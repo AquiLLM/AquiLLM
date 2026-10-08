@@ -96,6 +96,7 @@ def test_global_orphan_scan_uses_exclusive_opaque_cursor(monkeypatch):
     observed_cursors = []
 
     def list_generations(**kwargs):
+        assert kwargs["timeout_seconds"] == 12.0
         observed_cursors.append(kwargs["after_generation_key"])
         if kwargs["after_generation_key"] is None:
             return (_manifest(authoritative), _manifest(_bundle("2" * 64)))

@@ -66,6 +66,10 @@ KG_MAINTENANCE_INTERVAL_SECONDS = max(
 )
 KG_ARTIFACT_RETENTION_DAYS = env_int("KG_ARTIFACT_RETENTION_DAYS", 30) or 30
 KG_ARTIFACT_KEEP_SUPERSEDED = env_int("KG_ARTIFACT_KEEP_SUPERSEDED", 2)
+KG_ARTIFACT_PRUNING_ENABLED = env_bool("KG_ARTIFACT_PRUNING_ENABLED", False)
+KG_ARTIFACT_PRUNING_INTERVAL_SECONDS = min(
+    max(env_int("KG_ARTIFACT_PRUNING_INTERVAL_SECONDS", 86400), 86400), 604800
+)
 try:
     KG_EXTRACTION_QUEUE = load_extraction_queue(os.environ)
 except KnowledgeGraphConfigError:
@@ -328,7 +332,9 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/5.0/howto/static-files/
 
 STATIC_URL = "static/"
-STATIC_ROOT = "prod_static/"
+STATIC_ROOT = os.environ.get("AQUILLM_STATIC_ROOT", "prod_static/")
+BUILT_STATIC_DIR = os.environ.get("AQUILLM_BUILT_STATIC_DIR", "")
+STATICFILES_DIRS = [BUILT_STATIC_DIR] if BUILT_STATIC_DIR else []
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
@@ -455,7 +461,15 @@ CELERY_BEAT_SCHEDULE = knowledge_graph_maintenance_schedule(
     extraction_queue=KG_EXTRACTION_QUEUE,
     projection_queue=globals()["KG_PROJECTION_QUEUE"],
     interval_seconds=KG_MAINTENANCE_INTERVAL_SECONDS,
+    pruning_enabled=KG_ARTIFACT_PRUNING_ENABLED,
+    pruning_interval_seconds=KG_ARTIFACT_PRUNING_INTERVAL_SECONDS,
 )
+from aquillm.celery_schedules import application_maintenance_schedule
+
+CELERY_BEAT_SCHEDULE.update(application_maintenance_schedule(
+    enabled=os.getenv("APPLICATION_MAINTENANCE_SCHEDULER_ENABLED", "0").strip().lower()
+    in {"1", "true", "yes", "on"},
+))
 
 # Zotero Integration Settings
 # OAuth credentials should be set in environment variables:

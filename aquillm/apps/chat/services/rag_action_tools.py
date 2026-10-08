@@ -1,5 +1,7 @@
 """One action admission boundary shared by direct, manual and model tools."""
 
+import json
+
 from apps.documents.services.source_loading import current_source_runtime
 from lib.llm.turn_context import current_turn
 
@@ -13,7 +15,9 @@ RETRIEVAL_TOOLS = {
 }
 
 
-def admit_tool_action(kind, query="", document_id=None, chunk_id=None):
+def admit_tool_action(
+    kind, query="", document_id=None, chunk_id=None, *, include_images=False
+):
     runtime = current_source_runtime()
     if runtime is None:
         return True
@@ -21,7 +25,12 @@ def admit_tool_action(kind, query="", document_id=None, chunk_id=None):
     action = AcquisitionAction(
         kind, query, str(document_id) if document_id else None, chunk_id
     )
-    return runtime.budget.reserve_action(action.signature)
+    signature = action.signature
+    if include_images:
+        signature = json.dumps(
+            [signature, "include_images", True], separators=(",", ":")
+        )
+    return runtime.budget.reserve_action(signature)
 
 
 def limited_action_result():
@@ -37,8 +46,6 @@ def limited_action_result():
 
 
 def allow_targeted_tool(name, arguments):
-    import json
-
     from lib.llm.providers.tool_budget import ToolCallObservation
 
     state = current_turn()

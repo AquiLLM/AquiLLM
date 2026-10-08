@@ -42,4 +42,16 @@ export interface UploadSummary {
   textExtracted: boolean;
 }
 
-export type SubmissionStatus = "idle" | "submitting" | "success" | "error" | "initiated";
+export interface UploadRejection {
+  filename: string;
+  error: string;
+  file?: File;
+}
+
+export interface UploadBatch {
+  id: number;
+  accepted: { id: number; file?: File }[];
+  rejected: UploadRejection[];
+}
+
+export type SubmissionStatus = "idle" | "submitting" | "success" | "error" | "initiated" | "status-error";

@@ -1,6 +1,12 @@
 {% extends "aquillm/base.html" %}
 {% block title %}AquiLLM -- Chat{% endblock %}
 
+{% block before_react_bundle %}
+<script data-convo-id="{{ convo_id }}">
+{% include "aquillm/includes/chat_socket_bootstrap.js" %}
+</script>
+{% endblock %}
+
 {% block content %}
 <div id="chat-mount" class="h-full"></div>
 {% endblock %}

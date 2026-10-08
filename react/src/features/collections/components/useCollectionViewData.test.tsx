@@ -52,6 +52,21 @@ afterEach(() => {
 });
 
 describe('useCollectionViewData', () => {
+  it.each([true, false])('ignores a superseded refresh after the latest response (latest forbidden=%s)', async (forbidden) => {
+    const { result } = renderHook(() => useCollectionViewData('7'));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const pending: Array<(value: unknown) => void> = [];
+    vi.stubGlobal('fetch', vi.fn(() => new Promise(resolve => pending.push(resolve))));
+    act(() => { result.current.fetchCollectionData(); result.current.fetchCollectionData(); });
+    const success = { ok: true, status: 200, json: async () => collectionPayload };
+    const rejected = { ok: false, status: 403, json: async () => ({ error: 'Forbidden' }) };
+    await act(async () => { pending[1](forbidden ? rejected : success); });
+    await act(async () => { pending[0](forbidden ? success : rejected); });
+    expect(result.current.collection?.id ?? null).toBe(forbidden ? null : 7);
+    expect(result.current.initialCanEdit).toBe(!forbidden);
+    expect(result.current.error).toBe(forbidden ? 'Forbidden' : null);
+  });
+
   it('maps can_edit and can_manage from the collection response', async () => {
     const { result } = renderHook(() => useCollectionViewData('7'));
 

@@ -144,27 +144,7 @@ class Document(models.Model):
             schedule_document_move_invalidation,
         )
 
-        def publish_chunks() -> None:
-            from apps.documents.tasks.chunking import create_chunks
-
-            if canonical_hash is None:
-                raise RuntimeError("chunk publication requires a persisted content hash")
-            try:
-                create_chunks.delay(
-                    str(self.id),
-                    canonical_hash,
-                    document_model._meta.label_lower,
-                    int(self.pkid),
-                )
-            except Exception as exc:
-                logger.error(
-                    "obs.documents.chunk_enqueue_failed",
-                    document_id=str(self.id),
-                    concrete_model=document_model._meta.label_lower,
-                    document_pkid=int(self.pkid),
-                    expected_source_hash=canonical_hash,
-                    error_type=type(exc).__name__,
-                )
+        from apps.documents.services.chunk_publication import schedule_chunk_publication
 
         lifecycle_guard = nullcontext(None)
         if (
@@ -272,11 +252,13 @@ class Document(models.Model):
                 if pending is not None:
                     lifecycle_kind, event, lifecycle_alias = pending
                     if lifecycle_kind == "content":
-                        schedule_document_content_invalidation(
-                            event,
-                            using=lifecycle_alias,
-                            after_cleanup=None if dont_rechunk else publish_chunks,
-                        )
+                        if dont_rechunk:
+                            schedule_document_content_invalidation(event, using=lifecycle_alias)
+                        else:
+                            schedule_chunk_publication(
+                                self, (event.old_collection_id, event.committed_collection_id),
+                                using=lifecycle_alias,
+                            )
                     elif lifecycle_kind == "move":
                         schedule_document_move_invalidation(
                             event,
@@ -285,11 +267,7 @@ class Document(models.Model):
                     else:
                         raise RuntimeError("unknown document lifecycle event")
                 elif previous is None and not dont_rechunk:
-                    transaction.on_commit(
-                        publish_chunks,
-                        using=database_alias,
-                        robust=True,
-                    )
+                    schedule_chunk_publication(self, (self.collection_id,), using=database_alias)
 
     def move_to(self, new_collection, *, actor):
         """Move this document when ``actor`` may edit both collection boundaries."""

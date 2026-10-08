@@ -17,6 +17,25 @@ from lib.llm.turn_context import check_turn_active
 logger = structlog.stdlib.get_logger(__name__)
 
 
+async def send_conversation_snapshot(consumer: Any) -> None:
+    consumer.last_sent_sequence = len(consumer.convo) - 1
+    await consumer.send(
+        text_data=dumps(
+            {
+                "conversation": {
+                    "system": consumer.db_convo.system_prompt,
+                    "selected_collections": consumer.db_convo.selected_collection_ids
+                    or [],
+                    "skill_overrides": consumer.db_convo.skill_overrides or {},
+                    "messages": [
+                        pydantic_message_to_frontend_dict(msg) for msg in consumer.convo
+                    ],
+                }
+            }
+        )
+    )
+
+
 async def send_conversation_delta(
     consumer: Any,
     convo: Conversation,
@@ -29,13 +48,13 @@ async def send_conversation_delta(
     check_turn_active()
     logger.debug("obs.chat.delta_start")
     consumer.convo = convo
-    save_start = perf_counter()
-    await consumer._save_conversation(create_memories=create_memories)
-    check_turn_active()
     new_messages = convo.messages[consumer.last_sent_sequence + 1 :]
     if not new_messages:
         logger.debug("obs.chat.delta_skipped")
         return
+    save_start = perf_counter()
+    await consumer._save_conversation(create_memories=create_memories)
+    check_turn_active()
     usage = next(
         (
             msg.usage

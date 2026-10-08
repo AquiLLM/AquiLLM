@@ -47,10 +47,12 @@ def test_invalid_direct_policy_is_local_and_cooperative_timeout_is_local(monkeyp
         settings=settings,
         deadline=1.0,
     )
-    assert direct_timeout.failure_reason is DirectBranchFailureReason.EXTRACTOR_TIMEOUT
+    assert (
+        direct_timeout.failure_reason is DirectBranchFailureReason.DIRECT_BRANCH_TIMEOUT
+    )
     assert (
         extended_timeout.failure_reason
-        is ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+        is ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT
     )
 
 

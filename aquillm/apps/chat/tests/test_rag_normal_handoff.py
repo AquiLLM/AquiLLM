@@ -22,6 +22,9 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
         ("whole", "none"),
         ("whole", "figure"),
         ("whole", "revoke"),
+        ("image", "none"),
+        ("image", "text"),
+        ("image", "revoke"),
         ("adjacent", "edit"),
         ("adjacent", "none"),
     ],
@@ -44,9 +47,23 @@ async def test_normal_current_tool_handoff(docs, monkeypatch, kind, mutation):
         await database_sync_to_async(figure_for)(
             user, doc, "Original caption: only below 1 Pa."
         )
-        if kind == "whole"
+        if kind in {"whole", "image"}
         else None
     )
+    if kind == "image":
+        doc = figure
+        chunks = await database_sync_to_async(TextChunk.objects.bulk_create)(
+            [
+                TextChunk(
+                    doc_id=doc.id,
+                    chunk_number=0,
+                    start_position=0,
+                    end_position=40,
+                    content="OCR evidence: only below 1 Pa.",
+                    modality=TextChunk.Modality.IMAGE,
+                )
+            ]
+        )
     calls = []
     provider = OpenAIInterface(None, "test")
 
@@ -73,11 +90,14 @@ async def test_normal_current_tool_handoff(docs, monkeypatch, kind, mutation):
         llm_if=provider,
     )
     async with preservation_turn(consumer, max_func_calls=4) as runtime:
-        if kind == "whole":
+        if kind in {"whole", "image"}:
             tool = whole_document_tool(
                 user, SimpleNamespace(chat=consumer), consumer.col_ref
             )
-            arguments, name = {"doc_id": str(doc.id)}, "whole_document"
+            arguments, name = (
+                {"doc_id": str(doc.id), "include_images": mutation != "text"},
+                "whole_document",
+            )
         else:
             tool = more_context_tool(user)
             arguments, name = (
@@ -120,6 +140,10 @@ async def test_normal_current_tool_handoff(docs, monkeypatch, kind, mutation):
         text = str(calls[0]["messages"])
         assert ("Original caption" in text) is (kind == "whole" and mutation == "none")
         assert "Changed caption" not in text
+        if kind == "image":
+            assert (f"/aquillm/document_image/{doc.id}/" in text) is (
+                mutation == "none"
+            )
 
 
 async def test_expired_normal_tool_result_cannot_restart_legacy_loop(docs, monkeypatch):

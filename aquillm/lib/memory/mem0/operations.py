@@ -447,19 +447,28 @@ async def _add_mem0_fact_async(
 
 
 def _add_mem0_messages_payload(
-    mem0: Any, messages: list[dict[str, Any]], user_id: str, metadata: dict[str, Any], enable_graph: Optional[bool]
+    mem0: Any, messages: list[dict[str, Any]], user_id: str, metadata: dict[str, Any], enable_graph: Optional[bool],
+    *, strict: bool = False,
 ) -> Any:
     add_kwargs = {"user_id": user_id, "metadata": metadata, "infer": True}
     if enable_graph is not None:
         add_kwargs["enable_graph"] = enable_graph
     last_exc: Exception | None = None
+
+    def invoke(*args, **kwargs):
+        # Durable callers hold an execution owner until this call finishes.
+        # Do not leave an unowned add thread alive after a wrapper timeout.
+        if strict:
+            return mem0.add(*args, **kwargs)
+        return _run_mem0_add_call_with_timeout(mem0.add, *args, **kwargs)
+
     for payload in _message_payload_candidates(messages):
         try:
-            return _run_mem0_add_call_with_timeout(mem0.add, payload, **add_kwargs)  # type: ignore[attr-defined]
+            return invoke(payload, **add_kwargs)
         except TypeError as exc:
             last_exc = exc
             try:
-                return _run_mem0_add_call_with_timeout(mem0.add, messages=payload, **add_kwargs)  # type: ignore[attr-defined]
+                return invoke(messages=payload, **add_kwargs)
             except Exception as keyword_exc:
                 last_exc = keyword_exc
                 if not _payload_shape_error(keyword_exc):
@@ -563,9 +572,18 @@ def add_mem0_messages(
     messages: list[dict[str, Any]],
     conversation_id: int,
     assistant_message_uuid: str,
+    *, strict: bool = False,
 ) -> bool:
+    """Return whether inference added memories; strict callers receive failures.
+
+    An empty successful result is False in either mode. Strict mode waits for
+    the SDK call itself, whose network timeouts remain authoritative, so the
+    durable worker can retain execution ownership until the call ends.
+    """
     mem0 = get_mem0_oss()
     if mem0 is None:
+        if strict:
+            raise RuntimeError('Mem0 client is unavailable')
         return False
     if not messages:
         logger.info("obs.memory.intelligent_write_skipped")
@@ -581,7 +599,7 @@ def add_mem0_messages(
 
     enable_graph = _add_enable_graph()
     try:
-        result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=enable_graph)
+        result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=enable_graph, strict=strict)
     except Exception as exc:
         if enable_graph and _graph_fail_open():
             logger.warning(
@@ -590,13 +608,15 @@ def add_mem0_messages(
                 error_type=type(exc).__name__,
             )
             try:
-                result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=False)
+                result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=False, strict=strict)
             except Exception as retry_exc:
                 logger.warning(
                     "obs.memory.intelligent_write_vector_retry_error",
                     error=str(retry_exc),
                     error_type=type(retry_exc).__name__,
                 )
+                if strict:
+                    raise
                 return False
         else:
             logger.warning(
@@ -604,6 +624,8 @@ def add_mem0_messages(
                 error=str(exc),
                 error_type=type(exc).__name__,
             )
+            if strict:
+                raise
             return False
 
     return _mem0_add_result_has_writes(result)
@@ -678,6 +700,7 @@ def add_mem0_memory_with_client(
     assistant_content: str,
     conversation_id: int,
     assistant_message_uuid: str,
+    *, strict: bool = False,
 ) -> bool:
     """Write a raw conversation turn to OSS Mem0 with inference enabled."""
     messages = [
@@ -689,6 +712,7 @@ def add_mem0_memory_with_client(
         messages=messages,
         conversation_id=conversation_id,
         assistant_message_uuid=assistant_message_uuid,
+        strict=strict,
     )
 
 

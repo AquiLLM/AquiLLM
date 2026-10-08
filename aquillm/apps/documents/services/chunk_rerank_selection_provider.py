@@ -100,6 +100,13 @@ class LocalSelectionScorer:
             query, chunk.content[: self.char_limit], self.pair_limit, self.reserve
         )
 
+    def prepare_emitted_pair(self, query: str, emitted_text: str) -> Pair | None:
+        """Refuse final evidence that this provider would silently truncate."""
+        pair = trim_rerank_pair(
+            query, emitted_text[: self.char_limit], self.pair_limit, self.reserve
+        )
+        return pair if pair == (query, emitted_text) else None
+
     def score_budgeted_pair(self, pair, timeout_seconds, *, budget, phase):
         from .chunk_rerank_window_http import score_budgeted_pair
 

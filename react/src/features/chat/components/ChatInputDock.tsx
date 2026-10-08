@@ -1,5 +1,5 @@
 import React from 'react';
-import { Send } from 'lucide-react';
+import { Folder, Send, Sparkles } from 'lucide-react';
 import { CircularProgressbar } from 'react-circular-progressbar';
 
 export interface ChatInputDockProps {
@@ -16,8 +16,13 @@ export interface ChatInputDockProps {
   onAutoResize: () => void;
   onSend: () => void;
   inputDisabled: boolean;
+  sendDisabled: boolean;
+  connectionMessage: string | null;
   onOpenCollections: () => void;
+  collectionsDisabled: boolean;
+  collectionsLoading?: boolean;
   selectedCount: number;
+  selectedSkillCount: number;
 }
 
 const ChatInputDock: React.FC<ChatInputDockProps> = ({
@@ -34,12 +39,17 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
   onAutoResize,
   onSend,
   inputDisabled,
+  sendDisabled,
+  connectionMessage,
   onOpenCollections,
+  collectionsDisabled,
+  collectionsLoading = false,
   selectedCount,
+  selectedSkillCount,
 }) => (
   <div className="sticky bottom-0 w-full bg-scheme-shade_2 border-t border-border-mid_contrast mt-[8px]">
     <div className="w-[98%] md:w-[96%] lg:w-[94%] xl:w-[92%] 2xl:max-w-[1800px] mx-auto mb-[8px] mt-[8px]">
-      <div className="flex items-center justify-center w-full gap-[12px]">
+      <div className="flex flex-wrap items-center justify-center w-full gap-2 sm:flex-nowrap sm:gap-3">
         <div className="flex h-[56px] min-w-[114px] shrink-0 flex-col items-center justify-center gap-[3px] rounded-[10px] border border-border-mid_contrast bg-scheme-shade_2 px-[8px] py-[6px]">
           <div className="h-[28px] w-[28px] rounded-full border border-border-mid_contrast bg-scheme-shade_2">
             <CircularProgressbar
@@ -58,7 +68,7 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
           </div>
         </div>
 
-        <div className="relative flex min-h-[56px] w-full flex-col justify-start gap-[8px] rounded-[10px] border border-border-mid_contrast bg-scheme-shade_2 px-4 py-[6px] transition-colors duration-200 has-[:focus]:border-transparent has-[:focus]:bg-scheme-shade_4">
+        <div className="relative order-first flex min-h-[56px] w-full min-w-0 flex-col justify-start gap-[8px] rounded-[10px] border border-border-mid_contrast bg-scheme-shade_2 px-4 py-[6px] transition-colors duration-200 has-[:focus]:border-transparent has-[:focus]:bg-scheme-shade_4 sm:order-none">
           <div
             onMouseDown={contentOverflowing ? undefined : onDragStart}
             className={`absolute left-1/2 -translate-x-1/2 top-0 -translate-y-1/2 z-50 flex justify-center px-2 py-1 group ${contentOverflowing ? 'pointer-events-none' : 'cursor-ns-resize'}`}
@@ -82,7 +92,7 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
               onKeyDown={(e) => {
                 if (e.key === 'Enter' && !e.shiftKey) {
                   e.preventDefault();
-                  onSend();
+                  if (!sendDisabled) onSend();
                 }
               }}
               disabled={inputDisabled}
@@ -93,7 +103,7 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
               className="mr-[-4px] flex h-[44px] w-[44px] items-center justify-center rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 p-0 text-text-normal transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5 disabled:cursor-not-allowed"
               title="Send Message"
               type="button"
-              disabled={inputDisabled}
+              disabled={sendDisabled}
             >
               <Send size={16} className="text-text-normal" />
             </button>
@@ -103,19 +113,29 @@ const ChatInputDock: React.FC<ChatInputDockProps> = ({
         <div className="">
           <button
             onClick={onOpenCollections}
-            className="flex h-[56px] w-[max-content] cursor-pointer items-center rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-[16px] py-0 text-text-normal transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5"
+            disabled={collectionsDisabled}
+            aria-busy={collectionsLoading}
+            title={collectionsLoading ? 'Loading collections…' : undefined}
+            aria-label={`Collections and skills: ${selectedCount} ${selectedCount === 1 ? 'collection' : 'collections'}, ${selectedSkillCount} ${selectedSkillCount === 1 ? 'skill' : 'skills'}`}
+            className="flex h-[56px] w-[max-content] cursor-pointer flex-col items-start justify-center gap-1 rounded-[10px] border border-border-high_contrast bg-scheme-shade_4 px-3 py-0 text-xs text-text-normal transition-colors duration-200 hover:border-border-higher_contrast hover:bg-scheme-shade_5 disabled:cursor-not-allowed"
             type="button"
           >
-            <span className="text-text-normal">Collections</span>
-            <span className="ml-2 text-sm text-text-normal">
-              {selectedCount ? `(${selectedCount} selected)` : ''}
-            </span>
+            <span className="flex items-center gap-1.5"><Folder size={13} aria-hidden="true" />{selectedCount} {selectedCount === 1 ? 'collection' : 'collections'}</span>
+            <span className="flex items-center gap-1.5"><Sparkles size={13} aria-hidden="true" />{selectedSkillCount} {selectedSkillCount === 1 ? 'skill' : 'skills'}</span>
           </button>
         </div>
       </div>
-      <p className="mt-2 text-center text-xs text-text-low_contrast">
-        Search commands: <code>/search [document] question</code> or <code>/collection question</code>
-      </p>
+      <div className="mt-2 grid text-center text-xs text-text-low_contrast">
+        <p
+          className={`col-start-1 row-start-1 ${connectionMessage ? 'invisible' : ''}`}
+          aria-hidden={connectionMessage ? true : undefined}
+        >
+          Search commands: <code>/search [document] question</code> or <code>/collection question</code>
+        </p>
+        {connectionMessage && (
+          <p className="col-start-1 row-start-1" role="status">{connectionMessage}</p>
+        )}
+      </div>
     </div>
   </div>
 );

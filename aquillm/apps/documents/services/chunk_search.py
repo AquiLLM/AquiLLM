@@ -20,7 +20,6 @@ from apps.documents.services.chunk_rerank import (
     rerank_chunks_scored,
 )
 from apps.documents.services.chunk_rerank_results import RerankScoreSet
-from apps.documents.services.chunk_rerank_score_transport import serialize_score_set
 from apps.documents.services.chunk_search_authorization import authorized_search_rows
 from apps.documents.services.chunk_search_candidates import (
     CandidateScopeLimit,
@@ -33,7 +32,10 @@ from apps.documents.services.chunk_search_candidates import (
 from apps.documents.services.chunk_search_candidates import (
     _salient_exact_terms as _candidate_salient_exact_terms,
 )
-from apps.documents.services.chunk_search_logging import log_search_failure
+from apps.documents.services.chunk_search_logging import (
+    completed_search_diagnostics,
+    log_search_failure,
+)
 from apps.documents.services.chunk_search_score_handoff import (
     score_set_for_authorized_rows,
 )
@@ -66,6 +68,7 @@ from apps.documents.services.source_loading import (
     current_source_runtime,
     source_mode_enabled,
 )
+from lib.replay_observation import retrieval_stages
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 if TYPE_CHECKING:
@@ -422,51 +425,30 @@ def text_chunk_search(
         )
 
         total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
-        logger.info(
-            "obs.rag.search",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.COMPLETED,
-                count=0,
-                elapsed_ms=total_ms,
+        diagnostics = completed_search_diagnostics(
+            logger,
+            model_cls,
+            snapshot,
+            reranked_results,
+            score_set,
+            graph_diagnostics,
+            overlay_enabled=overlay_enabled,
+            docs_count=len(docs),
+            elapsed_ms=total_ms,
+        )
+        retrieval_stages(
+            query,
+            top_k,
+            snapshot,
+            ranking,
+            reranked_results,
+            graph_diagnostics,
+            overlay_enabled=overlay_enabled,
+            hybrid_pool=hybrid_pool,
+            graph_seed_attempted=(
+                graph_config is not None and graph_preflight_status is None
             ),
         )
-        chunks_with_embeddings: int | None = None
-        if not reranked_results:
-            try:
-                chunks_with_embeddings = (
-                    model_cls.objects.filter_by_documents(snapshot.documents)
-                    .exclude(embedding__isnull=True)
-                    .count()
-                )
-            except Exception:
-                logger.warning(
-                    "obs.rag.chunk_count_failed",
-                    **retrieval_log_fields(
-                        reason=RetrievalLogReason.INTERNAL_FAILURE,
-                        count=0,
-                        elapsed_ms=0.0,
-                    ),
-                )
-        diagnostics: dict = {
-            "doc_count": len(docs),
-            "chunks_with_embeddings": chunks_with_embeddings,
-            "vector_error": snapshot.vector_error,
-            "trigram_candidates": len(snapshot.trigram_chunk_ids),
-            "exact_term_count": len(snapshot.exact_terms),
-        }
-        if overlay_enabled:
-            diagnostics.update(graph_diagnostics)
-        if score_set is not None and reranked_results:
-            diagnostics["_score_set"] = serialize_score_set(score_set)
-        if not reranked_results:
-            logger.info(
-                "obs.rag.search_empty",
-                **retrieval_log_fields(
-                    reason=RetrievalLogReason.NO_SEEDS,
-                    count=0,
-                    elapsed_ms=total_ms,
-                ),
-            )
         return (
             authorized_rows(snapshot.vector_results),
             authorized_rows(snapshot.trigram_results),

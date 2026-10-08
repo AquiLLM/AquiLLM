@@ -27,6 +27,20 @@ def test_openai_client_defaults_to_dedicated_transcribe_service(monkeypatch):
     assert captured["api_key"] == "EMPTY"
 
 
+@pytest.mark.parametrize("configured,expected", [(None, 120), ("15", 15), ("invalid", 120), ("0", 120), ("900", 600)])
+def test_transcription_has_bounded_timeout_without_automatic_retries(monkeypatch, configured, expected):
+    if configured is None:
+        monkeypatch.delenv("INGEST_TRANSCRIBE_TIMEOUT_SECONDS", raising=False)
+    else:
+        monkeypatch.setenv("INGEST_TRANSCRIBE_TIMEOUT_SECONDS", configured)
+    captured = {}
+    monkeypatch.setattr(media, "OpenAI", lambda **kwargs: captured.update(kwargs))
+    media._openai_client()
+    assert captured["timeout"].read == expected
+    assert captured["timeout"].connect == 5
+    assert captured["max_retries"] == 0
+
+
 def test_transcribe_rejects_unconfigured_provider(monkeypatch):
     monkeypatch.delenv("INGEST_TRANSCRIBE_PROVIDER", raising=False)
     try:

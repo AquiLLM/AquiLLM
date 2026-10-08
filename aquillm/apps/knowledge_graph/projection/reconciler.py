@@ -13,6 +13,10 @@ from apps.knowledge_graph.models import (
     GraphArtifact,
 )
 
+from .bounded_reconciliation import (
+    reconcile_projection_batch as reconcile_projection_batch,
+)
+
 from .generation_audit import (
     audit_projection_generation as _generation_audit,
     orphan_generation_keys as _orphan_generation_keys,
@@ -286,7 +290,7 @@ def prune_graph_projection_generations(
             deleted += int(
                 graph.delete_generation(
                     generation_key=generation_key,
-                    timeout_seconds=settings.graph_overall_timeout_ms / 1_000.0,
+                    timeout_seconds=settings.projection_timeout_ms / 1_000.0,
                 )
                 is not False
             )

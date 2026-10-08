@@ -52,6 +52,22 @@ and newly selected graph candidates. A successful duplicate-only branch is
 therefore distinguishable from an empty result or a timeout. These events contain
 no query text, source passages, graph identifiers, or raw exception messages.
 
+Whole-branch scheduler expiry uses `direct_branch_timeout` or
+`extended_branch_timeout`. `extractor_timeout` is reserved for an extractor call;
+ontology, extended seed-source, and PageRank deadline checks use the branch timeout reason.
+Topology loader failures retain their existing topology-specific reasons. Branch
+expiry carries zero counts because the scheduler cannot know the completed stage.
+
+The `obs.rag.graph_stage` event emits fixed `branch` and `stage` labels plus
+`elapsed_ms` in 0..5000. Stages cover ontology, extraction, entity resolution,
+topology loading, and final materialization. Extended entity resolution emits one
+event per selected projection read. Materialization uses the `shared` branch
+label. These completion events include failed stages but omit exception details.
+They do not extend deadlines or interrupt synchronous reads: an abandoned read
+can finish and emit its timing after the branch timeout, while retaining its
+worker slot until it actually finishes. A missing completion event can indicate
+blocked work. Timings are capped telemetry, not a change to execution budgets.
+
 ## Development rollout
 
 1. Merge the tested revision to `development`, then fast-forward the development
@@ -81,3 +97,29 @@ deployment record. To roll back, deploy a reviewed revert on `development`,
 rebuild/recreate the gateway for that revision, and reload web/worker using the
 same environment and Compose overrides. There is no data or schema rollback.
 Do not roll back by discarding unrelated server edits or rebuilding graph data.
+# Direct seed SQL budget
+
+Direct seed membership and candidate reads consume the existing absolute direct
+branch deadline. Each fully consumed PostgreSQL read runs in a savepoint with
+`statement_timeout` set to the smaller of the remaining milliseconds and any
+nonzero caller timeout. An expired budget starts no further tier or span read.
+Database query cancellation and budget expiry report `direct_branch_timeout`;
+invalid seed data retains `direct_seed_invalid`.
+
+Only alias candidate reads use transaction-local `join_collapse_limit=1`, based
+on the measured development alias plan. Name and identifier reads retain the
+caller planner policy. `enable_nestloop` is unchanged. Prior settings restore
+explicitly on success and through savepoint rollback on SQL or Python failure,
+including callers already inside an outer transaction.
+
+Run the PostgreSQL regressions only against an isolated test database with
+`KG_REQUIRE_POSTGRES_TESTS=1`:
+
+```shell
+python -m pytest aquillm/apps/knowledge_graph/tests/test_direct_seed_sql_postgres.py -q
+```
+
+The fixture creates temporary synthetic graph rows, checks alias provenance and
+caps, cancels `pg_sleep`, and verifies the caller connection and all four worker
+slots remain reusable after cancellation. Live repeated replay remains necessary
+to establish the measured production latency and worker starvation outcome.

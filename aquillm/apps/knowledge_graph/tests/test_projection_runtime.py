@@ -44,7 +44,11 @@ def _projection_hook_environment() -> dict[str, str]:
 
 
 def test_runtime_consumes_only_frozen_projection_configuration_names() -> None:
-    source = {**_projection_environment(), "KG_BUILD_ENABLED": "1"}
+    source = {
+        **_projection_environment(),
+        "KG_BUILD_ENABLED": "1",
+        "KG_PROJECTION_TIMEOUT_MS": "12000",
+    }
 
     settings = runtime.load_projection_runtime_settings(source)
 
@@ -54,6 +58,8 @@ def test_runtime_consumes_only_frozen_projection_configuration_names() -> None:
     assert settings.projection_batch_size == 37
     assert settings.projection_lease_seconds == 41
     assert settings.projection_queue == "projection-control"
+    assert settings.projection_timeout_ms == 12000
+    assert settings.graph_overall_timeout_ms == 300
 
 
 def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
@@ -62,12 +68,13 @@ def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
     settings = runtime.load_projection_runtime_settings(_projection_environment())
     observed: dict[str, object] = {}
 
-    def driver(uri, username, password, *, database):
+    def driver(uri, username, password, *, database, max_transaction_retry_time):
         observed.update(
             uri=uri,
             username=username,
             password=password,
             database=database,
+            max_transaction_retry_time=max_transaction_retry_time,
         )
         return SimpleNamespace(execute_read=lambda *_a, **_k: ())
 
@@ -81,6 +88,7 @@ def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
         "username": "writer",
         "password": "writer-secret",
         "database": "projection",
+        "max_transaction_retry_time": 0.0,
     }
 
 
@@ -94,9 +102,7 @@ def test_postgres_factory_rejects_missing_function_state_repository_before_io(
         constructed.append("direct-store")
         raise AssertionError("direct projection-state ORM store was constructed")
 
-    monkeypatch.setattr(
-        runtime, "DjangoChunkReferenceStore", forbidden, raising=False
-    )
+    monkeypatch.setattr(runtime, "DjangoChunkReferenceStore", forbidden, raising=False)
     monkeypatch.setattr(runtime, "DjangoProjectionRowSource", forbidden)
 
     with pytest.raises(RuntimeError, match="function state repository is required"):
@@ -216,3 +222,45 @@ def test_enabled_activation_injects_frozen_membership_hmac_on_web_alias(
     assert enabled is True
     assert observed["using"] == "default"
     assert observed["codec"].key_version == "key-v7"
+
+
+def test_membership_hook_enqueues_without_projection_worker_credentials(monkeypatch):
+    from apps.knowledge_graph.projection import lifecycle
+
+    observed = {}
+    monkeypatch.setattr(
+        lifecycle,
+        "enqueue_automatic_membership_changes_locked",
+        lambda **kwargs: observed.update(kwargs),
+    )
+
+    assert (
+        runtime.enqueue_automatic_membership_projections(
+            (7, 9), using="default", source=_projection_hook_environment()
+        )
+        is True
+    )
+    assert observed["collection_ids"] == (7, 9)
+    assert observed["using"] == "default"
+    assert observed["codec"].key_version == "key-v7"
+
+
+@pytest.mark.parametrize("hook_flag", [None, "0", "invalid"])
+def test_membership_hook_requires_explicit_valid_hook_flag(monkeypatch, hook_flag):
+    from apps.knowledge_graph.projection import lifecycle
+
+    def forbidden(**_kwargs):
+        pytest.fail("disabled membership hook accessed projection state")
+
+    monkeypatch.setattr(
+        lifecycle, "enqueue_automatic_membership_changes_locked", forbidden
+    )
+    source = _projection_environment()
+    if hook_flag is not None:
+        source["KG_MEMGRAPH_PROJECTION_HOOK_ENABLED"] = hook_flag
+    assert (
+        runtime.enqueue_automatic_membership_projections(
+            (7, 9), using="default", source=source
+        )
+        is False
+    )

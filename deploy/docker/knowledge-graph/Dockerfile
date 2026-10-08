@@ -17,6 +17,11 @@ COPY pyproject.toml uv.lock ./
 RUN UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_INSTALLS=1 uv sync --frozen --no-dev --extra knowledge-graph-local --no-cache
 RUN /opt/venv/bin/python -c "import torch; assert torch.version.cuda is None, torch.version.cuda"
 
+# Projection workers start without public network access; retain tokenizer data
+# outside /app so a deployment bind mount cannot hide the cache.
+ENV TIKTOKEN_CACHE_DIR=/opt/aquillm-tokenizers
+RUN /opt/venv/bin/python -c "import tiktoken; tiktoken.get_encoding('o200k_base'); tiktoken.get_encoding('cl100k_base')"
+
 COPY . .
 
 WORKDIR /app/aquillm

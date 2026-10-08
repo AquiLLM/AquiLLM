@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import IngestionDashboard from './IngestionDashboard';
 import { IngestionDashboardLauncherProps } from '../types';
 import { X } from 'lucide-react';
@@ -35,6 +35,7 @@ const IngestionDashboardModal: React.FC<IngestionDashboardModalProps> = ({ wsUrl
 
 const IngestionDashboardLauncher: React.FC<IngestionDashboardLauncherProps> = ({ wsUrl }) => {
   const [modalOpen, setModalOpen] = useState(false);
+  const handleNewDocument = useCallback(() => setModalOpen(true), []);
 
   return (
     <>
@@ -45,7 +46,7 @@ const IngestionDashboardLauncher: React.FC<IngestionDashboardLauncherProps> = ({
 
       {/* The modal is always in the DOM; its visibility is controlled by the 'hidden' class */}
       <div className={`${modalOpen ? '' : 'hidden'}`}>
-        <IngestionDashboardModal wsUrl={wsUrl} onClose={() => setModalOpen(false)} onNewDocument={() => setModalOpen(true)} />
+        <IngestionDashboardModal wsUrl={wsUrl} onClose={() => setModalOpen(false)} onNewDocument={handleNewDocument} />
       </div>
     </>
   );

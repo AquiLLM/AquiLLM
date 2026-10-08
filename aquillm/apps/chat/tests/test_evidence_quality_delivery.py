@@ -90,6 +90,88 @@ def test_known_legacy_marker_does_not_hide_exact_prefix():
     assert not unknown and spans[0]["end"] == 6
 
 
+def test_sdk_split_support_after_excerpt_is_recorded_as_lost_despite_source_id():
+    import json
+
+    from apps.chat.evals.evidence_quality_eval import (
+        evaluate,
+        match_delivered,
+        required_support,
+    )
+
+    text = "x" * 1200 + " threshold=7.3 ug/L"
+    start = text.index("threshold=")
+    s = {
+        "source_id": "s",
+        "revision": "r",
+        "text": text,
+        "authorized_at_answer": True,
+    }
+    case = {
+        "case_id": "synthetic-split-support",
+        "split": "development",
+        "depth": "routine",
+        "scenario": "retrieval",
+        "quality_aggregation": "normal",
+        "sources": [s],
+        "gold_support": [
+            {
+                "support_id": "threshold",
+                "source_id": "s",
+                "revision": "r",
+                "start": start,
+                "end": len(text),
+                "quote": text[start:],
+            }
+        ],
+        "required_claims": [
+            {"claim_id": "answer", "support_ids": ["threshold"], "labels": []}
+        ],
+        "expected_delivered_support_ids": ["threshold"],
+        "permitted_citations": [{"source_id": "s", "revision": "r"}],
+        "publishable_citations": [{"source_id": "s", "revision": "r"}],
+    }
+    excerpt = text[:1000] + "\n...[truncated for context window]..."
+    payload = {
+        "content": json.dumps(
+            {
+                "result": [
+                    {
+                        "doc_id": "d",
+                        "chunk_id": 1,
+                        "citation": "[doc:d chunk:1]",
+                        "text": excerpt,
+                    }
+                ]
+            }
+        )
+    }
+    delivered, unknown = map_payload(payload, {("d", 1): s})
+    assert not unknown
+    assert delivered[0]["source_id"] == "s"
+    assert match_delivered(case, delivered) == set()
+    result = evaluate(
+        case,
+        {
+            "delivered": delivered,
+            "upstream": [
+                {
+                    "source_id": "s",
+                    "revision": "r",
+                    "fingerprint": text_digest(text),
+                    "start": 0,
+                    "end": len(text),
+                    "text": text,
+                }
+            ],
+            "citations": [{"source_id": "s", "revision": "r"}],
+        },
+    )
+    assert required_support(case) == {"threshold"}
+    assert result["support_recall"] == 0.0
+    assert result["lost_before_sdk"] == ["threshold"]
+
+
 def test_incomplete_sdk_or_pair_transport_accounting_cannot_claim_complete():
     from apps.chat.evals.evidence_quality_trace import Trace
 

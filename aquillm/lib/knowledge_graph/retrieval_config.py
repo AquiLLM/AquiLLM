@@ -65,7 +65,7 @@ class HybridRetrievalSettings:
     memgraph_projection_password: SecretSetting = field(repr=False); projection_postgres_source_dsn: SecretSetting = field(repr=False); projection_postgres_state_dsn: SecretSetting = field(repr=False)
     projection_queue: str; projection_schema_version: str; projection_format_version: str; projection_identifier_hmac_key: SecretSetting = field(repr=False)
     projection_identifier_key_version: str; projection_batch_size: int; projection_lease_seconds: int; projection_max_attempts: int; projection_retention: int
-    projection_max_lag_seconds: int; query_extractor_url: str = field(repr=False); query_extractor_bearer_token: SecretSetting = field(repr=False)
+    projection_max_lag_seconds: int; projection_timeout_ms: int; query_extractor_url: str = field(repr=False); query_extractor_bearer_token: SecretSetting = field(repr=False)
     query_extractor_model: str; query_extractor_model_revision: str; query_extractor_build_hash: str; query_extractor_expected_schema_version: str; query_extractor_expected_schema_checksum: str
     query_extractor_timeout_ms: int; query_max_bytes: int; query_max_codepoints: int; query_max_spans: int
     graph_overall_timeout_ms: int; graph_direct_timeout_ms: int; graph_extended_timeout_ms: int; graph_direct_max_seeds: int
@@ -79,7 +79,7 @@ _BOOL_DEFAULTS = dict.fromkeys((
 ), "0")
 _INT_RULES = {
     "KG_PROJECTION_BATCH_SIZE": ("500", 1, 5000), "KG_PROJECTION_LEASE_SECONDS": ("300", 10, 3600), "KG_PROJECTION_MAX_ATTEMPTS": ("5", 1, 20), "KG_PROJECTION_RETENTION": ("2", 1, 50),
-    "KG_PROJECTION_MAX_LAG_SECONDS": ("300", 1, 86400), "KG_QUERY_EXTRACTOR_TIMEOUT_MS": ("75", 10, 1000), "KG_QUERY_MAX_BYTES": ("4096", 1, 16384), "KG_QUERY_MAX_CODEPOINTS": ("2048", 1, 8192),
+    "KG_PROJECTION_MAX_LAG_SECONDS": ("300", 1, 86400), "KG_PROJECTION_TIMEOUT_MS": ("5000", 100, 60000), "KG_QUERY_EXTRACTOR_TIMEOUT_MS": ("75", 10, 1000), "KG_QUERY_MAX_BYTES": ("4096", 1, 16384), "KG_QUERY_MAX_CODEPOINTS": ("2048", 1, 8192),
     "KG_QUERY_MAX_SPANS": ("32", 1, 128), "KG_GRAPH_OVERALL_TIMEOUT_MS": ("300", 25, 5000), "KG_GRAPH_DIRECT_TIMEOUT_MS": ("125", 10, 5000), "KG_GRAPH_EXTENDED_TIMEOUT_MS": ("125", 10, 5000),
     "KG_GRAPH_DIRECT_MAX_SEEDS": ("32", 1, 64), "KG_GRAPH_DIRECT_MAX_DEPTH": ("2", 1, 2), "KG_GRAPH_DIRECT_MAX_NODES": ("200", 1, 200), "KG_GRAPH_DIRECT_MAX_EDGES": ("1000", 1, 1000),
     "KG_GRAPH_DIRECT_MAX_CANDIDATES": ("20", 1, 20), "KG_GRAPH_EXTENDED_MAX_SEEDS": ("64", 1, 64), "KG_GRAPH_EXTENDED_MAX_DEPTH": ("2", 1, 2), "KG_GRAPH_EXTENDED_MAX_NODES": ("200", 1, 200),

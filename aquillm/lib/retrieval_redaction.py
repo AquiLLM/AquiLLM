@@ -23,6 +23,15 @@ class RetrievalLogReason(StrEnum):
     NO_SEEDS = "no_seeds"
     AMBIGUOUS = "ambiguous"
     INTERNAL_FAILURE = "internal_failure"
+    READINESS_COLLECTION_COVERAGE = "readiness_collection_coverage"
+    READINESS_DOCUMENT_COVERAGE = "readiness_document_coverage"
+    READINESS_IDENTIFIER_KEY = "readiness_identifier_key"
+    READINESS_MEMBERSHIP_MISSING = "readiness_membership_missing"
+    READINESS_ARTIFACT_MISSING = "readiness_artifact_missing"
+    READINESS_MEMBERSHIP_STALE = "readiness_membership_stale"
+    READINESS_ARTIFACT_BINDING = "readiness_artifact_binding"
+    READINESS_ARTIFACT_COLLECTION = "readiness_artifact_collection"
+    READINESS_MANIFEST = "readiness_manifest"
 
 
 def retrieval_log_fields(

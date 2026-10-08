@@ -36,15 +36,14 @@ cases:
       - "spectral"
 
   - id: figure_request
-    description: "Figure retrieval request from selected documents"
+    description: "Figure request defers to deliberate image tool selection"
     message: "Show me the figures from the calibration paper."
     collection_ids: [1]
     mock_retrieval_status: results_found
     mock_retrieved_count: 1
-    expect_outcome: handled
-    expect_retrieval_called: true
-    expect_content_contains:
-      - "calibration"
+    expect_outcome: skipped
+    expect_retrieval_called: false
+    expect_content_contains: []
 
   - id: no_results
     description: "Search that returns empty results → transparent notice, no LLM call"

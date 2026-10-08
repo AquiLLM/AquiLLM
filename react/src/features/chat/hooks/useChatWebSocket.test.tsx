@@ -144,6 +144,7 @@ describe('useChatWebSocket', () => {
 
     act(() => {
       socket.onopen?.(new Event('open'));
+      socket.emit({ conversation: { messages: [], selected_collections: [] } });
       socket.emit({
         delta: {
           messages: [{
@@ -218,6 +219,7 @@ describe('useChatWebSocket', () => {
 
     act(() => {
       socket.onopen?.(new Event('open'));
+      socket.emit({ conversation: { messages: [], selected_collections: [] } });
       socket.emit({ delta: { messages: [toolCall] } });
       socket.emit({ exception: 'Tool result validation failed.' });
       socket.onopen?.(new Event('open'));
@@ -227,7 +229,7 @@ describe('useChatWebSocket', () => {
     expect(screen.getByTestId('conversation').getAttribute('data-spinner')).toBe('false');
 
     act(() => {
-      socket.emit({ conversation: { messages: [toolCall] } });
+      socket.emit({ conversation: { messages: [toolCall], selected_collections: [] } });
     });
 
     expect(screen.getByTestId('error').textContent).toBe('');

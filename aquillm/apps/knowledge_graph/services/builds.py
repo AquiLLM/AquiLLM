@@ -25,6 +25,18 @@ from django.db.models import Count, DateTimeField, ExpressionWrapper, F, Q, Valu
 from django.db.models.functions import Now
 from django.utils import timezone
 
+from apps.knowledge_graph.resolution.commit_state import (
+    _document_resolution_commit_state,
+)
+from apps.knowledge_graph.resolution.source_exclusions import resolvable_mentions
+
+from .collection_context_policy import (
+    context_failure_code,
+    select_capacity_configs,
+)
+from .collection_context_policy import (
+    validate_collection_context_caps as _validate_collection_context_caps,
+)
 from .failure_codes import (
     BuildInProgressError,
     BuildLeaseLostError,
@@ -936,114 +948,6 @@ def _document_extraction_commit_state(
             relation_count=relation_count,
             evidence_fingerprint=evidence_fingerprint,
         ),
-    )
-
-
-def _document_resolution_commit_state(
-    artifact: object,
-    run: object,
-) -> CommitMarkerState:
-    from apps.knowledge_graph.models import (
-        DocumentEntity,
-        DocumentEntityMention,
-        EntityMention,
-    )
-    from apps.knowledge_graph.resolution.coreference import MAX_DOCUMENT_MENTIONS
-    from apps.knowledge_graph.resolution.persistence import (
-        _bounded_rows,
-        resolution_commit_is_valid,
-        resolution_rows_fingerprint,
-        source_mention_fingerprint,
-    )
-
-    stats = getattr(run, "stats", None)
-    marker = stats.get("resolution_commit") if type(stats) is dict else None
-    entity_query = DocumentEntity.objects.filter(artifact=artifact)
-    link_query = DocumentEntityMention.objects.select_related(
-        "document_entity", "mention"
-    ).filter(document_entity__artifact=artifact)
-    entity_count = entity_query.count()
-    membership_count = link_query.count()
-    mention_query = EntityMention.objects.filter(artifact=artifact).order_by("pk")
-    mention_count = mention_query.count()
-    rows_present = bool(entity_count or membership_count)
-    if mention_count > MAX_DOCUMENT_MENTIONS:
-        return CommitMarkerState.CORRUPT
-    if entity_count > MAX_DOCUMENT_MENTIONS:
-        return CommitMarkerState.CORRUPT
-    if membership_count > MAX_DOCUMENT_MENTIONS:
-        return CommitMarkerState.CORRUPT
-    if type(stats) is not dict or "resolution_commit" not in stats:
-        return _commit_marker_state(
-            stats,
-            "resolution_commit",
-            rows_present=rows_present,
-            valid=False,
-        )
-    if type(marker) is not dict:
-        return CommitMarkerState.CORRUPT
-    try:
-        mentions = _bounded_rows(
-            mention_query,
-            MAX_DOCUMENT_MENTIONS,
-            "document mention",
-        )
-        entities = _bounded_rows(
-            entity_query.order_by("pk"),
-            MAX_DOCUMENT_MENTIONS,
-            "document resolution entity",
-        )
-        links = _bounded_rows(
-            link_query.order_by("mention_id"),
-            MAX_DOCUMENT_MENTIONS,
-            "document resolution membership",
-        )
-        source_fingerprint = source_mention_fingerprint(mentions)
-        rows_fingerprint = resolution_rows_fingerprint(entities, links)
-    except (TypeError, ValueError):
-        return CommitMarkerState.CORRUPT
-    result_checksum = marker.get("result_checksum")
-    valid_marker = resolution_commit_is_valid(
-        marker,
-        resolver_version=artifact.resolver_version,
-        ontology_checksum=artifact.ontology_checksum,
-        assembly_version=artifact.assembly_version,
-        assembly_config_checksum=artifact.assembly_config_checksum,
-        source_mention_count=len(mentions),
-        source_mention_fingerprint=source_fingerprint,
-        document_entity_count=entity_count,
-        membership_count=membership_count,
-        result_checksum=result_checksum,
-    )
-    entity_ids = {row.pk for row in entities}
-    mention_ids = {row.pk for row in mentions}
-    row_audits_valid = (
-        len(entity_ids) == len(entities)
-        and type(stats.get("resolution_rows_fingerprint")) is str
-        and _HASH_PATTERN.fullmatch(stats["resolution_rows_fingerprint"]) is not None
-        and stats["resolution_rows_fingerprint"] == rows_fingerprint
-        and all(
-            row.status == row.Status.ACTIVE
-            and type(row.metadata) is dict
-            and row.metadata.get("result_checksum") == result_checksum
-            for row in entities
-        )
-        and {row.mention_id for row in links} == mention_ids
-        and all(
-            row.status == row.Status.ACTIVE
-            and row.document_entity_id in entity_ids
-            and row.mention.artifact_id == artifact.pk
-            and row.resolver_version == artifact.resolver_version
-            and type(row.metadata) is dict
-            and row.metadata.get("result_checksum") == result_checksum
-            for row in links
-        )
-    )
-    return _commit_marker_state(
-        stats,
-        "resolution_commit",
-        rows_present=rows_present,
-        valid=bool(valid_marker and row_audits_valid),
     )
 
 
@@ -2950,6 +2854,26 @@ def _completed_request_document_artifacts(
     return artifacts
 
 
+def _finish_rebuild_preflight(request, parent_id, *, error_code, resnapshot):
+    """Finalize preflight without treating permanent errors as changed sources."""
+    from apps.knowledge_graph.models import GraphRebuildRequest
+
+    if request.scope_type == GraphRebuildRequest.ScopeType.COLLECTION:
+        request.failed_collection_count = 1
+    request.status = GraphRebuildRequest.Status.PARTIAL
+    request.error_code = error_code
+    request.completed_at = timezone.now()
+    if resnapshot:
+        _schedule_rebuild_resnapshot(request)
+    request.save(
+        update_fields=[
+            "status", "failed_collection_count", "error_code",
+            "completed_at", "updated_at",
+        ]
+    )
+    _advance_parent_rebuild_request(parent_id)
+
+
 def advance_rebuild_request(request_id: uuid.UUID | str) -> None:
     """Advance a request only from its exact immutable document snapshot."""
 
@@ -2982,32 +2906,26 @@ def advance_rebuild_request(request_id: uuid.UUID | str) -> None:
         expected = tuple(request.requested_documents)
         try:
             current = _lock_request_completion_snapshot(request, expected)
-        except (LookupError, RuntimeError, ValueError):
-            current = ()
-        if current != expected:
-            if request.scope_type == GraphRebuildRequest.ScopeType.COLLECTION:
-                request.failed_collection_count = 1
-            request.status = GraphRebuildRequest.Status.PARTIAL
-            request.error_code = "request_snapshot_changed"
-            request.completed_at = timezone.now()
-            _schedule_rebuild_resnapshot(request)
-            request.save(
-                update_fields=[
-                    "status",
-                    "failed_collection_count",
-                    "error_code",
-                    "completed_at",
-                    "updated_at",
-                ]
+            if current != expected:
+                raise StaleBuildError("request snapshot changed")
+            active = _completed_request_document_artifacts(
+                request, expected, for_update=True,
             )
-            _advance_parent_rebuild_request(hierarchy_parent_id)
+        except (LookupError, RuntimeError, ValueError) as exc:
+            # KeyError/IndexError from malformed snapshots are permanent errors.
+            stale = isinstance(exc, StaleBuildError) or type(exc) is LookupError
+            invalid = isinstance(
+                exc, (CorruptBuildError, ValueError, KeyError, IndexError)
+            )
+            error_code = (
+                "request_snapshot_changed" if stale
+                else "request_snapshot_invalid" if invalid
+                else "request_snapshot_failed"
+            )
+            _finish_rebuild_preflight(
+                request, hierarchy_parent_id, error_code=error_code, resnapshot=stale,
+            )
             return
-
-        active = _completed_request_document_artifacts(
-            request,
-            expected,
-            for_update=True,
-        )
         request.completed_document_count = min(len(active), request.document_count)
         failure_query = GraphBuildRun.objects.filter(
             rebuild_request_id=request.pk,
@@ -3098,40 +3016,19 @@ def advance_rebuild_request(request_id: uuid.UUID | str) -> None:
                 ),
                 evaluation_request_id=(request.pk if request.evaluation_only else None),
             )
-        except Exception:
-            request.failed_collection_count = 1
-            request.status = GraphRebuildRequest.Status.PARTIAL
-            request.error_code = "collection_manifest_changed"
-            request.completed_at = timezone.now()
-            _schedule_rebuild_resnapshot(request)
-            request.save(
-                update_fields=[
-                    "status",
-                    "failed_collection_count",
-                    "error_code",
-                    "completed_at",
-                    "updated_at",
-                ]
+        except Exception as exc:
+            _finish_rebuild_preflight(
+                request, hierarchy_parent_id,
+                error_code=context_failure_code(exc),
+                resnapshot=isinstance(exc, StaleBuildError),
             )
-            _advance_parent_rebuild_request(hierarchy_parent_id)
             return
         contributing_ids = {artifact.pk for artifact in context.document_artifacts}
         if contributing_ids != {artifact.pk for artifact in active}:
-            request.failed_collection_count = 1
-            request.status = GraphRebuildRequest.Status.PARTIAL
-            request.error_code = "collection_manifest_changed"
-            request.completed_at = timezone.now()
-            _schedule_rebuild_resnapshot(request)
-            request.save(
-                update_fields=[
-                    "status",
-                    "failed_collection_count",
-                    "error_code",
-                    "completed_at",
-                    "updated_at",
-                ]
+            _finish_rebuild_preflight(
+                request, hierarchy_parent_id,
+                error_code="collection_manifest_changed", resnapshot=True,
             )
-            _advance_parent_rebuild_request(hierarchy_parent_id)
             return
         build_key = derive_collection_build_key(context.identity)
         request.expected_aggregate_signature = (
@@ -4016,7 +3913,9 @@ def build_document_graph(
                         )
                     except ValueError as exc:
                         raise CorruptBuildError(str(exc)) from exc
-                    result = resolve_document_mentions(mentions, context.ontology)
+                    result = resolve_document_mentions(
+                        resolvable_mentions(mentions), context.ontology
+                    )
                     persist_document_resolution(
                         artifact.pk,
                         run.pk,
@@ -4132,36 +4031,6 @@ def _collection_extractor_version(artifacts: tuple[object, ...]) -> str:
     return f"manifest-extractors-v1:{_identity_key('extractors-v1', versions)}"
 
 
-def _validate_collection_context_caps(
-    *,
-    document_count: int,
-    entity_count: int,
-    resolution_config: object,
-    assembly_config: object,
-) -> None:
-    """Reject oversized graph inputs without coupling them to raw source volume."""
-
-    counts = {
-        "document": document_count,
-        "entity": entity_count,
-    }
-    if any(type(value) is not int or value < 0 for value in counts.values()):
-        raise CorruptBuildError(
-            "collection context counts must be nonnegative integers"
-        )
-    document_cap = min(
-        resolution_config.max_document_inputs,
-        assembly_config.max_document_inputs,
-    )
-    entity_cap = min(resolution_config.max_entities, assembly_config.max_entities)
-    for name, value, cap in (
-        ("document", document_count, document_cap),
-        ("entity", entity_count, entity_cap),
-    ):
-        if value > cap:
-            raise CorruptBuildError(f"collection context {name} cap exceeded")
-
-
 def _bounded_context_rows(values, maximum: int, label: str) -> tuple[object, ...]:
     """Bound both the preflight count and the post-count iterator snapshot."""
 
@@ -4230,6 +4099,7 @@ def _collection_context(
     ontology = _active_ontology(collection_id) if ontology is None else ontology
     ontology_activation_signature = _ontology_activation_signature(ontology)
     filter_policy = FilterPolicy() if filter_policy is None else filter_policy
+    capacity_overrides = (resolution_config, assembly_config)
     resolution_config = (
         CollectionResolutionConfig() if resolution_config is None else resolution_config
     )
@@ -4346,6 +4216,9 @@ def _collection_context(
         artifact_id__in=tuple(artifact.pk for artifact in artifacts),
         status=DocumentEntity.Status.ACTIVE,
     ).count()
+    resolution_config, assembly_config = select_capacity_configs(
+        entity_count, *capacity_overrides,
+    )
     _validate_collection_context_caps(
         document_count=document_count,
         entity_count=entity_count,

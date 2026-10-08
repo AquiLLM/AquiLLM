@@ -2,11 +2,11 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from lib.llm.types.messages import ToolMessage
 
 from django.test import SimpleTestCase
 
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
+from lib.llm.types.messages import ToolMessage
 from lib.tools.search.vector_search import pack_chunk_search_results
 
 
@@ -39,20 +39,20 @@ class VectorSearchPackTests(SimpleTestCase):
 
     def test_pack_includes_image_url_when_storage_has_image(self):
         chunk = SimpleNamespace(
-            id=7,
-            doc_id="doc-a",
-            chunk_number=1,
-            modality="text",
-            content="figure context",
+            id=7, doc_id="doc-a", chunk_number=1,
+            modality="text", content="figure context",
         )
         storage = SimpleNamespace(exists=lambda _name: True)
-        doc = SimpleNamespace(image_file=SimpleNamespace(name="img/a.png", storage=storage))
+        doc = SimpleNamespace(
+            image_file=SimpleNamespace(name="img/a.png", storage=storage)
+        )
         out = pack_chunk_search_results(
             [chunk],
             titles_by_doc_id={"doc-a": "Doc A"},
             docs_by_doc_id={"doc-a": doc},
             truncate=lambda s: s,
             image_modality="image",
+            include_images=True,
             compact_items=False,
         )
         assert out["result"][0]["image_url"] == "/aquillm/document_image/doc-a/"
@@ -60,20 +60,20 @@ class VectorSearchPackTests(SimpleTestCase):
 
     def test_pack_omits_image_url_when_storage_missing_file(self):
         chunk = SimpleNamespace(
-            id=8,
-            doc_id="doc-b",
-            chunk_number=1,
-            modality="text",
-            content="figure context",
+            id=8, doc_id="doc-b", chunk_number=1,
+            modality="text", content="figure context",
         )
         storage = SimpleNamespace(exists=lambda _name: False)
-        doc = SimpleNamespace(image_file=SimpleNamespace(name="img/b.png", storage=storage))
+        doc = SimpleNamespace(
+            image_file=SimpleNamespace(name="img/b.png", storage=storage)
+        )
         out = pack_chunk_search_results(
             [chunk],
             titles_by_doc_id={"doc-b": "Doc B"},
             docs_by_doc_id={"doc-b": doc},
             truncate=lambda s: s,
             image_modality="image",
+            include_images=True,
             compact_items=False,
         )
         assert "image_url" not in out["result"][0]
@@ -94,8 +94,8 @@ class VectorSearchPackTests(SimpleTestCase):
         assert out["result"] == []
         assert out["retrieval_status"] == "no_results"
         assert out["retrieval_message"] == (
-            'I searched selected documents for "HSC-PDR2 calibration", but retrieval returned '
-            "no relevant passages."
+            'I searched selected documents for "HSC-PDR2 calibration", '
+            "but retrieval returned no relevant passages."
         )
 
     def test_pack_no_results_includes_retrieval_diagnostics_when_provided(self):

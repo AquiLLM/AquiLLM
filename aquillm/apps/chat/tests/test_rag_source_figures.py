@@ -65,6 +65,7 @@ def test_whole_document_figures_preflight_caption_and_preserve_shape(
     with source_runtime_scope(runtime), CaptureQueriesContext(connection) as queries:
         result = whole_document_tool(user, chat, CollectionsRef([doc.collection_id]))(
             doc_id=str(doc.id),
+            include_images=True,
         )
     if allowance == 500:
         assert all(chunk.content in result["result"] for chunk in chunks)

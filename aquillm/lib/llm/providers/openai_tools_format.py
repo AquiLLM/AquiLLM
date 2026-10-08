@@ -1,12 +1,16 @@
 """OpenAI Chat Completions `tools` and `tool_choice` wire format."""
+
 from __future__ import annotations
 
 from os import getenv
-from typing import Any
 
 
-async def transform_openai_tools(tools: list[dict], *, include_strict: bool = True) -> list[dict]:
-    strict_tools = include_strict and getenv("OPENAI_TOOL_STRICT", "0").strip().lower() in ("1", "true", "yes", "on")
+async def transform_openai_tools(
+    tools: list[dict], *, include_strict: bool = True
+) -> list[dict]:
+    strict_tools = include_strict and getenv(
+        "OPENAI_TOOL_STRICT", "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
     transformed: list[dict] = []
     for tool in tools:
         function_payload = {
@@ -15,7 +19,13 @@ async def transform_openai_tools(tools: list[dict], *, include_strict: bool = Tr
             "parameters": {
                 "type": "object",
                 "properties": tool["input_schema"]["properties"],
-                "required": tool["input_schema"].get("required", []),
+                # Strict wire schemas require every property. The model must
+                # choose optional booleans explicitly; Python defaults remain.
+                "required": (
+                    list(tool["input_schema"]["properties"])
+                    if strict_tools
+                    else tool["input_schema"].get("required", [])
+                ),
                 "additionalProperties": False,
             },
         }

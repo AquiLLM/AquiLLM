@@ -11,15 +11,12 @@ from typing import Any
 from lib.retrieval.evidence import SourceEvidence, source_provenance
 
 IMAGE_MARKDOWN_INSTRUCTION = (
-    "One or more results include an image URL (fie"
-    "ld `image_url`, or compact payloads: `u` with"
-    " "
-    "`ty` of `image` or `text_with_image`). When d"
-    "iscussing those results, include them in mark"
-    "down "
-    "with ![description](url) using that exact URL"
-    " from the tool result—do not guess document i"
-    "ds."
+    "Image URLs are optional visual evidence (`image_url`, or compact `u`). "
+    "Select only images that directly support this answer or that the user "
+    "requested; shared keywords or membership in a retrieved document are "
+    "not enough. A text-only answer is appropriate when no image adds useful "
+    "evidence. For a selected image, explain its relevance and use "
+    "![description](url) with the exact tool URL; never invent an image URL."
 )
 
 
@@ -75,6 +72,7 @@ def pack_chunk_search_results(
     docs_by_doc_id: dict[Any, Any],
     truncate: Callable[[str], str],
     image_modality: Any,
+    include_images: bool = False,
     image_url_prefix: str = "/aquillm/document_image/",
     compact_items: bool | None = None,
     search_string: str | None = None,
@@ -142,8 +140,8 @@ def pack_chunk_search_results(
 
         doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
         if chunk.doc_id not in image_renderable_by_doc_id:
-            image_renderable_by_doc_id[chunk.doc_id] = _doc_has_renderable_image(
-                doc_for_chunk
+            image_renderable_by_doc_id[chunk.doc_id] = (
+                include_images and _doc_has_renderable_image(doc_for_chunk)
             )
         has_renderable_image = image_renderable_by_doc_id[chunk.doc_id]
 

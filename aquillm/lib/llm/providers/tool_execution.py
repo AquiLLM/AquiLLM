@@ -6,6 +6,12 @@ from typing import Any, Literal
 from lib.llm.turn_context import check_turn_active, submit_tool, tool_timeout
 from lib.llm.types.messages import AssistantMessage, ToolMessage
 from lib.llm.utils.tool_call_kwargs import normalize_tool_call_kwargs
+from lib.llm.execution_context import (
+    UncertainToolExecution,
+    execution_is_bound,
+    run_tool_once,
+    uncertain_tool_message,
+)
 
 from . import image_context as imgctx
 
@@ -47,15 +53,20 @@ def call_tool(self, message: AssistantMessage) -> ToolMessage:
             else:
                 call_arguments = normalize_tool_call_kwargs(name, input)
                 future = submit_tool(
-                    self.tool_executor, partial(tool, **call_arguments)
+                    self.tool_executor,
+                    partial(run_tool_once, message, partial(tool, **call_arguments)),
                 )
                 try:
                     tool_timeout_s = tool_timeout(message.tool_call_name)
                     result_dict = future.result(timeout=tool_timeout_s)
                     check_turn_active()
                     result = imgctx.serialize_tool_result_for_llm(result_dict)
+                except UncertainToolExecution:
+                    return uncertain_tool_message(message)
                 except TimeoutError:
                     future.cancel()
+                    if execution_is_bound():
+                        return uncertain_tool_message(message)
                     result_dict = {"exception": "Tool call timed out"}
                     result = imgctx.serialize_tool_result_for_llm(result_dict)
                 except Exception as e:

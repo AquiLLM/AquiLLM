@@ -23,6 +23,7 @@ from apps.documents.tests.hybrid_graph_test_support import (
 )
 from apps.documents.tests.test_chunk_search_graph_overlay import _DOC_A
 from apps.knowledge_graph.retrieval.branch_contracts import (
+    DirectBranchFailureReason,
     ExtendedBranchFailureReason,
     GraphBranchCandidateV1,
 )
@@ -112,3 +113,37 @@ def test_empty_and_shared_failure_paths_emit_one_fixed_event(monkeypatch, failur
         "failed" if failure else "succeeded_empty"
     )
     assert diagnostics["graph_extended_status"] == diagnostics["graph_direct_status"]
+
+
+def test_whole_branch_timeout_labels_reach_redacted_transport_diagnostics(monkeypatch):
+    from apps.documents.services import hybrid_graph_diagnostics
+
+    events = []
+    monkeypatch.setattr(
+        hybrid_graph_diagnostics,
+        "logger",
+        SimpleNamespace(info=lambda event, **fields: events.append(fields)),
+    )
+    runtime = _Runtime()
+    runtime.direct = failed_branch(
+        HybridBranchKind.DIRECT,
+        DirectBranchFailureReason.DIRECT_BRANCH_TIMEOUT,
+        elapsed_ms=125,
+    )
+    runtime.extended = failed_branch(
+        HybridBranchKind.EXTENDED,
+        ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT,
+        elapsed_ms=125,
+    )
+    rows, diagnostics = hybrid_graph_candidate_pool(
+        replace(selected_snapshot(baseline=()), baseline_candidates=()),
+        "SECRET query",
+        authorization(Policy()),
+        HybridGraphRetrievalDependencies(runtime, hybrid_settings(), lambda **kw: ()),
+    )
+    assert rows == ()
+    assert diagnostics["graph_direct_reason"] == "direct_branch_timeout"
+    assert diagnostics["graph_extended_reason"] == "extended_branch_timeout"
+    assert diagnostics["graph_raw_count"] == 0
+    assert len(events) == 1
+    assert "SECRET" not in json.dumps(events)

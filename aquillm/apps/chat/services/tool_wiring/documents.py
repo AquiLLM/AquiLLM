@@ -24,7 +24,10 @@ from aquillm.llm import LLMTool, ToolResultDict, llm_tool
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
 from lib.tools.documents import whole_document as whole_document_tools
 from lib.tools.documents.list_ids import titles_to_document_ids
-from lib.tools.search.vector_search import pack_chunk_search_results
+from lib.tools.search.vector_search import (
+    IMAGE_MARKDOWN_INSTRUCTION,
+    pack_chunk_search_results,
+)
 
 from ..retrieval_authorization import resolve_document_retrieval_authorization
 from .adjacent_documents import more_context_tool as more_context_tool
@@ -66,31 +69,30 @@ def vector_search_tool(
                 "for simple questions, 8-10 for broad "
                 "or multi-part questions."
             ),
+            "include_images": whole_document_tools.INCLUDE_IMAGES_DESCRIPTION,
         },
         required=["search_string", "top_k"],
         for_whom="assistant",
     )
-    def vector_search(search_string: str, top_k: int) -> ToolResultDict:
+    def vector_search(
+        search_string: str, top_k: int, include_images: bool = False
+    ) -> ToolResultDict:
         """
-        Uses a combination of vector search, trigram search and reranking to search
-        the documents
-        available to the user. You must pass search_string and top_k every
-        time—empty tool calls fail.
-        Prefer this tool when the question may span many documents; it does not
-        require document UUIDs.
-        Returns text and image chunks, including image OCR text.
-        After using this tool, tell the user that you searched the selected
-        documents for
+        Search available documents with vector/trigram search and reranking.
+        Always pass search_string and top_k; empty tool calls fail.
+        Prefer this tool for questions spanning documents; no UUIDs required.
+        Returns text chunks and image OCR text; image URLs require include_images.
+        Tell the user that you searched the selected documents for
         `search_string`, and cite or name the documents used in the final answer.
-        When returning results to the user that include images, use markdown image
-        syntax:
-        ![description](image_url)
+        Select only images that help answer the current question.
         """
         if top_k < 1 or top_k > 15:
             return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
         if not search_string.strip():
             return {"exception": "search_string must not be empty"}
-        if not admit_tool_action("vector", search_string):
+        if not admit_tool_action(
+            "vector", search_string, include_images=include_images
+        ):
             return limited_action_result()
         docs = selected_document_metadata(user, col_ref)
         if not docs:
@@ -115,6 +117,7 @@ def vector_search_tool(
             docs_by_doc_id=docs_by_doc_id,
             truncate=truncate_tool_text,
             image_modality=TextChunk.Modality.IMAGE,
+            include_images=include_images,
             search_string=search_string,
             search_scope="selected documents",
             retrieval_diagnostics=diagnostics,
@@ -160,12 +163,15 @@ def whole_document_tool(
                 "If the document is in another collection you "
                 "can access, add that collection in the "
                 "chat picker or use the exact id from the library."
-            )
+            ),
+            "include_images": whole_document_tools.INCLUDE_IMAGES_DESCRIPTION,
         },
     )
-    def whole_document(doc_id: str) -> ToolResultDict:
-        """Open an authorized exact document with chunk citations and images."""
-        if not admit_tool_action("whole", document_id=doc_id):
+    def whole_document(doc_id: str, include_images: bool = False) -> ToolResultDict:
+        """Open an authorized document with chunk citations and optional images."""
+        if not admit_tool_action(
+            "whole", document_id=doc_id, include_images=include_images
+        ):
             return limited_action_result()
         doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
@@ -181,7 +187,9 @@ def whole_document_tool(
         if not can_view_document(user, doc):
             return {"exception": f"User cannot access document {doc_id}!"}
         if source_mode_enabled():
-            return bounded_whole_document(doc, chat_ref, user=user)
+            return bounded_whole_document(
+                doc, chat_ref, user=user, include_images=include_images
+            )
         chunks = (
             TextChunk.objects.filter(doc_id=doc.id)
             .only("id", "chunk_number", "content")
@@ -193,8 +201,7 @@ def whole_document_tool(
         if citation_chunks:
             ret["citation_chunks"] = citation_chunks
 
-        image_file = getattr(doc, "image_file", None)
-        if image_file:
+        if include_images and getattr(doc, "image_file", None):
             display_url = f"/aquillm/document_image/{doc.id}/"
             ret["result"] = image_document_tool_payload(
                 full_text=document_text, title=doc.title, display_url=display_url
@@ -202,7 +209,7 @@ def whole_document_tool(
             ret["_image_instruction"] = image_document_instruction(
                 title=doc.title, display_url=display_url
             )
-        else:
+        elif include_images:
             figures = _related_figure_payloads(doc, user=user)
             if figures:
                 ret["result"] = {
@@ -210,12 +217,7 @@ def whole_document_tool(
                     "text": document_text,
                     "figures": figures,
                 }
-                ret["_image_instruction"] = (
-                    "Related figures include image_url fields. Whe"
-                    "n the user asks for figures, "
-                    "include relevant figures in markdown with ![d"
-                    "escription](image_url)."
-                )
+                ret["_image_instruction"] = IMAGE_MARKDOWN_INSTRUCTION
 
         serialized_result = serialize_tool_result_for_llm(ret)
         token_count = async_to_sync(chat_ref.chat.llm_if.token_count)(
@@ -249,30 +251,27 @@ def search_single_document_tool(
             ),
             "search_string": "String to search the contents of the document by.",
             "top_k": "Number of search results to return.",
+            "include_images": whole_document_tools.INCLUDE_IMAGES_DESCRIPTION,
         },
     )
     def search_single_document(
-        doc_id: str, search_string: str, top_k: int
+        doc_id: str, search_string: str, top_k: int, include_images: bool = False
     ) -> ToolResultDict:
         """
-        Use vector search to search the text of a single document. If the user may
-        mean many
-        documents, prefer vector_search instead (no doc_id required).
-        Returns text chunks and image chunks. For image chunks, both the image and
-        its
-        OCR-extracted text are provided.
+        Search a single document. Prefer vector_search for multiple documents.
+        Returns text chunks and image OCR text; image URLs require include_images.
         After using this tool, tell the user which document was searched for
         `search_string`,
         and cite or name the document in the final answer.
-        When returning results to the user that include images, use markdown image
-        syntax:
-        ![description](image_url)
+        Select only images that help answer the current question.
         """
         if top_k < 1 or top_k > 15:
             return {"exception": f"top_k must be between 1 and 15, got {top_k}"}
         if not search_string.strip():
             return {"exception": "search_string must not be empty"}
-        if not admit_tool_action("document", search_string, document_id=doc_id):
+        if not admit_tool_action(
+            "document", search_string, document_id=doc_id, include_images=include_images
+        ):
             return limited_action_result()
         doc_uuid, error_msg = _resolve_doc_uuid(doc_id, user, col_ref)
         if doc_uuid is None:
@@ -307,6 +306,7 @@ def search_single_document_tool(
             docs_by_doc_id=docs_by_doc_id,
             truncate=truncate_tool_text,
             image_modality=TextChunk.Modality.IMAGE,
+            include_images=include_images,
             search_string=search_string,
             search_scope=f'document "{doc.title}"',
             retrieval_diagnostics=diagnostics,

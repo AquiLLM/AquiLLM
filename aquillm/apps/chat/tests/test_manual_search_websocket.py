@@ -7,7 +7,7 @@ import pytest
 
 from apps.chat.consumers.chat_receive import handle_chat_receive
 from apps.chat.services import manual_search_turn
-from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
+from apps.chat.tests.chat_message_test_support import _FakeLLMInterface, stub_execution_ownership
 from apps.chat.tests.test_direct_rag_websocket_smoke import (
     _append_payload,
     _consumer,

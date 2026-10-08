@@ -107,6 +107,14 @@ def test_edge_pages_preserve_every_authority_arm_and_limit_before_wide_projectio
         with driver._connection().session() as session:
             for relationship, _cursor, _fields in _SPECS:
                 session.run(f"CREATE EDGE INDEX ON :{relationship}").consume()
+                session.run(
+                    f"CREATE EDGE INDEX ON :{relationship}(generation_key)"
+                ).consume()
+                session.run(
+                    "UNWIND range(1,10000) AS i CREATE (s {generation_key:'unrelated'})"
+                    f"-[:{relationship} {{generation_key:'unrelated'}}]->"
+                    "(t {generation_key:'unrelated'})"
+                ).consume()
                 for source_gen, target_gen, edge_gen in cases:
                     session.run(
                         "CREATE (source {generation_key:$sg,opaque_key:'tie'})"
@@ -133,8 +141,24 @@ def test_edge_pages_preserve_every_authority_arm_and_limit_before_wide_projectio
                 max_records=100,
             )
             assert len(baseline) == 8
-            actual = tuple(edges._stream_edge_family(driver, "g", query, 8, 100, 0.3))
-            assert actual == tuple(edges._mapping(row) for row in baseline)
+            with pytest.raises(ValueError, match="incident"):
+                tuple(edges._stream_edge_family(driver, "g", query, 4, 100, 0.3))
+            # Every old predicate arm outside the property-index page must be
+            # rejected, including unlabelled endpoints and null generations.
+            guard = edges._INCIDENT_GUARDS[query]
+            assert driver.execute_read(
+                guard, {"generation_key": "g"}, timeout_seconds=0.3, max_records=1
+            ) == ({"invalid_incident_edge": True},)
+            with driver._connection().session() as session:
+                session.run(
+                    f"MATCH (s)-[e:{spec[0]}]->(t) "
+                    "WHERE (s.generation_key='g' OR t.generation_key='g') "
+                    "AND (e.generation_key IS NULL OR e.generation_key <> 'g') DELETE e"
+                ).consume()
+            actual = tuple(edges._stream_edge_family(driver, "g", query, 4, 100, 0.3))
+            assert actual == tuple(
+                edges._mapping(row) for row in baseline if row["generation_key"] == "g"
+            )
             assert {row["source_generation_key"] for row in actual} == {
                 "g",
                 "other",
@@ -147,7 +171,8 @@ def test_edge_pages_preserve_every_authority_arm_and_limit_before_wide_projectio
                 max_records=100,
             )
             operators = [row["QUERY PLAN"].strip() for row in plans]
-            assert any("ScanAllByEdgeType " in row for row in operators)
+            assert any("ScanAllByEdgeTypeProperty" in row for row in operators)
+            assert not any("ScanAllByEdgeType " in row for row in operators)
             # EXPLAIN lists the output operator first: property projection must
             # occur after the bounded window rather than for every scanned edge.
             wide = next(

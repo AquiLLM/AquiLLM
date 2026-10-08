@@ -8,6 +8,14 @@ import pytest
 
 from apps.knowledge_graph.projection import tasks
 from apps.knowledge_graph.projection.memgraph_driver import MemgraphDriverError
+from apps.knowledge_graph.tests.test_projection_bounded_maintenance import RedisBoundary
+
+
+@pytest.fixture(autouse=True)
+def isolated_maintenance_broker(monkeypatch):
+    client = RedisBoundary()
+    monkeypatch.setattr(tasks.maintenance, "broker_client", lambda: client)
+    return client
 
 
 def test_projection_task_uses_canonical_uuid_and_returns_redacted_summary(monkeypatch):
@@ -40,10 +48,10 @@ def test_reconcile_and_prune_tasks_are_registered_thin_wrappers(monkeypatch):
     calls = {}
     monkeypatch.setattr(
         tasks,
-        "reconcile_graph_projections",
+        "reconcile_projection_batch",
         lambda **kwargs: (
             calls.update(reconcile=kwargs)
-            or SimpleNamespace(examined_count=2, enqueued_count=1)
+            or SimpleNamespace(examined_count=2, enqueued_count=1, failure_count=0)
         ),
     )
     monkeypatch.setattr(
@@ -80,6 +88,9 @@ def test_reconcile_and_prune_tasks_are_registered_thin_wrappers(monkeypatch):
         "examined_count": 2,
         "enqueued_count": 1,
         "published_count": 2,
+        "failure_count": 0,
+        "failure_code": None,
+        "skipped": False,
     }
     assert pruned == {"candidate_count": 3, "deleted_count": 2}
     assert calls["reconcile"]["collection_id"] == 17
@@ -95,15 +106,21 @@ def test_projection_module_registers_exactly_three_production_task_wrappers() ->
     assert "def publish_knowledge_graph_projection_outbox" not in source
 
 
-def test_reconcile_task_retries_failed_outbox_then_publishes(monkeypatch) -> None:
+def test_reconcile_task_leaves_failed_outbox_due_without_retry_flood(
+    monkeypatch,
+    isolated_maintenance_broker,
+) -> None:
     monkeypatch.setattr(
         tasks,
-        "reconcile_graph_projections",
-        lambda **_kwargs: SimpleNamespace(examined_count=0, enqueued_count=0),
+        "reconcile_projection_batch",
+        lambda **_kwargs: SimpleNamespace(
+            examined_count=0, enqueued_count=0, failure_count=0
+        ),
     )
     summaries = [
         SimpleNamespace(attempted_count=1, published_count=0, failed_count=1),
         SimpleNamespace(attempted_count=1, published_count=1, failed_count=0),
+        SimpleNamespace(attempted_count=0, published_count=0, failed_count=0),
         SimpleNamespace(attempted_count=0, published_count=0, failed_count=0),
     ]
     observed = []
@@ -113,12 +130,17 @@ def test_reconcile_task_retries_failed_outbox_then_publishes(monkeypatch) -> Non
         lambda **kwargs: observed.append(kwargs) or summaries.pop(0),
     )
 
-    with pytest.raises(RuntimeError, match="projection_task_transient"):
-        tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+    initial = tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+    assert initial["failure_count"] == 1
+    assert initial["published_count"] == 1
+    duplicate = tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+    assert duplicate["skipped"] is True
+    isolated_maintenance_broker.now = 301
     recovered = tasks.reconcile_knowledge_graph_projections.run(10, False, None)
 
-    assert recovered["published_count"] == 1
+    assert recovered["published_count"] == 0
     assert [call["using"] for call in observed] == [
+        "projection_state",
         "projection_state",
         "projection_state",
         "projection_state",
@@ -137,17 +159,17 @@ def test_reconcile_attempts_due_outbox_before_graph_maintenance(monkeypatch) -> 
     )
     monkeypatch.setattr(
         tasks,
-        "reconcile_graph_projections",
+        "reconcile_projection_batch",
         lambda **_kwargs: (
             order.append("reconcile")
             or (_ for _ in ()).throw(TimeoutError("backend detail"))
         ),
     )
 
-    with pytest.raises(RuntimeError, match="projection_task_transient"):
-        tasks.reconcile_knowledge_graph_projections.run(10, False, None)
+    result = tasks.reconcile_knowledge_graph_projections.run(10, False, None)
 
-    assert order == ["publish", "reconcile"]
+    assert order == ["publish", "reconcile", "publish"]
+    assert result["failure_code"] == "maintenance_pass_failed"
 
 
 def test_task_boundary_retries_fixed_redacted_memgraph_failures():

@@ -1,8 +1,10 @@
 import io
 import os
+import math
 from os import getenv
 
 import structlog
+import httpx
 from openai import BadRequestError, OpenAI
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -21,9 +23,17 @@ def _openai_client() -> OpenAI:
     api_key = (
         getenv("INGEST_TRANSCRIBE_OPENAI_API_KEY") or getenv("OPENAI_API_KEY") or ""
     ).strip()
-    if base_url:
-        return OpenAI(base_url=base_url, api_key=api_key or "EMPTY")
-    return OpenAI(api_key=api_key)
+    try:
+        timeout = float(getenv("INGEST_TRANSCRIBE_TIMEOUT_SECONDS", "120"))
+    except ValueError:
+        timeout = 120
+    if not math.isfinite(timeout) or timeout <= 0:
+        timeout = 120
+    # Do not repeat a potentially expensive transcription automatically.
+    return OpenAI(
+        base_url=base_url, api_key=api_key or "EMPTY",
+        timeout=httpx.Timeout(min(timeout, 600), connect=5), max_retries=0,
+    )
 
 
 def transcribe_media_bytes(data: bytes, filename: str) -> str:

@@ -1,3 +1,11 @@
+FROM node:22-bookworm-slim AS frontend
+WORKDIR /build/react
+COPY react/package.json react/package-lock.json ./
+RUN npm ci
+COPY react/ ./
+COPY aquillm/ /build/aquillm/
+RUN npm run build && npx --no-install tailwindcss -o /build/aquillm/aquillm/static/index.css
+
 FROM astral/uv:0.8.17-python3.12-bookworm
 
 ENV PORT=${PORT}
@@ -8,8 +16,9 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 RUN UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_INSTALLS=1 uv sync --frozen --no-dev --no-cache
-RUN uv pip install --python /opt/venv/bin/python --no-cache-dir "mem0ai[graph]" langchain-memgraph rank-bm25
-RUN apt update && apt install -y curl nodejs npm tesseract-ocr \
+COPY deploy/docker/web/runtime-constraints.txt /opt/aquillm-runtime-constraints.txt
+RUN uv pip install --python /opt/venv/bin/python --no-cache-dir --constraint /opt/aquillm-runtime-constraints.txt "mem0ai[graph]" langchain-memgraph rank-bm25
+RUN apt update && apt install -y curl tesseract-ocr \
     libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui
 
 # Chromium is only needed for crawl-time PDF capture (CRAWL_CAPTURE_PDF). It is
@@ -19,7 +28,15 @@ ARG CRAWL_CAPTURE_PDF=false
 RUN if [ "$CRAWL_CAPTURE_PDF" = "true" ] || [ "$CRAWL_CAPTURE_PDF" = "1" ]; then \
         apt update && apt install -y chromium chromium-driver fonts-liberation; \
     fi
+# Tokenizers are imported during Django startup; cache their data outside /app
+# so restarting a bind-mounted deployment does not require an external download.
+ENV TIKTOKEN_CACHE_DIR=/opt/aquillm-tokenizers
+RUN /opt/venv/bin/python -c "import tiktoken; tiktoken.get_encoding('o200k_base'); tiktoken.get_encoding('cl100k_base')"
 COPY . .
+COPY --from=frontend /build/aquillm/aquillm/static/js/dist/ /opt/aquillm-static/js/dist/
+COPY --from=frontend /build/aquillm/aquillm/static/index.css /opt/aquillm-static/index.css
+ENV AQUILLM_BUILT_STATIC_DIR=/opt/aquillm-static
+ENV AQUILLM_STATIC_ROOT=/opt/aquillm-collected-static
 
 
 WORKDIR /app/aquillm

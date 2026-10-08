@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+from time import monotonic
 from uuid import UUID, uuid4
 
 from celery import shared_task
+from django.conf import settings as django_settings
 from django.utils import timezone
 
+from . import maintenance
 from .memgraph_driver import MemgraphDriverError
 from .outbox import publish_projection_outbox
 from .reconciler import (
     prune_graph_projection_generations,
     reconcile_graph_projections,
+    reconcile_projection_batch,
 )
 from .runtime import ProjectionDatabaseAliases, load_projection_runtime_settings
 from .worker import project_generation
@@ -47,17 +51,6 @@ def _uuid(value: object) -> UUID:
     return parsed
 
 
-def _publish_due_outbox(limit: int):
-    summary = publish_projection_outbox(
-        limit=limit,
-        now=timezone.now(),
-        using=ProjectionDatabaseAliases().state,
-    )
-    if summary.failed_count:
-        raise TimeoutError("projection_outbox_publish_pending")
-    return summary
-
-
 @shared_task(
     bind=True,
     name="apps.knowledge_graph.projection.tasks.project_knowledge_graph_projection",
@@ -92,42 +85,84 @@ def reconcile_knowledge_graph_projections(
     collection_id: int | None = None,
 ):
     size = _TASK_SETTINGS.projection_batch_size if page_size is None else page_size
-    published = (
-        None
-        if dry_run
-        else _run_redacted(
+    if dry_run is True:
+        summary = _run_redacted(
             self,
-            lambda: _publish_due_outbox(size),
+            lambda: reconcile_graph_projections(
+                page_size=size,
+                dry_run=True,
+                collection_id=collection_id,
+            ),
         )
+        return {
+            "examined_count": summary.examined_count,
+            "enqueued_count": summary.enqueued_count,
+            "published_count": 0,
+        }
+    from .reconciler import _collection, _size
+
+    size = min(_size(size, "page_size"), maintenance.MAX_ARTIFACTS)
+    _collection(collection_id)
+    if type(dry_run) is not bool:
+        raise TypeError("dry_run must be exact")
+    result = dict(
+        examined_count=0,
+        enqueued_count=0,
+        published_count=0,
+        failure_count=0,
+        failure_code=None,
+        skipped=False,
     )
-    summary = _run_redacted(
-        self,
-        lambda: reconcile_graph_projections(
-            page_size=size,
-            dry_run=dry_run,
-            collection_id=collection_id,
-        ),
-    )
-    if not dry_run:
-        # Reconciliation itself creates durable outbox rows. Flush those too;
-        # a full page schedules another bounded pass for the remaining backlog.
-        recovered = _run_redacted(self, lambda: _publish_due_outbox(size))
-        published_count = published.published_count + recovered.published_count
-        if recovered.attempted_count == size:
-            _run_redacted(
-                self,
-                lambda: self.apply_async(
-                    kwargs={"page_size": size, "collection_id": collection_id},
-                    countdown=1,
-                ),
+    try:
+        admission = maintenance.admit(
+            maintenance.broker_client(),
+            scope="global" if collection_id is None else f"collection:{collection_id}",
+            interval=int(
+                getattr(django_settings, "KG_MAINTENANCE_INTERVAL_SECONDS", 300)
+            ),
+        )
+    except Exception:
+        return {
+            **result,
+            "failure_code": "maintenance_coordination_unavailable",
+            "skipped": True,
+        }
+    if admission is None:
+        return {**result, "skipped": True}
+    deadline = monotonic() + maintenance.PASS_SECONDS
+
+    # Failed publications remain durable and due. The next admitted pass retries
+    # them; maintenance never produces its own retry/global-audit message flood.
+    def flush():
+        try:
+            summary = publish_projection_outbox(
+                limit=size, now=timezone.now(), using=ProjectionDatabaseAliases().state
             )
-    else:
-        published_count = 0
-    return {
-        "examined_count": summary.examined_count,
-        "enqueued_count": summary.enqueued_count,
-        "published_count": published_count,
-    }
+            result["published_count"] += summary.published_count
+            result["failure_count"] += summary.failed_count
+        except Exception:
+            result["failure_count"] += 1
+            result["failure_code"] = "maintenance_outbox_unavailable"
+
+    flush()
+    try:
+        if monotonic() < deadline:
+            summary = reconcile_projection_batch(
+                after_id=admission.cursor,
+                page_size=size,
+                deadline=deadline,
+                collection_id=collection_id,
+                save_cursor=admission.save_cursor,
+            )
+            result["examined_count"] = summary.examined_count
+            result["enqueued_count"] = summary.enqueued_count
+            result["failure_count"] += summary.failure_count
+    except Exception:
+        result["failure_count"] += 1
+        result["failure_code"] = "maintenance_pass_failed"
+    if monotonic() < deadline:
+        flush()
+    return result
 
 
 @shared_task(

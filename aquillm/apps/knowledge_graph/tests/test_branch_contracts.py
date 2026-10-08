@@ -140,6 +140,7 @@ def test_closed_shared_direct_extended_failure_values_and_status() -> None:
         "fusion_invalid",
     )
     assert tuple(DirectBranchFailureReason) == (
+        "direct_branch_timeout",
         "extractor_timeout",
         "extractor_auth",
         "extractor_provenance",
@@ -152,6 +153,7 @@ def test_closed_shared_direct_extended_failure_values_and_status() -> None:
         "direct_ppr_invalid",
     )
     assert tuple(ExtendedBranchFailureReason) == (
+        "extended_branch_timeout",
         "extended_seed_invalid",
         "extended_no_seeds",
         "extended_topology_timeout",

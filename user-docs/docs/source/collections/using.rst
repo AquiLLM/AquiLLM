@@ -9,8 +9,15 @@ Do this in the current conversation so the model is allowed to read documents fr
 
 1. Wait until uploads in your collection have **finished processing** (use the ingestion monitor if you are unsure).
 2. Open a chat: use **New Conversation** in the left menu for a new thread, or stay in an existing one.
-3. Click **Collections** on the bottom bar (right side, next to the message field).
-4. In the dialog, check the collection(s) you want. You can select several, including **sub-collections** (for example a **Figures** folder from a PDF) when they appear.
+3. Click the **Collections and skills** control beside the message field. It shows separate collection and skill counts.
+4. In **Collections**, check the collections you want. Selecting or removing a parent also selects or removes its accessible descendants. Expand or collapse folders with the arrow, or search by name or parent path.
+5. Optionally open **Skills** to inspect or change the response instructions for this chat. A collection's skills badge opens its associated skills.
+6. Review the separate **Collections** and **Skills** groups under **In this chat**, then choose **Apply to chat**. The dialog closes after the server confirms the save.
+
+Changes stay in the dialog until you apply them. **Cancel**, Escape, or clicking outside
+the dialog discards your draft. If saving fails or times out, the draft stays open with
+a message so you can retry. Wait until the current reply finishes before applying
+changes. Your applied choices are restored when you reopen the conversation.
 
 .. figure:: /_static/images/usingCollections/home_page.png
    :alt: AquiLLM chat with New Conversation in the sidebar and Collections button on the bottom bar
@@ -24,7 +31,7 @@ Do this in the current conversation so the model is allowed to read documents fr
    :width: 800px
    :align: center
 
-   Pick libraries here; the bar updates (for example **Collections (2 selected)**).
+   The earlier collection-only dialog is shown here. The current picker has Collections and Skills tabs, an In this chat summary, and an Apply to chat button.
 
 Markdown skills in collections
 ==============================
@@ -35,9 +42,16 @@ If your administrator has enabled collection skills, you can add **prompt instru
 - Name a file ``skill.md``, ``skills.md``, or ``my-topic_skill.md``, **or**
 - Add a subcollection named ``skills`` or ``skill_pack`` and put ``.md`` files inside it.
 
-When that collection is selected for the conversation, AquiLLM merges the skill text into
-the system prompt for that session. See :doc:`../skills/markdown` for naming rules and
-examples.
+Collection selection enables associated skills by default. In **Skills**, you can enable
+an individual skill without selecting its collection for document retrieval, or turn off
+an inherited skill. **Follow collection selection** resets an individual override.
+Removing a collection removes inherited skills; explicitly enabled skills stay enabled.
+**Clear all** clears retrieval collections and disables all currently available collection
+skills. Server-wide operator skills are managed separately and are unaffected.
+
+Skill-pack collections remain selectable for retrieval and are labeled **Skill pack**.
+Selecting a parent and its pack does not duplicate the pack's skills. See
+:doc:`../skills/markdown` for naming rules and examples.
 
 Ask about documents
 ===================

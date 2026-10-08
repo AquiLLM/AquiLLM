@@ -18,6 +18,7 @@ def _settings():
     return SimpleNamespace(
         projection_batch_size=25,
         graph_overall_timeout_ms=500,
+        projection_timeout_ms=12000,
     )
 
 

@@ -6,8 +6,13 @@ import unicodedata
 from math import isfinite
 from uuid import UUID
 
-_MAX_SOURCE_TEXT_CHARACTERS = 1_000_000
-_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS = 2_000_000
+from ..extraction.evidence import ExtractionCapacityCode, ExtractionCapacityError
+from ..extraction.limits import DOCUMENT_SOURCE_MAX_CHARACTERS
+
+# Every admitted extraction source must also fit document resolution, whether
+# supplied as a single context or spread across multiple unique chunk contexts.
+_MAX_SOURCE_TEXT_CHARACTERS = DOCUMENT_SOURCE_MAX_CHARACTERS
+_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS = DOCUMENT_SOURCE_MAX_CHARACTERS
 _MAX_IDENTIFIER_CHARACTERS = 2_048
 _MAX_SOURCE_KEY_CHARACTERS = 512
 _MAX_MENTION_ID_CHARACTERS = 128
@@ -71,7 +76,8 @@ def _validated_source_text(value: object) -> str:
     if type(value) is not str:
         raise ValueError("source text must be a string")
     if len(value) > _MAX_SOURCE_TEXT_CHARACTERS:
-        raise ValueError(
+        raise ExtractionCapacityError(
+            ExtractionCapacityCode.CHARACTER_LIMIT,
             f"source text exceeds the {_MAX_SOURCE_TEXT_CHARACTERS}-character limit"
         )
     if _contains_unsafe_control(

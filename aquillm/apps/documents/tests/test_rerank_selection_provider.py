@@ -48,6 +48,31 @@ def test_known_pointwise_endpoint_sends_model_and_caps_timeout(monkeypatch):
     ]
 
 
+def test_final_pair_preparation_refuses_silent_query_or_document_clipping():
+    from apps.documents.services.chunk_rerank_selection_provider import (
+        LocalSelectionScorer,
+    )
+
+    scorer = LocalSelectionScorer(
+        endpoint="http://reranker/score",
+        shape="score_single_text_pair",
+        model_name="model",
+        revision="revision",
+        char_limit=10,
+        pair_limit=8,
+        reserve=0,
+        timeout=3.0,
+        deadline=100.0,
+        clock=lambda: 0.0,
+    )
+    assert scorer.prepare_emitted_pair("question", "short") == (
+        "question",
+        "short",
+    )
+    assert scorer.prepare_emitted_pair("question", "x" * 20) is None
+    assert scorer.prepare_emitted_pair("a long question " * 20, "short") is None
+
+
 def test_retry_checks_deadline_and_records_successful_shorter_pair(monkeypatch):
     from apps.documents.services import chunk_rerank_selection_provider as provider
 

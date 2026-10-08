@@ -1,6 +1,7 @@
 """Real Channels dispatch must deliver disconnect during an owned turn."""
 
 import asyncio
+from json import loads
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -29,7 +30,7 @@ async def test_asgi_disconnect_cancels_blocked_sdk_before_late_save(
         "default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}
     }
     user, doc, chunks, _ = docs
-    started, released, cancelled, initial_saved = (asyncio.Event() for _ in range(4))
+    started, released, cancelled = (asyncio.Event() for _ in range(3))
 
     async def create(**kwargs):
         started.set()
@@ -59,18 +60,16 @@ async def test_asgi_disconnect_cancels_blocked_sdk_before_late_save(
         ),
         "test",
     )
-    db = SimpleNamespace(
-        id=1,
+    from apps.chat.models import WSConversation
+    db = await WSConversation.objects.acreate(
+        owner=user,
         selected_collection_ids=[doc.collection_id],
         system_prompt="sys",
         name="existing",
     )
     db.save = lambda **kwargs: None
-    consumer._ChatConsumer__get_all_user_collections = AsyncMock()
     consumer._ChatConsumer__get_convo = AsyncMock(return_value=db)
-    consumer._save_conversation = AsyncMock(
-        side_effect=lambda **kw: initial_saved.set()
-    )
+    consumer._save_conversation = AsyncMock()
     pending = Conversation(
         system="sys",
         messages=[
@@ -104,7 +103,8 @@ async def test_asgi_disconnect_cancels_blocked_sdk_before_late_save(
         await app.send_input({"type": "websocket.connect"})
         assert (await app.receive_output(2))["type"] == "websocket.accept"
         if entry == "append":
-            await asyncio.wait_for(initial_saved.wait(), 2)
+            snapshot = await app.receive_output(2)
+            assert "conversation" in loads(snapshot["text"])
             await app.send_input(
                 {
                     "type": "websocket.receive",
@@ -189,7 +189,7 @@ async def test_actual_dispatch_serializes_turns_and_keeps_context_isolated(
             assert all(not ledger.can_publish() for ledger in ledgers)
         else:
             assert ledgers == [None, None]
-            assert getattr(consumer, "_chat_event_owner", None) is None
+            assert getattr(consumer, "_chat_event_owner", None) is not None
     finally:
         release.set()
         await app.send_input({"type": "websocket.disconnect", "code": 1000})

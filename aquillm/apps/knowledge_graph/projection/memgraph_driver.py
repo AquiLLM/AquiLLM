@@ -44,6 +44,11 @@ _PROJECTION_INDEX_STATEMENTS = (
     "CREATE EDGE INDEX ON :PROJECTED_RELATION",
     "CREATE EDGE INDEX ON :RELATION_EVIDENCE",
     "CREATE EDGE INDEX ON :ENTITY_MENTION",
+    "CREATE EDGE INDEX ON :ENTITY_MEMBERSHIP(generation_key)",
+    "CREATE EDGE INDEX ON :DOCUMENT_CHUNK(generation_key)",
+    "CREATE EDGE INDEX ON :PROJECTED_RELATION(generation_key)",
+    "CREATE EDGE INDEX ON :RELATION_EVIDENCE(generation_key)",
+    "CREATE EDGE INDEX ON :ENTITY_MENTION(generation_key)",
 )
 
 
@@ -139,6 +144,7 @@ class Neo4jMemgraphDriver:
         *,
         database: str,
         driver: Any | None = None,
+        max_transaction_retry_time: float | None = None,
     ) -> None:
         for name, value in (
             ("uri", uri),
@@ -150,10 +156,19 @@ class Neo4jMemgraphDriver:
                 raise TypeError(f"{name} must be an exact string")
         if not uri or not database or database != database.strip():
             raise ValueError("uri and database must be nonempty canonical strings")
+        if max_transaction_retry_time is not None and (
+            type(max_transaction_retry_time) is not float
+            or not isfinite(max_transaction_retry_time)
+            or max_transaction_retry_time < 0.0
+        ):
+            raise ValueError(
+                "max_transaction_retry_time must be a finite nonnegative float"
+            )
         self._uri = uri
         self._username = username
         self._password = password
         self._database = database
+        self._max_transaction_retry_time = max_transaction_retry_time
         self._client = driver
         self._client_lock = Lock()
 
@@ -167,7 +182,14 @@ class Neo4jMemgraphDriver:
                     if not self._username and not self._password
                     else (self._username, self._password)
                 )
-                self._client = GraphDatabase.driver(self._uri, auth=auth)
+                options = (
+                    {}
+                    if self._max_transaction_retry_time is None
+                    else {
+                        "max_transaction_retry_time": self._max_transaction_retry_time
+                    }
+                )
+                self._client = GraphDatabase.driver(self._uri, auth=auth, **options)
             return self._client
 
     def _transaction_function(self, callback, *, timeout: float):

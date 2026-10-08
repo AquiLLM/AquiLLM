@@ -71,6 +71,28 @@ services:
       - ../..:/app
     networks: [default, knowledge_graph_api]
 
+  scheduler_application_maintenance:
+    build: {context: ../.., dockerfile: deploy/docker/web/Dockerfile.prod}
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: scheduler-only
+      DJANGO_DEBUG: "0"
+      GOOGLE_OAUTH2_CLIENT_ID: disabled
+      GOOGLE_OAUTH2_CLIENT_SECRET: disabled
+      OPENAI_API_KEY: disabled
+      ANTHROPIC_API_KEY: disabled
+      GEMINI_API_KEY: disabled
+      AWS_EC2_METADATA_DISABLED: "true"
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "1"
+      APPLICATION_MAINTENANCE_SCHEDULER_ENABLED: "1"
+      KG_MAINTENANCE_SCHEDULER_ENABLED: "0"
+      C_FORCE_ROOT: "1"
+      RUN_CELERY_IN_WEB: "0"
+    depends_on:
+      redis: {condition: service_healthy}
+    command: /bin/sh -c 'exec /opt/venv/bin/celery -A aquillm beat --loglevel=info --schedule=/tmp/celerybeat-application'
+
   worker:
     build:
       context: ../..
@@ -134,6 +156,7 @@ services:
       POSTGRES_HOST: db
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
       KG_BUILD_ENABLED: ${KG_BUILD_ENABLED:-0}
+      APPLICATION_MAINTENANCE_SCHEDULER_ENABLED: "0"
       KG_MAINTENANCE_SCHEDULER_ENABLED: ${KG_MAINTENANCE_SCHEDULER_ENABLED:-0}
       KG_OVERLAY_ENABLED: ${KG_OVERLAY_ENABLED:-0}
       KG_EVAL_BYPASS_ALLOWED: ${KG_EVAL_BYPASS_ALLOWED:-0}
@@ -190,6 +213,7 @@ services:
       AWS_EC2_METADATA_DISABLED: "true"
       POSTGRES_HOST: 127.0.0.1
       POSTGRES_PORT: "1"
+      APPLICATION_MAINTENANCE_SCHEDULER_ENABLED: "0"
       KG_MAINTENANCE_SCHEDULER_ENABLED: ${KG_MAINTENANCE_SCHEDULER_ENABLED:-0}
       KG_MAINTENANCE_INTERVAL_SECONDS: ${KG_MAINTENANCE_INTERVAL_SECONDS:-300}
       KG_GRAPH_RECOVERY_PAGE_SIZE: ${KG_GRAPH_RECOVERY_PAGE_SIZE:-50}
@@ -362,6 +386,8 @@ services:
       KG_PROJECTION_SCHEMA_VERSION: ${KG_PROJECTION_SCHEMA_VERSION:-collection-graph-v1}
       KG_PROJECTION_FORMAT_VERSION: ${KG_PROJECTION_FORMAT_VERSION:-projection-v1}
       KG_PROJECTION_QUEUE: ${KG_PROJECTION_QUEUE:-knowledge_graph_projection}
+      KG_PROJECTION_TIMEOUT_MS: ${KG_PROJECTION_TIMEOUT_MS:-5000}
+      KG_MAINTENANCE_INTERVAL_SECONDS: ${KG_MAINTENANCE_INTERVAL_SECONDS:-300}
       C_FORCE_ROOT: 1
       UV_PROJECT_ENVIRONMENT: /opt/venv
       VIRTUAL_ENV: /opt/venv

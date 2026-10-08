@@ -23,6 +23,7 @@ def _settings():
     return SimpleNamespace(
         projection_batch_size=25,
         graph_overall_timeout_ms=500,
+        projection_timeout_ms=12000,
         projection_schema_version="collection-graph-v1",
         projection_format_version="projection-v1",
         projection_identifier_key_version="key-v7",
@@ -85,14 +86,21 @@ def test_generation_audit_detects_empty_store_and_checksum_drift(monkeypatch):
     row = _ready_row()
     bundle = _bundle()
     purposes = []
+    graph_timeouts = []
     postgres = SimpleNamespace(
         load_projection_bundle=lambda **kwargs: (
             purposes.append(kwargs["purpose"]) or bundle
         )
     )
     graph = SimpleNamespace(
-        read_generation_manifest=lambda **_kwargs: _manifest(bundle),
-        validate_generation=lambda **_kwargs: SimpleNamespace(valid=True),
+        read_generation_manifest=lambda **kwargs: graph_timeouts.append(
+            kwargs["timeout_seconds"]
+        )
+        or _manifest(bundle),
+        validate_generation=lambda **kwargs: graph_timeouts.append(
+            kwargs["timeout_seconds"]
+        )
+        or SimpleNamespace(valid=True),
     )
     monkeypatch.setattr(
         generation_audit,
@@ -106,6 +114,7 @@ def test_generation_audit_detects_empty_store_and_checksum_drift(monkeypatch):
         graph=graph,
         settings=_settings(),
     )
+    assert graph_timeouts == [12.0, 12.0]
     graph.read_generation_manifest = lambda **_kwargs: (_ for _ in ()).throw(
         ValueError("generation marker is missing")
     )

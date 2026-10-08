@@ -3,11 +3,13 @@ from django.urls import path
 
 from .views import api as api_views
 from .views import pages as page_views
+from .views.chat_context import chat_context
 
 app_name = 'collections'
 
 # API URL patterns (to be included under /api/)
 api_urlpatterns = [
+    path("chat-context/", chat_context, name="api_chat_context"),
     path("", api_views.collections, name="api_collections"),
     path("<int:col_id>/", api_views.collection_detail, name="api_collection_detail"),
     path("permissions/<int:col_id>/", api_views.collection_permissions, name="api_collection_permissions"),

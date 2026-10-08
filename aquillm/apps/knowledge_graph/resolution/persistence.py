@@ -11,6 +11,7 @@ from itertools import islice
 from math import isfinite
 from uuid import UUID
 
+from .commit_validation import resolution_commit_is_valid
 from .coreference import (
     MAX_DOCUMENT_DECISIONS,
     MAX_DOCUMENT_MENTIONS,
@@ -21,24 +22,11 @@ from .coreference import (
     resolution_input_fingerprint,
     resolution_result_checksum,
 )
-from .coreference_types import _is_count, _is_hash
+from .coreference_types import _is_hash
+from .source_exclusions import resolvable_mentions, source_exclusion_audit
 
 _HASH = re.compile(r"[0-9a-f]{64}")
 _QUERY_ITERATOR_BATCH_SIZE = 1_000
-_COMMIT_FIELDS = frozenset(
-    (
-        "version",
-        "resolver_version",
-        "ontology_checksum",
-        "assembly_version",
-        "assembly_config_checksum",
-        "source_mention_count",
-        "source_mention_fingerprint",
-        "document_entity_count",
-        "membership_count",
-        "result_checksum",
-    )
-)
 _SOURCE_FIELDS = (
     "id",
     "artifact_id",
@@ -86,58 +74,6 @@ _RESOLUTION_LINK_FIELDS = (
 
 class ResolutionPersistenceError(RuntimeError):
     """Raised when a resolution write cannot preserve its immutable snapshot."""
-
-
-def resolution_commit_is_valid(
-    marker: object,
-    *,
-    resolver_version: str,
-    ontology_checksum: str,
-    assembly_version: str,
-    assembly_config_checksum: str,
-    source_mention_count: int,
-    source_mention_fingerprint: str,
-    document_entity_count: int,
-    membership_count: int,
-    result_checksum: str,
-) -> bool:
-    """Validate the complete resolution commit marker against persisted state."""
-
-    return bool(
-        isinstance(marker, Mapping)
-        and frozenset(marker) == _COMMIT_FIELDS
-        and type(resolver_version) is str
-        and _is_hash(ontology_checksum)
-        and type(assembly_version) is str
-        and assembly_version
-        and _is_hash(assembly_config_checksum)
-        and _is_count(source_mention_count)
-        and _is_hash(source_mention_fingerprint)
-        and _is_count(document_entity_count)
-        and _is_count(membership_count)
-        and _is_hash(result_checksum)
-        and type(marker.get("version")) is int
-        and marker.get("version") == 1
-        and type(marker.get("resolver_version")) is str
-        and marker.get("resolver_version") == resolver_version
-        and _is_hash(marker.get("ontology_checksum"))
-        and marker.get("ontology_checksum") == ontology_checksum
-        and type(marker.get("assembly_version")) is str
-        and marker.get("assembly_version") == assembly_version
-        and _is_hash(marker.get("assembly_config_checksum"))
-        and marker.get("assembly_config_checksum") == assembly_config_checksum
-        and _is_count(marker.get("source_mention_count"))
-        and marker.get("source_mention_count") == source_mention_count
-        and _is_hash(marker.get("source_mention_fingerprint"))
-        and marker.get("source_mention_fingerprint") == source_mention_fingerprint
-        and _is_count(marker.get("document_entity_count"))
-        and marker.get("document_entity_count") == document_entity_count
-        and _is_count(marker.get("membership_count"))
-        and marker.get("membership_count") == membership_count
-        and marker.get("membership_count") == marker.get("source_mention_count")
-        and _is_hash(marker.get("result_checksum"))
-        and marker.get("result_checksum") == result_checksum
-    )
 
 
 def _record_value(record: object, field: str) -> object:
@@ -398,7 +334,9 @@ def _validate_source_snapshot(artifact, result, mention_records) -> str:
         raise ResolutionPersistenceError(
             "resolution result mention IDs must be exact strings"
         )
-    if set(source_ids) != set(result.mention_ids):
+    accepted = resolvable_mentions(mention_records)
+    accepted_ids = {str(_record_value(record, "id")) for record in accepted}
+    if accepted_ids != set(result.mention_ids):
         raise ResolutionPersistenceError(
             "resolution result does not partition the persisted source mentions"
         )
@@ -407,7 +345,7 @@ def _validate_source_snapshot(artifact, result, mention_records) -> str:
             "resolution result input fingerprint must be an exact lowercase "
             "SHA-256 digest"
         )
-    if resolution_input_fingerprint(mention_records) != result.input_fingerprint:
+    if resolution_input_fingerprint(accepted) != result.input_fingerprint:
         raise ResolutionPersistenceError(
             "resolution result does not match current mention source context"
         )
@@ -553,6 +491,7 @@ def _existing_resolution(
     ontology_checksum,
     source_count,
     source_fingerprint,
+    exclusion_audit,
 ):
     from apps.knowledge_graph.models import DocumentEntity, DocumentEntityMention
 
@@ -588,6 +527,7 @@ def _existing_resolution(
         document_entity_count=len(result.clusters),
         membership_count=len(result.mention_ids),
         result_checksum=result.checksum,
+        exclusion_audit=exclusion_audit,
     ):
         raise ResolutionPersistenceError("existing resolution commit marker is invalid")
     entity_rows = _bounded_rows(
@@ -749,6 +689,7 @@ def persist_document_resolution(
                 "result ontology checksum does not match extraction snapshot"
             )
         source_fingerprint = _validate_source_snapshot(artifact, result, mentions)
+        exclusion_audit = source_exclusion_audit(mentions, relations)
         ontology_checksum = artifact.ontology_checksum
         existing = _existing_resolution(
             artifact=artifact,
@@ -757,6 +698,7 @@ def persist_document_resolution(
             ontology_checksum=ontology_checksum,
             source_count=source_count,
             source_fingerprint=source_fingerprint,
+            exclusion_audit=exclusion_audit,
         )
         if existing is not None:
             return existing
@@ -769,7 +711,7 @@ def persist_document_resolution(
         membership_count = len(link_rows)
         rows_fingerprint = resolution_rows_fingerprint(entity_rows, link_rows)
         marker = {
-            "version": 1,
+            "version": 2 if exclusion_audit else 1,
             "resolver_version": result.resolver_version,
             "ontology_checksum": ontology_checksum,
             "assembly_version": artifact.assembly_version,
@@ -779,6 +721,7 @@ def persist_document_resolution(
             "document_entity_count": len(entity_rows),
             "membership_count": membership_count,
             "result_checksum": result.checksum,
+            **exclusion_audit,
         }
         if not resolution_commit_is_valid(
             marker,
@@ -791,6 +734,7 @@ def persist_document_resolution(
             document_entity_count=len(entity_rows),
             membership_count=membership_count,
             result_checksum=result.checksum,
+            exclusion_audit=exclusion_audit,
         ):
             raise ResolutionPersistenceError("generated resolution marker is invalid")
         run.stats = {

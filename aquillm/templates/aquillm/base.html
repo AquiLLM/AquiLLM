@@ -7,13 +7,14 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}AquiLLM{% endblock %}</title>
 
+    {% block before_react_bundle %}{% endblock %}
     <script src="{% static 'js/dist/main.js' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}"></script>
     <link rel="stylesheet" href="{% static 'js/dist/main.css' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}" type="text/css" />
     <link rel="icon" type="image/png" href="{% static 'images/aquila-small-light.ico' %}" media="(prefers-color-scheme: dark)"/>
     <link rel="icon" type="image/png" href="{% static 'images/aquila-small-dark.ico' %}" media="(prefers-color-scheme: light)"/>
 
     <link rel="stylesheet" href="https://lalten.github.io/lmweb/style/latinmodern-mono.css" type="text/css" charset="utf-8" />
-    <link rel="stylesheet" href="{% static 'index.css' %}" type="text/css" charset="utf-8" />
+    <link rel="stylesheet" href="{% static 'index.css' %}{% if react_bundle_version %}?v={{ react_bundle_version }}{% endif %}" type="text/css" charset="utf-8" />
 {% block head %}
     <link rel="stylesheet" href="{% static 'scrollbar.css' %}" type="text/css" charset="utf-8" />
     <link rel="stylesheet" href="{% static 'search_styling.css' %}" type="text/css" charset="utf-8" />
@@ -275,6 +276,7 @@
         </div>
     </div>
 
+<div id="chat-rename-dialog"></div>
 <script>
     const menuToggle = document.getElementById("menu-toggle");
     const sidebar = document.getElementById("aq-sidebar");
@@ -605,10 +607,9 @@
         document.body.appendChild(modal);
         
         // Position the modal near the conversation item
-        modal.style.position = 'absolute';
-        modal.style.top = rect.top + 'px';
-        modal.style.left = (rect.right + 10) + 'px'; // 10px gap
         modal.classList.remove('hidden');
+        modal.style.top = Math.max(8, Math.min(rect.top, window.innerHeight - modal.offsetHeight - 8)) + 'px';
+        modal.style.left = Math.max(8, Math.min(rect.right + 10, window.innerWidth - modal.offsetWidth - 8)) + 'px';
         
         activeModal = modal;
     }
@@ -718,6 +719,7 @@
     const wsUrl = `${wsProtocol}//${window.location.host}/ingest/dashboard/`;
     mountReactComponent('ingestion-monitor', 'IngestionDashboardLauncher', {
         wsUrl: wsUrl});
+    mountReactComponent('chat-rename-dialog', 'ChatRenameDialog');
 
 </script>
     </script>

@@ -43,6 +43,7 @@ from apps.chat.services import rag_pipeline
 from apps.chat.tests.chat_message_test_support import (
     _FakeLLMInterface,
     _test_document_ids,
+    stub_execution_ownership,
 )
 from aquillm.llm import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage

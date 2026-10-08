@@ -51,7 +51,43 @@ preflight overflow is skipped before artifact bootstrap because it has no valid
 complete chunk signature. It does not fabricate a partial graph identity.
 Projection reconciliation runs on its separate queue and publishes durable outbox
 work both before and after reconciliation. The scheduler holds no database or
-graph credentials, and it does not schedule destructive pruning.
+graph credentials. Artifact pruning has a separate opt-in gate described below.
+
+## Conservative artifact retention scheduling
+
+Artifact pruning is off by default. In development, enable both
+`KG_MAINTENANCE_SCHEDULER_ENABLED=1` and `KG_ARTIFACT_PRUNING_ENABLED=1` in the
+private Compose environment, then recreate only
+`scheduler_knowledge_graph_maintenance` with the existing development Compose
+configuration and `knowledge-graph` profile. Run one graph beat instance.
+`KG_ARTIFACT_PRUNING_INTERVAL_SECONDS` defaults to 86400 (daily); settings clamp
+parsed integers to 86400–604800 seconds (daily–weekly) and fall back to the daily
+default for malformed input. The pure schedule helper rejects invalid intervals.
+Existing recovery and projection intervals remain independent.
+
+Before opting in, run a bounded dry run against the intended development database:
+
+```sh
+docker compose -f deploy/compose/development.yml exec web /opt/venv/bin/python manage.py shell -c 'from apps.knowledge_graph.services.pruning import prune_graph_artifacts; report = prune_graph_artifacts(execute=False, batch_size=100); print({"dry_run": report.dry_run, "artifact_count": report.artifact_count, "run_count": report.run_count})'
+```
+
+Review eligible counts and verify active artifact counts and retrieval readiness
+before and after any authorized cleanup. The scheduled task keeps the existing
+default batch of 100 and runs once per interval on the extraction queue at
+priority 9, with no catch-up loop. Existing retention defaults remain 30 days and
+two superseded artifacts per scope. The pruner protects active artifacts,
+memberships, and nonterminal builds; scheduling changes no eligibility or deletion
+logic. This controls Django artifact/build retention, while projection generation
+cleanup continues through its existing reconciliation path. Do not use this
+schedule to delete active data, reset collections, publish drafts, or exercise
+destructive races on shared development data.
+
+Disable future scheduled pruning with `KG_ARTIFACT_PRUNING_ENABLED=0` and recreate
+the graph scheduler; this does not cancel a task already delivered to a worker.
+The application maintenance scheduler pins both KG gates off. Web and worker
+services do not start beat. Verify the loaded beat schedule and extraction queue
+consumer after changing configuration. This runbook describes the procedure;
+cleanup and deployment require separate recorded evidence.
 
 Redis has `restart: unless-stopped` in all Compose variants. After broker recovery,
 verify both workers respond and consume their configured queues before relying on

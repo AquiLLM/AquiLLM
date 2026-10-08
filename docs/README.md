@@ -1,6 +1,6 @@
 # Documentation Map
 
-Last updated: 2026-03-25
+Last updated: 2026-09-29
 
 ## Primary folders
 
@@ -16,6 +16,8 @@ Last updated: 2026-03-25
 - Roadmap guide: `docs/roadmap/README.md`
 - Specs index: `docs/specs/README.md`
 - Documents index: `docs/documents/README.md`
+- [Current runtime architecture](documents/architecture/aquillm-current-architecture-mermaid.md)
+- [Knowledge graph and retrieval path](documents/architecture/2026-09-28-knowledge-graph-and-retrieval-pipeline.md)
 
 ## Naming conventions
 

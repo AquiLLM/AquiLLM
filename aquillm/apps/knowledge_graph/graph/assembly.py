@@ -16,7 +16,9 @@ from math import isfinite
 from typing import TYPE_CHECKING
 
 from apps.knowledge_graph.resolution.collection import (
+    DEFAULT_COLLECTION_ENTITIES,
     MAX_COLLECTION_DOCUMENT_INPUTS,
+    MAX_COLLECTION_ENTITIES,
 )
 
 from .assembly_plan import (
@@ -33,7 +35,7 @@ if TYPE_CHECKING:
 
 
 ASSEMBLY_VERSION = "collection-assembly-v1"
-ASSEMBLY_V1_MAX_ENTITIES = 50_000
+ASSEMBLY_V1_MAX_ENTITIES = MAX_COLLECTION_ENTITIES
 ASSEMBLY_V1_MAX_LINKS = 850_000
 ASSEMBLY_V1_MAX_RELATIONS = 50_000
 ASSEMBLY_V1_MAX_EVIDENCE = 200_000
@@ -86,21 +88,19 @@ class CollectionGraphSourceStaleError(CollectionGraphAssemblyError):
     """The collection/document source snapshot changed and should be rebuilt."""
 
 
-
-
 @dataclass(frozen=True, slots=True)
 class AssemblyConfig:
     """Bounded, checksum-addressed collection assembly policy."""
 
     version: str = ASSEMBLY_VERSION
     max_document_inputs: int = MAX_COLLECTION_DOCUMENT_INPUTS
-    max_entities: int = ASSEMBLY_V1_MAX_ENTITIES
+    max_entities: int = DEFAULT_COLLECTION_ENTITIES
     max_links: int = ASSEMBLY_V1_MAX_LINKS
     # V1 materializes its deterministic projection before batched persistence.
     # Keep a hard operational envelope until a streaming planner lands.
     max_relations: int = ASSEMBLY_V1_MAX_RELATIONS
     max_evidence: int = ASSEMBLY_V1_MAX_EVIDENCE
-    max_orphan_entities: int = ASSEMBLY_V1_MAX_ORPHAN_ENTITIES
+    max_orphan_entities: int = DEFAULT_COLLECTION_ENTITIES
     max_filter_lineage_depth: int = ASSEMBLY_V1_MAX_FILTER_LINEAGE_DEPTH
     max_orphan_ratio: float = 1.0
     generic_identity_relations: frozenset[str] = field(

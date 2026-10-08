@@ -26,7 +26,7 @@ const IngestRowStatusBlocks: React.FC<IngestRowStatusBlocksProps> = ({
         {row.docType === DocType.UPLOADS ? 'Batch ingestion queued...' : 'Webpage crawl initiated...'}
       </p>
     )}
-    {submissionStatus === 'error' && errorMessage && (
+    {errorMessage && (
       <p className="text-red-dark mt-2">Error: {errorMessage}</p>
     )}
     {uploadSummary && (

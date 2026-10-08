@@ -6,6 +6,7 @@ from dataclasses import replace
 import pytest
 
 from apps.knowledge_graph.retrieval import projected_types as t
+from apps.knowledge_graph.retrieval import readiness_diagnostics
 from apps.knowledge_graph.retrieval.topology.contracts import (
     AuthorizedProjectedDocumentV1,
     HybridBranchKind,
@@ -191,7 +192,16 @@ def test_memgraph_loader_uses_exact_parameterized_scope_deadline_and_caps() -> N
 
 
 @pytest.mark.parametrize("field", ("generation_key", "membership_checksum"))
-def test_memgraph_loader_is_all_or_nothing_for_ready_manifest(field: str) -> None:
+def test_memgraph_loader_is_all_or_nothing_for_ready_manifest(
+    field: str, monkeypatch
+) -> None:
+    events = []
+
+    class Sink:
+        def info(self, event, **fields):
+            events.append((event, fields))
+
+    monkeypatch.setattr(readiness_diagnostics, "logger", Sink())
     driver = Driver()
     row = dict(
         Driver().execute_read(
@@ -201,7 +211,7 @@ def test_memgraph_loader_is_all_or_nothing_for_ready_manifest(field: str) -> Non
             max_records=1,
         )[0]
     )
-    row[field] = K[14]
+    row[field] = "synthetic-source-sentinel"
     driver.manifest_override = (row,)
     with pytest.raises(TopologyLoadError, match="readiness_mismatch"):
         MemgraphProjectedTopologyLoader(driver).load(
@@ -210,6 +220,13 @@ def test_memgraph_loader_is_all_or_nothing_for_ready_manifest(field: str) -> Non
             caps=TopologyCapsV1(HybridBranchKind.DIRECT, 32, 2, 200, 1_000, 20),
             deadline=42.5,
         )
+    assert len(events) == 1
+    assert events[0][0] == "obs.rag.graph_readiness_failed"
+    assert set(events[0][1]) == {"reason", "count", "elapsed_ms"}
+    assert events[0][1]["reason"] == "readiness_manifest"
+    assert events[0][1]["count"] == 1
+    assert events[0][1]["elapsed_ms"] > 0.0
+    assert "synthetic-source-sentinel" not in str(events)
 
 
 def test_memgraph_loader_rejects_snapshot_scope_or_endpoint_tampering() -> None:

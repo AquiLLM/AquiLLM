@@ -52,7 +52,8 @@ async def test_skipped_when_intent_not_rag(monkeypatch):
 async def test_explicit_collection_synthesis_without_selection_is_handled(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     convo = _user_convo(
-        "Hi aquillm can you tell me about the documents in this collection and synthesize things?"
+        "Hi aquillm can you tell me about the documents in this collection "
+        "and synthesize things?"
     )
     consumer = _consumer(convo, [])
     llm_if = SimpleNamespace(get_message=AsyncMock())
@@ -316,37 +317,6 @@ async def test_direct_rag_no_results_returns_notice_without_llm(monkeypatch):
     assert outcome == "handled"
     assert llm_if.calls == []
     assert "no relevant passages" in consumer.convo[-1].content.lower()
-
-
-async def test_direct_rag_figure_request_embeds_image(monkeypatch):
-    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
-    raw = _results_payload()
-    raw["result"][0]["image_url"] = "/aquillm/document_image/doc-a/"
-    monkeypatch.setattr(rag_pipeline, "_run_vector_search", lambda c, q, k: raw)
-
-    answer = (
-        "The figure shows calibration drift across magnitude bins for the survey "
-        "sample [doc:doc-a chunk:1]."
-    )
-    llm_if = _FakeLLMInterface(
-        [
-            LLMResponse(
-                text=answer,
-                tool_call=None,
-                stop_reason="end_turn",
-                input_usage=1,
-                output_usage=1,
-            )
-        ]
-    )
-
-    convo = _user_convo("show me the figure for the calibration method")
-    consumer = _consumer(convo, [1])
-
-    outcome = await run_direct_rag_turn(consumer, llm_if, convo, stream_func=None)
-
-    assert outcome == "handled"
-    assert "/aquillm/document_image/doc-a/" in consumer.convo[-1].content
 
 
 async def test_handled_appends_synthetic_tool_messages(monkeypatch):

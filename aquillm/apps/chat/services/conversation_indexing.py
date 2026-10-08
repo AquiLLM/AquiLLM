@@ -50,6 +50,7 @@ def conversation_transcript_hash(conversation: WSConversation) -> str:
 
 
 def _publish_chunks(conversation_id: int, transcript_hash: str, chunks: list) -> bool:
+    complete = all(chunk.embedding is not None for chunk in chunks)
     with transaction.atomic():
         conversation = (
             WSConversation.objects.select_for_update().filter(pk=conversation_id).first()
@@ -59,12 +60,19 @@ def _publish_chunks(conversation_id: int, transcript_hash: str, chunks: list) ->
             or conversation_transcript_hash(conversation) != transcript_hash
         ):
             return False
+        if (
+            not complete and conversation.index_complete
+            and conversation.indexed_transcript_hash == transcript_hash
+            and not ConversationChunk.objects.filter(conversation=conversation, embedding__isnull=True).exists()
+        ):
+            # A slower failed embedding attempt must not downgrade a successful peer.
+            return True
         # Transcript persistence takes this same parent-row lock before updating
         # messages, so the snapshot cannot change during publication.
         ConversationChunk.objects.filter(conversation=conversation).delete()
         ConversationChunk.objects.bulk_create(chunks)
         WSConversation.objects.filter(pk=conversation.pk).update(
-            indexed_transcript_hash=transcript_hash, index_complete=True
+            indexed_transcript_hash=transcript_hash, index_complete=complete
         )
     return True
 
@@ -87,6 +95,7 @@ def index_conversation(conversation_id: int, *, force: bool = False) -> int:
         not force
         and conversation.index_complete
         and conversation.indexed_transcript_hash == transcript_hash
+        and not ConversationChunk.objects.filter(conversation=conversation, embedding__isnull=True).exists()
     ):
         return ConversationChunk.objects.filter(conversation=conversation).count()
 

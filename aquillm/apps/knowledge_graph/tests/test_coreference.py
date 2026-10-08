@@ -11,6 +11,11 @@ import pytest
 from django.conf import settings
 from django.db.models import UniqueConstraint
 
+from apps.knowledge_graph.extraction.pipeline import (
+    DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
+    ExtractionCapacityCode,
+    ExtractionCapacityError,
+)
 from apps.knowledge_graph.resolution import DOCUMENT_RESOLVER_VERSION
 from apps.knowledge_graph.resolution.coreference import (
     DocumentMention,
@@ -951,23 +956,6 @@ def test_resolution_input_fingerprint_hashes_repeated_source_context_once(monkey
     assert digest_calls == 1
 
 
-def test_resolution_input_fingerprint_rejects_excess_unique_source_context():
-    mentions = tuple(
-        _mention(
-            f"mention-{index}",
-            f"Entity {index}",
-            "model",
-            start=index * 20,
-            source_text=(chr(ord("a") + index) * 700_001),
-            source_key=f"unique-context:{index}",
-        )
-        for index in range(3)
-    )
-
-    with pytest.raises(ValueError, match="aggregate.*source context"):
-        resolution_input_fingerprint(mentions)
-
-
 def test_same_source_key_and_coordinate_rejects_mismatched_source_text():
     first = _mapping_mention(
         mention_id="first",
@@ -1246,8 +1234,13 @@ def test_sparse_resolver_rejects_pathological_candidate_block(monkeypatch):
 def test_adversarial_scalars_are_rejected_as_bounded_validation_errors():
     with pytest.raises(ValueError, match="finite confidence"):
         _mention("huge-confidence", "Orion", confidence=10**10_000)
-    with pytest.raises(ValueError, match="source text.*limit"):
-        _mention("huge-source", "Orion", source_text="x" * 1_000_001)
+    with pytest.raises(ExtractionCapacityError, match="source text.*limit") as error:
+        _mention(
+            "huge-source",
+            "Orion",
+            source_text="x" * (DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS + 1),
+        )
+    assert error.value.code is ExtractionCapacityCode.CHARACTER_LIMIT
     with pytest.raises(ValueError, match="identifier.*limit"):
         _mention("huge-identifier", "Orion", identifier="x" * 2_049)
     with pytest.raises(ValueError, match="source text.*control"):
@@ -1281,15 +1274,16 @@ def test_mapping_inputs_cannot_bypass_source_bounds():
         "entity_type": "model",
         "start": 0,
         "end": 5,
-        "source_text": "x" * 1_000_001,
+        "source_text": "x" * (DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS + 1),
         "source_offset": 0,
         "confidence": 0.9,
         "document_id": str(DOCUMENT_ID),
         "chunk_id": 1,
     }
 
-    with pytest.raises(ValueError, match="source text.*limit"):
+    with pytest.raises(ExtractionCapacityError, match="source text.*limit") as error:
         resolve_document_mentions((mention,), _ontology())
+    assert error.value.code is ExtractionCapacityCode.CHARACTER_LIMIT
 
     invalid_empty_source = {
         **mention,

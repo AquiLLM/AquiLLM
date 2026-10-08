@@ -13,7 +13,7 @@ Skills
 .. tip::
 
    **On a shared or hosted instance, you can add Markdown skills yourself** — upload a
-   ``.md`` file to a collection and attach that collection to your chat. You do **not**
+   ``.md`` file to a collection and choose it from **Collections and skills** in your chat. You do **not**
    need access to the server's ``.env``. Python tools still require whoever runs the
    server to configure them.
 
@@ -31,8 +31,8 @@ server**. Find your row below and follow the linked guide — every case has a p
      - Using a shared / hosted instance
      - Running your own instance
    * - **Markdown (prompt text)**
-     - **You can do this yourself.** Upload a ``.md`` file to a collection and attach the
-       collection to your chat — no server access needed. Follow
+     - **You can do this yourself.** Upload a ``.md`` file to a collection and select its skills
+       in your chat — no server access needed. Follow
        :doc:`markdown` → *Adding a skill through collections*.
        (Your admin must have collection skills enabled.)
      - Do the same collection workflow, **or** load a server-wide folder for every chat
@@ -46,8 +46,8 @@ server**. Find your row below and follow the linked guide — every case has a p
 
 .. note::
 
-   Skills are **not** turned on from the chat window. Markdown skills are added through
-   **collections** (any user) or a **server folder** (operators). Python tools always
+   Collection Markdown skills are selected in the chat window through **Collections and
+   skills**. Server-folder Markdown is managed by operators. Python tools always
    require server-side setup by whoever runs the instance.
 
 Markdown vs Python at a glance

@@ -184,8 +184,6 @@ class ResolutionResult:
             raise ValueError("checksum must be a lowercase SHA-256 digest")
 
 
-
-
 @dataclass(frozen=True, slots=True)
 class _PreparedSource:
     document_id: str
@@ -438,7 +436,8 @@ def _prepare_source_contexts(
             source_text = _validated_source_text(raw_source_text)
             aggregate_source_characters += len(source_text)
             if aggregate_source_characters > _MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS:
-                raise ValueError(
+                raise ExtractionCapacityError(
+                    ExtractionCapacityCode.CHARACTER_LIMIT,
                     "aggregate unique source context exceeds the "
                     f"{_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS}-character limit"
                 )

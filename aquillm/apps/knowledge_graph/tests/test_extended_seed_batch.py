@@ -35,6 +35,17 @@ def lookup(fixture, max_rows=4):
     )
 
 
+@pytest.mark.parametrize(
+    "seeds",
+    (
+        None,
+        {
+            "collection_resolver": "collection-resolution-v1",
+            "canonical_resolver": "canonical-resolution-v1",
+        },
+    ),
+    indirect=True,
+)
 def test_batch_matches_prior_rows_and_independent_chunk_masses(seeds):  # noqa: F811
     from apps.knowledge_graph.projection.identifiers import (
         ProjectionIdentifierDomain as Domain,
@@ -48,7 +59,7 @@ def test_batch_matches_prior_rows_and_independent_chunk_masses(seeds):  # noqa: 
         seeds.chunks[1].pk: (canonical,),
         seeds.chunks[2].pk: (gamma,),
     }
-    # Independent hand-checked associations: Alpha+Beta / Alpha / Gamma.
+    # Independent associations and active link counts: Alpha+Beta / Alpha / Gamma.
     with CaptureQueriesContext(connections["projection_source"]) as queries:
         assert lookup(seeds) == expected
     reads = [q["sql"] for q in queries if "SELECT DISTINCT" in q["sql"]]
@@ -65,7 +76,11 @@ def test_batch_matches_prior_rows_and_independent_chunk_masses(seeds):  # noqa: 
             )
         )
         assert prior == tuple(
-            (seeds.entities[i].pk, seeds.canonical.pk if i == 0 else None)
+            (
+                seeds.entities[i].pk,
+                seeds.canonical.pk if i == 0 else None,
+                1 if i == 0 else None,
+            )
             for i in entities
         )
     runtime = SimpleNamespace(

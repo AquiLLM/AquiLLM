@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from math import isfinite
+from time import monotonic
 
 from apps.knowledge_graph.projection.identifiers import (
     ProjectionIdentifierCodec,
@@ -21,6 +22,7 @@ from apps.knowledge_graph.retrieval.topology.contracts import ReadyGenerationBun
 from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 
 from .direct_seed_queries import _load_candidate_rows, _load_membership_states
+from .direct_seed_sql import check_seed_deadline
 from .direct_seed_types import DirectSeedCandidateRow, DirectSeedScopeV1
 
 _FACTORS = {DirectResolutionTier.IDENTIFIER: 1.0, DirectResolutionTier.NAME: 0.95, DirectResolutionTier.ALIAS: 0.90, DirectResolutionTier.EMBEDDING: 0.80}  # fmt: skip
@@ -45,10 +47,14 @@ class DirectSeedRepository:
         row_loader: RowLoader | None = None,
         membership_state_loader: MembershipStateLoader | None = None,
         using: str = "default",
+        deadline: float | None = None,
+        clock=monotonic,
     ) -> None:
         self._scope = scope
         self._codec = codec
         self._using = using
+        self._deadline = deadline
+        self._clock = clock
         self._row_loader = _load_candidate_rows if row_loader is None else row_loader
         self._membership_state_loader = _load_membership_states if membership_state_loader is None else membership_state_loader
         self._spans = {
@@ -77,7 +83,8 @@ class DirectSeedRepository:
         if set(ready_by_generation) != {generation for _, generation in self._scope.generation_keys_by_artifact}:
             raise ValueError("ready membership scope is incomplete")
         expected = {artifact_id: (ready_by_generation[generation].membership_epoch, ready_by_generation[generation].membership_checksum, ready_by_generation[generation].resolver_version, ready_by_generation[generation].resolution_config_checksum) for artifact_id, generation in self._scope.generation_keys_by_artifact}
-        states = self._membership_state_loader(collection_ids=self._scope.selected_collection_ids, using=self._using)
+        check_seed_deadline(self._deadline, clock=self._clock)
+        states = self._membership_state_loader(collection_ids=self._scope.selected_collection_ids, using=self._using, deadline=self._deadline, clock=self._clock)
         keys = {"collection_id", "active_artifact_id", "registry_epoch", "membership_checksum", "resolver_version", "resolution_config_checksum"}
         if type(states) is not tuple or len(states) != len(self._scope.selected_collection_ids) or any(type(row) is not dict or set(row) != keys for row in states):
             raise ValueError("current membership state is invalid")
@@ -111,7 +118,10 @@ class DirectSeedRepository:
         }.get(tier, "")
         # fmt: off
         membership_states = self._current_membership_states(ready)
+        check_seed_deadline(self._deadline, clock=self._clock)
         rows = self._row_loader(
+            deadline=self._deadline,
+            clock=self._clock,
             tier=tier,
             lookup=lookup,
             lookup_field=lookup_field,

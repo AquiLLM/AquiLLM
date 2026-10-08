@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import type { Message, Collection, Conversation, ChatProps } from '../types';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import type { Message, Conversation, ChatProps, ChatContextCatalog, SkillOverrides, ContextSelection } from '../types';
 import { MessageBubble } from './MessageBubble';
 import { ToolCallGroup } from './ToolCallGroup';
 import ChatInputDock from './ChatInputDock';
@@ -8,12 +8,7 @@ import { useChatWebSocket } from '../hooks/useChatWebSocket';
 import ChatCollectionsModal from './ChatCollectionsModal';
 import { AquillmLogo } from '../../../shared/components';
 
-const normalizeCollectionId = (collectionId: string | number): string => String(collectionId);
-
-const toPayloadCollectionId = (collectionId: string): string | number => {
-  const numericId = Number(collectionId);
-  return Number.isInteger(numericId) && String(numericId) === collectionId ? numericId : collectionId;
-};
+import { payloadCollectionId, skillEnabled, validOverrides } from '../utils/contextSelection';
 
 const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const [conversation, setConversation] = useState<Conversation>({ messages: [] });
@@ -21,15 +16,19 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const [messageInput, setMessageInput] = useState('');
   const [exception, setException] = useState('');
   const [debugHtml, setDebugHtml] = useState<string | null>(null);
-  const [collections, setCollections] = useState<Collection[]>([]);
+  const [catalog, setCatalog] = useState<ChatContextCatalog>({ collections: [], skills: [], skills_enabled: false });
+  const [collectionsError, setCollectionsError] = useState('');
+  const [collectionsLoading, setCollectionsLoading] = useState(true);
+  const collectionsRequest = useRef<AbortController | null>(null);
   const [selectedCollections, setSelectedCollections] = useState<Set<string>>(new Set());
-  const [searchTerm, setSearchTerm] = useState('');
+  const [skillOverrides, setSkillOverrides] = useState<SkillOverrides>({});
   const [showCollections, setShowCollections] = useState(false);
   const conversationEndRef = useRef<HTMLDivElement>(null);
   const messageContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [textareaMinHeight, setTextareaMinHeight] = useState(0);
   const [contentOverflowing, setContentOverflowing] = useState(false);
+  const [delayedConnectionConvoId, setDelayedConnectionConvoId] = useState<string | null>(null);
   const isDragging = useRef(false);
   const dragStartY = useRef(0);
   const dragStartHeight = useRef(0);
@@ -37,75 +36,62 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const fallbackContextLimit = 200000;
   const contextLimitTokens = contextLimit && contextLimit > 0 ? contextLimit : fallbackContextLimit;
 
-  const { wsRef, terminalError, beginTurn } = useChatWebSocket({
+  const { wsRef, terminalError, connectionStatus, beginTurn, saveContext, contextSaving } = useChatWebSocket({
     convoId,
     setConversation,
     setException,
     setDebugHtml,
     setInputDisabled,
     setSelectedCollections,
+    setSkillOverrides,
   });
+  const collectionsReady = connectionStatus === 'ready';
+  const collectionsEditable = collectionsReady && !inputDisabled && !contextSaving;
+  const waitingForConnection = connectionStatus === 'connecting' ||
+    connectionStatus === 'hydrating' || connectionStatus === 'reconnecting';
+
+  useEffect(() => {
+    setDelayedConnectionConvoId(null);
+    if (!waitingForConnection) return;
+
+    const timer = setTimeout(() => setDelayedConnectionConvoId(convoId), 1200);
+    return () => clearTimeout(timer);
+  }, [convoId, waitingForConnection]);
+
+  useEffect(() => { setShowCollections(false); }, [convoId]);
   useEffect(() => {
     if (conversationEndRef.current) {
       conversationEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [conversation]);
 
-  useEffect(() => {
-    const fetchCollections = async () => {
-      try {
-        const response = await fetch('/api/collections/');
-        if (!response.ok) {
-          throw new Error(`HTTP error: ${response.status}`);
-        }
-        const data = await response.json();
-        setCollections(data.collections);
-      } catch (error) {
-        console.error('Error fetching collections:', error);
-        setException('Failed to load collections. Please refresh the page.');
+  const fetchCollections = useCallback(async () => {
+    collectionsRequest.current?.abort();
+    const controller = new AbortController();
+    collectionsRequest.current = controller;
+    setCollectionsLoading(true);
+    try {
+      const response = await fetch('/api/collections/chat-context/', { signal: controller.signal });
+      if (!response.ok) {
+        throw new Error(`HTTP error: ${response.status}`);
       }
-    };
-    fetchCollections();
-  }, []);
-
-  const childrenByParentCollectionId = useMemo(() => {
-    const map = new Map<string, string[]>();
-    collections.forEach((collection) => {
-      if (collection.parent == null) return;
-
-      const parentId = normalizeCollectionId(collection.parent);
-      const childId = normalizeCollectionId(collection.id);
-      const siblings = map.get(parentId);
-
-      if (siblings) {
-        siblings.push(childId);
-      } else {
-        map.set(parentId, [childId]);
-      }
-    });
-    return map;
-  }, [collections]);
-
-  const getDescendantCollectionIds = (collectionId: string): string[] => {
-    const descendants: string[] = [];
-    const visited = new Set<string>();
-    const queue = [...(childrenByParentCollectionId.get(collectionId) ?? [])];
-
-    while (queue.length > 0) {
-      const currentId = queue.shift();
-      if (!currentId || visited.has(currentId)) continue;
-
-      visited.add(currentId);
-      descendants.push(currentId);
-
-      const children = childrenByParentCollectionId.get(currentId);
-      if (children) {
-        queue.push(...children);
-      }
+      const data = await response.json();
+      if (!Array.isArray(data.collections) || !Array.isArray(data.skills) || typeof data.skills_enabled !== 'boolean') throw new Error('Invalid context response');
+      if (controller.signal.aborted) return;
+      setCatalog(data);
+      setCollectionsError('');
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      console.error('Error fetching collections:', error);
+      setCollectionsError('Failed to load collections and skills. Please try again.');
+    } finally {
+      if (!controller.signal.aborted) setCollectionsLoading(false);
     }
-
-    return descendants;
-  };
+  }, []);
+  useEffect(() => {
+    void fetchCollections();
+    return () => collectionsRequest.current?.abort();
+  }, [fetchCollections]);
 
   const autoResizeTextarea = () => {
     const textarea = textareaRef.current;
@@ -144,7 +130,7 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   };
 
   const sendMessage = () => {
-    if (!messageInput.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    if (connectionStatus !== 'ready' || inputDisabled || contextSaving || !messageInput.trim() || !wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
 
     beginTurn();
     setInputDisabled(true);
@@ -160,7 +146,8 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     const payload = {
       action: 'append',
       message: newMessage,
-      collections: Array.from(selectedCollections).map(toPayloadCollectionId),
+      collections: Array.from(selectedCollections).map(payloadCollectionId),
+      ...(catalog.skills_enabled ? { skill_overrides: validOverrides(catalog.skills, skillOverrides) } : {}),
       files: [],
     };
 
@@ -211,38 +198,12 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
     });
   };
 
-  const persistSelectedCollections = useCallback((collectionIds: Set<string>) => {
-    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-
-    wsRef.current.send(JSON.stringify({
-      action: 'select_collections',
-      collections: Array.from(collectionIds).map(toPayloadCollectionId),
-    }));
-  }, [wsRef]);
-
-  const handleCollectionToggle = (collectionId: string) => {
-    const normalizedCollectionId = normalizeCollectionId(collectionId);
-    const nextSelected = new Set(selectedCollections);
-
-    if (nextSelected.has(normalizedCollectionId)) {
-      nextSelected.delete(normalizedCollectionId);
-      getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
-        nextSelected.delete(descendantId);
-      });
-    } else {
-      nextSelected.add(normalizedCollectionId);
-      getDescendantCollectionIds(normalizedCollectionId).forEach((descendantId) => {
-        nextSelected.add(descendantId);
-      });
-    }
-
-    setSelectedCollections(nextSelected);
-    persistSelectedCollections(nextSelected);
+  const applyContext = async (selection: ContextSelection) => {
+    if (!collectionsEditable) throw new Error('Wait for the chat to be ready before applying changes.');
+    const available = new Set(catalog.collections.map(collection => String(collection.id)));
+    const collections = new Set([...selection.selectedCollections].filter(id => available.has(id)));
+    await saveContext(collections, catalog.skills_enabled ? validOverrides(catalog.skills, selection.skillOverrides) : undefined);
   };
-
-  const filteredCollections = collections.filter((collection) =>
-    collection.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
 
   const getUsageColor = (ratio: number): string => {
     if (ratio >= 0.95) return 'var(--color-red-dark)';
@@ -255,9 +216,20 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
   const clampedUsageValue = Math.min(usageValue, contextLimitTokens);
   const usageRatio = contextLimitTokens > 0 ? clampedUsageValue / contextLimitTokens : 0;
   const visibleException = terminalError || exception;
+  const connectionMessage = !visibleException && waitingForConnection && delayedConnectionConvoId === convoId
+    ? connectionStatus === 'reconnecting' ? 'Reconnecting…' : 'Getting your chat ready…'
+    : null;
 
   return (
     <div className="flex flex-col h-full">
+      {collectionsError && !showCollections && (
+        <div role="alert" className="p-3 text-text-normal bg-scheme-shade_3 flex items-center justify-between gap-3">
+          <span>{collectionsError}</span>
+          <button type="button" onClick={() => void fetchCollections()} disabled={collectionsLoading} className="underline whitespace-nowrap">
+            {collectionsLoading ? 'Loading collections…' : 'Retry collections'}
+          </button>
+        </div>
+      )}
       {visibleException && (
         <div className="sticky top-0 z-50 font-mono text-text-normal p-4 mb-4 bg-red-dark rounded flex items-center justify-between">
           <span>{visibleException}</span>
@@ -350,19 +322,28 @@ const Chat: React.FC<ChatProps> = ({ convoId, contextLimit }) => {
         onMessageInputChange={setMessageInput}
         onAutoResize={autoResizeTextarea}
         onSend={sendMessage}
-        inputDisabled={inputDisabled}
-        onOpenCollections={() => setShowCollections(true)}
-        selectedCount={selectedCollections.size}
+        inputDisabled={connectionStatus === 'failed' || (connectionStatus === 'ready' && inputDisabled)}
+        sendDisabled={inputDisabled || contextSaving || connectionStatus !== 'ready'}
+        connectionMessage={connectionMessage}
+        onOpenCollections={() => { if (collectionsEditable) setShowCollections(true); }}
+        collectionsDisabled={!collectionsEditable}
+        collectionsLoading={collectionsLoading}
+        selectedCount={catalog.collections.filter(collection => selectedCollections.has(String(collection.id))).length}
+        selectedSkillCount={catalog.skills_enabled ? catalog.skills.filter(skill => skillEnabled(skill, selectedCollections, skillOverrides)).length : 0}
       />
 
       <ChatCollectionsModal
+        key={convoId}
         open={showCollections}
         onClose={() => setShowCollections(false)}
-        searchTerm={searchTerm}
-        onSearchTermChange={setSearchTerm}
-        filteredCollections={filteredCollections}
+        catalog={catalog}
         selectedCollections={selectedCollections}
-        onToggleCollection={handleCollectionToggle}
+        skillOverrides={skillOverrides}
+        onApply={applyContext}
+        loading={collectionsLoading}
+        error={collectionsError}
+        onRetry={() => void fetchCollections()}
+        applyDisabled={!collectionsEditable}
       />
     </div>
   );

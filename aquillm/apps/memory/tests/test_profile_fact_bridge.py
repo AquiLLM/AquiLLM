@@ -4,9 +4,31 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from uuid import uuid4
+import pytest
 
 from aquillm import memory as memory_module
 from aquillm import tasks as tasks_module
+
+
+@pytest.fixture(autouse=True)
+def mem0_only_runtime(monkeypatch):
+    # These unit tests supply fake users and exercise the remote/profile path.
+    # Real local dual-write persistence is covered by provider-completion tests.
+    monkeypatch.setattr(memory_module, 'MEM0_DUAL_WRITE_LOCAL', False)
+
+
+@pytest.fixture
+def queued_promotions(monkeypatch):
+    queued = []
+    monkeypatch.setattr(tasks_module.promote_profile_facts_task, 'delay', lambda **kwargs: queued.append(kwargs))
+    return queued
+
+
+def run_queued_promotion(monkeypatch, user, queued):
+    assert len(queued) == 1
+    assert queued[0]['user_id'] == user.id
+    monkeypatch.setattr(memory_module.User.objects, 'filter', lambda **kwargs: SimpleNamespace(first=lambda: user))
+    tasks_module.promote_profile_facts_task.run(**queued[0])
 
 
 class _FakeMessages:
@@ -20,7 +42,7 @@ class _FakeMessages:
         return list(self._rows)
 
 
-def test_create_episodic_memories_promotes_durable_facts_to_profile_memory(monkeypatch):
+def test_create_episodic_memories_promotes_durable_facts_via_background_task(monkeypatch, queued_promotions):
     assistant_uuid = uuid4()
     db_convo = SimpleNamespace(
         owner_id=1,
@@ -70,6 +92,8 @@ def test_create_episodic_memories_promotes_durable_facts_to_profile_memory(monke
     )
 
     memory_module.create_episodic_memories_for_conversation(db_convo)
+    assert promoted == []
+    run_queued_promotion(monkeypatch, db_convo.owner, queued_promotions)
 
     assert promoted == [
         {
@@ -85,7 +109,7 @@ def test_create_episodic_memories_promotes_durable_facts_to_profile_memory(monke
     ]
 
 
-def test_create_episodic_memories_keeps_fact_promotion_with_intelligent_mem0_write(monkeypatch):
+def test_create_episodic_memories_keeps_fact_promotion_with_intelligent_mem0_write(monkeypatch, queued_promotions):
     assistant_uuid = uuid4()
     db_convo = SimpleNamespace(
         owner_id=1,
@@ -140,6 +164,8 @@ def test_create_episodic_memories_keeps_fact_promotion_with_intelligent_mem0_wri
     )
 
     memory_module.create_episodic_memories_for_conversation(db_convo)
+    assert promoted == []
+    run_queued_promotion(monkeypatch, db_convo.owner, queued_promotions)
 
     assert promoted == [
         {
@@ -160,11 +186,12 @@ def test_create_episodic_memories_keeps_fact_promotion_with_intelligent_mem0_wri
             "assistant_content": "I will remember your stack and response style.",
             "conversation_id": 99,
             "assistant_message_uuid": str(assistant_uuid),
+            "strict": True,
         }
     ]
 
 
-def test_create_episodic_memories_still_writes_intelligent_mem0_when_no_facts_promote(monkeypatch):
+def test_create_episodic_memories_still_writes_intelligent_mem0_when_no_facts_promote(monkeypatch, queued_promotions):
     assistant_uuid = uuid4()
     db_convo = SimpleNamespace(
         owner_id=1,
@@ -211,6 +238,7 @@ def test_create_episodic_memories_still_writes_intelligent_mem0_when_no_facts_pr
     )
 
     memory_module.create_episodic_memories_for_conversation(db_convo)
+    run_queued_promotion(monkeypatch, db_convo.owner, queued_promotions)
 
     assert captured_write == [
         {
@@ -219,6 +247,7 @@ def test_create_episodic_memories_still_writes_intelligent_mem0_when_no_facts_pr
             "assistant_content": "Here is a summary of the last thing we discussed.",
             "conversation_id": 99,
             "assistant_message_uuid": str(assistant_uuid),
+            "strict": True,
         }
     ]
 
@@ -291,6 +320,7 @@ def test_create_episodic_memories_defers_profile_fact_extraction_to_background_t
             "assistant_content": "I will remember your memory stack.",
             "conversation_id": 99,
             "assistant_message_uuid": str(assistant_uuid),
+            "strict": True,
         }
     ]
 

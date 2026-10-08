@@ -151,6 +151,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "apps.knowledge_graph.retrieval.stage_diagnostics": {
+            "handlers": _default_handlers,
+            "level": "INFO",
+            "propagate": False,
+        },
         "celery": {
             "handlers": _default_handlers,
             "level": "DEBUG",

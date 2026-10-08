@@ -200,3 +200,36 @@ def _membership_state(
 
 
 # fmt: off
+
+
+def test_expired_deadline_starts_no_membership_or_candidate_read():
+    ready = _ready()
+    reads = []
+    repository = DirectSeedRepository(
+        scope=_scope(ready),
+        codec=HmacSha256ProjectionIdentifierCodec(b'key', key_version='key-v1'),
+        span_inputs=(DirectResolutionSpanInputV1(QueryEntitySpanV1('model', 0, 5, 1.0), 'model'),),
+        row_loader=lambda **kwargs: reads.append('candidate'),
+        membership_state_loader=lambda **kwargs: reads.append('membership'),
+        deadline=0.0,
+    )
+    with pytest.raises(TimeoutError):
+        repository.canonical_name_matches(span=QueryEntitySpanV1('model', 0, 5, 1.0), ready=ready, limit=4)
+    assert reads == []
+
+
+def test_deadline_is_carried_to_both_repository_reads():
+    from time import monotonic
+    ready = _ready()
+    span = QueryEntitySpanV1('model', 0, 5, 1.0)
+    calls = []
+    deadline = monotonic() + 10
+    def membership(**options):
+        calls.append(options)
+        return _membership_state(ready)
+    def candidates(**options):
+        calls.append(options)
+        return ()
+    repository = DirectSeedRepository(scope=_scope(ready), codec=HmacSha256ProjectionIdentifierCodec(b'key', key_version='key-v1'), span_inputs=(DirectResolutionSpanInputV1(span, 'model'),), row_loader=candidates, membership_state_loader=membership, deadline=deadline)
+    assert repository.canonical_name_matches(span=span, ready=ready, limit=4) == ()
+    assert [call['deadline'] for call in calls] == [deadline, deadline]

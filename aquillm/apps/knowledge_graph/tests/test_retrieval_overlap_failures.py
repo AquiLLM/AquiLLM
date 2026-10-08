@@ -46,7 +46,9 @@ def test_direct_expiring_between_ready_publication_and_collection_is_local(monke
 
         monkeypatch.setattr(scheduler, "_collect", collect_after_early_finishes)
         outcome = handle.finish(baseline=object(), deadline=11.2)
-    assert outcome.direct.failure_reason is DirectBranchFailureReason.EXTRACTOR_TIMEOUT
+    assert outcome.direct.failure_reason is (
+        DirectBranchFailureReason.DIRECT_BRANCH_TIMEOUT
+    )
     assert outcome.extended.status is BranchStatusV1.SUCCEEDED
 
 

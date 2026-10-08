@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from math import fsum
+from time import monotonic
 
 import pytest
 
@@ -22,6 +23,33 @@ from lib.knowledge_graph.query_extractor.contracts import QueryEntitySpanV1
 from lib.knowledge_graph.retrieval_config import load_hybrid_retrieval_settings
 
 K = tuple(character * 64 for character in "123456789abcdef")
+
+
+def test_expired_deadline_stops_before_any_tier():
+    from apps.knowledge_graph.retrieval.direct_seed_sql import DirectSeedReadTimeout
+    repository = Repository({})
+    span = QueryEntitySpanV1("model", 0, 5, 1.0)
+    with pytest.raises(DirectSeedReadTimeout):
+        direct_seed_resolution.resolve_direct_seed_components(
+            spans=(span,), repository=repository, ready=_ready(), settings=_settings(), deadline=0.0,
+        )
+    assert repository.calls == []
+
+
+def test_deadline_expiring_after_first_tier_starts_no_next_tier():
+    from apps.knowledge_graph.retrieval.direct_seed_sql import DirectSeedReadTimeout
+    now = [0.0]
+    repository = Repository({})
+    def identifier(**kwargs):
+        now[0] = 2.0
+        return repository._get("identifier", kwargs["span"], kwargs["limit"])
+    repository.exact_identifier_matches = identifier
+    with pytest.raises(DirectSeedReadTimeout):
+        direct_seed_resolution.resolve_direct_seed_components(
+            spans=(QueryEntitySpanV1("model", 0, 5, 1.0),), repository=repository,
+            ready=_ready(), settings=_settings(), deadline=1.0, clock=lambda: now[0],
+        )
+    assert repository.calls == [("identifier", 0)]
 
 
 def _ready() -> ReadyGenerationBundleV1:
@@ -134,7 +162,7 @@ def test_deduplicates_normalized_surface_and_short_circuits_highest_confidence()
         repository=repository,
         ready=_ready(),
         settings=_settings(),
-        deadline=10.0,
+        deadline=monotonic() + 10.0,
     )
     assert outcome.failure_reason is None
     assert outcome.diagnostics.input_span_count == 3
@@ -174,7 +202,7 @@ def test_automatic_component_ambiguity_and_same_component_best_member() -> None:
         repository=repository,
         ready=_ready(),
         settings=_settings(max_seeds=1),
-        deadline=10.0,
+        deadline=monotonic() + 10.0,
     )
     assert outcome.ambiguities[0].component_count == 2
     assert outcome.matches[0].entity_key == K[2]
@@ -204,7 +232,7 @@ def test_uses_fsum_normalized_component_mass_and_opaque_tie_order() -> None:
         repository=Repository(tiers),
         ready=_ready(),
         settings=_settings(),
-        deadline=10.0,
+        deadline=monotonic() + 10.0,
     )
     total = fsum(weights)
     assert outcome.seeds[0].mass == fsum((weights[0], weights[2])) / total
@@ -240,7 +268,7 @@ def test_embedding_threshold_margin_and_transient_fallback(
         repository=repository,
         ready=_ready(),
         settings=_settings(embedding=True),
-        deadline=10.0,
+        deadline=monotonic() + 10.0,
     )
     assert outcome.diagnostics.ambiguous_span_count == ambiguous
     assert outcome.diagnostics.resolved_span_count == resolved
@@ -280,7 +308,7 @@ def test_embedding_failure_preserves_exact_matches_and_disables_only_fallback(
         repository=repository,
         ready=_ready(),
         settings=_settings(embedding=True),
-        deadline=10.0,
+        deadline=monotonic() + 10.0,
     )
 
     assert outcome.failure_reason is None
@@ -293,7 +321,7 @@ def test_embedding_failure_preserves_exact_matches_and_disables_only_fallback(
 def test_applies_configured_seed_cap_globally_after_resolution() -> None:
     spans = tuple(QueryEntitySpanV1("model", index * 2, index * 2 + 1, 1.0) for index in range(65))
     tiers = {("identifier", span.start): (_match(span=index, entity=f"{index + 1:064x}", component=f"{index + 1:064x}", tier=DirectResolutionTier.IDENTIFIER),) for index, span in enumerate(spans)}
-    outcome = direct_seed_resolution.resolve_direct_seed_components(spans=spans, repository=Repository(tiers), ready=_ready(), settings=_settings(max_seeds=3), deadline=10.0)
+    outcome = direct_seed_resolution.resolve_direct_seed_components(spans=spans, repository=Repository(tiers), ready=_ready(), settings=_settings(max_seeds=3), deadline=monotonic() + 10.0)
     assert tuple(seed.component_key for seed in outcome.seeds) == tuple(f"{index:064x}" for index in range(1, 4))
     assert len(outcome.matches) == outcome.diagnostics.resolved_span_count == 3
     assert outcome.diagnostics.unresolved_span_count == 62

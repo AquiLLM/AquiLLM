@@ -16,6 +16,7 @@ from apps.knowledge_graph.retrieval.scheduler_support import (
     LocalBranchSchedulerFailure,
     failed_branch,
 )
+from apps.knowledge_graph.retrieval.stage_diagnostics import graph_stage
 from apps.knowledge_graph.retrieval.topology.contracts import (
     HybridBranchKind,
     ProjectedSeedV1,
@@ -65,7 +66,7 @@ def _prepare_extended_branch(
     ):
         return ExtendedBranchFailureReason.EXTENDED_NO_SEEDS
     if runtime.clock() >= deadline:
-        return ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+        return ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT
     by_pk = {getattr(row, "pk", None): row for row in candidates}
     authority_by_document = {
         document: row
@@ -102,21 +103,24 @@ def _prepare_extended_branch(
         if not chunks:
             continue
         if runtime.clock() >= deadline:
-            return ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+            return ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT
         try:
-            by_chunk = repository.load_seed_identities(
-                authority=authority,
-                chunks=chunks,
-                authorization=authorization,
-                codec=runtime.codec,
-                max_rows=_MAX_SEED_SOURCE_ROWS_PER_PROJECTION,
-            )
+            with graph_stage(
+                branch="extended", stage="entity_resolution", clock=runtime.clock
+            ):
+                by_chunk = repository.load_seed_identities(
+                    authority=authority,
+                    chunks=chunks,
+                    authorization=authorization,
+                    codec=runtime.codec,
+                    max_rows=_MAX_SEED_SOURCE_ROWS_PER_PROJECTION,
+                )
             if set(by_chunk) - {pk for pk, _ in chunks}:
                 raise ValueError("extended source returned unrelated chunks")
         except Exception as error:
             _source_failure(error)
         if runtime.clock() >= deadline:
-            return ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT
+            return ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT
         for chunk_id, entity_keys in by_chunk.items():
             if not entity_keys:
                 continue
@@ -195,9 +199,10 @@ def run_extended_branch(
         )
     seeds = prepared if mode == "fixed" else prepared.seeds
     caps = topology_caps(settings, HybridBranchKind.EXTENDED)
-    snapshot = runtime.topology_loader.load(
-        ready=scope.ready, seeds=seeds, caps=caps, deadline=deadline
-    )
+    with graph_stage(branch="extended", stage="topology", clock=runtime.clock):
+        snapshot = runtime.topology_loader.load(
+            ready=scope.ready, seeds=seeds, caps=caps, deadline=deadline
+        )
     try:
         result, execution_signature = rank_projected_for_mode(
             snapshot=snapshot,
@@ -214,11 +219,9 @@ def run_extended_branch(
             maximum=caps.max_results,
         )
     except TimeoutError:
-        return ppr_failure_envelope(
+        return failed_branch(
             HybridBranchKind.EXTENDED,
-            ExtendedBranchFailureReason.EXTENDED_TOPOLOGY_TIMEOUT,
-            seed_count=len(seeds),
-            snapshot=snapshot,
+            ExtendedBranchFailureReason.EXTENDED_BRANCH_TIMEOUT,
             elapsed_ms=settings.graph_extended_timeout_ms,
         )
     except (TypeError, ValueError):

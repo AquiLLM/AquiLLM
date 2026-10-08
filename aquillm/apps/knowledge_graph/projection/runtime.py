@@ -32,6 +32,7 @@ _PROJECTION_SETTING_NAMES = frozenset(
         "KG_PROJECTION_LEASE_SECONDS",
         "KG_PROJECTION_MAX_ATTEMPTS",
         "KG_PROJECTION_MAX_LAG_SECONDS",
+        "KG_PROJECTION_TIMEOUT_MS",
         "KG_PROJECTION_POSTGRES_SOURCE_DSN",
         "KG_PROJECTION_POSTGRES_STATE_DSN",
         "KG_PROJECTION_QUEUE",
@@ -90,6 +91,7 @@ def memgraph_projection_repository(
         settings.memgraph_projection_username,
         settings.memgraph_projection_password.get_secret_value(),
         database=settings.memgraph_database,
+        max_transaction_retry_time=0.0,
     )
     return MemgraphProjectionRepository(driver)
 
@@ -195,8 +197,9 @@ def enqueue_automatic_membership_projections(
     """Best-effort optional membership hook inside the canonical transaction."""
 
     try:
-        settings = load_projection_runtime_settings(source)
-        if not settings.memgraph_projection_enabled:
+        values = os.environ if source is None else source
+        settings = load_projection_runtime_settings(values)
+        if not _projection_hook_enabled(values):
             return False
         from .lifecycle import enqueue_automatic_membership_changes_locked
 

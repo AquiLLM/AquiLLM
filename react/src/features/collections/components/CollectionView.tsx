@@ -138,14 +138,16 @@ const CollectionView: React.FC<CollectionViewProps> = ({ collectionId, onBack })
       });
   };
 
-  if (loading) return <div>Loading...</div>;
-  if (error) return <div>Error: {error}</div>;
+  if (loading && !collection) return <div>Loading...</div>;
+  if (error && !collection) return <div role="alert">Error: {error} <button type="button" onClick={fetchCollectionData}>Retry collection</button></div>;
   if (!collection) return <div>Collection not found</div>;
 
   const breadcrumbs = buildCollectionBreadcrumbs(collection, allCollections);
 
   return (
     <CollectionSchemaNavigationGuard onProceedNavigation={proceedNavigation}>
+      {error && <div role="alert" className="p-3 text-red-dark">Error: {error} <button type="button" onClick={fetchCollectionData} className="underline">Retry collection</button></div>}
+      {loading && <p role="status" className="text-text-low_contrast">Updating collection…</p>}
       <CollectionViewGuardedContent
         collection={collection}
         collectionId={collectionId}

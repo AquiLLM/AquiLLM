@@ -5,21 +5,14 @@ pass/fail detection) without any live LLM calls or database access.
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import patch
 
 import pytest
 
 from apps.chat.evals.run_rag_eval import (
-    _build_mock_retrieval,
-    _make_consumer,
     _run_case,
     load_cases,
 )
-from apps.chat.services import rag_pipeline
-
 
 _CASES_PATH = Path(__file__).resolve().parent.parent / "evals" / "rag_cases.yaml"
 
@@ -94,18 +87,18 @@ async def test_collection_backed_question_case_passes(monkeypatch):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_figure_request_case_passes(monkeypatch):
+async def test_figure_request_defers_to_model_tool_selection(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     case = {
         "id": "figure_request_smoke",
-        "description": "Figure request smoke test",
+        "description": "Figure request defers to deliberate image tool selection",
         "message": "Show me the figures from the calibration paper.",
         "collection_ids": [1],
         "mock_retrieval_status": "results_found",
         "mock_retrieved_count": 1,
-        "expect_outcome": "handled",
-        "expect_retrieval_called": True,
-        "expect_content_contains": ["calibration"],
+        "expect_outcome": "skipped",
+        "expect_retrieval_called": False,
+        "expect_content_contains": [],
     }
 
     result = await _run_case(case, verbose=False)

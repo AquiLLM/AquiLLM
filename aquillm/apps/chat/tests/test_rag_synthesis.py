@@ -1,19 +1,17 @@
 """Tests for evidence-first synthesis (Task 5)."""
+
 from __future__ import annotations
 
-import pytest
-
+from apps.chat.services.rag_evidence import build_evidence_packet
+from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from lib.llm.providers import visibility
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
-from apps.chat.services.rag_evidence import build_evidence_packet
-from apps.chat.services.rag_synthesis import synthesize_from_evidence
-
-
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
+
 
 class _FakeCompleteLLM:
     """Stub LLM whose ``complete`` appends a fixed assistant reply."""
@@ -42,6 +40,7 @@ class _NoCallLLM:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _raw_results(*, image: bool = False) -> dict:
     chunk = {
@@ -107,6 +106,7 @@ def _packet(raw_result: dict, query: str = "calibration"):
 # Happy path
 # ---------------------------------------------------------------------------
 
+
 async def test_uses_llm_answer_when_usable():
     raw = _raw_results()
     convo = _post_tool_convo("summarize the calibration method", raw)
@@ -125,6 +125,7 @@ async def test_uses_llm_answer_when_usable():
 # ---------------------------------------------------------------------------
 # Extractive fallback (always on for direct RAG)
 # ---------------------------------------------------------------------------
+
 
 async def test_blank_synthesis_uses_extractive_fallback(monkeypatch):
     monkeypatch.delenv("LLM_ALLOW_EXTRACTIVE_EVIDENCE_UI", raising=False)
@@ -157,6 +158,7 @@ async def test_failure_text_replaced_by_extractive():
 # No results -> transparent notice, no LLM call
 # ---------------------------------------------------------------------------
 
+
 async def test_no_results_returns_notice_without_llm():
     raw = _raw_no_results("gravitational waves")
     convo = _post_tool_convo("search for gravitational waves", raw)
@@ -173,26 +175,28 @@ async def test_no_results_returns_notice_without_llm():
 
 
 # ---------------------------------------------------------------------------
-# Figure requests ensure markdown images
+# Figures appear only when selected in the synthesized answer
 # ---------------------------------------------------------------------------
 
-async def test_figure_request_appends_markdown_image():
+
+async def test_figure_request_does_not_override_a_text_only_answer():
     raw = _raw_results(image=True)
     convo = _post_tool_convo("show me the figure for calibration", raw)
-    reply = "The figure shows calibration drift across magnitude bins [doc:doc-a chunk:1]."
+    reply = "The retrieved figure does not illustrate calibration [doc:doc-a chunk:1]."
     llm = _FakeCompleteLLM(reply)
 
     result = await synthesize_from_evidence(llm, convo, _packet(raw))
 
-    content = result[-1].content
-    assert "/aquillm/document_image/doc-a/" in content
-    assert "![" in content
+    assert result[-1].content == reply
 
 
 async def test_no_figure_appended_when_not_requested():
     raw = _raw_results(image=True)
     convo = _post_tool_convo("explain the calibration method in detail", raw)
-    reply = "Calibration subtracts dark frames and divides by flat fields [doc:doc-a chunk:1]."
+    reply = (
+        "Calibration subtracts dark frames and divides by flat fields "
+        "[doc:doc-a chunk:1]."
+    )
     llm = _FakeCompleteLLM(reply)
 
     result = await synthesize_from_evidence(llm, convo, _packet(raw))
@@ -213,3 +217,41 @@ async def test_figure_not_duplicated_when_already_present():
 
     content = result[-1].content
     assert content.count("/aquillm/document_image/doc-a/") == 1
+
+
+async def test_only_model_selected_figure_is_displayed():
+    raw = _raw_results(image=True)
+    raw["result"].append(
+        {
+            "rank": 2,
+            "chunk_id": 2,
+            "doc_id": "doc-b",
+            "title": "Unrelated example image",
+            "text": "Example galaxy images in five photometric bands.",
+            "citation": "[doc:doc-b chunk:2]",
+            "image_url": "/aquillm/document_image/doc-b/",
+        }
+    )
+    convo = _post_tool_convo("show the calibration figure", raw)
+    reply = (
+        "The calibration plot shows the drift [doc:doc-a chunk:1].\n\n"
+        "![Calibration drift](/aquillm/document_image/doc-a/)"
+    )
+
+    result = await synthesize_from_evidence(
+        _FakeCompleteLLM(reply), convo, _packet(raw)
+    )
+
+    assert result[-1].content == reply
+    assert "/aquillm/document_image/doc-b/" not in result[-1].content
+
+
+async def test_extractive_fallback_does_not_select_a_figure():
+    raw = _raw_results(image=True)
+    convo = _post_tool_convo("show me the figure for calibration", raw)
+
+    result = await synthesize_from_evidence(_FakeCompleteLLM(""), convo, _packet(raw))
+
+    assert "[doc:doc-a chunk:1]" in result[-1].content
+    assert "flat fields" in result[-1].content
+    assert "![" not in result[-1].content
