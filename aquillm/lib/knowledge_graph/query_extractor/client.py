@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from time import monotonic
@@ -70,6 +71,19 @@ def _stdlib_request_once(
 
 
 RequestOnce = Callable[..., QueryExtractorHTTPResponse]
+
+
+def _is_service_timeout(body: bytes) -> bool:
+    # Failure envelopes are tiny. Decode UTF-8 explicitly (json.loads(bytes)
+    # also accepts UTF-16), and retain pairs so duplicate keys cannot collapse.
+    if type(body) is not bytes or len(body) > 256:
+        return False
+    try:
+        return json.loads(
+            body.decode("utf-8"), object_pairs_hook=lambda pairs: pairs
+        ) == [("reason", "extractor_timeout")]
+    except (UnicodeError, ValueError, RecursionError):
+        return False
 
 
 def reconstruct_entity_texts(
@@ -175,6 +189,14 @@ class QueryExtractorClient:
             ) from None
         if wire.status in {401, 403}:
             raise QueryExtractorClientError(QueryExtractorFailureReason.EXTRACTOR_AUTH)
+        if (
+            wire.status == 503
+            and len(wire.body) <= settings.max_response_body_bytes
+            and _is_service_timeout(wire.body)
+        ):
+            raise QueryExtractorClientError(
+                QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
+            )
         if wire.status != 200 or len(wire.body) > settings.max_response_body_bytes:
             raise QueryExtractorClientError(
                 QueryExtractorFailureReason.EXTRACTOR_PROVENANCE

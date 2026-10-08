@@ -10,6 +10,12 @@ from threading import Lock
 from time import monotonic
 
 from apps.knowledge_graph.retrieval.topology import contracts as c
+from apps.knowledge_graph.retrieval.topology.diagnostics import (
+    TopologyDiagnosticPhase as Phase,
+)
+from apps.knowledge_graph.retrieval.topology.diagnostics import (
+    record_topology_failure,
+)
 from apps.knowledge_graph.retrieval.topology.failures import (
     TopologyLoadError,
     TopologyResultCapError,
@@ -144,7 +150,9 @@ class Neo4jProjectedTopologyQueryAdapter:
     def _manifests(self, ready, *, deadline: float, max_records: int):
         if max_records != len(ready.selected_generations):
             raise TopologyLoadError(c.TopologyFailureReason.BACKEND_SCHEMA_MISMATCH)
-        selected_by_key = {row.generation_key: row for row in ready.selected_generations}
+        selected_by_key = {
+            row.generation_key: row for row in ready.selected_generations
+        }
         rows = self._execute(
             _MANIFEST_CYPHER,
             {
@@ -249,11 +257,18 @@ class Neo4jProjectedTopologyQueryAdapter:
             if caps.branch_kind is c.HybridBranchKind.DIRECT
             else c.TopologyFailureReason.EXTENDED_TOPOLOGY_INVALID
         )
+        started = monotonic()
         try:
             snapshot = build_projected_topology_snapshot(
                 ready=ready, seeds=seeds, caps=caps, bundles=tuple(bundles)
             )
         except (KeyError, TypeError, ValueError) as error:
+            record_topology_failure(
+                phase=Phase.SNAPSHOT_BUILD,
+                started=started,
+                branch=caps.branch_kind.value,
+                count=len(bundles),
+            )
             raise TopologyLoadError(invalid) from error
         with self._cache_lock:
             self._cache[cache_key] = snapshot

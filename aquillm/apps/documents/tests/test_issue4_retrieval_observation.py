@@ -51,6 +51,7 @@ def test_retrieval_stages_use_actual_candidate_and_rerank_rows(monkeypatch):
     assert [row["chunk_id"] for row in trace["materialized_union"]] == [11, 12]
     assert [row["chunk_id"] for row in trace["post_rerank"]] == [12, 11]
     assert trace["graph"]["ready"] is None
+    assert trace["graph"]["candidates"] == []
 
 
 @override_settings(KG_OVERLAY_ENABLED=False, RAG_CACHE_ENABLED=False)

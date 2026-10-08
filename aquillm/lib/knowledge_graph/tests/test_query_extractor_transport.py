@@ -65,7 +65,6 @@ def test_stdlib_transport_reads_at_most_response_cap_plus_one(
         assert Response.last.closed
 
 
-
 @pytest.mark.parametrize(
     ("response", "expected"),
     (
@@ -107,7 +106,6 @@ def test_client_has_fixed_failures_and_never_retries_or_follows_redirects(
     assert calls == 1
 
 
-
 def test_expired_deadline_is_a_fixed_timeout_without_io() -> None:
     client = QueryExtractorClient(
         load_query_extractor_settings(_environment()),
@@ -117,6 +115,60 @@ def test_expired_deadline_is_a_fixed_timeout_without_io() -> None:
     with pytest.raises(QueryExtractorClientError) as exc_info:
         client.extract(query="model", ontology=Ontology(), deadline=5.0)
     assert exc_info.value.reason is QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
+
+
+@pytest.mark.parametrize(
+    "status,body,reason",
+    [
+        (503, b'{"reason":"extractor_timeout"}', "extractor_timeout"),
+        (503, b' { "reason" : "extractor_timeout" } ', "extractor_timeout"),
+        (
+            503,
+            b'{"reason":"extractor_timeout","reason":"extractor_timeout"}',
+            "extractor_provenance",
+        ),
+        (
+            503,
+            b'{"reason":"extractor_timeout","detail":"private"}',
+            "extractor_provenance",
+        ),
+        (503, b'{"reason":"private"}', "extractor_provenance"),
+        (503, b'["extractor_timeout"]', "extractor_provenance"),
+        (503, b'{"reason":null}', "extractor_provenance"),
+        (503, b"\xff", "extractor_provenance"),
+        (503, b"{", "extractor_provenance"),
+        (
+            503,
+            b" " * 100_000 + b'{"reason":"extractor_timeout"}',
+            "extractor_provenance",
+        ),
+        (500, b'{"reason":"extractor_timeout"}', "extractor_provenance"),
+        (401, b'{"reason":"extractor_timeout"}', "extractor_auth"),
+        (403, b'{"reason":"extractor_timeout"}', "extractor_auth"),
+    ],
+)
+def test_service_timeout_envelope_is_strict_bounded_and_redacted(status, body, reason):
+    calls = []
+
+    def request_once(**kwargs):
+        calls.append(kwargs)
+        return QueryExtractorHTTPResponse(status, body)
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(_environment()),
+        request_once=request_once,
+        monotonic=lambda: 1.0,
+    )
+    with pytest.raises(QueryExtractorClientError) as caught:
+        client.extract(query="model", ontology=Ontology(), deadline=1.05)
+    assert caught.value.reason.value == reason
+    assert str(caught.value) == reason
+    assert len(calls) == 1
+    assert calls[0]["timeout_seconds"] == pytest.approx(0.05)
+
+
+def test_url_timeout_is_redacted():
+    client = QueryExtractorClient(load_query_extractor_settings(_environment()))
     client._request_once = lambda **_kwargs: (_ for _ in ()).throw(URLError(TimeoutError()))  # fmt: skip
     client._monotonic = lambda: 1.0
     with pytest.raises(QueryExtractorClientError) as exc_info:

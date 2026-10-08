@@ -16,7 +16,6 @@ from apps.knowledge_graph.projection.topology_adapter import (
 
 from .contracts import TopologyFailureReason, TopologyQueryName
 from .failures import TopologyLoadError, TopologyResultCapError
-from .gateway_workers import GATEWAY_WORKERS
 from .gateway_config import (
     TopologyGatewaySettings,
     load_topology_gateway_settings,
@@ -30,6 +29,7 @@ from .gateway_contracts import (
     decode_request,
     encode_response,
 )
+from .gateway_workers import GATEWAY_WORKERS
 
 _FAMILY_CAPS: Final = {
     TopologyQueryName.GENERATION_MANIFESTS: 128,
@@ -52,7 +52,9 @@ class TopologyGatewayRuntime:
 _runtime: TopologyGatewayRuntime | None = None
 
 
-def _get_runtime(settings: TopologyGatewaySettings | None = None) -> TopologyGatewayRuntime:
+def _get_runtime(
+    settings: TopologyGatewaySettings | None = None,
+) -> TopologyGatewayRuntime:
     global _runtime
     if settings is None:
         settings = load_topology_gateway_settings(environ)
@@ -62,6 +64,9 @@ def _get_runtime(settings: TopologyGatewaySettings | None = None) -> TopologyGat
             settings.query_username,
             settings.query_password.get_secret_value(),
             database=settings.memgraph_database,
+            # Retrying a managed read would reuse a stale per-transaction
+            # timeout beyond the caller's absolute branch deadline.
+            max_transaction_retry_time=0.0,
         )
         _runtime = TopologyGatewayRuntime(
             settings, driver, Neo4jProjectedTopologyQueryAdapter(driver)
@@ -239,7 +244,9 @@ async def topology_read(scope, receive, send) -> None:
     try:
         runtime = _get_runtime(settings)
         rows = await GATEWAY_WORKERS.run(
-            runtime.adapter.execute_read, expires=deadline, clock=monotonic,
+            runtime.adapter.execute_read,
+            expires=deadline,
+            clock=monotonic,
             query=request.query,
             parameters=request.parameters,
             deadline=deadline,

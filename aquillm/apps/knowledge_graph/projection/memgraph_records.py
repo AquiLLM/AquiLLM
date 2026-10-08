@@ -1,6 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import fields
+from time import monotonic
+
+from apps.knowledge_graph.retrieval.topology.diagnostics import (
+    TopologyDiagnosticPhase as Phase,
+)
+from apps.knowledge_graph.retrieval.topology.diagnostics import (
+    record_topology_failure,
+)
 
 from .memgraph_pagination import (
     FAMILY_IDENTITY_FIELDS,
@@ -26,7 +34,7 @@ from .records import (
     ProjectionGenerationMarkerV1,
     ProjectionLifecycleState,
 )
-from .topology_cypher import bounded_family_query
+from .topology_cypher import EMPTY_FRONTIER_QUERY, bounded_family_query
 
 FAMILIES = (
     ("ProjectedEntity", ProjectedEntityV1),
@@ -52,12 +60,64 @@ _ORDER_FIELDS = (
     "scope_type scope_key artifact_key",
 )
 
+_FRONTIER_FAMILIES = frozenset(
+    {
+        "AutomaticMembership",
+        "ProjectedChunk",
+        "ProjectedRelationSemantics",
+        "ProjectedRelation",
+        "ProjectedEvidence",
+        "ProjectedEntityMention",
+    }
+)
+
+
+def _empty_frontier(driver, parameters, timeout):
+    started = monotonic()
+    rows = driver.execute_read(
+        EMPTY_FRONTIER_QUERY, parameters, timeout_seconds=timeout, max_records=1
+    )
+    if (
+        type(rows) is not tuple
+        or len(rows) != 1
+        or type(rows[0]) is not dict
+        or set(rows[0]) != {"frontier_count"}
+        or type(rows[0]["frontier_count"]) is not int
+        or rows[0]["frontier_count"] not in {0, 1}
+    ):
+        record_topology_failure(phase=Phase.EMPTY_FRONTIER, started=started)
+        raise ValueError("bounded Memgraph frontier probe is invalid")
+    return rows[0]["frontier_count"] == 0
+
 
 class MemgraphFamilyResultCapError(ValueError):
     """A validated sentinel row exceeds this request's bounded family budget."""
 
 
-def _read_topology_family(
+def _read_topology_family(driver, **kwargs):
+    started = monotonic()
+    try:
+        return _read_topology_family_rows(driver, **kwargs)
+    except MemgraphFamilyResultCapError:
+        record_topology_failure(
+            phase=Phase.SOURCE_FAMILY_CAP,
+            started=started,
+            family=kwargs["label"],
+            maximum=kwargs["maximum"],
+            count=kwargs["maximum"] + 1,
+        )
+        raise
+    except (KeyError, TypeError, ValueError):
+        record_topology_failure(
+            phase=Phase.FAMILY_SCHEMA,
+            started=started,
+            family=kwargs["label"],
+            maximum=kwargs["maximum"],
+        )
+        raise
+
+
+def _read_topology_family_rows(
     driver,
     *,
     query,
@@ -199,9 +259,13 @@ def read_bundle(
         raise ValueError("generation marker is missing")
     marker = _dto(ProjectionGenerationMarkerV1, _properties(marker_rows[0], "record"))
     loaded = []
+    empty_frontier = False
     for (label, kind), maximum, order_fields in zip(
         FAMILIES, maxima, _ORDER_FIELDS, strict=True
     ):
+        if empty_frontier and label in _FRONTIER_FAMILIES:
+            loaded.append(())
+            continue
         if topology_parameters is not None:
             query = bounded_family_query(label)
         else:
@@ -220,6 +284,11 @@ def read_bundle(
                 timeout=timeout,
                 reject_full_pages=reject_full_pages,
             )
+            if label == "ProjectedEntity" and not decoded:
+                # Ready generations are immutable. Only physical emptiness
+                # proves every downstream NODE_PATH/EDGE_PATH family empty;
+                # documents, provenance, marker and bundle validation remain.
+                empty_frontier = _empty_frontier(driver, parameters, timeout)
         else:
             rows = driver.execute_read(
                 query,

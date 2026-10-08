@@ -27,6 +27,14 @@ _EDGE_PATH = (
     "UNWIND relationships(path) AS physical "
 )
 
+# Probe physical nodes before skipping path-derived families. The entity family
+# rejoins on opaque_key and can be empty for malformed nodes with missing keys.
+# This probe deliberately has neither an identity rejoin nor a cursor predicate.
+EMPTY_FRONTIER_QUERY = (
+    _ROOT + _NODE_PATH + "WITH entity LIMIT 1 RETURN count(entity) AS frontier_count"
+)
+
+
 def _return(label: str) -> str:
     return (
         "WITH DISTINCT n WHERE "

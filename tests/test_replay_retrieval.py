@@ -36,6 +36,29 @@ def test_guard_denies_every_callable_including_rewrite():
     assert guard.model == "x"
 
 
+@pytest.mark.parametrize("fail", [False, True])
+def test_graph_off_restores_graph_on_settings_and_zero_candidate_summary(fail):
+    settings = SimpleNamespace(RAG_CACHE_ENABLED=True, KG_OVERLAY_ENABLED=True)
+    pipeline = SimpleNamespace(synthesize_from_evidence=object())
+    original = pipeline.synthesize_from_evidence
+    try:
+        with replay.replay_runtime(
+            "graph-off", settings, SimpleNamespace(), pipeline, lambda: None
+        ):
+            assert settings.KG_OVERLAY_ENABLED is False
+            if fail:
+                raise RuntimeError("simulated failure")
+    except RuntimeError:
+        pass
+    assert settings.KG_OVERLAY_ENABLED is True
+    assert settings.RAG_CACHE_ENABLED is True
+    assert pipeline.synthesize_from_evidence is original
+    summary = replay.summarize(
+        [("retrieval_stages", {"graph": {"candidates": []}})], [], []
+    )
+    assert summary["stages"][0]["graph"]["unique_count"] == 0
+
+
 def test_mapping_rejects_missing_and_ambiguous_sources():
     target = {
         "source_sha256": replay.fingerprint("source"),

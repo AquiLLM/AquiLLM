@@ -88,7 +88,9 @@ def retrieval_stages(
             if key in diagnostics and diagnostics[key] not in (None, "none", "not_run")
         ]
         readiness_failures = reasons.count("readiness_mismatch") or None
-        graph_rows = None
+        # Disabled retrieval is known to contribute zero graph candidates.
+        # Keep unknown/unavailable observations distinct on enabled paths.
+        graph_rows = None if overlay_enabled else ()
         if overlay_enabled:
             if hybrid_pool is not None:
                 baseline_ids = {row.pk for row in snapshot.baseline_candidates}

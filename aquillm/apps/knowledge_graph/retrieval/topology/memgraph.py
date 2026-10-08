@@ -3,13 +3,15 @@ from __future__ import annotations
 import json
 from dataclasses import asdict
 from math import isfinite
-from time import monotonic_ns
+from time import monotonic, monotonic_ns
 
 from lib.retrieval_redaction import MAX_RETRIEVAL_LOG_ELAPSED_MS, RetrievalLogReason
 
 from .. import projected_types as t
 from ..readiness_diagnostics import record_readiness_failure
 from . import contracts as c
+from .diagnostics import TopologyDiagnosticPhase as Phase
+from .diagnostics import record_topology_failure
 from .failures import TopologyLoadError, TopologyResultCapError
 from .gateway_client import TopologyGatewayRequestError
 from .gateway_contracts import GatewayFailureReason
@@ -191,6 +193,7 @@ class MemgraphProjectedTopologyLoader:
             if caps.branch_kind is c.HybridBranchKind.DIRECT
             else c.TopologyFailureReason.EXTENDED_TOPOLOGY_INVALID
         )
+        started = monotonic()
         try:
             snapshot = compose_projected_snapshot_families(
                 memberships=responses[c.TopologyQueryName.AUTOMATIC_MEMBERSHIPS],
@@ -213,4 +216,9 @@ class MemgraphProjectedTopologyLoader:
                 raise ValueError("snapshot scope or caps disagree with request")
             return snapshot
         except (KeyError, TypeError, ValueError) as error:
+            record_topology_failure(
+                phase=Phase.SNAPSHOT_COMPOSE,
+                started=started,
+                branch=caps.branch_kind.value,
+            )
             raise TopologyLoadError(invalid) from error
