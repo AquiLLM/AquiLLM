@@ -123,7 +123,7 @@ def test_web_gets_query_only_and_projection_worker_gets_split_credentials(
         name in worker_environment
         for name in ("POSTGRES_USER", "POSTGRES_PASSWORD", "POSTGRES_NAME")
     )
-    assert '--queues="$${KG_PROJECTION_QUEUE}"' in worker["command"]
+    assert '--queues="$${KG_PROJECTION_QUEUE},$${KG_PROJECTION_QUEUE}-maintenance"' in worker["command"]
 
 
 @pytest.mark.parametrize("path", FILES, ids=lambda path: path.name)

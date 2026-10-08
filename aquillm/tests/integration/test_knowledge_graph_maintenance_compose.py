@@ -89,6 +89,34 @@ def test_maintenance_scheduler_boots_from_its_allowlisted_environment(pruning_en
         environment.pop("KG_ARTIFACT_PRUNING_ENABLED")
         environment.pop("KG_ARTIFACT_PRUNING_INTERVAL_SECONDS")
 
+    redis_probe = ""
+    if os.getenv("REDIS_MAINTENANCE_TEST_URL"):
+        environment["CELERY_BROKER_URL"] = os.environ["REDIS_MAINTENANCE_TEST_URL"]
+        redis_probe = """
+from uuid import uuid4
+from redis import Redis
+from celery.beat import ScheduleEntry, Scheduler
+prefix = 'allowlisted-beat-' + uuid4().hex + ':'
+app.conf.broker_transport_options = {'global_keyprefix': prefix}
+client = Redis.from_url(app.conf.broker_url)
+entry = ScheduleEntry(name='reconcile', app=app,
+    **app.conf.beat_schedule['knowledge-graph-projection-reconcile'])
+try:
+    scheduler = Scheduler(app=app, lazy=True)
+    for _ in range(3):
+        scheduler.apply_async(entry, advance=False)
+    with app.connection_for_write() as connection:
+        channel = connection.channel()
+        keys = [prefix + channel._q_for_pri('test-projection-maintenance', p)
+                for p in channel.priority_steps]
+    assert sum(client.llen(key) for key in keys) == 1
+finally:
+    keys = list(client.scan_iter(match=prefix + '*'))
+    if keys:
+        client.delete(*keys)
+    app.close()
+"""
+
     completed = subprocess.run(
         [
             sys.executable,
@@ -96,6 +124,10 @@ def test_maintenance_scheduler_boots_from_its_allowlisted_environment(pruning_en
             (
                 "from aquillm.celery import app; "
                 "app.loader.import_default_modules(); "
+                "from apps.knowledge_graph.projection.publication import "
+                "SCHEDULED_TASK, ScheduledReconcileTask, validate_beat_registration; "
+                "assert isinstance(app.tasks[SCHEDULED_TASK], ScheduledReconcileTask); "
+                "validate_beat_registration(app); "
                 "assert set(app.conf.beat_schedule) == "
                 "{'knowledge-graph-build-recovery', "
                 "'knowledge-graph-projection-reconcile'}"
@@ -105,6 +137,7 @@ def test_maintenance_scheduler_boots_from_its_allowlisted_environment(pruning_en
                    "; from django.conf import settings; "
                    "assert settings.KG_ARTIFACT_PRUNING_ENABLED is False; "
                    "assert settings.KG_ARTIFACT_PRUNING_INTERVAL_SECONDS == 86400")
+                + redis_probe
             ),
         ],
         cwd=ROOT / "aquillm",
@@ -156,3 +189,14 @@ def test_projection_worker_uses_same_configured_maintenance_interval(name):
     assert environment["KG_MAINTENANCE_INTERVAL_SECONDS"] == (
         "${KG_MAINTENANCE_INTERVAL_SECONDS:-300}"
     )
+
+
+@pytest.mark.parametrize(
+    "name", ("base.yml", "development.yml", "test.yml", "production.yml", "no_gpu_dev.yml"),
+)
+def test_projection_worker_consumes_normal_and_scheduled_queues_with_hard_limit_pool(name):
+    command = _compose(name)["services"]["worker_knowledge_graph_projection"]["command"]
+    assert '--queues="$${KG_PROJECTION_QUEUE},$${KG_PROJECTION_QUEUE}-maintenance"' in command
+    assert "--pool=prefork" in command
+    assert "--concurrency=1" in command
+    assert "--prefetch-multiplier=1" in command

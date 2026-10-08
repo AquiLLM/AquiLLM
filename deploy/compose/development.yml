@@ -412,7 +412,7 @@ services:
       redis: {condition: service_healthy}
       memgraph_knowledge_graph: {condition: service_healthy}
     networks: [knowledge_graph_control, knowledge_graph_store]
-    command: /bin/sh -c 'exec /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues="$${KG_PROJECTION_QUEUE}" --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph-projection@%h'
+    command: /bin/sh -c 'exec /opt/venv/bin/celery -A aquillm worker --loglevel=info --queues="$${KG_PROJECTION_QUEUE},$${KG_PROJECTION_QUEUE}-maintenance" --pool=prefork --concurrency=1 --prefetch-multiplier=1 --hostname=worker-knowledge-graph-projection@%h'
 
   worker_memory_promotion:
     build:

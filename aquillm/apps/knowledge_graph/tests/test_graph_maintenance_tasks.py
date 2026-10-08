@@ -134,10 +134,10 @@ def test_enabled_maintenance_beat_uses_exact_worker_queues():
         "knowledge-graph-projection-reconcile": {
             "task": (
                 "apps.knowledge_graph.projection.tasks."
-                "reconcile_knowledge_graph_projections"
+                "scheduled_reconcile_knowledge_graph_projections"
             ),
             "schedule": 300,
-            "options": {"queue": "exact-projection"},
+            "options": {"queue": "exact-projection-maintenance", "priority": 9, "expires": 300},
         },
     }
     assert knowledge_graph_maintenance_schedule(

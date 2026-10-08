@@ -8,6 +8,7 @@ from django.conf import settings as django_settings
 from django.utils import timezone
 
 from . import maintenance
+from . import publication
 from .memgraph_driver import MemgraphDriverError
 from .outbox import publish_projection_outbox
 from .reconciler import (
@@ -56,6 +57,7 @@ def _uuid(value: object) -> UUID:
     name="apps.knowledge_graph.projection.tasks.project_knowledge_graph_projection",
     max_retries=_TASK_MAX_RETRIES,
     queue=_TASK_QUEUE,
+    priority=0,
     acks_late=True,
     reject_on_worker_lost=True,
 )
@@ -167,9 +169,50 @@ def reconcile_knowledge_graph_projections(
 
 @shared_task(
     bind=True,
+    base=publication.ScheduledReconcileTask,
+    name=publication.SCHEDULED_TASK,
+    queue=_TASK_QUEUE + "-maintenance",
+    priority=9,
+    serializer="json",
+    acks_late=False,
+    reject_on_worker_lost=False,
+    ignore_result=True,
+    max_retries=0,
+    soft_time_limit=100,
+    time_limit=120,
+)
+def scheduled_reconcile_knowledge_graph_projections(self, publication_token: str):
+    """Token-fenced, early-ack global audit; manual requests use the old task."""
+    if publication_token != self.request.id:
+        return None
+    client = None
+    started = False
+    try:
+        client = publication.broker_client(self.app)
+        started = publication.start(client, publication_token, app=self.app)
+    except Exception:
+        publication.logger.warning("obs.kg.scheduled_reconcile_coordination_unavailable")
+    if not started:
+        if client is not None:
+            client.close()
+        return None
+    try:
+        return reconcile_knowledge_graph_projections.run()
+    finally:
+        try:
+            publication.finish(client, publication_token, app=self.app)
+        except Exception:
+            publication.logger.warning("obs.kg.scheduled_reconcile_release_unavailable")
+        finally:
+            client.close()
+
+
+@shared_task(
+    bind=True,
     name="apps.knowledge_graph.projection.tasks.prune_knowledge_graph_projection",
     max_retries=_TASK_MAX_RETRIES,
     queue=_TASK_QUEUE,
+    priority=0,
     acks_late=True,
 )
 def prune_knowledge_graph_projection(
@@ -203,4 +246,5 @@ __all__ = [
     "project_knowledge_graph_projection",
     "prune_knowledge_graph_projection",
     "reconcile_knowledge_graph_projections",
+    "scheduled_reconcile_knowledge_graph_projections",
 ]

@@ -23,10 +23,14 @@ def knowledge_graph_maintenance_schedule(
         "knowledge-graph-projection-reconcile": {
             "task": (
                 "apps.knowledge_graph.projection.tasks."
-                "reconcile_knowledge_graph_projections"
+                "scheduled_reconcile_knowledge_graph_projections"
             ),
             "schedule": interval_seconds,
-            "options": {"queue": projection_queue},
+            "options": {
+                "queue": projection_queue + "-maintenance",
+                "priority": 9,
+                "expires": interval_seconds,
+            },
         },
     }
     if pruning_enabled is True:
