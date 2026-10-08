@@ -101,6 +101,88 @@ def test_settings_are_strict_and_keep_bearer_out_of_repr() -> None:
             load_query_extractor_settings(_environment(**{key: value}))
 
 
+@pytest.mark.parametrize("timeout_ms", ("10", "75", "1000", "3000", "5000"))
+def test_settings_accept_supported_extractor_timeouts(timeout_ms: str) -> None:
+    settings = load_query_extractor_settings(
+        _environment(KG_QUERY_EXTRACTOR_TIMEOUT_MS=timeout_ms)
+    )
+    assert settings.timeout_ms == int(timeout_ms)
+
+
+@pytest.mark.parametrize(
+    "timeout_ms",
+    ("0", "9", "5001", "9999", "03000", "3e3", "3000.0", " 3000", "-1", "true"),
+)
+def test_settings_reject_invalid_extractor_timeouts(timeout_ms: str) -> None:
+    with pytest.raises(
+        QueryExtractorConfigError, match="KG_QUERY_EXTRACTOR_TIMEOUT_MS"
+    ):
+        load_query_extractor_settings(
+            _environment(KG_QUERY_EXTRACTOR_TIMEOUT_MS=timeout_ms)
+        )
+
+
+@pytest.mark.parametrize(
+    "parent_remaining,elapsed,expected_timeout", ((4.5, 1.5, 3.0), (2.0, 1.5, 2.0))
+)
+def test_cpu_extraction_can_succeed_after_one_second_within_both_deadlines(
+    parent_remaining: float, elapsed: float, expected_timeout: float
+) -> None:
+    now = 10.0
+    calls = []
+
+    def request_once(**kwargs: object) -> QueryExtractorHTTPResponse:
+        nonlocal now
+        calls.append(kwargs)
+        now += elapsed
+        return QueryExtractorHTTPResponse(200, _response("ABC"))
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(
+            _environment(KG_QUERY_EXTRACTOR_TIMEOUT_MS="3000")
+        ),
+        request_once=request_once,
+        monotonic=lambda: now,
+    )
+    response = client.extract(
+        query="ABC", ontology=Ontology(), deadline=10.0 + parent_remaining
+    )
+    assert reconstruct_entity_texts(query="ABC", response=response) == ("B",)
+    assert len(calls) == 1
+    assert calls[0]["timeout_seconds"] == pytest.approx(expected_timeout)
+
+
+@pytest.mark.parametrize(
+    "parent_remaining,elapsed", ((1.5, 1.5), (1.5, 2.0), (4.5, 3.0), (4.5, 3.1))
+)
+def test_client_rejects_success_arriving_at_or_after_effective_deadline(
+    parent_remaining: float, elapsed: float
+) -> None:
+    now = 10.0
+    calls = []
+
+    def request_once(**kwargs: object) -> QueryExtractorHTTPResponse:
+        nonlocal now
+        calls.append(kwargs)
+        now += elapsed
+        return QueryExtractorHTTPResponse(200, _response("ABC"))
+
+    client = QueryExtractorClient(
+        load_query_extractor_settings(
+            _environment(KG_QUERY_EXTRACTOR_TIMEOUT_MS="3000")
+        ),
+        request_once=request_once,
+        monotonic=lambda: now,
+    )
+    with pytest.raises(QueryExtractorClientError) as exc_info:
+        client.extract(
+            query="ABC", ontology=Ontology(), deadline=10.0 + parent_remaining
+        )
+    assert exc_info.value.reason is QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
+    assert len(calls) == 1
+    assert calls[0]["timeout_seconds"] == pytest.approx(min(parent_remaining, 3.0))
+
+
 def test_client_posts_one_canonical_body_and_reconstructs_code_point_spans() -> None:
     calls: list[dict[str, object]] = []
     query = f"A{EMOJI}B"

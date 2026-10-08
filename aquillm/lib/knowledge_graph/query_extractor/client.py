@@ -131,12 +131,14 @@ class QueryExtractorClient:
         body = canonical_query_extraction_request_bytes(request)
         if len(body) > settings.max_request_body_bytes:
             raise ValueError("query request exceeds the configured body cap")
-        remaining = deadline - self._monotonic()
+        started = self._monotonic()
+        remaining = deadline - started
         if remaining <= 0.0:
             raise QueryExtractorClientError(
                 QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
             )
         timeout = min(remaining, settings.timeout_ms / 1000.0)
+        effective_deadline = min(deadline, started + settings.timeout_ms / 1000.0)
         try:
             endpoint = urlsplit(settings.url)
             url = (
@@ -205,6 +207,10 @@ class QueryExtractorClient:
             raise QueryExtractorClientError(
                 QueryExtractorFailureReason.EXTRACTOR_PROVENANCE
             ) from None
+        if self._monotonic() >= effective_deadline:
+            raise QueryExtractorClientError(
+                QueryExtractorFailureReason.EXTRACTOR_TIMEOUT
+            )
         return response
 
 

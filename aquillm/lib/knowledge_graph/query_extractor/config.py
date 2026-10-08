@@ -158,7 +158,7 @@ def load_query_extractor_settings(env: Mapping[str, str]) -> QueryExtractorSetti
         ontology_path=ontology_path,
         ontology_checksum=_digest(env, "KG_QUERY_EXTRACTOR_ONTOLOGY_CHECKSUM"),
         timeout_ms=_integer(
-            env, "KG_QUERY_EXTRACTOR_TIMEOUT_MS", minimum=10, maximum=1000
+            env, "KG_QUERY_EXTRACTOR_TIMEOUT_MS", minimum=10, maximum=5000
         ),
         max_query_utf8_bytes=_integer(
             env, "KG_QUERY_MAX_BYTES", minimum=1, maximum=MAX_QUERY_UTF8_BYTES
