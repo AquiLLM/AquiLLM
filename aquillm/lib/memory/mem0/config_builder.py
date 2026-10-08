@@ -192,10 +192,22 @@ def build_mem0_oss_config_dict(graph_enabled_override: bool | None = None) -> tu
         embed_config["ollama_base_url"] = embed_base_url
 
     vector_store_config: dict[str, Any] = {
-        "host": getenv("MEM0_QDRANT_HOST", "qdrant"),
-        "port": int(getenv("MEM0_QDRANT_PORT", "6333")),
         "collection_name": getenv("MEM0_COLLECTION_NAME", "mem0_768_v4"),
     }
+    qdrant_url = _env_optional_str("MEM0_QDRANT_URL")
+    qdrant_api_key = _env_optional_str("MEM0_QDRANT_API_KEY")
+    if qdrant_url:
+        vector_store_config["url"] = qdrant_url
+    else:
+        qdrant_host = getenv("MEM0_QDRANT_HOST", "qdrant")
+        qdrant_port = int(getenv("MEM0_QDRANT_PORT", "6333"))
+        if qdrant_api_key:
+            # Qdrant implicitly enables HTTPS for host + API key. Docker uses HTTP.
+            vector_store_config["url"] = f"http://{qdrant_host}:{qdrant_port}"
+        else:
+            vector_store_config.update(host=qdrant_host, port=qdrant_port)
+    if qdrant_api_key:
+        vector_store_config["api_key"] = qdrant_api_key
     embed_dims_raw = getenv("MEM0_EMBED_DIMS", "").strip()
     allow_embed_dims_override = getenv("MEM0_EMBED_ALLOW_DIMENSIONS_OVERRIDE", "").strip().lower() in (
         "1",

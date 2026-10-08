@@ -13,8 +13,8 @@ def _compose(name: str):
     return yaml.safe_load((ROOT / "deploy" / "compose" / name).read_text())
 
 
-def test_base_and_development_define_one_gated_maintenance_scheduler():
-    for name in ("base.yml", "development.yml"):
+def test_compose_defines_one_gated_maintenance_scheduler():
+    for name in ("base.yml", "development.yml", "production.yml"):
         services = _compose(name)["services"]
         schedulers = [
             service
@@ -46,9 +46,12 @@ def test_base_and_development_define_one_gated_maintenance_scheduler():
         )
 
 
+@pytest.mark.parametrize("compose_name", ["development.yml", "production.yml"])
 @pytest.mark.parametrize("pruning_enabled", ["0", "1"])
-def test_maintenance_scheduler_boots_from_its_allowlisted_environment(pruning_enabled):
-    scheduler = _compose("development.yml")["services"][
+def test_maintenance_scheduler_boots_from_its_allowlisted_environment(
+    pruning_enabled, compose_name
+):
+    scheduler = _compose(compose_name)["services"][
         "scheduler_knowledge_graph_maintenance"
     ]
     declared = scheduler["environment"]
@@ -118,8 +121,9 @@ def test_maintenance_scheduler_boots_from_its_allowlisted_environment(pruning_en
     assert completed.returncode == 0, completed.stderr[-2000:]
 
 
-def test_development_pruning_is_explicitly_opt_in_and_application_beat_is_isolated():
-    services = _compose("development.yml")["services"]
+@pytest.mark.parametrize("compose_name", ["development.yml", "production.yml"])
+def test_pruning_is_explicitly_opt_in_and_application_beat_is_isolated(compose_name):
+    services = _compose(compose_name)["services"]
     environment = services["scheduler_knowledge_graph_maintenance"]["environment"]
     assert environment["KG_ARTIFACT_PRUNING_ENABLED"] == "${KG_ARTIFACT_PRUNING_ENABLED:-0}"
     assert environment["KG_ARTIFACT_PRUNING_INTERVAL_SECONDS"] == "${KG_ARTIFACT_PRUNING_INTERVAL_SECONDS:-86400}"
@@ -155,4 +159,12 @@ def test_projection_worker_uses_same_configured_maintenance_interval(name):
     ]
     assert environment["KG_MAINTENANCE_INTERVAL_SECONDS"] == (
         "${KG_MAINTENANCE_INTERVAL_SECONDS:-300}"
+    )
+
+
+def test_production_qdrant_is_loopback_only_and_requires_shared_authentication():
+    qdrant = _compose("production.yml")["services"]["qdrant"]
+    assert qdrant["ports"] == ["127.0.0.1:6333:6333"]
+    assert qdrant["environment"]["QDRANT__SERVICE__API_KEY"] == (
+        "${MEM0_QDRANT_API_KEY:?Set MEM0_QDRANT_API_KEY for production}"
     )

@@ -88,6 +88,7 @@ services:
       POSTGRES_PORT: "1"
       APPLICATION_MAINTENANCE_SCHEDULER_ENABLED: "1"
       KG_MAINTENANCE_SCHEDULER_ENABLED: "0"
+      KG_ARTIFACT_PRUNING_ENABLED: "0"
       C_FORCE_ROOT: "1"
       RUN_CELERY_IN_WEB: "0"
     depends_on:
@@ -206,6 +207,39 @@ services:
       - ../../artifacts:/app/artifacts
       - "${KG_HF_CACHE_HOST_PATH:-../../data/hf_knowledge_graph}:${KG_GLINER2_CACHE_DIR:-/root/.cache/huggingface}"
     command: /opt/venv/bin/python -c "from lib.knowledge_graph.config import run_extraction_worker; run_extraction_worker()"
+
+  scheduler_knowledge_graph_maintenance:
+    build: {context: ../.., dockerfile: deploy/docker/knowledge-graph/Dockerfile}
+    profiles: [knowledge-graph]
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: scheduler-only
+      DJANGO_DEBUG: "0"
+      GOOGLE_OAUTH2_CLIENT_ID: disabled
+      GOOGLE_OAUTH2_CLIENT_SECRET: disabled
+      OPENAI_API_KEY: disabled
+      ANTHROPIC_API_KEY: disabled
+      GEMINI_API_KEY: disabled
+      AWS_EC2_METADATA_DISABLED: "true"
+      POSTGRES_HOST: 127.0.0.1
+      POSTGRES_PORT: "1"
+      APPLICATION_MAINTENANCE_SCHEDULER_ENABLED: "0"
+      KG_MAINTENANCE_SCHEDULER_ENABLED: ${KG_MAINTENANCE_SCHEDULER_ENABLED:-0}
+      KG_ARTIFACT_PRUNING_ENABLED: ${KG_ARTIFACT_PRUNING_ENABLED:-0}
+      KG_ARTIFACT_PRUNING_INTERVAL_SECONDS: ${KG_ARTIFACT_PRUNING_INTERVAL_SECONDS:-86400}
+      KG_MAINTENANCE_INTERVAL_SECONDS: ${KG_MAINTENANCE_INTERVAL_SECONDS:-300}
+      KG_GRAPH_RECOVERY_PAGE_SIZE: ${KG_GRAPH_RECOVERY_PAGE_SIZE:-50}
+      KG_EXTRACTION_QUEUE: ${KG_EXTRACTION_QUEUE-knowledge-graph-extraction}
+      KG_PROJECTION_QUEUE: ${KG_PROJECTION_QUEUE:-knowledge_graph_projection}
+      KG_MEMGRAPH_PROJECTION_ENABLED: "0"
+      C_FORCE_ROOT: 1
+      RUN_CELERY_IN_WEB: 0
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      VIRTUAL_ENV: /opt/venv
+      PATH: /opt/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    depends_on:
+      redis: {condition: service_healthy}
+    command: /bin/sh -c 'exec /opt/venv/bin/celery -A aquillm beat --loglevel=info --schedule=/tmp/celerybeat-schedule'
 
   worker_knowledge_graph_schema:
     build: {context: ../.., dockerfile: deploy/docker/knowledge-graph/Dockerfile}
@@ -500,8 +534,10 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.17
     restart: unless-stopped
+    environment:
+      QDRANT__SERVICE__API_KEY: ${MEM0_QDRANT_API_KEY:?Set MEM0_QDRANT_API_KEY for production}
     ports:
-      - "6333:6333"
+      - "127.0.0.1:6333:6333"
     volumes:
       - ${MEM0_QDRANT_DATA_HOST_PATH:-/media/volume/aquillmdev2-vol/mem0/qdrant}:/qdrant/storage
 
