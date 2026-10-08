@@ -51,3 +51,7 @@
 - [ ] Back up development runtime config and retain rollback images. Deploy verified application/KG images with matching revision labels; set the extractor timeout to 3000 in the app and extractor service.
 - [ ] Check web readiness, worker/scheduler behavior, queue depth, and exact-case repeated retrieval with graph on/off.
 - [ ] Publish a concise outcome with before/after timings and failure counts, the development revision, and remaining production promotion prerequisites.
+
+
+### Task 5: Close the extractor cold-start readiness gap found during rollout
+Live verification of the first development rollout showed a 3040 ms first-call timeout followed by warm extraction at approximately 230–250 ms. The service health endpoint reported healthy before lazy model initialization. Move local pinned-model initialization and one fixed synthetic warmup into a bounded ASGI lifespan startup, and admit extraction/report healthy only after success. Preserve authentication, provenance, request deadlines and inference-slot lifetime. Add lifecycle, cancellation, timeout and late-worker regressions, then review and repeat a fresh development restart/replay. Production stays unchanged.

@@ -32,6 +32,21 @@ A graph-off replay on the current release measures the effect of graph retrieval
 
 Private question manifests, corpus identifiers, raw replay reports, and test deployment credentials are kept outside tracked repository files. No production change is part of this development task.
 
+## Development rollout and cold-start follow-up
+Revision `c8690ff29977cfb2a9834aa95dafcbeff5e13d2f` is deployed to development at `149.165.150.254`. Web, workers, schedulers, gateway and extractor have matching image revision labels; web/gateway/extractor are healthy and the external homepage and readiness endpoint return HTTP 200. App and extractor use 3000 ms; graph branch/overall settings remain 4500/4500/5000 ms. Configuration was edited as bytes to preserve existing non-UTF-8 comments. Rollback images and protected environment backups are retained.
+
+The first rollout exposed a separate startup defect: health returned 200 before the extractor model's lazy initialization. Its first query took 3040 ms and timed out. ASGI lifespan now loads the pinned offline model and performs a fixed synthetic warmup before readiness, with a separate 60-second startup bound. Failed/cancelled startup cannot publish readiness or spawn replacement warmups. Native threads cannot be forcibly terminated by Python; a wedged thread remains an unready supervisor-recovery case. The follow-up suite passed 151 tests with one existing gated skip; independent review passed.
+
+After restarting the extractor and gateway, the exact private Q1/Q2 matrix completed 14 retrieval-only turns: 12 graph-on and two graph-off. No generation was attempted and runtime settings restored after every turn. All 12 extractor calls passed in 230–255 ms, including the first at 243 ms. Graph-on returned candidates in 11/12 turns, with both branches successful in 10/12. The first combined-scope Q1 had an extended timeout and four direct candidates; cold Q2 timed out both graph branches. Later combined-scope turns returned 19/20 candidates; all four parent-only turns returned 20. Restart-cold here means empty service caches; database and operating-system caches were retained.
+
+Both graph-off turns returned zero graph candidates and made no extractor call, taking 2.55 and 2.86 seconds. Re-enabling graph in the same replay process returned 19/20 candidates again. A scheduled maintenance pass examined 10 projections in 8.77 seconds with zero failures or new work; the real worker consumes both queues using prefork concurrency 1/prefetch 1 and the configured 100/120-second limits.
+
+Production has not been contacted or changed during this task. Cold combined-scope topology timeouts and the unreproduced production `extended_topology_invalid` remain promotion blockers.
+
+A final read-only fair-window experiment used four shared read workers, at most two generation jobs per request and eight outstanding jobs globally. Both extended cases still exceeded their captured deadlines; direct cases passed with little headroom. Successful snapshots remained identical and the process drained cleanly, but the experiment did not establish a latency improvement or saturated-capacity fault behavior. This parallel implementation was not shipped.
+
+Remaining work before production promotion: isolate the expensive cold combined-scope source queries without relaxing authorization/caps/deadlines; reproduce the invalid result against an agreed matching corpus or coordinated production diagnostic; agree on the graph-off study window with Bernie and Sri. Existing warm-case passes do not close those items.
+
 ## Verification status
 
-The final topology/extractor/replay regression run passed 382 tests, with 10 separately gated existing integration tests skipped and 6 existing dependency/startup warnings. Four new real-Cypher cases passed against a disposable Memgraph instance. Independent review and the live development rollout are pending; deployment revision and exact-case results will be recorded after those checks.
+The combined regression run passed 700 tests, with 11 pre-existing gated skips and the already-proven real 120-second hard-limit test deselected. Existing dependency/startup and test-only fork warnings remain. Four new real-Cypher cases passed against a disposable Memgraph instance. The later lifecycle follow-up passed 151 tests (overlapping coverage; these counts are not additive). Task and whole-branch reviews passed. The live results above establish the verified improvements and explicit remaining limits.
