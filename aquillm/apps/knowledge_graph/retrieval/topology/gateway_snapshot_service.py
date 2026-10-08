@@ -1,7 +1,5 @@
 """One admitted worker owns attestation, hydration and final V2 wire encoding."""
 
-from hmac import compare_digest
-
 from . import gateway_service as v1
 from . import gateway_snapshot_contracts as v2
 from .contracts import TopologyFailureReason
@@ -42,36 +40,17 @@ def _snapshot_payload(adapter, *, parameters, deadline, maximum):
 
 
 async def topology_snapshot(scope, receive, send):
-    try:
-        settings = v1.load_topology_gateway_settings(v1.environ)
-    except Exception:
-        await _failure(send, GatewayFailureReason.UNAVAILABLE)
+    validated = await v1._validate_ingress(
+        scope,
+        receive,
+        send,
+        decoder=v2.decode_request,
+        version=v2.SCHEMA_VERSION,
+        checksum=v2.SCHEMA_CHECKSUM,
+    )
+    if validated is None:
         return
-    expected = b"Bearer " + settings.bearer_token.get_secret_value().encode("ascii")
-    if not compare_digest(v1._single_header(scope, b"authorization") or b"", expected):
-        await _failure(send, GatewayFailureReason.AUTHENTICATION)
-        return
-    length = v1._length(scope, settings.max_request_bytes)
-    if length is not None and length > settings.max_request_bytes:
-        await _respond(send, 413, v1._OVERSIZED)
-        return
-    if length is None or not v1._wire_valid(
-        scope, version=v2.SCHEMA_VERSION, checksum=v2.SCHEMA_CHECKSUM
-    ):
-        await _respond(send, 400, v1._MALFORMED)
-        return
-    body = await v1._read_body(receive, length)
-    try:
-        request = v2.decode_request(body) if body is not None else None
-    except ValueError:
-        request = None
-    if request is None:
-        await _respond(send, 400, v1._MALFORMED)
-        return
-    deadline = min(request.deadline, v1.monotonic() + settings.timeout_ms / 1000.0)
-    if deadline <= v1.monotonic():
-        await _failure(send, GatewayFailureReason.DEADLINE)
-        return
+    settings, request, deadline = validated
     try:
         runtime = v1._get_runtime(settings)
         payload = await v1.GATEWAY_WORKERS.run(

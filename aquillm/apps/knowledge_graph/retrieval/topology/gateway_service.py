@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from functools import partial
 from hmac import compare_digest
 from os import environ
 from time import monotonic
@@ -119,10 +120,20 @@ async def _respond(
 
 
 async def _failure(
-    send: Callable[..., Awaitable[None]], reason: GatewayFailureReason
+    send: Callable[..., Awaitable[None]],
+    reason: GatewayFailureReason,
+    *,
+    version=SCHEMA_VERSION,
+    checksum=SCHEMA_CHECKSUM,
 ) -> None:
     value = TopologyGatewayFailureV1(reason)
-    await _respond(send, value.status, encode_response(value))
+    await _respond(
+        send,
+        value.status,
+        encode_response(value),
+        version=version,
+        checksum=checksum,
+    )
 
 
 async def _read_body(
@@ -215,39 +226,71 @@ async def readyz(scope, receive, send) -> None:
     await _respond(send, 200, _OK)
 
 
-async def topology_read(scope, receive, send) -> None:
+async def _validate_ingress(
+    scope,
+    receive,
+    send,
+    *,
+    decoder,
+    version,
+    checksum,
+    exceeds_cap=None,
+):
+    """Validate in fixed precedence before either route may access its runtime."""
+    respond = partial(_respond, send, version=version, checksum=checksum)
+    failure = partial(_failure, send, version=version, checksum=checksum)
     try:
         settings = load_topology_gateway_settings(environ)
     except Exception:
-        await _failure(send, GatewayFailureReason.UNAVAILABLE)
+        await failure(GatewayFailureReason.UNAVAILABLE)
         return
     expected = b"Bearer " + settings.bearer_token.get_secret_value().encode("ascii")
     authorization = _single_header(scope, b"authorization") or b""
     if not compare_digest(authorization, expected):
-        await _failure(send, GatewayFailureReason.AUTHENTICATION)
+        await failure(GatewayFailureReason.AUTHENTICATION)
         return
     length = _length(scope, settings.max_request_bytes)
     if length is not None and length > settings.max_request_bytes:
-        await _respond(send, 413, _OVERSIZED)
+        await respond(413, _OVERSIZED)
         return
-    if length is None or not _wire_valid(scope):
-        await _respond(send, 400, _MALFORMED)
+    if length is None or not _wire_valid(scope, version=version, checksum=checksum):
+        await respond(400, _MALFORMED)
         return
     body = await _read_body(receive, length)
     try:
-        request = decode_request(body) if body is not None else None
+        request = decoder(body) if body is not None else None
     except ValueError:
         request = None
     if request is None:
-        await _respond(send, 400, _MALFORMED)
+        await respond(400, _MALFORMED)
         return
-    if request.max_records > _FAMILY_CAPS[request.query]:
-        await _failure(send, GatewayFailureReason.RESULT_CAP)
+    if exceeds_cap is not None and exceeds_cap(request):
+        await failure(GatewayFailureReason.RESULT_CAP)
         return
     deadline = min(request.deadline, monotonic() + settings.timeout_ms / 1000.0)
     if deadline <= monotonic():
-        await _failure(send, GatewayFailureReason.DEADLINE)
+        await failure(GatewayFailureReason.DEADLINE)
         return
+    return settings, request, deadline
+
+
+def _family_cap_exceeded(request):
+    return request.max_records > _FAMILY_CAPS[request.query]
+
+
+async def topology_read(scope, receive, send) -> None:
+    validated = await _validate_ingress(
+        scope,
+        receive,
+        send,
+        decoder=decode_request,
+        version=SCHEMA_VERSION,
+        checksum=SCHEMA_CHECKSUM,
+        exceeds_cap=_family_cap_exceeded,
+    )
+    if validated is None:
+        return
+    settings, request, deadline = validated
     try:
         runtime = _get_runtime(settings)
         rows = await GATEWAY_WORKERS.run(
