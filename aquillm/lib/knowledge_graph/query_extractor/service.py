@@ -26,6 +26,13 @@ from .span_selection import _canonical_spans
 
 _JSON_HEADERS = [(b"content-type", b"application/json")]
 _inference_slots = asyncio.BoundedSemaphore(1)
+# Model loading is a serving-process concern, outside every user's deadline.
+_STARTUP_TIMEOUT_SECONDS = 60.0
+_WARMUP_QUERY = "Warmup."
+_ready = False
+_startup_started = False
+_shutdown_requested = False
+_startup_worker: asyncio.Task[QueryExtractorRuntime] | None = None
 
 
 class _InferenceOverloaded(RuntimeError): pass  # fmt: skip
@@ -102,7 +109,6 @@ def _load_activated_ontology(path: Path) -> _ActivatedOntology:
 def _get_runtime(
     settings: QueryExtractorSettings | None = None,
 ) -> QueryExtractorRuntime:
-    global _runtime
     if _runtime is None:
         from lib.knowledge_graph.config import load_extraction_settings
         from lib.knowledge_graph.extractors.gliner2_local import GLiNER2LocalBackend
@@ -117,7 +123,7 @@ def _get_runtime(
             model_id=settings.model_identifier,
             model_revision=settings.model_revision,
         )
-        _runtime = QueryExtractorRuntime(
+        return QueryExtractorRuntime(
             settings=settings,
             ontology=ontology,
             backend=GLiNER2LocalBackend(settings=extraction),
@@ -198,9 +204,95 @@ async def _extract_batch(runtime: QueryExtractorRuntime, query: str, timeout_ms:
 # fmt: on
 
 
+def _warm_runtime() -> QueryExtractorRuntime:
+    settings = load_query_extractor_settings(environ)
+    runtime = _get_runtime(settings)
+    result = runtime.backend.extract_entities_batch(  # type: ignore[union-attr]
+        (_WARMUP_QUERY,), ontology=runtime.ontology
+    )
+    if type(result) is not tuple or len(result) != 1:
+        raise ValueError("invalid extraction batch")
+    _canonical_spans(result[0].entities, settings.max_spans)
+    return runtime
+
+
+def _finish_startup_worker(
+    task: asyncio.Task[QueryExtractorRuntime], slots: asyncio.BoundedSemaphore
+) -> None:
+    global _startup_worker
+    _release_worker(task, slots)
+    if _startup_worker is task:
+        _startup_worker = None
+
+
+async def _startup() -> bool:
+    global _startup_started, _startup_worker, _runtime, _ready
+    if _startup_started:
+        return _ready
+    # One attempt per process, including failure/cancellation. A native model
+    # load cannot be killed; retries must not create replacement threads.
+    _startup_started = True
+    slots = _inference_slots
+    if _shutdown_requested or slots.locked():
+        return False
+    await slots.acquire()
+    worker = asyncio.create_task(asyncio.to_thread(_warm_runtime))
+    _startup_worker = worker
+    # Startup and request inference share admission. Always release only when
+    # the actual worker completes, including after timeout or cancellation.
+    worker.add_done_callback(lambda task: _finish_startup_worker(task, slots))
+    try:
+        async with asyncio.timeout(_STARTUP_TIMEOUT_SECONDS):
+            runtime = await asyncio.shield(worker)
+    except Exception:
+        return False
+    if _shutdown_requested:
+        return False
+    # The worker never publishes state: cancelled/timed-out startup cannot
+    # become healthy when model loading eventually returns.
+    _runtime = runtime
+    _ready = True
+    return True
+
+
+def _shutdown() -> None:
+    global _ready, _runtime, _shutdown_requested, _startup_worker
+    _ready = False
+    _runtime = None
+    _shutdown_requested = True
+    if _startup_worker is not None and _startup_worker.done():
+        _startup_worker = None
+
+
+async def lifespan(scope, receive, send) -> None:
+    del scope
+    try:
+        while True:
+            message = await receive()
+            if message["type"] == "lifespan.startup":
+                if await _startup():
+                    await send({"type": "lifespan.startup.complete"})
+                else:
+                    await send(
+                        {
+                            "type": "lifespan.startup.failed",
+                            "message": "extractor startup failed",
+                        }
+                    )
+            elif message["type"] == "lifespan.shutdown":
+                _shutdown()
+                await send({"type": "lifespan.shutdown.complete"})
+                return
+    finally:
+        _shutdown()
+
+
 async def healthz(scope, receive, send) -> None:
     del scope, receive
-    await _respond(send, 200, b'{"status":"ok"}')
+    if _ready:
+        await _respond(send, 200, b'{"status":"ok"}')
+    else:
+        await _respond(send, 503, b'{"reason":"extractor_provenance"}')
 
 
 async def extract_v1(scope, receive, send) -> None:
@@ -236,7 +328,10 @@ async def extract_v1(scope, receive, send) -> None:
     except Exception:
         await _respond(send, 422, b'{"reason":"extractor_provenance"}')
         return
-    # Authenticate and fully bound/validate the request before loading a model.
+    # Keep authentication and contract/cap validation strict even while unready.
+    if not _ready:
+        await _respond(send, 503, b'{"reason":"extractor_provenance"}')
+        return
     try:
         runtime = _get_runtime(settings)
         if runtime.settings != settings:
@@ -245,7 +340,9 @@ async def extract_v1(scope, receive, send) -> None:
         await _respond(send, 503, b'{"reason":"extractor_provenance"}')
         return
     try:
-        result = await _extract_batch(runtime, request.query, settings.timeout_ms, ontology=ontology)
+        result = await _extract_batch(
+            runtime, request.query, settings.timeout_ms, ontology=ontology
+        )
         if type(result) is not tuple or len(result) != 1:
             raise ValueError("invalid extraction batch")
         # fmt: off
@@ -268,6 +365,9 @@ async def extract_v1(scope, receive, send) -> None:
 
 
 async def app(scope, receive, send) -> None:
+    if scope.get("type") == "lifespan":
+        await lifespan(scope, receive, send)
+        return
     if scope.get("type") != "http":
         return
     route = (scope.get("method"), scope.get("path"))

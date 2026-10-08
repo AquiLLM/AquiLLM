@@ -123,6 +123,9 @@ def runtime(monkeypatch):
         service, "load_query_extractor_settings", lambda _environment: value.settings
     )
     monkeypatch.setattr(service, "_get_runtime", lambda *_args: value)
+    # HTTP-only contract tests represent an already-started serving process.
+    # Cold startup/readiness behavior is exercised by the lifespan suite.
+    monkeypatch.setattr(service, "_ready", True)
 
     monkeypatch.setattr(service, "_inference_slots", asyncio.BoundedSemaphore(1), raising=False)
 
