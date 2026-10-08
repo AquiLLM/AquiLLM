@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import fields
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -9,6 +10,7 @@ from math import isfinite
 from uuid import UUID
 
 _MAX_COUNT = 2**31 - 1
+_KEY_PATTERN = re.compile(r"[0-9a-f]{64}")
 
 
 def canonical_projection_bytes(value: object) -> bytes:
@@ -136,9 +138,7 @@ def _encode(value: object, provider_types: frozenset[type[object]]) -> object:
 def _key(value: object, name: str) -> None:
     if type(value) is not str:
         raise TypeError(f"{name} must be a built-in str")
-    if len(value) != 64 or any(
-        character not in "0123456789abcdef" for character in value
-    ):
+    if _KEY_PATTERN.fullmatch(value) is None:
         raise ValueError(f"{name} must be a lowercase SHA-256 hexadecimal key")
 
 

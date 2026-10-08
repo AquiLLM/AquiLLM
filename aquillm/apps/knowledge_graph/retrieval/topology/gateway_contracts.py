@@ -1,4 +1,5 @@
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
@@ -23,6 +24,7 @@ _REQUEST_FIELDS = frozenset({"query", "parameters", "deadline", "max_records"})
 SCHEMA_VERSION: Final = "topology-gateway-v1"
 MALFORMED_REQUEST_STATUS: Final = 400
 OVERSIZED_REQUEST_STATUS: Final = 413
+_FORBIDDEN_TEXT_PATTERN = re.compile(r"[\x00-\x1f\x7f\ud800-\udfff]")
 
 
 class GatewayRequestSizeError(ValueError):
@@ -110,10 +112,7 @@ def _safe_text(value: object, name: str, limit: int, *, size_error=ValueError) -
         raise TypeError(f"{name} must be an exact string")
     if len(value) > limit:
         raise size_error(f"{name} exceeds its text cap")
-    if any(
-        ord(char) < 0x20 or ord(char) == 0x7F or 0xD800 <= ord(char) <= 0xDFFF
-        for char in value
-    ):
+    if _FORBIDDEN_TEXT_PATTERN.search(value) is not None:
         raise ValueError(f"{name} contains forbidden control text")
 
 

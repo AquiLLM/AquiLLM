@@ -15,6 +15,9 @@ WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
 RUN UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_INSTALLS=1 uv sync --frozen --no-dev --extra knowledge-graph-local --no-cache
+RUN /opt/venv/bin/python -c "from importlib.metadata import version; import neo4j._codec.packstream.v1 as codec; \
+    assert version('neo4j') == '5.28.4' and version('neo4j-rust-ext') == '5.28.4.0', 'KG runtime requires neo4j==5.28.4 and neo4j-rust-ext==5.28.4.0'; \
+    assert codec._rust_pack is not None and codec._rust_unpack is not None, 'KG runtime requires compiled PackStream encoder and decoder'"
 RUN /opt/venv/bin/python -c "import torch; assert torch.version.cuda is None, torch.version.cuda"
 
 # Projection workers start without public network access; retain tokenizer data
