@@ -22,7 +22,7 @@ class WSConversation(models.Model):
     name = models.TextField(blank=True, null=True)
     name_is_manual = models.BooleanField(default=False, db_default=False)
     selected_collection_ids = models.JSONField(default=list, blank=True)
-    skill_overrides = models.JSONField(default=dict, blank=True)
+    skill_overrides = models.JSONField(default=dict, db_default={}, blank=True)
     created_at = models.DateTimeField(editable=False)
     updated_at = models.DateTimeField()
     # Re-index guard for ConversationChunk: SHA256 of the ordered transcript that was

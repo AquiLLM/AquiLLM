@@ -15,7 +15,8 @@ from apps.chat.tests.chat_message_test_support import (
 )
 from apps.collections.models import Collection, CollectionPermission
 from apps.documents.models import RawTextDocument
-from aquillm.llm import Conversation
+from aquillm.llm import Conversation, UserMessage
+from aquillm.message_adapters import load_conversation_from_db, save_conversation_to_db
 from aquillm.models import WSConversation
 
 User = get_user_model()
@@ -115,7 +116,10 @@ async def test_append_regular_chat_omits_tools(_augment, _mem_task):
 async def test_append_persists_selected_collections(_augment, _mem_task):
     _augment.side_effect = lambda convo, *args, **kwargs: convo
     user = await database_sync_to_async(User.objects.create_user)(username="appendcollections", password="pass")
-    db_convo = await WSConversation.objects.acreate(owner=user, system_prompt="sys")
+    saved_overrides = {"apps_documents.rawtextdocument:123": False}
+    db_convo = await WSConversation.objects.acreate(
+        owner=user, system_prompt="sys", skill_overrides=saved_overrides,
+    )
 
     consumer = ChatConsumer()
     consumer.base_send = AsyncMock()
@@ -144,6 +148,7 @@ async def test_append_persists_selected_collections(_augment, _mem_task):
 
     assert consumer.col_ref.collections == [3, "7"]
     assert db_convo.selected_collection_ids == [3, "7"]
+    assert db_convo.skill_overrides == saved_overrides
 
 
 @pytest.mark.asyncio
@@ -299,19 +304,20 @@ async def test_append_applies_independent_skill_before_prompt_construction():
         collection=collection, ingested_by=user,
     )
     await database_sync_to_async(doc.save)(dont_rechunk=True)
-    db_convo = await WSConversation.objects.acreate(owner=user, system_prompt="sys")
+    db_convo = await WSConversation.objects.acreate(
+        owner=user, system_prompt="sys", selected_collection_ids=[11],
+    )
     consumer = ChatConsumer()
     consumer.base_send = AsyncMock()
     consumer.user = user
     consumer.db_convo = db_convo
     consumer.convo = Conversation(system="sys", messages=[])
     consumer.dead = False
-    consumer.col_ref = CollectionsRef([])
+    consumer.col_ref = CollectionsRef([11])
     consumer.doc_tools = []
     consumer.tools = []
     consumer.memory_tools = []
     consumer.last_sent_sequence = -1
-    consumer._save_conversation = AsyncMock()
     observed_systems = []
 
     async def capture_system(convo, user_arg, system, convo_id, **kwargs):
@@ -320,7 +326,9 @@ async def test_append_applies_independent_skill_before_prompt_construction():
 
     with patch("apps.chat.consumers.chat_receive.augment_conversation_with_memory_async", side_effect=capture_system), patch(
         "apps.chat.consumers.chat_receive.run_direct_rag_turn", new=AsyncMock(return_value="skipped")
-    ), patch("apps.chat.consumers.chat_receive.run_llm_spin", new=AsyncMock()):
+    ), patch("apps.chat.consumers.chat_receive.run_llm_spin", new=AsyncMock()), patch(
+        "apps.chat.consumers.chat.enqueue_conversation_memories_task"
+    ), patch("apps.chat.consumers.chat.enqueue_index_conversation_task"):
         await consumer.receive(json.dumps({
             "action": "append", "collections": [],
             "skill_overrides": {f"{doc._meta.label_lower}:{doc.pk}": True},
@@ -329,8 +337,85 @@ async def test_append_applies_independent_skill_before_prompt_construction():
     await db_convo.arefresh_from_db()
 
     assert db_convo.skill_overrides == {f"{doc._meta.label_lower}:{doc.pk}": True}
+    assert db_convo.selected_collection_ids == []
+    assert consumer.col_ref.collections == []
+    assert consumer.skill_overrides == db_convo.skill_overrides
+    assert [content async for content in db_convo.db_messages.values_list("content", flat=True)] == ["hello"]
     assert len(observed_systems) == 1
     assert "Independent append instruction" in observed_systems[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
+@override_settings(
+    SKILLS_ENABLED=True,
+    AQUILLM_COLLECTION_MARKDOWN_SKILLS_ENABLED=True,
+    AQUILLM_SKILLS_EXTRA_MODULES=[],
+    AQUILLM_SKILLS_MARKDOWN_DIR="",
+)
+async def test_stale_skill_append_preserves_saved_context_and_transcript():
+    user = await database_sync_to_async(User.objects.create_user)(username="stale-skill-append")
+    collection = await Collection.objects.acreate(name="Research")
+    await CollectionPermission.objects.acreate(user=user, collection=collection, permission="VIEW")
+    doc = RawTextDocument(
+        title="research_skill.md", full_text="Research instruction",
+        full_text_hash=RawTextDocument.hash_fn("Research instruction"),
+        collection=collection, ingested_by=user,
+    )
+    await database_sync_to_async(doc.save)(dont_rechunk=True)
+    skill_id = f"{doc._meta.label_lower}:{doc.pk}"
+    db_convo = await WSConversation.objects.acreate(
+        owner=user, system_prompt="sys", selected_collection_ids=[11],
+        skill_overrides={skill_id: False},
+    )
+    await database_sync_to_async(save_conversation_to_db)(
+        Conversation(system="sys", messages=[UserMessage(content="Original")]), db_convo,
+    )
+    stale_handle = await WSConversation.objects.aget(pk=db_convo.pk)
+    stale_transcript = await database_sync_to_async(load_conversation_from_db)(stale_handle)
+    current = await database_sync_to_async(load_conversation_from_db)(db_convo)
+    current.messages.append(UserMessage(content="Newer accepted turn"))
+    await database_sync_to_async(save_conversation_to_db)(
+        current, db_convo, selected_collections=[22],
+    )
+    await WSConversation.objects.filter(pk=db_convo.pk).aupdate(skill_overrides={skill_id: True})
+    await db_convo.arefresh_from_db()
+    saved_updated_at = db_convo.updated_at
+
+    consumer = ChatConsumer()
+    consumer.base_send = AsyncMock()
+    consumer.close = AsyncMock()
+    consumer._chat_accepted = True
+    consumer.user = user
+    consumer.db_convo = stale_handle
+    consumer.convo = stale_transcript
+    consumer.dead = False
+    consumer.col_ref = CollectionsRef([11])
+    consumer.skill_overrides = {skill_id: False}
+    consumer.doc_tools = []
+    consumer.tools = []
+    consumer.memory_tools = []
+    consumer.last_sent_sequence = 0
+
+    await consumer.receive(json.dumps({
+        "action": "append", "collections": [33],
+        "skill_overrides": {skill_id: False},
+        "message": {"role": "user", "content": "Stale rejected turn"},
+    }))
+    await db_convo.arefresh_from_db()
+
+    assert db_convo.selected_collection_ids == [22]
+    assert db_convo.skill_overrides == {skill_id: True}
+    assert db_convo.updated_at == saved_updated_at
+    assert [content async for content in db_convo.db_messages.order_by("sequence_number").values_list("content", flat=True)] == [
+        "Original", "Newer accepted turn",
+    ]
+    assert consumer.col_ref.collections == [11]
+    assert consumer.skill_overrides == {skill_id: False}
+    assert consumer.dead is True
+    payloads = [json.loads(call.args[0]["text"]) for call in consumer.base_send.call_args_list]
+    assert any(payload.get("fatal") and "refresh" in payload["exception"].lower() for payload in payloads)
+    consumer.close.assert_awaited_once_with(code=4409)
 
 
 @pytest.mark.asyncio

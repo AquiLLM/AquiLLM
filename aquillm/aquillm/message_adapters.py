@@ -182,7 +182,10 @@ def load_conversation_from_db(db_convo: WSConversation) -> Conversation:
     return convo
 
 
-def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, selected_collections=None) -> None:
+def save_conversation_to_db(
+    convo: Conversation, db_convo: WSConversation, *, selected_collections=None,
+    skill_overrides=None,
+) -> None:
     """Replace the transcript only if this writer's loaded revision is current.
 
     Existing populated conversations require load_conversation_from_db first.
@@ -220,6 +223,14 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, se
         if selected_collections is not None:
             db_convo.selected_collection_ids = list(selected_collections)
             update_fields.append("selected_collection_ids")
+        saved_overrides = (
+            dict(locked.skill_overrides or {})
+            if skill_overrides is None
+            else dict(skill_overrides)
+        )
+        if skill_overrides is not None:
+            db_convo.skill_overrides = saved_overrides
+            update_fields.append("skill_overrides")
         db_convo.save(update_fields=update_fields)
 
         existing_by_uuid = {row.message_uuid: row for row in existing_rows}
@@ -286,6 +297,7 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, se
     # that transaction later rolls back (e.g. publication cancellation), this
     # handle must reload; the next attempted save safely reports a conflict.
     db_convo._transcript_revision = (db_convo.pk, saved_revision)
+    db_convo.skill_overrides = saved_overrides
 
 
 def build_frontend_conversation_json(db_convo: WSConversation) -> dict:

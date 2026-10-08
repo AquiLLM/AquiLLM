@@ -9,10 +9,12 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 async def save_chat_conversation(
-    consumer, *, create_memories=False, selected_collections=None, enqueue_functions=()
+    consumer, *, create_memories=False, selected_collections=None,
+    skill_overrides=None, enqueue_functions=()
 ):
     title_request = await _persist_conversation(
-        consumer, create_memories, selected_collections=selected_collections
+        consumer, create_memories, selected_collections=selected_collections,
+        skill_overrides=skill_overrides,
     )
     if title_request:
         from apps.chat.tasks.title import schedule_title
@@ -38,7 +40,7 @@ async def save_chat_conversation(
 
 @database_sync_to_async
 def _persist_conversation(
-    consumer, create_memories=False, *, selected_collections=None
+    consumer, create_memories=False, *, selected_collections=None, skill_overrides=None
 ):
     from apps.chat.services.rag_turn_publication import conversation_publication
     from aquillm.message_adapters import save_conversation_to_db
@@ -46,14 +48,12 @@ def _persist_conversation(
 
     assert consumer.db_convo is not None
     with execution_publication(), conversation_publication():
-        if selected_collections is None:
-            save_conversation_to_db(consumer.convo, consumer.db_convo)
-        else:
-            save_conversation_to_db(
-                consumer.convo,
-                consumer.db_convo,
-                selected_collections=selected_collections,
-            )
+        context = {}
+        if selected_collections is not None:
+            context["selected_collections"] = selected_collections
+        if skill_overrides is not None:
+            context["skill_overrides"] = skill_overrides
+        save_conversation_to_db(consumer.convo, consumer.db_convo, **context)
     if len(consumer.convo) >= 2 and not consumer.db_convo.name:
         first_user = next(
             (message.content for message in consumer.convo if message.role == "user"),

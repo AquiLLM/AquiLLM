@@ -58,7 +58,8 @@ def _consumer(*, user_authenticated=True, db_convo=None):
 
 def _db_convo():
     return SimpleNamespace(
-        id=42, system_prompt="system", selected_collection_ids=[7], name="Saved chat"
+        id=42, system_prompt="system", selected_collection_ids=[7],
+        skill_overrides={}, name="Saved chat"
     )
 
 

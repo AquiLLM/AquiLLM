@@ -99,7 +99,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
         self.transport_connected = False
 
     async def _save_conversation(
-        self, create_memories=False, *, selected_collections=None
+        self, create_memories=False, *, selected_collections=None, skill_overrides=None
     ):
         from apps.chat.consumers.chat_persistence import save_chat_conversation
 
@@ -107,6 +107,7 @@ class ChatConsumer(AsyncWebsocketConsumer):
             self,
             create_memories=create_memories,
             selected_collections=selected_collections,
+            skill_overrides=skill_overrides,
             enqueue_functions=(
                 enqueue_conversation_memories_task,
                 enqueue_index_conversation_task,

@@ -239,10 +239,6 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
             else None
         )
         message = UserMessage.model_validate(data["message"])
-        if overrides is not None:
-            await _apply_context_selection(selected_collections, overrides)
-        else:
-            consumer.col_ref.collections = selected_collections
         consumer.convo += message
         files: list[ConversationFile] = []
         if "files" in data:
@@ -271,8 +267,13 @@ async def handle_chat_receive(consumer: Any, text_data: str) -> None:
         consumer.convo[-1].tools = active_tools
         consumer.convo[-1].files = [(file.name, file.id) for file in files]
         consumer.convo[-1].tool_choice = tool_choice
-        await consumer._save_conversation(
-            create_memories=False, selected_collections=selected_collections
+        context = {"selected_collections": selected_collections}
+        if overrides is not None:
+            context["skill_overrides"] = overrides
+        await consumer._save_conversation(create_memories=False, **context)
+        consumer.col_ref.collections = selected_collections
+        consumer.skill_overrides = dict(
+            getattr(consumer.db_convo, "skill_overrides", {}) or {}
         )
         consumer.last_sent_sequence = len(consumer.convo) - 1
         logger.debug("obs.chat.append_completed")
