@@ -31,7 +31,7 @@ def install(env=None):
     global _installed
     config = settings(os.environ if env is None else env)
     if (config["mtp"] == config["split"] == config["gdn"] == "baseline"
-            and config["prefill"] == "0"):
+            and config["prefill"] == "0" and config["runtime_profile"] == "baseline"):
         return {"status": "disabled"}
     if _installed:
         return {"status": "already_installed"}

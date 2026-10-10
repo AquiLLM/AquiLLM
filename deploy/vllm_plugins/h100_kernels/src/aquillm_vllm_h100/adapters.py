@@ -99,6 +99,10 @@ def install_adapters(config):
             raise ValueError("FlashInfer GDN requires candidate runtime flashinfer-0.6.18")
         from .gdn.adapter import prepare_install
         prepared_gdn = prepare_install()
+    prepared_prefill_compat = None
+    if config.get("runtime_profile") == "flashinfer-0.6.18":
+        from .gdn.prefill_compat import prepare_install
+        prepared_prefill_compat = prepare_install()
     prefill_result = {"installed": False, "reason": "disabled"}
     if config["prefill"] == "1":
         from .prefill_adapter import install_prefill_adapter
@@ -108,9 +112,13 @@ def install_adapters(config):
     if prepared_gdn is not None:
         module, call = prepared_gdn
         module.fused_sigmoid_gating_delta_rule_update = call
+    if prepared_prefill_compat is not None:
+        module, call = prepared_prefill_compat
+        module.fi_chunk_gated_delta_rule = call
     return {"status": "installed", "mtp": config["mtp"], "split": config["split"],
             "prefill": prefill_result["installed"], "prefill_reason": prefill_result["reason"],
             "prefill_profile": PROFILE_NAME if prefill_result["installed"] else None,
             "prefill_qualification": "experimental_pending_serving" if prefill_result["installed"] else None,
             "gdn": config.get("gdn", "baseline"),
-            "gdn_qualification": "experimental_pending_gpu_serving" if prepared_gdn else None}
+            "gdn_qualification": "experimental_pending_gpu_serving" if prepared_gdn else None,
+            "gdn_prefill_int64_offsets": prepared_prefill_compat is not None}
