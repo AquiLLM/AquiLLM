@@ -159,9 +159,9 @@ def test_real_index_staging_validates_source_and_raw_equality_plan(frontier_memg
         repository.delete_generation(generation_key=generation, timeout_seconds=5.0)
 
 
-@pytest.mark.parametrize("hub", [False, True])
+@pytest.mark.parametrize("case", ["bridge", "hub", "terminal"])
 def test_real_canonical_bridge_uses_original_seed_and_at_most_64_queries(
-    frontier_memgraph, hub
+    frontier_memgraph, case
 ):
     from dataclasses import replace
     from time import monotonic
@@ -177,11 +177,15 @@ def test_real_canonical_bridge_uses_original_seed_and_at_most_64_queries(
     )
     from apps.knowledge_graph.tests.frontier_fixture_support import FrontierFixture
     from apps.knowledge_graph.tests.frontier_hub_fixture import hub_bundles
+    from apps.knowledge_graph.tests.frontier_terminal_fixture import terminal_bundles
     from apps.knowledge_graph.tests.test_memgraph_projection_repository import (
         _expected_manifest,
     )
 
+    hub = case == "hub"
     bundles, late_answer = hub_bundles() if hub else (None, None)
+    if case == "terminal":
+        bundles, _, terminal_chunk, _ = terminal_bundles(2, False)
     fixture = FrontierFixture(bundles)
     repository = MemgraphProjectionRepository(frontier_memgraph)
     generations = [
@@ -268,6 +272,10 @@ def test_real_canonical_bridge_uses_original_seed_and_at_most_64_queries(
             assert result.coverage.status == "partial"
         else:
             assert fixture.answer_identity in result.snapshot.identity_keys
+            if case == "terminal":
+                assert terminal_chunk in {
+                    r.chunk_key for r in result.evidence_candidates
+                }
         assert budget.queries == meter.calls <= 64
         assert result.coverage.exhaustive is False
     finally:

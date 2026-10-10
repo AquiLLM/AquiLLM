@@ -10,7 +10,7 @@ from .frontier_contracts_v2 import FrontierBudgetExceeded
 def acquire_frontier(session, assembly, seeds, caps, budget):
     frontier = tuple(s.identity_key for s in seeds)
     visited, mention_streams = set(), []
-    for depth in range(caps.max_depth):
+    for depth in range(caps.max_depth + 1):
         heap, serial = [], 0
         # Read every competing stream head before admitting this round.
         for identity in sorted(frontier):
@@ -36,6 +36,10 @@ def acquire_frontier(session, assembly, seeds, caps, budget):
                             identity,
                         )
                     )
+                    # Copy joins and mentions cost zero relation hops, including
+                    # at the horizon; no terminal relation head may be fetched.
+                    if depth == caps.max_depth:
+                        continue
                     for predicate, head in sorted(copy["links"]["relations"].items()):
                         stream = "relations/" + entity + "/" + predicate
                         iterator = session.entries(generation, head, stream)
