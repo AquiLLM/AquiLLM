@@ -65,6 +65,12 @@ def application_maintenance_schedule(*, enabled: bool) -> dict[str, dict[str, ob
             "kwargs": {"limit": 25},
             "options": {"queue": "celery"},
         },
+        "profile-memory-reconciliation-recovery": {
+            "task": "aquillm.tasks.recover_profile_memory_reconciliation_jobs",
+            "schedule": 60,
+            "kwargs": {"limit": 25},
+            "options": {"queue": "celery"},
+        },
     }
 
 
