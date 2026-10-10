@@ -35,6 +35,12 @@ hashes are also in the manifest. Existing switch baselines must be prepared and
 verified separately. Model benchmark scripts are copied into
 `compose-vllm-1:/tmp/h100_performance/`.
 
+The dependency hashes cover captured checkout bytes, including line endings,
+rather than Git's normalized blobs. Five dependencies used CRLF;
+`long_quality_bench.py` used LF. A checkout with another line-ending policy can
+therefore have different byte hashes with identical source text. The ten archived
+reproduction files retain their original bytes and must match their hashes exactly.
+
 Web execution uses `/opt/venv/bin/python`, installed Django/allauth/httpx/websockets,
 the application mounted at `/app`, and its existing database, embedding, memory,
 graph and worker services. The replay client is copied to `/tmp/chat_replay.py`;
