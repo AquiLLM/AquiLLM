@@ -158,12 +158,27 @@ def paired_domain_errors(groups):
     reasons = []
     domains = {g["baseline"].get("domain") for g in groups} - {None}
     for domain in sorted(domains):
-        cohort = [g for g in groups if g["baseline"].get("domain") == domain]
-        for mode in MODES[1:]:
-            for key in ("support_recall", "faithfulness", "qualification_accuracy"):
-                pairs = [(g["baseline"].get(key), g[mode].get(key)) for g in cohort]
-                deltas = [b - a for a, b in pairs if a is not None and b is not None]
-                interval = paired_bootstrap_interval(deltas)
-                if len(deltas) != len(pairs) or not deltas or interval["lower"] < 0:
-                    reasons.append(f"{mode}: domain {domain}/{key} decline or unknown")
+        domain_rows = [g for g in groups if g["baseline"].get("domain") == domain]
+        # Preserve marginal checks; gains there cannot conceal a crossed decline.
+        cohorts = {domain: domain_rows}
+        cohorts.update(
+            {
+                f"{domain}/{depth}": [
+                    g for g in domain_rows if g["baseline"].get("depth") == depth
+                ]
+                for depth in ("routine", "deeper")
+            }
+        )
+        for cohort_name, cohort in cohorts.items():
+            for mode in MODES[1:]:
+                for key in ("support_recall", "faithfulness", "qualification_accuracy"):
+                    pairs = [(g["baseline"].get(key), g[mode].get(key)) for g in cohort]
+                    deltas = [
+                        b - a for a, b in pairs if a is not None and b is not None
+                    ]
+                    interval = paired_bootstrap_interval(deltas)
+                    if len(deltas) != len(pairs) or not deltas or interval["lower"] < 0:
+                        reasons.append(
+                            f"{mode}: domain {cohort_name}/{key} decline or unknown"
+                        )
     return reasons

@@ -92,6 +92,19 @@ TARGETS = {
 }
 
 
+def test_comparator_reports_crossed_domain_depth_failure():
+    from apps.chat.tests.test_evidence_support_gates import crossing_cohort_reports
+
+    assert compare(crossing_cohort_reports(decline=False), TARGETS)[
+        "activation_eligible"
+    ]
+    result = compare(crossing_cohort_reports(), TARGETS)
+    assert result["blocking_reasons"] == [
+        "combined: domain policy_record/deeper/support_recall decline or unknown"
+    ]
+    assert result["activation_eligible"] is False
+
+
 def test_incomplete_frozen_corpus_and_unmatched_conditions_rejected():
     from apps.chat.evals.evidence_quality_comparison import frozen_comparison_errors
 
