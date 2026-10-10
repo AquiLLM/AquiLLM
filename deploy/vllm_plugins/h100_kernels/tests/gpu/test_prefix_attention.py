@@ -61,3 +61,16 @@ def test_prefix_honors_query_dimension_cache_byte_table_and_state_strides():
     expected = reference_attention(q, pk, pv, causal_prefix=None)
     assert_close(state.output, expected.output, q.dtype)
     torch.testing.assert_close(state.lse, expected.lse, atol=0.015, rtol=0.002)
+
+
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16])
+def test_prefix_crosses_actual_hybrid_2128_page_boundary(dtype):
+    from aquillm_vllm_h100.kernels.prefix import prefix_attention
+    batch = make_verify_batch([2129], length=129, block_size=2128, dtype=dtype, strided=True)
+    q = batch.q[0]
+    state = AttentionState(torch.empty_like(q, dtype=torch.float32),torch.empty(q.shape[:2],device="cuda"))
+    prefix_attention(q,batch.kv_cache,batch.block_table[0],2129,batch.scale,batch.spec,state)
+    k,v = unpack_prefix(batch,0)
+    expected = reference_attention(q,k,v,causal_prefix=None)
+    assert_close(state.output,expected.output,dtype)
+    torch.testing.assert_close(state.lse,expected.lse,atol=0.015,rtol=0.002)
