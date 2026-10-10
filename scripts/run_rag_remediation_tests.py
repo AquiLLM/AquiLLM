@@ -187,7 +187,8 @@ def validate_arguments(arguments, *, manage=False):
     forbidden = {"--ds", "--dc", "--settings", "--pythonpath", "--config-file", "--override-ini", "--rootdir", "--confcutdir", "--noconftest", "--env", "--environment"}
     for token in arguments:
         option = token.split("=", 1)[0]
-        if option in forbidden or (not manage and (token.startswith("-c") or token.startswith("-o"))):
+        abbreviated_manage_override = manage and option.startswith("--") and any(blocked.startswith(option) for blocked in ("--settings", "--pythonpath"))
+        if option in forbidden or abbreviated_manage_override or (not manage and (token.startswith("-c") or token.startswith("-o"))):
             raise IsolationError("settings, environment and configuration overrides are forbidden")
     if manage and arguments and arguments[0] not in {"check", "makemigrations", "showmigrations", "migrate"}:
         raise IsolationError("only isolated Django check/migration commands are supported")

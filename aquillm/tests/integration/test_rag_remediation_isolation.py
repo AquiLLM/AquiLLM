@@ -131,9 +131,21 @@ class IsolationTests(unittest.TestCase):
         for tokens in (("--ds", "aquillm.settings"), ("--ds=aquillm.settings",), ("-c", "foreign.ini"), ("-cforeign.ini",), ("--override-ini=DJANGO_SETTINGS_MODULE=aquillm.settings",), ("-o", "DJANGO_SETTINGS_MODULE=aquillm.settings"), ("--rootdir=foreign",)):
             with self.subTest(tokens=tokens), patch.object(self.h.subprocess, "run", side_effect=AssertionError("Docker launched")), redirect_stderr(StringIO()):
                 self.assertEqual(self.h.main(["--project", "aquillm-rag-review", "--", *tokens]), 2)
-        for tokens in (("showmigrations", "--settings", "aquillm.settings"), ("showmigrations", "--settings=aquillm.settings"), ("check", "--pythonpath=foreign")):
+        for tokens in (("showmigrations", "--settings", "aquillm.settings"), ("showmigrations", "--settings=aquillm.settings"), ("check", "--pythonpath=foreign"), ("check", "--set", "aquillm.settings"), ("check", "--set=aquillm.settings"), ("check", "--py", "foreign"), ("check", "--py=foreign")):
             with self.subTest(tokens=tokens), patch.object(self.h.subprocess, "run", side_effect=AssertionError("Docker launched")), redirect_stderr(StringIO()):
                 self.assertEqual(self.h.main(["--project", "aquillm-rag-review", "--manage", *tokens]), 2)
+
+    def test_actual_django_parser_abbreviations_cannot_bypass_guard(self):
+        if os.environ.get("RAG_REMEDIATION_TEST") != "1":
+            self.skipTest("real Django CommandParser assertion requires installed apps")
+        from django.core.management import ManagementUtility
+        command = ManagementUtility().fetch_command("check")
+        parser = command.create_parser("manage.py", "check")
+        for tokens in (("--set", "aquillm.settings"), ("--set=aquillm.settings",), ("--py", "foreign"), ("--py=foreign",)):
+            parsed = parser.parse_args(tokens)
+            self.assertTrue(parsed.settings == "aquillm.settings" or parsed.pythonpath == "foreign")
+            with patch.object(self.h.subprocess, "run", side_effect=AssertionError("Docker launched")), redirect_stderr(StringIO()):
+                self.assertEqual(self.h.main(["--project", "aquillm-rag-review", "--manage", "check", *tokens]), 2)
 
     def test_incomplete_container_inventory_and_unowned_peers_rejected(self):
         project = "aquillm-rag-review"
