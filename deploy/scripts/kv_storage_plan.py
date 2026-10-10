@@ -120,8 +120,8 @@ def main():
     parser.add_argument("--limits", type=Path)
     args, extra = parser.parse_known_args()
     try:
-        layout = json.loads(args.layout.read_text()) if args.layout else None
-        limits = json.loads(args.limits.read_text()) if args.limits else None
+        layout = json.loads(args.layout.read_text(encoding="utf-8-sig")) if args.layout else None
+        limits = json.loads(args.limits.read_text(encoding="utf-8-sig")) if args.limits else None
         print(json.dumps(plan_storage(os.environ, layout, limits, extra), sort_keys=True, indent=2))
     except (ConfigurationError, OSError, json.JSONDecodeError) as exc:
         print(f"ERROR: KV storage planning: {exc}", file=sys.stderr)

@@ -61,3 +61,51 @@ def test_infrastructure_uses_validated_plan_not_mutated_argv(layout, limits):
     restored = preflight.reconstruct_plan(plan)
     assert restored["server_argv"][:2] == ["lmcache", "server"]
     assert restored["status"] == "experimental-not-launchable"
+
+
+def write_operator_utf8_json(path, data):
+    payload = json.dumps(data)
+    if os.name == "nt":
+        # Exercise the runbook's real Windows PowerShell 5.1 producer.
+        result = subprocess.run([
+            "powershell.exe", "-NoProfile", "-Command",
+            "$env:KV_TEST_JSON | Set-Content -LiteralPath $env:KV_TEST_JSON_PATH -Encoding utf8; $PSVersionTable.PSVersion.ToString()",
+        ], env={**os.environ, "KV_TEST_JSON": payload, "KV_TEST_JSON_PATH": str(path)},
+            capture_output=True, text=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip().startswith("5.1.")
+    else:
+        # Preserve coverage on Linux CI with the same UTF-8 BOM bytes.
+        path.write_text(payload, encoding="utf-8-sig")
+    assert path.read_bytes().startswith(b"\xef\xbb\xbf")
+
+
+@pytest.mark.parametrize("bom_input", ["layout", "limits"])
+def test_planner_cli_accepts_powershell_utf8_inputs(layout, limits, tmp_path, bom_input):
+    arguments = []
+    for name, data in (("layout", layout), ("limits", limits)):
+        path = tmp_path / f"{name}.json"
+        if name == bom_input:
+            write_operator_utf8_json(path, data)
+        else:
+            path.write_text(json.dumps(data), encoding="utf-8")
+        arguments += [f"--{name}", str(path)]
+    result = subprocess.run([sys.executable, str(ROOT / "deploy/scripts/kv_storage_plan.py"), *arguments],
+                            env={**os.environ, **env()}, capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["chunk_tokens"] == 32
+
+
+@pytest.mark.parametrize("flag", ["--plan", "--server-plan", "--master-plan"])
+def test_preflight_cli_reads_powershell_json_before_identity_gate(layout, limits, tmp_path, flag):
+    sys.path.insert(0, str(ROOT / "deploy/scripts"))
+    planner = importlib.import_module("kv_storage_plan")
+    plan = planner.plan_storage(env(), layout, limits)
+    plan["layout"]["identity"]["model"] = "incorrect-model"
+    path = tmp_path / "plan.json"
+    write_operator_utf8_json(path, plan)
+    result = subprocess.run([sys.executable, str(ROOT / "deploy/scripts/kv_storage_preflight.py"), flag, str(path)],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 64, result.stderr
+    assert "layout identity must match" in result.stderr
+    assert "Traceback" not in result.stderr

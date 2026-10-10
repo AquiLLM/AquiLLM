@@ -166,7 +166,7 @@ def main():
     try:
         path = args.plan or args.server_plan or args.master_plan
         if path:
-            plan = reconstruct_plan(json.loads(path.read_text()))
+            plan = reconstruct_plan(json.loads(path.read_text(encoding="utf-8-sig")))
             profile = plan["profile"]
             native_identity()
             if args.master_plan:
