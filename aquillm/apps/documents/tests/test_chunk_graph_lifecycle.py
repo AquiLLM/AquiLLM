@@ -17,12 +17,23 @@ from ._chunk_graph_lifecycle_support import (
 def test_create_chunks_task_accepts_an_exact_concrete_snapshot_reference():
     from apps.documents.tasks.chunking import create_chunks
 
-    assert list(inspect.signature(create_chunks.run).parameters) == [
+    signature = inspect.signature(create_chunks.run)
+    parameters = signature.parameters
+    assert list(parameters)[:4] == [
         "doc_id",
         "expected_source_hash",
         "concrete_model_label",
         "document_pkid",
     ]
+    assert list(parameters)[4:] == [
+        "publication_id", "publication_generation", "publication_attempt",
+    ]
+    for name in list(parameters)[4:]:
+        assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
+        assert parameters[name].default is None
+    # Existing four-positional deliveries remain callable during rollout.
+    bound = signature.bind("synthetic", "a" * 64, "apps_documents.rawtextdocument", 1)
+    assert bound.arguments["document_pkid"] == 1
 
 
 @pytest.mark.django_db(transaction=True)

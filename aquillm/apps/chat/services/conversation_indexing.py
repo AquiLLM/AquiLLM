@@ -16,6 +16,8 @@ from django.db import transaction
 from aquillm.utils import get_embedding_result as get_embedding, get_embedding_results as get_embeddings
 from apps.chat.models import ConversationChunk, Message, WSConversation
 from lib.conversations.chunking import TranscriptMessage, build_turn_windows
+from lib.embeddings.errors import EmbeddingUpstreamUnavailableError
+from lib.embeddings.utils import EmbeddingContractError
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -118,21 +120,10 @@ def index_conversation(conversation_id: int, *, force: bool = False) -> int:
     try:
         batch = get_embeddings(texts, input_type="search_document")
         if len(batch) != len(windows):
-            raise RuntimeError(f"Embedding batch mismatch: expected {len(windows)}, got {len(batch)}")
+            raise EmbeddingContractError("Embedding batch count differs from conversation windows")
         embeddings = list(batch)
-    except Exception as exc:
-        logger.warning("Batch embedding failed for conversation %s: %s", conversation_id, exc)
-        for i, text in enumerate(texts):
-            try:
-                embeddings[i] = get_embedding(text, input_type="search_document")
-            except Exception as inner:
-                logger.warning(
-                    "Per-window embedding failed for conversation %s window %s: %s",
-                    conversation_id,
-                    i,
-                    inner,
-                )
-                embeddings[i] = None
+    except EmbeddingUpstreamUnavailableError:
+        logger.warning("obs.chat.embedding_unavailable", conversation_id=conversation_id)
 
     chunks = [
         ConversationChunk(

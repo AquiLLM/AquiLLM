@@ -5,10 +5,12 @@ broker acknowledgement is retried after the lease. The existing chunk task
 uses lifecycle locks and source hashes to make such redelivery idempotent.
 """
 from datetime import timedelta
+from uuid import uuid4
 
 import structlog
 from django.apps import apps
 from django.db import DEFAULT_DB_ALIAS, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.documents.models.chunk_publication import ChunkPublication
@@ -73,12 +75,14 @@ def dispatch_chunk_publication(intent_id, *, using=DEFAULT_DB_ALIAS):
         if document is None or document.ingestion_complete:
             intent.delete(using=using)
             return False
-        if intent.next_attempt_at > now:
+        if intent.failure_kind or intent.next_attempt_at > now:
             return False
+        if intent.generation is None:
+            intent.generation = uuid4()
         intent.attempts += 1
         intent.next_attempt_at = now + timedelta(seconds=PUBLICATION_LEASE_SECONDS)
         intent.last_error = ''
-        intent.save(update_fields=['attempts', 'next_attempt_at', 'last_error'], using=using)
+        intent.save(update_fields=['attempts', 'next_attempt_at', 'last_error', 'generation'], using=using)
 
     try:
         # This also recovers a process death before the old post-commit graph
@@ -99,11 +103,13 @@ def dispatch_chunk_publication(intent_id, *, using=DEFAULT_DB_ALIAS):
         create_chunks.delay(
             str(intent.document_id), intent.source_hash,
             intent.concrete_model_label, intent.document_pkid,
+            publication_id=intent.pk, publication_generation=str(intent.generation),
+            publication_attempt=intent.attempts,
         )
         return True
     except Exception as exc:
         # Compare the attempt so a slow publisher cannot undo a newer lease.
-        ChunkPublication.objects.using(using).filter(pk=intent.pk, attempts=intent.attempts).update(
+        ChunkPublication.objects.using(using).filter(pk=intent.pk, generation=intent.generation, attempts=intent.attempts).update(
             next_attempt_at=timezone.now() + timedelta(seconds=min(900, 30 * 2 ** min(intent.attempts - 1, 5))),
             last_error=type(exc).__name__[:128],
         )
@@ -116,5 +122,43 @@ def recover_due_chunk_publications(*, limit=25, using=DEFAULT_DB_ALIAS):
     limit = min(100, max(1, int(limit)))
     ids = list(ChunkPublication.objects.using(using)
                .filter(next_attempt_at__lte=timezone.now())
+               .filter(Q(failure_kind='') | Q(failure_kind__isnull=True))
                .order_by('next_attempt_at', 'pk').values_list('pk', flat=True)[:limit])
     return sum(dispatch_chunk_publication(pk, using=using) for pk in ids)
+
+
+def task_publication(document, source_hash, publication_id, generation, attempt, *, using=DEFAULT_DB_ALIAS):
+    """A query carrying the complete worker failure fence, never inferred for old jobs."""
+    return ChunkPublication.objects.using(using).filter(
+        pk=publication_id, generation=generation, attempts=attempt,
+        concrete_model_label=document._meta.label_lower,
+        document_pkid=document.pkid, document_id=document.id, source_hash=source_hash,
+    )
+
+
+def reset_chunk_publication(intent_id, *, source_hash, generation, using=DEFAULT_DB_ALIAS):
+    """Reset only the operator-observed source/generation; old deliveries stay fenced."""
+    from apps.documents.models import DESCENDED_FROM_DOCUMENT
+
+    with transaction.atomic(using=using):
+        intent = (ChunkPublication.objects.using(using).select_for_update()
+                  .filter(pk=intent_id, source_hash=source_hash, generation=generation).first())
+        if intent is None or not intent.failure_kind:
+            return False
+        try:
+            model = apps.get_model(intent.concrete_model_label)
+        except (LookupError, ValueError):
+            return False
+        if model not in DESCENDED_FROM_DOCUMENT or not model._base_manager.using(using).filter(
+            pkid=intent.document_pkid, id=intent.document_id,
+            full_text_hash=source_hash, ingestion_complete=False,
+        ).exists():
+            return False
+        intent.generation = uuid4()
+        intent.attempts = 0
+        intent.failure_kind = ''
+        intent.last_error = ''
+        intent.next_attempt_at = timezone.now()
+        intent.save(update_fields=['generation', 'attempts', 'failure_kind', 'last_error', 'next_attempt_at'], using=using)
+        transaction.on_commit(lambda: dispatch_chunk_publication(intent.pk, using=using), using=using, robust=True)
+    return True

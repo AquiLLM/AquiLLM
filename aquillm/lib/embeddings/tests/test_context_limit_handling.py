@@ -1,6 +1,8 @@
 """Tests for embedding context limit handling and retry logic."""
 
 from types import SimpleNamespace
+import httpx
+from openai import BadRequestError
 
 from lib.embeddings import (
     get_embedding_via_local_openai,
@@ -18,6 +20,10 @@ CONTEXT_LIMIT_ERROR = (
 )
 
 
+def context_error(message=CONTEXT_LIMIT_ERROR):
+    return BadRequestError(message, response=httpx.Response(400, request=httpx.Request("POST", "http://localhost/v1/embeddings")), body=None)
+
+
 class _FakeEmbeddingsApi:
     def __init__(self):
         self.calls = []
@@ -27,7 +33,7 @@ class _FakeEmbeddingsApi:
         self.calls.append(input)
         if isinstance(input, list):
             if any(isinstance(item, str) and len(item) > 2047 for item in input):
-                raise RuntimeError(CONTEXT_LIMIT_ERROR)
+                raise context_error()
             return SimpleNamespace(
                 data=[
                     SimpleNamespace(index=index, embedding=[float(index + 1), 0, 0, 0])
@@ -35,7 +41,7 @@ class _FakeEmbeddingsApi:
                 ]
             )
         if isinstance(input, str) and len(input) > 2047:
-            raise RuntimeError(CONTEXT_LIMIT_ERROR)
+            raise context_error()
         return SimpleNamespace(
             data=[SimpleNamespace(index=0, embedding=[1.0, 2.0, 3.0, 4.0])]
         )

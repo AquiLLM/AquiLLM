@@ -40,8 +40,11 @@ def embed_unresolved_query_span(
     actual_signature = signature_loader()
     if actual_signature != expected_signature:
         raise RuntimeError("query embedding signature mismatch")
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError("query embedding deadline expired")
     rows, returned_signature = embedding_loader(
-        [text], expected_model_signature=expected_signature
+        [text], expected_model_signature=expected_signature, timeout=remaining
     )
     if monotonic() >= deadline:
         raise TimeoutError("query embedding deadline expired")

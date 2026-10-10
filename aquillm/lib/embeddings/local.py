@@ -3,9 +3,10 @@ Local OpenAI-compatible embedding provider.
 """
 
 from typing import Any
+from math import isfinite
 
 import structlog
-from openai import OpenAI
+from openai import OpenAI, BadRequestError
 
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
@@ -20,6 +21,7 @@ from .config import (
 )
 from .utils import EmbeddingContractError, validate_embedding
 from .provenance import EmbeddingResult, make_result
+from .errors import REQUEST_TIMEOUT_SECONDS
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -32,7 +34,7 @@ def _get_local_openai_client(base_url: str, api_key: str) -> OpenAI:
     global _LOCAL_OPENAI_CLIENT, _LOCAL_OPENAI_CLIENT_CFG
     cfg = (base_url, api_key)
     if _LOCAL_OPENAI_CLIENT is None or _LOCAL_OPENAI_CLIENT_CFG != cfg:
-        _LOCAL_OPENAI_CLIENT = OpenAI(base_url=base_url, api_key=api_key)
+        _LOCAL_OPENAI_CLIENT = OpenAI(base_url=base_url, api_key=api_key, timeout=REQUEST_TIMEOUT_SECONDS, max_retries=0)
         _LOCAL_OPENAI_CLIENT_CFG = cfg
     return _LOCAL_OPENAI_CLIENT
 
@@ -94,7 +96,7 @@ def _embed_local_with_context_retry(
         )
         return _local_result(response, query, query, model, input_type)
 
-    max_retries = _env_int("APP_EMBED_CONTEXT_RETRIES", 6)
+    max_retries = min(6, _env_int("APP_EMBED_CONTEXT_RETRIES", 6))
     candidate = query
     char_cap = max_embed_input_chars()
     if char_cap > 0 and len(candidate) > char_cap:
@@ -111,7 +113,7 @@ def _embed_local_with_context_retry(
             return _local_result(response, candidate, query, model, input_type)
         except Exception as exc:
             last_exc = exc
-            if not is_context_limit_error(exc):
+            if not isinstance(exc, BadRequestError) or not is_context_limit_error(exc):
                 raise
             limit_tokens = extract_context_limit_tokens(exc)
             if limit_tokens:
@@ -136,7 +138,7 @@ def _embed_local_with_context_retry(
             )
             candidate = next_candidate
     if last_exc is not None:
-        raise last_exc
+        raise EmbeddingContractError("Embedding input exceeds context after bounded repair") from None
     raise RuntimeError("Local embedding failed without an exception detail.")
 
 
@@ -186,7 +188,7 @@ def get_embedding_results_via_local_openai(
             for vector, prepared, original in zip(vectors, prepared_queries, queries)
         ]
     except Exception as exc:
-        if not is_context_limit_error(exc):
+        if not isinstance(exc, BadRequestError) or not is_context_limit_error(exc):
             raise
         logger.warning(
             "obs.embed.batch_context_retry",
@@ -232,6 +234,7 @@ def get_embeddings_via_local_openai(
 
 def get_strict_indexed_embeddings_via_local_openai(
     queries: list[str],
+    *, timeout: float | None = None,
 ) -> list[tuple[int, list[float]]]:
     """Embed an exact durable batch once and preserve provider indices.
 
@@ -239,6 +242,8 @@ def get_strict_indexed_embeddings_via_local_openai(
     retries with transformed text, or falls back to another provider.
     """
 
+    if timeout is not None and (type(timeout) not in (float, int) or not isfinite(timeout) or timeout <= 0):
+        raise ValueError("strict embedding timeout must be positive and finite")
     if type(queries) is not list or any(type(query) is not str for query in queries):
         raise ValueError("strict embedding inputs must be an exact list of strings")
     if not queries:
@@ -249,6 +254,7 @@ def get_strict_indexed_embeddings_via_local_openai(
         model=model,
         input=queries,
         dimensions=1024,
+        **({"timeout": min(timeout, REQUEST_TIMEOUT_SECONDS)} if timeout is not None else {}),
     )
     response_model = getattr(response, "model", None)
     if type(response_model) is not str or response_model != model:

@@ -138,31 +138,22 @@ def test_audit_invalid_policy_fails_before_probe(monkeypatch):
 
 
 def test_invalid_policy_does_not_retry_or_assign_chunk(monkeypatch, transport):
-    from tenacity import stop_after_attempt, wait_none
-
     from apps.documents.services.chunk_embeddings import get_chunk_embedding
 
     monkeypatch.setenv("APP_EMBED_FALLBACK_POLICY", "")
-    attempts = []
     chunk = SimpleNamespace(
         modality="text",
         Modality=SimpleNamespace(IMAGE="image"),
         content="synthetic",
         embedding=None,
     )
-    bounded = get_chunk_embedding.retry_with(
-        stop=stop_after_attempt(2),
-        wait=wait_none(),
-        before=lambda _: attempts.append(1),
-    )
     with pytest.raises(EmbeddingContractError):
-        bounded(chunk)
-    assert attempts == [1]
+        get_chunk_embedding(chunk)
     assert chunk.embedding is None
     assert transport["local"] == transport["cohere"] == []
 
 
-def test_multimodal_transport_error_uses_local_text_only(monkeypatch, transport):
+def test_multimodal_transport_error_does_not_amplify_to_text(monkeypatch, transport):
     monkeypatch.setenv("APP_EMBED_FALLBACK_POLICY", "local-only")
 
     def unavailable(*_):
@@ -171,7 +162,9 @@ def test_multimodal_transport_error_uses_local_text_only(monkeypatch, transport)
     monkeypatch.setattr(
         facade, "get_multimodal_embedding_via_vllm_pooling", unavailable
     )
-    assert invoke("multimodal") == [1, 0, 0, 0]
+    with pytest.raises(facade.EmbeddingUpstreamUnavailableError):
+        invoke("multimodal")
+    assert transport["local"] == []
     assert transport["cohere"] == []
 
 

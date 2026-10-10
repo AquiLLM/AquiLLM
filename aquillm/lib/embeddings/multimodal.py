@@ -9,8 +9,25 @@ import requests
 from .config import get_local_embed_config
 from .provenance import EmbeddingResult, make_result
 from .utils import EmbeddingContractError, validate_embedding
+from .errors import REQUEST_TIMEOUT_SECONDS, EmbeddingUpstreamUnavailableError, require_transient
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+def _check_status(response):
+    status = response.status_code
+    if status == 200 or status in (400, 404, 405, 415, 422):
+        return
+    if status in (408, 429) or 500 <= status <= 599:
+        raise EmbeddingUpstreamUnavailableError("Multimodal embedding upstream unavailable")
+    raise EmbeddingContractError("Multimodal provider rejected the request")
+
+
+def _response_json(response):
+    try:
+        return response.json()
+    except ValueError:
+        raise EmbeddingContractError("Multimodal provider returned malformed JSON") from None
 
 
 def _single_response_vector(data: object) -> list[float]:
@@ -72,7 +89,7 @@ def get_multimodal_embedding_result_via_vllm_pooling(
     Uses Qwen3-VL-Embedding format as documented in:
     https://github.com/QwenLM/Qwen3-VL-Embedding/blob/main/examples/embedding_vllm.ipynb
 
-    Returns None if multimodal embedding is not supported or fails.
+    Returns None for unsupported formats; outages and invalid responses propagate.
     """
     base_url, api_key, model = get_local_embed_config()
     vllm_base = base_url.rstrip("/")
@@ -107,10 +124,11 @@ def get_multimodal_embedding_result_via_vllm_pooling(
             f"{vllm_base}/v1/embeddings",
             headers=headers,
             json=payload,
-            timeout=60,
+            timeout=REQUEST_TIMEOUT_SECONDS,
         )
+        _check_status(response)
         if response.status_code == 200:
-            data = response.json()
+            data = _response_json(response)
             embedding = _single_response_vector(data)
             logger.info("obs.embed.multimodal_succeeded", format="multi_modal_data")
             return make_result(
@@ -137,8 +155,9 @@ def get_multimodal_embedding_result_via_vllm_pooling(
             )
     except EmbeddingContractError:
         raise
-    except Exception:
-        logger.debug("obs.embed.multimodal_request_failed", format="multi_modal_data")
+    except Exception as exc:
+        require_transient(exc)
+        raise EmbeddingUpstreamUnavailableError("Multimodal embedding upstream unavailable") from None
 
     # Try /v1/embeddings with OpenAI-style content blocks (alternative format)
     try:
@@ -154,10 +173,11 @@ def get_multimodal_embedding_result_via_vllm_pooling(
             f"{vllm_base}/v1/embeddings",
             headers=headers,
             json=content_payload,
-            timeout=60,
+            timeout=REQUEST_TIMEOUT_SECONDS,
         )
+        _check_status(response)
         if response.status_code == 200:
-            data = response.json()
+            data = _response_json(response)
             embedding = _single_response_vector(data)
             logger.info("obs.embed.multimodal_succeeded", format="openai_content")
             return make_result(
@@ -178,8 +198,9 @@ def get_multimodal_embedding_result_via_vllm_pooling(
             )
     except EmbeddingContractError:
         raise
-    except Exception:
-        logger.debug("obs.embed.multimodal_request_failed", format="openai_content")
+    except Exception as exc:
+        require_transient(exc)
+        raise EmbeddingUpstreamUnavailableError("Multimodal embedding upstream unavailable") from None
 
     logger.debug("obs.embed.multimodal_unsupported")
 

@@ -20,7 +20,7 @@ def test_embedding_requires_exact_signature_dimension_and_finite_values(
         def signature():
             return SIGNATURE
 
-        def embed(queries, *, expected_model_signature):
+        def embed(queries, *, expected_model_signature, timeout):
             calls.append((queries[0], expected_model_signature))
             return ([(0, [0.0] * 1024)], expected_model_signature)
 
@@ -80,3 +80,24 @@ def test_query_embedding_has_no_persistence_operations() -> None:
     source = inspect.getsource(query_embedding)
     for forbidden in (".save(", ".create(", ".update(", "bulk_create"):
         assert forbidden not in source
+
+
+def test_remaining_deadline_reaches_transport_without_floor(monkeypatch):
+    from unittest.mock import Mock
+    embed = Mock(return_value=([(0, [1.0] * 1024)], SIGNATURE))
+    monkeypatch.setattr(query_embedding, "_load_embedding_api", lambda: (lambda: SIGNATURE, embed))
+    ticks = iter([1.0, 1.999, 1.9995])
+    monkeypatch.setattr(query_embedding, "monotonic", lambda: next(ticks))
+    query_embedding.embed_unresolved_query_span(text="synthetic", expected_signature=SIGNATURE, deadline=2.0)
+    assert embed.call_args.kwargs["timeout"] == pytest.approx(0.001)
+
+
+def test_deadline_expired_during_signature_lookup_never_calls_provider(monkeypatch):
+    from unittest.mock import Mock
+    embed = Mock(return_value=([(0, [1.0] * 1024)], SIGNATURE))
+    monkeypatch.setattr(query_embedding, "_load_embedding_api", lambda: (lambda: SIGNATURE, embed))
+    ticks = iter([1.0, 2.0])
+    monkeypatch.setattr(query_embedding, "monotonic", lambda: next(ticks))
+    with pytest.raises(TimeoutError):
+        query_embedding.embed_unresolved_query_span(text="synthetic", expected_signature=SIGNATURE, deadline=2.0)
+    embed.assert_not_called()

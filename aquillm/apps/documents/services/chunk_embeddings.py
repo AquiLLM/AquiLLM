@@ -6,10 +6,6 @@ from collections.abc import Callable
 from os import getenv
 from typing import TYPE_CHECKING, Any
 
-from tenacity import retry, retry_if_not_exception_type, wait_exponential
-
-from lib.embeddings.utils import EmbeddingContractError
-
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
 
@@ -64,10 +60,6 @@ def image_embedding_payloads(chunk: TextChunk) -> list[Any]:
     ]
 
 
-@retry(
-    wait=wait_exponential(),
-    retry=retry_if_not_exception_type(EmbeddingContractError),
-)
 def get_chunk_embedding(chunk: TextChunk, callback: Callable[[], None] | None = None):
     from aquillm.utils import get_embedding_result, get_multimodal_embedding_result
 

@@ -110,7 +110,7 @@ def test_transport_failure_retains_legacy_cohere_fallback_and_role(monkeypatch):
     def unavailable(*args, **kwargs):
         raise ConnectionError("synthetic transport failure")
 
-    def embed(*, texts, model, input_type):
+    def embed(*, texts, model, input_type, request_options, batching):
         assert texts == ["text"]
         assert model == "embed-english-v3.0"
         return SimpleNamespace(
@@ -127,8 +127,6 @@ def test_transport_failure_retains_legacy_cohere_fallback_and_role(monkeypatch):
 
 
 def test_chunk_contract_error_does_not_retry_or_assign_embedding(monkeypatch):
-    from tenacity import stop_after_attempt, wait_none
-
     from apps.documents.services.chunk_embeddings import get_chunk_embedding
 
     provider(monkeypatch, [(0, [0.0])])
@@ -138,16 +136,8 @@ def test_chunk_contract_error_does_not_retry_or_assign_embedding(monkeypatch):
         content="text",
         embedding=None,
     )
-    attempts = []
-    # Bound the baseline's otherwise infinite retry so the regression fails promptly.
-    bounded = get_chunk_embedding.retry_with(
-        stop=stop_after_attempt(2),
-        wait=wait_none(),
-        before=lambda _: attempts.append(1),
-    )
     with pytest.raises(ValueError):
-        bounded(chunk)
-    assert attempts == [1]
+        get_chunk_embedding(chunk)
     assert chunk.embedding is None
 
 

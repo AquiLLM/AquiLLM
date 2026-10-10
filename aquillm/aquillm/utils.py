@@ -30,6 +30,7 @@ from lib.embeddings.config import (
     get_target_dims,
 )
 from lib.embeddings.utils import EmbeddingContractError, validate_embedding
+from lib.embeddings.errors import EmbeddingUpstreamUnavailableError, require_transient
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 from lib.embeddings.provenance import EmbeddingResult, fit_result
@@ -44,10 +45,6 @@ from lib.embeddings.cohere import (
 from lib.embeddings.multimodal import get_multimodal_embedding_result_via_vllm_pooling
 
 logger = structlog.stdlib.get_logger(__name__)
-
-
-class EmbeddingUpstreamUnavailableError(RuntimeError):
-    """Local embedding unavailable; transient failure, never a vector contract error."""
 
 
 def _strict_embedding_endpoint_digest(base_url: str) -> str:
@@ -143,15 +140,9 @@ def _get_multimodal_embedding(
             )
     except EmbeddingContractError:
         raise
-    except Exception:
-        logger.debug(
-            "obs.core.multimodal_embedding_failed",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE,
-                count=0,
-                elapsed_ms=0.0,
-            ),
-        )
+    except Exception as exc:
+        require_transient(exc)
+        raise EmbeddingUpstreamUnavailableError("Multimodal embedding upstream unavailable") from None
 
     logger.debug(
         "obs.core.multimodal_embedding_unavailable",
@@ -192,7 +183,8 @@ def _get_embedding(
         return fit(local_embed(query, input_type=input_type))
     except EmbeddingContractError:
         raise
-    except Exception:
+    except Exception as exc:
+        require_transient(exc)
         if fallback_policy == "local-only":
             raise EmbeddingUpstreamUnavailableError(
                 "Local embedding upstream unavailable"
@@ -214,11 +206,14 @@ def _get_embedding(
         )
     try:
         cohere_client = apps.get_app_config("aquillm").cohere_client
+        if cohere_client is None:
+            raise EmbeddingUpstreamUnavailableError("Optional embedding fallback unavailable")
         return fit(cohere_embed(cohere_client, query, input_type))
     except EmbeddingContractError:
         raise
     except Exception as exc:
-        raise RuntimeError("All embedding providers failed") from exc
+        require_transient(exc)
+        raise EmbeddingUpstreamUnavailableError("All embedding providers unavailable") from None
 
 
 def _get_embeddings(
@@ -253,7 +248,8 @@ def _get_embeddings(
         return [fit(emb) for emb in local_embed(queries, input_type=input_type)]
     except EmbeddingContractError:
         raise
-    except Exception:
+    except Exception as exc:
+        require_transient(exc)
         if fallback_policy == "local-only":
             raise EmbeddingUpstreamUnavailableError(
                 "Local embedding upstream unavailable"
@@ -274,6 +270,8 @@ def _get_embeddings(
         )
     try:
         cohere_client = apps.get_app_config("aquillm").cohere_client
+        if cohere_client is None:
+            raise EmbeddingUpstreamUnavailableError("Optional embedding fallback unavailable")
         text_queries: list[str] = [q for q in queries if isinstance(q, str)]
         return [
             fit(emb) for emb in cohere_embed(cohere_client, text_queries, input_type)
@@ -281,7 +279,8 @@ def _get_embeddings(
     except EmbeddingContractError:
         raise
     except Exception as exc:
-        raise RuntimeError("All embedding providers failed") from exc
+        require_transient(exc)
+        raise EmbeddingUpstreamUnavailableError("All embedding providers unavailable") from None
 
 
 def get_embedding(query: Any, input_type: str = "search_query") -> list[float]:
@@ -353,6 +352,7 @@ def get_strict_index_embeddings(
     queries: list[str],
     *,
     expected_model_signature: str,
+    timeout: float | None = None,
 ) -> tuple[list[tuple[int, list[float]]], str]:
     """Embed one durable index batch locally with no cross-provider fallback.
 
@@ -374,7 +374,9 @@ def get_strict_index_embeddings(
         return [], actual_signature
     if any(len(query) > 8_192 for query in queries):
         raise ValueError("strict index embedding input exceeds max_chars=8192")
-    indexed_vectors = get_strict_indexed_embeddings_via_local_openai(queries)
+    indexed_vectors = get_strict_indexed_embeddings_via_local_openai(
+        queries, **({"timeout": timeout} if timeout is not None else {})
+    )
     if not isinstance(indexed_vectors, (list, tuple)) or len(indexed_vectors) != len(
         queries
     ):

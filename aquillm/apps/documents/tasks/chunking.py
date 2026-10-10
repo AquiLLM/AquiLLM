@@ -7,15 +7,17 @@ import uuid
 from typing import Optional
 
 from asgiref.sync import async_to_sync
-from celery.states import FAILURE
 from channels.layers import get_channel_layer
 from django.apps import apps as django_apps
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, transaction
+from django.db.models import Q
 
 from aquillm.celery import app
 from aquillm.utils import get_embedding_result as get_embedding, get_embedding_results as get_embeddings
 from lib.embeddings.provenance import valid_provenance
+from lib.embeddings.errors import EmbeddingUpstreamUnavailableError
+from lib.embeddings.utils import EmbeddingContractError
 from apps.documents.models import DESCENDED_FROM_DOCUMENT, Document, TextChunk
 from apps.documents.services.chunk_progress import (
     notify_ingest_monitor_complete,
@@ -216,53 +218,26 @@ def _embed_chunks(
             notify_ingest_monitor_progress(document.id, progress)
 
     if embed_text:
-        try:
-            embeddings = (
-                get_embeddings(
-                    [chunk.content for chunk in chunks],
-                    input_type="search_document",
-                )
-                if chunks
-                else []
+        embeddings = (
+            get_embeddings(
+                [chunk.content for chunk in chunks],
+                input_type="search_document",
             )
-            if len(embeddings) != len(chunks):
-                raise RuntimeError(
-                    f"Embedding batch mismatch: expected {len(chunks)}, got {len(embeddings)}"
-                )
-            for chunk, embedding in zip(chunks, embeddings):
-                chunk.embedding = embedding.vector
-                chunk.embedding_provenance = embedding.provenance
-                done += 1
-                send_progress()
-        except Exception as exc:
-            logger.warning(
-                "obs.rag.batch_embed_failed",
-                document_id=str(document.id),
-                error_type=type(exc).__name__,
-            )
-            for chunk in chunks:
-                chunk.get_chunk_embedding()
-                done += 1
-                send_progress()
+            if chunks else []
+        )
+        if len(embeddings) != len(chunks):
+            raise EmbeddingContractError("Embedding batch count differs from chunks")
+        for chunk, embedding in zip(chunks, embeddings):
+            chunk.embedding = embedding.vector
+            chunk.embedding_provenance = embedding.provenance
+            done += 1
+            send_progress()
     else:
         done = len(chunks)
         send_progress()
 
     if image_chunk is not None:
-        try:
-            image_chunk.get_chunk_embedding()
-        except Exception as exc:
-            logger.warning(
-                "obs.rag.image_embed_failed",
-                document_id=str(document.id),
-                error_type=type(exc).__name__,
-            )
-            result = get_embedding(
-                image_chunk.content,
-                input_type="search_document",
-            )
-            image_chunk.embedding = result.vector
-            image_chunk.embedding_provenance = result.provenance
+        image_chunk.get_chunk_embedding()
         chunks.append(image_chunk)
         done += 1
         send_progress()
@@ -334,15 +309,19 @@ def _commit_chunks(
         return "stale"
 
 
-@app.task(serializer="json", bind=True, track_started=True)
+@app.task(serializer="json", bind=True, track_started=True, max_retries=2)
 def create_chunks(
     self,
     doc_id: str,
     expected_source_hash: str | None = None,
     concrete_model_label: str | None = None,
     document_pkid: int | None = None,
+    *,
+    publication_id: int | None = None,
+    publication_generation: str | None = None,
+    publication_attempt: int | None = None,
 ):
-    from apps.documents.services.chunk_publication import acknowledge_chunk_publication
+    from apps.documents.services.chunk_publication import acknowledge_chunk_publication, task_publication
     database_alias = DEFAULT_DB_ALIAS
     document = _exact_document(
         doc_id,
@@ -357,6 +336,15 @@ def create_chunks(
     )
     if document.full_text_hash != source_hash:
         return "stale"
+    envelope = (publication_id, publication_generation, publication_attempt)
+    intent = None
+    if any(value is not None for value in envelope):
+        if any(value is None for value in envelope):
+            raise ValueError("Incomplete publication envelope")
+        intent = task_publication(document, source_hash, *envelope, using=database_alias)
+        current = intent.first()
+        if current is None or current.failure_kind:
+            return "stale"
     try:
         from apps.knowledge_graph.graph.invalidation import (
             DocumentChunkState,
@@ -423,6 +411,13 @@ def create_chunks(
             notify_ingest_monitor_complete(document.id)
         return outcome
     except Exception as exc:
+        transient = isinstance(exc, EmbeddingUpstreamUnavailableError)
+        current_attempt = True
+        if intent is not None:
+            current_attempt = intent.filter(Q(failure_kind='') | Q(failure_kind__isnull=True)).update(
+                last_error=type(exc).__name__[:128],
+                failure_kind='' if transient else ('contract' if isinstance(exc, EmbeddingContractError) else 'unexpected'),
+            )
         logger.error(
             "obs.rag.chunking_failed",
             document_id=str(document.id),
@@ -431,7 +426,8 @@ def create_chunks(
             expected_source_hash=source_hash,
             error_type=type(exc).__name__,
         )
-        self.update_state(state=FAILURE)
+        if transient and current_attempt and self.request.retries < self.max_retries:
+            raise self.retry(exc=exc, countdown=30 * (2 ** self.request.retries))
         raise
 
 

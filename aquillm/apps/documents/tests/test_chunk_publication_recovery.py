@@ -44,7 +44,9 @@ def test_broker_failure_keeps_durable_intent_and_recovers_once(document_factory)
     with patch.object(create_chunks, 'delay') as queue:
         recover_chunk_publications.run()
         recover_chunk_publications.run()
-    queue.assert_called_once_with(str(document.id), document.full_text_hash, document._meta.label_lower, document.pkid)
+    intent.refresh_from_db()
+    queue.assert_called_once_with(str(document.id), document.full_text_hash, document._meta.label_lower, document.pkid,
+                                  publication_id=intent.pk, publication_generation=str(intent.generation), publication_attempt=intent.attempts)
     document.refresh_from_db()
     assert not document.ingestion_complete
 
@@ -120,7 +122,7 @@ def test_concurrent_dispatchers_publish_only_one_lease(document_factory):
     from apps.documents.services.chunk_publication import dispatch_chunk_publication
     publishing, release = Event(), Event()
 
-    def publish(*args):
+    def publish(*args, **kwargs):
         publishing.set()
         assert release.wait(5)
 

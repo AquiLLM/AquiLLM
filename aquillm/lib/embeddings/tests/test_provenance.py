@@ -74,7 +74,8 @@ def test_context_retry_receipt_hashes_only_successful_sent_input(monkeypatch):
     def create(**kwargs):
         calls.append(kwargs["input"])
         if len(calls) == 1:
-            raise RuntimeError("maximum input length of 200 tokens")
+            from .test_context_limit_handling import context_error
+            raise context_error("maximum input length of 200 tokens")
         return SimpleNamespace(data=[SimpleNamespace(index=0, embedding=[1, 2, 3])])
 
     transport(monkeypatch, create)
@@ -97,7 +98,7 @@ def test_context_retry_receipt_hashes_only_successful_sent_input(monkeypatch):
 def test_fallback_attributes_success_to_cohere(monkeypatch):
     monkeypatch.setenv("APP_EMBED_FALLBACK_POLICY", "legacy-cohere")
     monkeypatch.setenv("APP_EMBED_MODEL_REVISION", "local-only-revision")
-    transport(monkeypatch, lambda **_: (_ for _ in ()).throw(RuntimeError("offline")))
+    transport(monkeypatch, lambda **_: (_ for _ in ()).throw(ConnectionError("offline")))
     client = SimpleNamespace(embed=lambda **_: SimpleNamespace(embeddings=[[1.0]]))
     monkeypatch.setattr(
         facade.apps, "get_app_config", lambda *_: SimpleNamespace(cohere_client=client)

@@ -9,6 +9,7 @@ from typing import Any
 
 from .provenance import EmbeddingResult, make_result
 from .utils import EmbeddingContractError, validate_embedding
+from .errors import REQUEST_TIMEOUT_SECONDS
 
 
 def _response_vectors(response: Any, count: int) -> list[list[float]]:
@@ -30,6 +31,8 @@ def get_embedding_result_via_cohere(
         texts=[query],
         model="embed-english-v3.0",
         input_type=input_type,
+        request_options={"timeout_in_seconds": REQUEST_TIMEOUT_SECONDS, "max_retries": 0},
+        batching=False,
     )
     return _cohere_result(
         _response_vectors(response, 1)[0], query, input_type, response
@@ -44,15 +47,22 @@ def get_embedding_results_via_cohere(
         return []
     if cohere_client is None:
         raise RuntimeError("Cohere client not configured")
-    response = cohere_client.embed(
-        texts=queries,
-        model="embed-english-v3.0",
-        input_type=input_type,
-    )
-    return [
-        _cohere_result(vector, query, input_type, response)
-        for vector, query in zip(_response_vectors(response, len(queries)), queries)
-    ]
+    results = []
+    # Match the SDK's 96-input cap, but stop before dispatching more on failure.
+    for start in range(0, len(queries), 96):
+        batch = queries[start:start + 96]
+        response = cohere_client.embed(
+            texts=batch,
+            model="embed-english-v3.0",
+            input_type=input_type,
+            request_options={"timeout_in_seconds": REQUEST_TIMEOUT_SECONDS, "max_retries": 0},
+            batching=False,
+        )
+        results.extend(
+            _cohere_result(vector, query, input_type, response)
+            for vector, query in zip(_response_vectors(response, len(batch)), batch)
+        )
+    return results
 
 
 __all__ = [
