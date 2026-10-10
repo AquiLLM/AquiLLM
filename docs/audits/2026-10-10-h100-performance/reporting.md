@@ -1,9 +1,9 @@
-# Task 2/11 CPU serving reporter
+# Serving comparison report
 
-Implemented `scripts/h100_performance/report.py` on the isolated
-`codex/h100-flashinfer-aux` branch after merging integration commit `5792a03a`.
-No server, GPU, deployment, configuration or serving-harness changes were made.
-This report concerns development 254 only.
+`scripts/h100_performance/report.py` compares frozen direct-serving captures
+without contacting a server. The accompanying measurements concern development
+254 only. `reproduce_report.py` rebuilds the saved comparison from its captured
+inputs and explicit external evidence.
 
 ## Input and calculation contract
 
@@ -68,27 +68,19 @@ input/case hashes. Changed greedy outputs require separate inspection.
 Absent evidence stays missing. The reporter does not infer activation, numerical
 correctness, memory safety or application latency from serving speed.
 
-## Verification and discovery result
+## Additional diagnostics and verification
 
-Global Python verification:
+Later captures also include a `shapes` array with per-prompt-length before/after
+MTP counters. These scrapes occur outside timed requests and include warmups.
+The existing blockwide acceptance calculation and promotion thresholds remain
+unchanged. Block1 predates this additional diagnostic field.
 
-```powershell
-rtk python -m pytest -q -p no:django -c deploy/vllm_plugins/h100_kernels/pyproject.toml --confcutdir=scripts/h100_performance scripts/h100_performance/tests/test_report.py
-rtk python -m pytest -q deploy/vllm_plugins/h100_kernels/tests/cpu
-```
+The saved latency rows deduplicate generated text into `serving/outputs.json`,
+keyed by its SHA256. Timing, completion, error, usage, and output hashes remain
+in every row. `serving/capture-provenance.json` records original and transformed
+file hashes and any output hashes whose text was never captured.
 
-Results: **23 reporter tests passed; 216 overlay CPU tests passed**. Test-first
-failures established the missing reporting behavior, `_total` handling, metrics
-coverage, incomplete-attempt exclusion and malformed-JSON CLI handling before
-their implementation. No GPU tests ran in this worker.
-
-The real first baseline/fused pair was read from the coordinator's plan ledger
-and processed by the CLI. The generated report is at the worker's
-`.superpowers/sdd/2026-10-10-h100-turboquant-performance/discovery-serving-report.json`.
-It is **incomplete**, because this is one AB pair with the old discovery capture
-contract and missing further qualification evidence. Weighted aggregate decode
-changes were -17.57% at 512 tokens, +8.66% at 8192, and +31.45% at 32768. These
-descriptive values are not a promotion decision. The 512-token decode p95
-regression was 17.85%. The available candidate metrics measured 5918 accepted
-of 10076 drafted tokens; absent baseline snapshots prevented an acceptance gate.
-No production action or throughput promise follows from this report.
+See [verification.json](verification.json) for the tested source revisions,
+CPU/GPU counts, sanitizer results, and scope limitations. A valid report can
+still be `fail` or `incomplete`; successful script execution is not a rollout
+approval.

@@ -2,6 +2,8 @@
 
 This work targets development `149.165.150.254` only. The user authorized implementation, commits, pulling to that host, and testing. The production host and checked-in feature defaults were not changed. Source work was parallel; the coordinator serialized GPU tests, measurements, and container replacement.
 
+Final disposition: **experimental and disabled by default**. The [serving results](results.md) show a 35.63% target TTFT improvement, but protected decode p95 and MTP acceptance failed qualification. The original image was restored and passed a fresh exact-answer smoke after becoming healthy.
+
 ## Implemented tracks
 
 | Track | Implementation | Current decision |
@@ -9,7 +11,7 @@ This work targets development `149.165.150.254` only. The user authorized implem
 | Fixed split tuning | Correctness-tested sweep of 7, 15, 31, 47 and 63 splits | Retain 15 globally: larger counts lose at short contexts |
 | Adaptive split scheduling | Device-side active count, fixed launch/scratch geometry, neutral inactive slots and a separate raw-tail slot | No gain over the best fixed long-context policy; disabled |
 | Fused MTP stage one | Pack five query positions and six GQA heads into 30 rows padded to 32; retain baseline precision and reduction ABI | Experimental only: first serving sweep regressed short-context generation |
-| Continuation prefill | Compressed-prefix attention plus raw causal current-chunk FA2, merged using natural-log attention states | Bounded development candidate; serving results recorded separately |
+| Continuation prefill | Compressed-prefix attention plus raw causal current-chunk FA2, merged using natural-log attention states | Target TTFT improved 35.63%; serving qualification failed; disabled |
 | FlashInfer GDN | Installed API and precision capability audit | Unsupported under the pinned FP16 contract; no adapter enabled |
 | FlashInfer sampler | Actual-dispatch and distribution tests | Already enabled in the captured deployment; no new speedup claimed |
 

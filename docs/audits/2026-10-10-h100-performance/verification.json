@@ -37,5 +37,25 @@
     "h100-final-prefill-sanitizer-small.log": "c78bd76bbc593dedbcc74b59445cc18d93161a6f3173f153ebd5612c72c8c1e8",
     "h100-final-prefill-sanitizer.log": "81b5604852ffb02708cbe3b3961f59d2d1e0d178690251fd4946bcd9a53e525b",
     "h100-sanitizer-focused.log": "19269a79ac6457d7330294c1056d178b09012a291115faceec82284e90d85ab5"
+  },
+  "final_page16": {
+    "code_commit": "e766a05a",
+    "package_and_harness_cpu_passed": 332,
+    "package_gpu_passed": 183,
+    "gpu_skipped": 0,
+    "focused_routed_fa2_sanitizer_passed": 1,
+    "focused_sanitizer_errors": 0,
+    "candidate_image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+    "log_sha256": {
+      "h100-final-page16-gpu.log": "3c5218c3aa41ca31ccf08ca639860d66ad78f4c7c4913b9220d1159afe13919d",
+      "h100-final-page16-sanitizer.log": "5db23f87c1e00372b1b92db6c3c8051be3df22c18979c323a32e7d210f698059"
+    }
+  },
+  "per_shape_capture_diagnostics": {
+    "code_commit": "82f2d5a5",
+    "package_and_harness_cpu_passed": 334,
+    "seconds": 72.75,
+    "runtime_kernel_source_unchanged_from": "e766a05a",
+    "scope": "Additional per-shape MTP snapshots outside timed requests; existing payloads and report gates preserved"
   }
 }
