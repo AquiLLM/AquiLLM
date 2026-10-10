@@ -12,13 +12,15 @@ from .graph_query_contracts import GraphRelationRequestV2
 POLICY_VERSION = "relation-request-v2"
 MAX_QUERY_BYTES = 4096
 MAX_QUERY_CODEPOINTS = 2048
-_SUPPORT = re.compile(r"\b(?:support|supports|supported|supporting)\b")
-_CONTRADICT = re.compile(r"\b(?:contradict|contradicts|contradicted|contradicting)\b")
+_SUPPORT_FORM = r"(?:support|supports|supported|supporting)"
+_CONTRADICT_FORM = r"(?:contradict|contradicts|contradicted|contradicting)"
+_SUPPORT = re.compile(r"\b" + _SUPPORT_FORM + r"\b")
+_CONTRADICT = re.compile(r"\b" + _CONTRADICT_FORM + r"\b")
 _NEGATED_SUPPORT = re.compile(
-    r"\b(?:not|never|doesn't|don't|didn't)\s+(?:support|supports|supported)\b"
+    r"\b(?:not|never|doesn't|don't|didn't)\s+" + _SUPPORT_FORM + r"\b"
 )
 _NEGATED_CONTRADICT = re.compile(
-    r"\b(?:not|never|doesn't|don't|didn't)\s+(?:contradict|contradicts|contradicted)\b"
+    r"\b(?:not|never|doesn't|don't|didn't)\s+" + _CONTRADICT_FORM + r"\b"
 )
 _QUESTION = re.compile(r"\b(?:which|what|who|how|show|list|find)\b")
 

@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+from collections import defaultdict
 from collections.abc import Callable
 from hashlib import sha256
 
 from .graph_query_contracts import GraphRelationRequestV2
 from .ppr import PPRAlgorithmConfig, canonical_algorithm_json
 from .ppr_kernel import WeightedEdge, run_ppr_kernel
-from .projected_ppr import _replay_groups, prepare_projected_ppr_inputs
+from .projected_ppr import prepare_projected_ppr_inputs
 from .projected_ppr_result import ProjectedPPRResultV1, _trace_bytes
 from .projected_types import ProjectedAuthorizedGraphSnapshotV1
 from .topology.contracts import ProjectedSeedV1
 
 ALGORITHM_VERSION = "ppr_projected_relation_v2"
-_POLICY = b"relation-request-v2\0directed-pair-maximum-v2\0exact-provenance-v2\0"
+_POLICY = (
+    b"relation-request-v2\0directed-pair-maximum-v2\0exact-provenance-v2\0"
+    b"weighted-endpoint-before-destination-fanout-v2\0"
+)
 
 
 def relation_algorithm_signature_v2(config: PPRAlgorithmConfig) -> str:
@@ -54,6 +58,54 @@ def _weighted_pairs(groups, predicate_weights, deadline_check):
     )
 
 
+def _admit_weighted_pairs(snapshot, seeds, config, predicate_weights, deadline_check):
+    """Cap weighted destinations, so predicate labels cannot spend fanout slots."""
+    eligible = tuple(
+        g for g in snapshot.relation_groups if g.admission_hop <= config.max_hops
+    )
+    pairs = _weighted_pairs(eligible, predicate_weights, deadline_check)
+    # Closed snapshot membership fixes admission hop by source identity. All
+    # observations of a directed endpoint pair therefore have the same hop.
+    hops = {
+        (g.source_identity_key, g.target_identity_key): g.admission_hop
+        for g in eligible
+    }
+    by_source = defaultdict(list)
+    for edge in pairs:
+        deadline_check()
+        by_source[edge.source].append(edge)
+
+    def selection_key(edge):
+        return -edge.weight, edge.source, edge.target
+
+    fanout = tuple(
+        edge
+        for source in sorted(by_source)
+        for edge in sorted(by_source[source], key=selection_key)[: config.max_fanout]
+    )
+    deadline_check()
+    if len(fanout) <= config.max_edges:
+        return fanout
+    admitted = {seed.identity_key for seed in seeds}
+    retained = []
+    for hop in range(1, config.max_hops + 1):
+        frontier = sorted(
+            (edge for edge in fanout if hops[(edge.source, edge.target)] == hop),
+            key=selection_key,
+        )
+        for edge in frontier:
+            deadline_check()
+            if edge.source not in admitted:
+                continue
+            if len(retained) >= config.max_edges or (
+                edge.target not in admitted and len(admitted) >= config.max_nodes
+            ):
+                return tuple(retained)
+            retained.append(edge)
+            admitted.add(edge.target)
+    return tuple(retained)
+
+
 def rank_relations_v2(
     *,
     snapshot: ProjectedAuthorizedGraphSnapshotV1,
@@ -77,8 +129,8 @@ def rank_relations_v2(
     predicate_weights = dict(request.predicate_weights)
     if any(g.relation_type not in predicate_weights for g in snapshot.relation_groups):
         raise ValueError("snapshot predicate is not approved by relation request")
-    edges = _weighted_pairs(
-        _replay_groups(snapshot, seeds, config), predicate_weights, deadline_check
+    edges = _admit_weighted_pairs(
+        snapshot, seeds, config, predicate_weights, deadline_check
     )
     kernel = run_ppr_kernel(
         nodes=snapshot.identity_keys,

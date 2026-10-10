@@ -39,6 +39,7 @@ def test_same_entity_questions_keep_distinct_predicates():
     [
         ("What supports Atlas?", "supports"),
         ("Which evidence does not support Atlas?", "contradicts"),
+        ("Which evidence is not supporting Atlas?", "contradicts"),
         ("Which finding contradicts Atlas?", "contradicts"),
     ],
 )
@@ -55,6 +56,7 @@ def test_requested_and_negated_support(query, preferred):
         "What supports or contradicts Atlas?",
         "Which dataset supports Atlas?",
         "What does not contradict Atlas?",
+        "What evidence is not contradicting Atlas?",
     ],
 )
 def test_unknown_or_ambiguous_intent_preserves_broad_recall(query):
