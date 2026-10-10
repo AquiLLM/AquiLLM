@@ -144,3 +144,24 @@ def test_build_deadline_fences_slow_activation(legacy, transport, monkeypatch):
     with pytest.raises(TimeoutError):
         task.build_embedding_generation.run(key)
     assert DocumentEmbeddingState.objects.get().active_generation_id is None
+
+
+def test_transaction_local_operator_timeout_does_not_leak_to_session():
+    from django.db import connection, transaction
+    from apps.documents.services.embedding_index_deadline import (
+        embedding_build_transaction,
+    )
+
+    with connection.cursor() as cursor:
+        cursor.execute("SHOW statement_timeout")
+        original = cursor.fetchone()[0]
+    with transaction.atomic():
+        with connection.cursor() as cursor:
+            cursor.execute("SET LOCAL statement_timeout = '250ms'")
+        with embedding_build_transaction(build_budget(), using="default"):
+            with connection.cursor() as cursor:
+                cursor.execute("SHOW statement_timeout")
+                assert cursor.fetchone()[0] == "250ms"
+    with connection.cursor() as cursor:
+        cursor.execute("SHOW statement_timeout")
+        assert cursor.fetchone()[0] == original

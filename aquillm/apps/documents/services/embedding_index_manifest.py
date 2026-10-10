@@ -33,6 +33,7 @@ from .representation_contracts import (
     RepresentationSnapshotV1,
 )
 from .representation_store import active_chunk_scope, validate_representation_snapshot
+from .embedding_index_deadline import check_active_build_deadline
 
 
 def persist_embedding_space(space, *, using):
@@ -125,6 +126,7 @@ def capture_embedding_manifest(selection, *, using, space=None):
     ).order_by("chunk_number", "pk")
     manifest = []
     for row in rows:
+        check_active_build_deadline()
         chunk = source_chunk(row)
         item = {
             "chunk_id": row.pk,
@@ -141,6 +143,7 @@ def capture_embedding_manifest(selection, *, using, space=None):
         }
         if space is not None:
             item["prepared_input_sha256"] = prepare_document(chunk, space=space)[1]
+        check_active_build_deadline()
         manifest.append(item)
     return manifest
 

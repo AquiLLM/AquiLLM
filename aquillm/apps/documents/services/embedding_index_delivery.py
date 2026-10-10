@@ -19,9 +19,14 @@ def claim_embedding_delivery(generation_key, *, using):
         if (
             generation.state != "building"
             or generation.failure_kind
-            or generation.deliveries >= 3
             or (generation.next_attempt_at and generation.next_attempt_at > now)
         ):
+            return None
+        if generation.deliveries >= 3:
+            # A later bounded explicit recovery can close an abandoned last lease.
+            generation.state = "failed"
+            generation.failure_kind = "delivery_exhausted"
+            generation.save(using=using, update_fields=["state", "failure_kind"])
             return None
         generation.deliveries += 1
         generation.lease_token = uuid4()

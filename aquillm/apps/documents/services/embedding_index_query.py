@@ -191,6 +191,8 @@ def _authorized_runtime(snapshot, budget, using):
     if not budget.can_publish():
         raise SourcePreparationLimited("source deadline")
     current = revalidate_retrieval_authorization_context(context=runtime.authorization)
+    if not budget.can_publish():
+        raise SourcePreparationLimited("source deadline")
     if any(
         s.document.id not in current.document_ids
         or s.document.collection_id not in current.collection_ids
@@ -289,4 +291,7 @@ def rank_compatible_chunks(
                 )
         valid = set(validate_dense_snapshot(snapshot, dense_snapshot, using=using))
         _authorized_runtime(snapshot, budget, using)
-        return tuple(r for r in ranked if r.embedding_generation_key in valid)
+        result = tuple(r for r in ranked if r.embedding_generation_key in valid)
+    if not budget.can_publish():
+        raise SourcePreparationLimited("source deadline")
+    return result
