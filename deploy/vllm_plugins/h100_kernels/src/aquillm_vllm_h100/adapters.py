@@ -93,13 +93,38 @@ def install_adapters(config):
     # are still validated before either independent adapter can mutate runtime.
     profile = (development_profile(config.get("profile"))
                if config["prefill"] == "1" or config.get("profile") is not None else None)
+    prepared_gdn = None
+    if ((config.get("gdn","baseline") == "native-fp16")
+            != (config.get("runtime_profile","baseline") == "native-gdn-baseline")):
+        raise ValueError("native-fp16 requires runtime profile native-gdn-baseline together")
+    if config.get("gdn") == "native-fp16":
+        from .gdn.adapter import prepare_native_install
+        prepared_gdn = prepare_native_install()
+    if config.get("gdn", "baseline") == "flashinfer":
+        if config.get("runtime_profile") != "flashinfer-0.6.18":
+            raise ValueError("FlashInfer GDN requires candidate runtime flashinfer-0.6.18")
+        from .gdn.adapter import prepare_install
+        prepared_gdn = prepare_install()
+    prepared_prefill_compat = None
+    if config.get("runtime_profile") == "flashinfer-0.6.18":
+        from .gdn.prefill_compat import prepare_install
+        prepared_prefill_compat = prepare_install()
     prefill_result = {"installed": False, "reason": "disabled"}
     if config["prefill"] == "1":
         from .prefill_adapter import install_prefill_adapter
         prefill_result = install_prefill_adapter(profile, profile.runtime_key)
     if config["mtp"] == "fused":
         baseline.call_p67_splitk = make_verifier_adapter(baseline.call_p67_splitk, config)
+    if prepared_gdn is not None:
+        module, call = prepared_gdn
+        module.fused_sigmoid_gating_delta_rule_update = call
+    if prepared_prefill_compat is not None:
+        module, call = prepared_prefill_compat
+        module.fi_chunk_gated_delta_rule = call
     return {"status": "installed", "mtp": config["mtp"], "split": config["split"],
             "prefill": prefill_result["installed"], "prefill_reason": prefill_result["reason"],
             "prefill_profile": PROFILE_NAME if prefill_result["installed"] else None,
-            "prefill_qualification": "experimental_pending_serving" if prefill_result["installed"] else None}
+            "prefill_qualification": "experimental_pending_serving" if prefill_result["installed"] else None,
+            "gdn": config.get("gdn", "baseline"),
+            "gdn_qualification": "experimental_pending_gpu_serving" if prepared_gdn else None,
+            "gdn_prefill_int64_offsets": prepared_prefill_compat is not None}

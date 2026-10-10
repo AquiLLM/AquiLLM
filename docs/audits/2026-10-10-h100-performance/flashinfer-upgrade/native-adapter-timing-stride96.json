@@ -1,0 +1,44 @@
+{
+  "kind": "full_native_adapter_single_cute_launch",
+  "T": 5,
+  "shape": [
+    1,
+    5,
+    16,
+    48,
+    128
+  ],
+  "state_stride": [
+    786560,
+    16384,
+    128,
+    1
+  ],
+  "gate_stride": [
+    96,
+    1
+  ],
+  "original_module": "vllm.model_executor.layers.fla.ops.fused_sigmoid_gating",
+  "repeats": 200,
+  "packages": {
+    "flashinfer-python": "0.6.18",
+    "nvidia-cutlass-dsl": "4.6.2",
+    "vllm": "0.23.1rc1.dev748+g2dfaae752",
+    "torch": "2.11.0+cu130",
+    "triton": "3.6.0"
+  },
+  "timings_us": {
+    "original": {
+      "eager": 65.03824234008789,
+      "cuda_graph": 17.781280279159546
+    },
+    "full_adapter": {
+      "eager": 46.31760120391846,
+      "cuda_graph": 13.090399503707886
+    }
+  },
+  "speedup": {
+    "eager": 1.4041798506306427,
+    "cuda_graph": 1.3583451195758356
+  }
+}
