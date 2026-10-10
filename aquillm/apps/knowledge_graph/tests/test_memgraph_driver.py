@@ -89,7 +89,10 @@ def test_driver_configures_explicit_managed_retry_bound_on_lazy_connection(monke
         lambda uri, **kwargs: observed.append((uri, kwargs)) or _Neo4jClient(),
     )
     driver = Neo4jMemgraphDriver(
-        "bolt://memgraph:7687", "reader", "secret", database="memgraph",
+        "bolt://memgraph:7687",
+        "reader",
+        "secret",
+        database="memgraph",
         max_transaction_retry_time=0.0,
     )
     assert observed == []
@@ -188,6 +191,7 @@ def test_schema_bootstrap_uses_only_fixed_indexes_in_bounded_implicit_transactio
     driver.ensure_projection_schema(timeout_seconds=0.5)
 
     assert [query for query, _ in calls] == [
+        "CREATE INDEX ON :FrontierIndexV2(index_key)",
         "CREATE INDEX ON :CollectionGeneration(generation_key)",
         "CREATE INDEX ON :ProjectedRecord(generation_key)",
         "CREATE INDEX ON :ProjectedEntity(entity_key)",

@@ -69,9 +69,12 @@ class MemgraphProjectionRepository:
         private_mapping_checksum: str,
         batch_size: int,
         timeout_seconds: float,
+        frontier_index: bool = False,
     ) -> None:
         if type(bundle) is not CollectionGraphProjectionBundleV1:
             raise TypeError("bundle must be an exact projection bundle")
+        if type(frontier_index) is not bool:
+            raise TypeError("frontier_index must be an exact opt-in boolean")
         size = _size(batch_size, "batch_size")
         timeout = _timeout(timeout_seconds)
         if (
@@ -174,6 +177,10 @@ class MemgraphProjectionRepository:
         write_topology_edges(
             self._driver, bundle, batch_size=size, timeout_seconds=timeout
         )
+        if frontier_index:
+            from .frontier_index_store_v2 import write_frontier_index
+
+            write_frontier_index(self._driver, bundle, batch_size=size, timeout=timeout)
 
     @staticmethod
     def _set_clause(alias: str, values: dict[str, object]) -> str:

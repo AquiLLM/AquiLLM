@@ -22,6 +22,7 @@ _COUNTERS = (
     "relationships_deleted",
 )
 _PROJECTION_INDEX_STATEMENTS = (
+    "CREATE INDEX ON :FrontierIndexV2(index_key)",
     "CREATE INDEX ON :CollectionGeneration(generation_key)",
     "CREATE INDEX ON :ProjectedRecord(generation_key)",
     "CREATE INDEX ON :ProjectedEntity(entity_key)",

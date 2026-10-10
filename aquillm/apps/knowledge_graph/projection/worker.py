@@ -171,6 +171,7 @@ def project_generation(
                 private_mapping_checksum=private_checksum,
                 batch_size=settings.projection_batch_size,
                 timeout_seconds=timeout,
+                frontier_index=True,
             )
             heartbeat.check()
             expected = _expected_manifest(bundle, private_checksum)

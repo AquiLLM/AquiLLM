@@ -344,6 +344,10 @@ async def app(scope, receive, send) -> None:
         from .gateway_snapshot_service import topology_snapshot
 
         await topology_snapshot(scope, receive, send)
+    elif route == ("POST", "/v2/topology/frontier"):
+        from .frontier_gateway_service_v2 import topology_frontier
+
+        await topology_frontier(scope, receive, send)
     else:
         await _respond(send, 404, b'{"reason":"not_found"}')
 

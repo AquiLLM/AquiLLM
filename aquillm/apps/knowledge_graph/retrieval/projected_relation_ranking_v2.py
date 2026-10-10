@@ -113,6 +113,7 @@ def rank_relations_v2(
     request: GraphRelationRequestV2,
     config: PPRAlgorithmConfig,
     deadline_check: Callable[[], None],
+    frontier_context=None,
 ) -> ProjectedPPRResultV1:
     """Use the closed V1 mathematical input without claiming its V1 signature."""
     if not callable(deadline_check):
@@ -121,7 +122,23 @@ def rank_relations_v2(
     if type(request) is not GraphRelationRequestV2:
         raise TypeError("request must be an exact GraphRelationRequestV2")
     # Reuse the exact original caps, algorithm and admitted-seed validation.
-    prepare_projected_ppr_inputs(snapshot=snapshot, seeds=seeds, config=config)
+    if (
+        type(snapshot) is ProjectedAuthorizedGraphSnapshotV1
+        and snapshot.algorithm.algorithm_version == "canonical_frontier_v2"
+    ):
+        from .frontier_ranking_validation_v2 import validate_frontier_ranking
+
+        validate_frontier_ranking(
+            snapshot=snapshot,
+            seeds=seeds,
+            request=request,
+            config=config,
+            context=frontier_context,
+        )
+    else:
+        if frontier_context is not None:
+            raise ValueError("V1 snapshot cannot carry frontier context")
+        prepare_projected_ppr_inputs(snapshot=snapshot, seeds=seeds, config=config)
     if {row.ontology_checksum for row in snapshot.artifact_provenance} != {
         request.ontology_checksum
     }:
