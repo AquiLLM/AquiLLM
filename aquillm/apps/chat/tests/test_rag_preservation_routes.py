@@ -200,4 +200,10 @@ async def test_normal_model_tool_is_counted_once_and_synthesized_once(
     assert len(calls) == (3 if iterative else 2)
     assert not calls[-1].get("tools")
     assert chunks[-1].content in str(calls[-1]["messages"])
-    assert send.call_args.args[0][-1].content.startswith("Only below")
+    published = send.call_args.args[0][-1]
+    assert "uncertain" in published.content
+    for chunk in chunks:
+        citation = f"[doc:{doc.id} chunk:{chunk.pk}]"
+        assert f"> Aspect {chunk.chunk_number}. {citation}" in published.content
+        assert f"> Qualified tail: only below 1 Pa. {citation}" in published.content
+    assert published._validated_answer.outcome == "partial"

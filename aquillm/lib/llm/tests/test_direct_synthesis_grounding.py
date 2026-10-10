@@ -39,6 +39,21 @@ def _conversation():
     )
 
 
+def _selected_packet(convo, image_urls=()):
+    from apps.chat.services.rag_evidence import EvidencePacket
+
+    return EvidencePacket(
+        list(convo[-1].result_dict["result"]),
+        list(image_urls),
+        ["[doc:a chunk:1]", "[doc:b chunk:2]"],
+        convo[0].content,
+        "synthetic selected papers",
+        "results_found",
+        "",
+        20,
+    )
+
+
 class _ModelBoundary:
     base_args = {}
 
@@ -157,7 +172,9 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
 
     with (
         synthetic_publication(
-            image_urls=("/aquillm/document_image/a/",) if with_figure else ()
+            packet=_selected_packet(
+                convo, ("/aquillm/document_image/a/",) if with_figure else ()
+            )
         ),
         observability_scope("comparison-repair", stage),
     ):
@@ -169,13 +186,10 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
         )
 
     assert len(requests) == 2
-    comparison = next(
-        line
-        for line in result[-1].content.splitlines()
-        if line.startswith("- The arithmetic difference")
-    )
-    assert "[doc:a chunk:1]" in comparison
-    assert "[doc:b chunk:2]" in comparison
+    assert "11 percentage points" not in result[-1].content
+    assert "uncertain" in result[-1].content
+    assert "> Improvement was 18%. [doc:a chunk:1]" in result[-1].content
+    assert "> Improvement was 7%. [doc:b chunk:2]" in result[-1].content
     assert len(stream_payloads) == 1
     assert stream_payloads[0]["done"] is True
     assert stream_payloads[0]["content"] == result[-1].content
@@ -221,15 +235,22 @@ async def test_uncited_numeric_prose_is_repaired_for_every_rag_synthesis(
     async def capture(payload):
         streamed.append(payload)
 
-    with synthetic_publication(), observability_scope("numeric-comparison", stage):
+    convo = _conversation()
+    with (
+        synthetic_publication(packet=_selected_packet(convo)),
+        observability_scope("numeric-comparison", stage),
+    ):
         result, _ = await complete_conversation_turn(
             CapacityModel(),
-            _conversation(),
+            convo,
             1024,
             stream_func=capture,
         )
 
     assert len(requests) == 2
-    assert result[-1].content.startswith(repaired)
+    assert "litres per cycle" not in result[-1].content
+    assert "uncertain" in result[-1].content
+    assert "> Improvement was 18%. [doc:a chunk:1]" in result[-1].content
+    assert "> Improvement was 7%. [doc:b chunk:2]" in result[-1].content
     assert len(streamed) == 1
     assert streamed[0]["content"] == result[-1].content

@@ -195,7 +195,13 @@ def test_continuation_uses_original_authority_and_lease(
                 Model(), convo, 1024, stream_func=stream
             )
             stored = publish_and_save(result, db, events)
-            expected = partial + "\n" + suffix if change == "none" else LIMITED_ANSWER
+            expected = LIMITED_ANSWER
+            if change == "none":
+                expected = result[-1].content
+                assert "uncertain" in expected
+                assert "> Capacity is 18 litres. [doc:a chunk:1]" in expected
+                assert "More evidence" not in expected
+                assert result[-1]._validated_answer.outcome == "partial"
             assert result[-1].content == stored == expected
             assert events == [expected, expected]
         assert context.lease is lease and state.answer_publication is context

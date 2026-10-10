@@ -238,6 +238,7 @@ async def test_synthesis_through_complete_turn_reaches_sdk_with_exact_tool_paylo
         authorized_source_scope,
         inputs,
     )
+    from lib.llm.answer_publication import LIMITED_ANSWER
     from lib.llm.evidence_guard import current_protection
     from lib.llm.providers.request_observability import observability_scope
 
@@ -284,9 +285,10 @@ async def test_synthesis_through_complete_turn_reaches_sdk_with_exact_tool_paylo
     with (
         authorized_source_scope(packet, monkeypatch),
         observability_scope("test", "direct_synthesis"),
-        pytest.raises(Dispatched),
     ):
-        await synthesize_from_evidence(provider, convo, packet)
+        result = await synthesize_from_evidence(provider, convo, packet)
+    assert result[-1].content == LIMITED_ANSWER
+    assert len(captured) == 1
     if provider_name == "gemini":
         actual = (
             captured[0]["contents"][-1].parts[0].function_response.response["output"]

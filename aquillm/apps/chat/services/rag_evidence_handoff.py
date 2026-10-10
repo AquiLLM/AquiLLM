@@ -131,6 +131,9 @@ def prepare_evidence_handoff(
         system=persisted.system, messages=request_messages
     ).model_copy(deep=True)
     request.system = f"{persisted.system}\n\n{DIRECT_SYNTHESIS_GROUNDING}"
+    from .rag_support_delivery import support_grounding
+
+    request.system += support_grounding(packet)
     for message in request.messages[:-1]:
         if isinstance(message, ToolMessage):
             message.content = _OMITTED_EVIDENCE

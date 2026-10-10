@@ -6,6 +6,14 @@ import unicodedata
 from dataclasses import dataclass, replace
 
 
+def decide_answer_support(question, packet, *, assessment, calibration_id=None):
+    from .rag_support_decision import decide_answer_support as decide
+
+    return decide(
+        question, packet, assessment=assessment, calibration_id=calibration_id
+    )
+
+
 @dataclass(frozen=True)
 class AcquisitionAction:
     kind: str
@@ -48,7 +56,8 @@ class CoverageAssessment:
 def needs_coverage_assessment(question, evidence_views, anchors):
     from .rag_lookup_coverage import lookup_coverage
 
-    return lookup_coverage(question, evidence_views, anchors) is None
+    proof = lookup_coverage(question, evidence_views, anchors)
+    return proof is None or bool(proof.unresolved_aspects)
 
 
 def validate_action(action, unresolved, views, allowed_documents):

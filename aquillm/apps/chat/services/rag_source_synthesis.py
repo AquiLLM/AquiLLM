@@ -193,4 +193,7 @@ async def finalize_source_support(packet):
     from apps.chat.services.rag_answer_publication import capture_publication_images
 
     await capture_publication_images(packet)
+    from .rag_support_delivery import refresh_answer_support
+
+    refresh_answer_support(packet)
     return packet

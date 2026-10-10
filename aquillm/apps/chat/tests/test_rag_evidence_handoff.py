@@ -2,6 +2,7 @@
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -138,8 +139,20 @@ async def test_provider_request_mutation_cannot_change_history_or_packet():
 
     result = await synthesize_from_evidence(MutatingProvider(), convo, packet)
 
+    from apps.chat.services.rag_coverage import decide_answer_support
+
+    expected_support = decide_answer_support(
+        packet_snapshot.query,
+        packet_snapshot,
+        assessment=packet_snapshot.coverage_assessment,
+    )
+    assert packet.answer_support == expected_support
+    assert expected_support.state == "unknown"
+    assert expected_support.assessment_basis == "unvalidated"
+    assert expected_support.supported_aspects == ()
+    assert expected_support.exhaustive is False
     assert convo.model_dump() == snapshot
-    assert packet == packet_snapshot
+    assert replace(packet, answer_support=None) == packet_snapshot
     assert result[0].content == "Earlier document question"
     assert result[-2].result_dict["result"][0]["text"] == "Selected alpha evidence."
 

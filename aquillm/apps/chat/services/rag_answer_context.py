@@ -151,12 +151,16 @@ class RagAnswerPublication:
         self._active()
         text = sanitize_assistant_text(text, allow_short_final=True)
         limited = limited_reason is not None or text == LIMITED_ANSWER
+        outcome = "answer"
         if not limited:
             try:
                 await self._authorized()
             except AnswerPublicationRejected as exc:
                 if str(exc) in {"execution_inactive", "lease_expired"}:
                     raise
+                from .rag_support_delivery import invalidate_answer_support
+
+                invalidate_answer_support(self.packet)
                 limited = True
             limited = limited or not validate_final_answer(text, self.policy).valid
             image_urls = set(re.findall(r"!\[[^\]]*\]\(([^\s)]+)", text))
@@ -167,6 +171,14 @@ class RagAnswerPublication:
             # I5 must supply a reviewed immutable artifact reference before any
             # selected output image is publishable; never reread uncharged bytes.
             limited = limited or bool(image_urls)
+            if not limited:
+                from .rag_support_delivery import render_supported_answer
+
+                text, outcome = render_supported_answer(self.packet)
+                limited = (
+                    outcome == "limited"
+                    or not validate_final_answer(text, self.policy).valid
+                )
         self._active()
         if limited:
             text = LIMITED_ANSWER
@@ -176,7 +188,7 @@ class RagAnswerPublication:
             content_digest(text),
             self.policy.evidence_digest,
             self.policy.scope_digest,
-            "limited" if limited else "answer",
+            "limited" if limited else outcome,
             receipt,
         )
         self._receipts[receipt] = (

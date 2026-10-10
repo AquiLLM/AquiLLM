@@ -205,9 +205,12 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
             result = async_to_sync(synthesize_from_evidence)(
                 Model(), convo, packet, stream_func=stream, max_tokens=1024
             )
-        assert result[-1].content == (
-            f"Capacity is 18 litres {citation}." if change is None else LIMITED_ANSWER
-        )
+        if change is None:
+            assert "uncertain" in result[-1].content
+            assert f"> Capacity is 18 litres. {citation}" in result[-1].content
+            assert result[-1]._validated_answer.outcome == "partial"
+        else:
+            assert result[-1].content == LIMITED_ANSWER
         db = WSConversation.objects.create(owner=user)
         save_conversation_to_db(result, db)
         assert (
