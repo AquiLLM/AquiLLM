@@ -3,6 +3,7 @@ Memory extraction utilities.
 """
 
 from .stable_facts import (
+    parse_memory_intent, validate_fact_candidates,
     clean_stable_facts,
     extract_stable_facts,
     heuristic_facts_from_turn,
@@ -11,6 +12,7 @@ from .stable_facts import (
 )
 
 __all__ = [
+    'parse_memory_intent', 'validate_fact_candidates',
     'clean_stable_facts',
     'extract_stable_facts',
     'heuristic_facts_from_turn',

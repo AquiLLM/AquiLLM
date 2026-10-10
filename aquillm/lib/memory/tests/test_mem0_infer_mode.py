@@ -40,8 +40,7 @@ def test_add_mem0_messages_uses_infer_with_graph_enabled(monkeypatch):
     assert captured == [
         {
             "messages": [
-                {"role": "user", "content": "Remember that we use Memgraph."},
-                {"role": "assistant", "content": "I will remember that."},
+                {"role": "user", "content": "we use Memgraph."},
             ],
             "user_id": "1",
             "metadata": {
@@ -89,10 +88,9 @@ def test_add_mem0_messages_falls_back_to_transcript_payload(monkeypatch):
     assert wrote is True
     assert captured_payloads == [
         [
-            {"role": "user", "content": "Remember that I prefer concise updates."},
-            {"role": "assistant", "content": "I will remember that preference."},
+            {"role": "user", "content": "I prefer concise updates."},
         ],
-        "User: Remember that I prefer concise updates.\nAssistant: I will remember that preference.",
+        "User: I prefer concise updates.",
     ]
 
 

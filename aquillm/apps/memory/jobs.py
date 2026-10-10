@@ -14,6 +14,69 @@ from apps.memory.models.jobs import ConversationMemoryJob
 LEASE_SECONDS = 900
 
 
+def execute_profile_reconciliation(fact_id):
+    """Reuse durable lease/session ownership and bounded retry accounting."""
+    from apps.memory.models import ProfileMemoryReconciliationJob, UserMemoryFact
+    from lib.memory.mem0.operations import reconcile_known_profile_copies
+    from aquillm.tasks import reconcile_profile_memory_task
+    with _execution_lock(f'profile:{fact_id}') as acquired:
+        if not acquired:
+            return
+        with transaction.atomic():
+            fact = UserMemoryFact.objects.select_for_update().filter(pk=fact_id).first()
+            job = ProfileMemoryReconciliationJob.objects.select_for_update().filter(fact_id=fact_id).first()
+            now = timezone.now()
+            if job is None or fact is None or job.state in {'complete', 'failed'} or job.next_attempt_at > now:
+                return
+            if fact.status == 'active':
+                return
+            token = uuid.uuid4()
+            job.state, job.token = 'running', token
+            job.attempts += 1
+            job.lease_expires_at = now + timedelta(seconds=LEASE_SECONDS)
+            job.next_attempt_at = job.lease_expires_at
+            job.save()
+            ids = list(fact.provider_memory_ids)
+        reason, terminal = '', False
+        try:
+            reconcile_known_profile_copies(user_id=str(fact.user_id), provider_memory_ids=ids,
+                source_conversation_id=fact.source_conversation_id, source_message_uuid=fact.source_message_uuid,
+                source_content_digest=fact.source_content_digest)
+            if not fact.provider_receipt_complete:
+                reason, terminal = 'unidentified_provider_copies', True
+        except (NotImplementedError, PermissionError, ValueError):
+            reason, terminal = 'unsupported_or_unverified', True
+        except Exception:
+            reason, terminal = 'provider_unavailable', job.attempts >= 3
+        with transaction.atomic():
+            fact = UserMemoryFact.objects.select_for_update().get(pk=fact_id)
+            current = ProfileMemoryReconciliationJob.objects.select_for_update().filter(fact_id=fact_id, token=token, state='running').first()
+            if current is None:
+                return  # A late receipt changed the reconciliation generation.
+            if fact.provider_memory_ids != ids:
+                reason, terminal = 'receipt_changed', False
+            state = ('failed' if terminal else 'pending') if reason else 'complete'
+            current.state, current.token, current.last_error = state, None, reason
+            current.lease_expires_at = None
+            current.next_attempt_at = timezone.now() + timedelta(seconds=min(900, 30 * 2 ** min(current.attempts, 5)))
+            current.save()
+            fact.reconciliation_status = state
+            fact.save(update_fields=['reconciliation_status'])
+            if state == 'pending':
+                countdown = max(1, int((current.next_attempt_at - timezone.now()).total_seconds()))
+                transaction.on_commit(lambda: reconcile_profile_memory_task.apply_async(kwargs={'fact_id': fact_id}, countdown=countdown), robust=True)
+
+
+def recover_profile_reconciliations(limit=25):
+    from apps.memory.models import ProfileMemoryReconciliationJob
+    from aquillm.tasks import reconcile_profile_memory_task
+    if type(limit) is not int or not 1 <= limit <= 25:
+        raise ValueError('recovery limit must be between 1 and 25')
+    jobs = ProfileMemoryReconciliationJob.objects.filter(state__in=['pending', 'running'], next_attempt_at__lte=timezone.now()).order_by('next_attempt_at')[:limit]
+    for job in jobs:
+        reconcile_profile_memory_task.delay(fact_id=job.fact_id)
+
+
 @contextmanager
 def _execution_lock(conversation_id):
     # Separate session: no database transaction stays open during provider work.

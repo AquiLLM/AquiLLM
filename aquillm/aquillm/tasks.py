@@ -76,16 +76,39 @@ def recover_conversation_memory_jobs(limit=25):
 @shared_task(serializer="json", queue="memory-promotion")
 def promote_profile_facts_task(
     user_id: int,
-    user_content: str,
-    assistant_content: str,
+    user_content: str | None = None,
+    assistant_content: str | None = None,
+    *, source_conversation_id=None, source_message_uuid=None, source_content_digest=None,
+    provider_memory_ids=(), provider_wrote=False, provider_receipt_complete=False,
 ) -> None:
     from .memory import promote_profile_facts_for_turn
 
+    from apps.chat.models import Message
+    from apps.memory.services.profile_facts import source_is_current
+    if not source_is_current(user_id=user_id, conversation_id=source_conversation_id,
+                            message_uuid=source_message_uuid, digest=source_content_digest):
+        # Legacy raw-string jobs cannot mint attribution. A late provider receipt
+        # is handled at the synchronous source-bound write boundary instead.
+        return
+    source = Message.objects.get(conversation_id=source_conversation_id, message_uuid=source_message_uuid, role='user')
     promote_profile_facts_for_turn(
         user_id=user_id,
-        user_content=user_content,
-        assistant_content=assistant_content,
+        user_content=source.content, assistant_content='',
+        source_conversation_id=source_conversation_id, source_message_uuid=source_message_uuid,
+        source_content_digest=source_content_digest, provider_memory_ids=provider_memory_ids, provider_wrote=provider_wrote, provider_receipt_complete=provider_receipt_complete,
     )
+
+
+@shared_task(serializer='json', queue='memory-promotion')
+def reconcile_profile_memory_task(fact_id: int) -> None:
+    from apps.memory.jobs import execute_profile_reconciliation
+    execute_profile_reconciliation(fact_id)
+
+
+@shared_task(serializer='json', ignore_result=True)
+def recover_profile_memory_reconciliation_jobs(limit=25):
+    from apps.memory.jobs import recover_profile_reconciliations
+    recover_profile_reconciliations(limit)
 
 
 @shared_task(serializer="json")

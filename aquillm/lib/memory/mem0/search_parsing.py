@@ -81,7 +81,13 @@ def parse_mem0_search_items(
         conv_id = _extract_mem0_conversation_id(item)
         if exclude_conversation_id is not None and conv_id == exclude_conversation_id:
             continue
-        parsed.append(RetrievedEpisodicMemory(content=content, conversation_id=conv_id))
+        metadata = item.get('metadata') if isinstance(item, dict) and isinstance(item.get('metadata'), dict) else {}
+        def bounded_string(value, limit):
+            return value if isinstance(value, str) and 0 < len(value) <= limit else None
+        parsed.append(RetrievedEpisodicMemory(content=content, conversation_id=conv_id,
+            provider_memory_id=bounded_string(item.get('id'), 256),
+            source_message_uuid=bounded_string(metadata.get('source_message_uuid'), 36),
+            source_content_digest=bounded_string(metadata.get('source_content_digest'), 64)))
     return parsed[:top_k]
 
 

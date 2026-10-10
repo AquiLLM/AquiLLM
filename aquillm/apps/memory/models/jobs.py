@@ -16,3 +16,17 @@ class ConversationMemoryJob(models.Model):
 
     class Meta:
         app_label = 'apps_memory'
+
+
+class ProfileMemoryReconciliationJob(models.Model):
+    """Content-free durable deletion of known, owner-verified provider copies."""
+    fact = models.OneToOneField('apps_memory.UserMemoryFact', on_delete=models.CASCADE, primary_key=True)
+    state = models.CharField(max_length=16, default='pending')
+    token = models.UUIDField(null=True, blank=True)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now, db_index=True)
+    lease_expires_at = models.DateTimeField(null=True, blank=True)
+    last_error = models.CharField(max_length=32, blank=True, default='')
+
+    class Meta:
+        app_label = 'apps_memory'
