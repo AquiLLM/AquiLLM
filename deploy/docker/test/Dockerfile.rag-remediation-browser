@@ -1,0 +1,8 @@
+FROM mcr.microsoft.com/playwright:v1.52.0-noble
+WORKDIR /app/react
+COPY react/package.json react/package-lock.json ./
+RUN npm ci
+COPY react ./
+COPY aquillm/aquillm/static /app/aquillm/aquillm/static
+RUN npm run build && mkdir -p /frontend-build && cp -a /app/aquillm/aquillm/static/js/dist/. /frontend-build/
+CMD ["sleep", "infinity"]

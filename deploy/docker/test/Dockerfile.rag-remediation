@@ -1,0 +1,15 @@
+# Same pinned Python/dependency runtime as deploy/docker/test/Dockerfile.
+FROM astral/uv:0.8.17-python3.12-bookworm
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen
+ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app:/app/aquillm"
+RUN python -c "from tiktoken import encoding_for_model; encoding_for_model('gpt-4o'); encoding_for_model('gpt-4')"
+COPY aquillm ./aquillm
+COPY scripts ./scripts
+COPY tests ./tests
+COPY deploy ./deploy
+COPY docs ./docs
+COPY pytest.ini compose.rag-remediation-test.yml ./
+RUN uv pip install -r deploy/vllm_plugins/nemotron_asr/requirements-test.txt
+CMD ["sleep", "infinity"]

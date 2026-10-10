@@ -19,7 +19,7 @@ const fonts = [
 
 test.describe('User Settings (Theme + Font) Page', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('http://localhost:8080/user-settings/');
+    await page.goto('/user-settings/');
     await expect(page.locator('#user-settings-root h2')).toHaveText('Select Your Theme');
   });
 
