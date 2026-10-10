@@ -352,3 +352,13 @@ Within the unchanged original raw-seed prefix, admit one best seed per nonempty 
 Disable Django fast deletion for retained representation history and its cascading chunk/embedding children inside the bounded lifecycle collector. Count distinct collected rows against the unchanged global deletion limit before mutation, including history that the ordinary fast path would omit. Deferred guards allow a real owner deletion in the same transaction while refusing standalone history deletion.
 
 Figure elements may overlay the primary canonical text partition. Lexical section publication selects the single covering non-figure element for a text chunk, while validating and retaining the complete extraction and its figure bindings. An overlay must neither make valid text ambiguous nor grant authority to image bytes.
+
+### D15 selected permission reads outside seed metering
+
+Use the built-in selected-document capability at initial authorization capture and every later revalidation, passing the already normalized or frozen selected IDs. Bound returned rows before materialization with the permission query and selected-ID union sentinel. Existing principal, capability, policy-signature and intersection checks remain mandatory. Unrelated documents or malformed identities elsewhere in a collection no longer exhaust or invalidate the selected scope; duplicate or conflicting selected identities still fail. This intentionally improves selected-scope availability without changing wire identities or ranking.
+
+Only seed calls charge the original frontier ledger. Other source/final checks retain their own deadlines and selected-ID cardinality bounds. A legacy custom policy without the optional selected capability retains its existing unmetered behavior; a required metered call refuses unsupported capability before dispatch. No new scope or budget is created.
+
+### D19 content changes retain citations
+
+Content-change and chunk-replacement cleanup invalidates graph state while retaining published representation and captured legacy chunks. Actual owner deletion still uses the bounded exact-owner cascade. Capture legacy source history before the owner edit; a delayed cleanup callback cannot associate old slices with today's text merely because their offsets fit. Unprovable history remains explicitly unavailable. The private rebuild entry validates the exact live owner, current hash and captured predecessor pointer independently of stale retrieval eligibility, then requires the new persisted active selection at transition completion. This lets an ordinary edit invalidate old evidence immediately while a valid replacement can still be built.
