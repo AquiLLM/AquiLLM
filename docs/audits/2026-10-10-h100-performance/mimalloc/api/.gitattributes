@@ -1,0 +1,3 @@
+*.json -text
+*.jsonl -text
+runner-output.txt -text

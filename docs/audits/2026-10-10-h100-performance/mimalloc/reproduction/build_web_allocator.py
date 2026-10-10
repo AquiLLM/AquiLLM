@@ -11,7 +11,7 @@ ALLOCATOR='sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c81969492
 def inspect(kind,target):
     return json.loads(subprocess.check_output(['docker',kind,'inspect',target],text=True))[0]
 base=inspect('image',BASE)
-assert base['Config']['Entrypoint'] is None
+assert base['Config'].get('Entrypoint') is None
 assert base['Config']['Cmd']==['sh','/app/deploy/scripts/run.sh']
 assert inspect('container','compose-web-1')['Image']==BASE
 assert not Path('/tmp/h100-web-mimalloc-build.json').exists()

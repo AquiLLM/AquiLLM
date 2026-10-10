@@ -11,6 +11,17 @@ records each source hash and the source checkout commit
 tracked at that commit. The image build pins PR #240's source commit
 `fedc29373c634fd47cf1f4429d133edaa2bc7e91`.
 
+The application stage uses harness commit
+`c1624504139e04bfdd737077bb62dba521b719a9`; the manifest records its corrected web
+helper hash separately from the historical capture. Read-only live preflight
+found that Compose used the implicit `compose-web` image and that the Linux
+builder omitted legacy Windows `ArgsEscaped` metadata. The corrected helper
+verifies that implicit reference against the exact base and normalizes only that
+Linux metadata difference while retaining full pinned image configuration digests.
+See the [OCI definition](https://github.com/opencontainers/image-spec/blob/main/config.md)
+of `ArgsEscaped`. The archived web builder also uses `.get('Entrypoint')` because
+Docker omits that key when empty; its manifest hash reflects the executed fix.
+
 ## Original locations and dependencies
 
 All ten archived files were staged under `/tmp/` on the authorized development

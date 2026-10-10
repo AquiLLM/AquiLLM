@@ -9,7 +9,7 @@
     "probe_web_allocator.py": "b1cf0d0eb8a8cb8425545db8c5c3b75289d3e283eb1dcfea17bf5c0f1ace40a4",
     "allocator_fixture_helper.py": "f4860e5e98d67b155150684e4af3af34189f4ae2ae5093f73ad62a1f2f05a0eb",
     "build_mimalloc_experiment.py": "2b69f2f36ad374186d13d2be4c09d8021b531b4a1ac0dda59735794239a9a135",
-    "build_web_allocator.py": "8491682d4f84d0e45b00967d3bc1c35b0c62b19e72946e227ce2adc937022819",
+    "build_web_allocator.py": "c81ad86a1daba6febb2ee756e290f3770c492344d8a20e92f3e61a2808b32ca3",
     "Dockerfile.mimalloc-experiment": "58aa5af1e34e61bfe0faa1a7142668f234df93cf36d4c59ecdbd34263ce96ae3",
     "Dockerfile.web-mimalloc-experiment": "b51ebfd5e24a60f8b230296b8f28fe64e47c4cd6ea08081e491e665c879f637b",
     "run_prefill_blocks.py": "003e40274bfe63d9b299f92b57008a28ac1d4c0fffbdd4f45aa9ef158c4f69d3"
@@ -21,5 +21,9 @@
     "scripts/h100_performance/quality_bench.py": "9707fa07750c73b55d169787c11105085273b2eee3a1668fae8830d7fe004c7d",
     "scripts/h100_performance/long_quality_bench.py": "f25a99700a1acdb299c19e438f6602d889bd40677e80e55a3f02d391977d5a2d",
     "scripts/h100_performance/chat_replay.py": "0fc3bfd00ee3c03bc60fe857c21b4b388cb0c5f21c4dc0f3228926a0f3bbe5f6"
+  },
+  "application_harness_commit": "c1624504139e04bfdd737077bb62dba521b719a9",
+  "application_dependency_overrides_sha256": {
+    "scripts/h100_performance/web_allocator_switch.py": "3b164633ef63df043d0256849ec8e6f80525a27695a46a76cebc20f257b0b9c0"
   }
 }

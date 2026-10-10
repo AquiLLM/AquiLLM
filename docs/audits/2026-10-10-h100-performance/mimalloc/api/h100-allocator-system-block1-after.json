@@ -1,0 +1,40 @@
+[
+  {
+    "pid": 1,
+    "role": "api",
+    "configured_allocator": "system",
+    "observed_env_allocator": "system",
+    "observed_env_pythonmalloc": "default",
+    "process_environment_reliable": true,
+    "libraries": [],
+    "status": {
+      "VmHWM": "3908012 kB",
+      "VmRSS": "2602196 kB",
+      "Threads": "32"
+    },
+    "memory": {
+      "Rss": "2602196 kB",
+      "Pss": "2358841 kB",
+      "Private_Dirty": "2025304 kB"
+    }
+  },
+  {
+    "pid": 192,
+    "role": "engine",
+    "configured_allocator": "system",
+    "observed_env_allocator": "system",
+    "observed_env_pythonmalloc": null,
+    "process_environment_reliable": false,
+    "libraries": [],
+    "status": {
+      "VmHWM": "7271128 kB",
+      "VmRSS": "3718364 kB",
+      "Threads": "66"
+    },
+    "memory": {
+      "Rss": "3718364 kB",
+      "Pss": "3474583 kB",
+      "Private_Dirty": "3079672 kB"
+    }
+  }
+]

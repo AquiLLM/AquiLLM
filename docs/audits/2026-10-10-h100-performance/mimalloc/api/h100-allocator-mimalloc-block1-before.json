@@ -1,0 +1,44 @@
+[
+  {
+    "pid": 1,
+    "role": "api",
+    "configured_allocator": "mimalloc",
+    "observed_env_allocator": "mimalloc",
+    "observed_env_pythonmalloc": "default",
+    "process_environment_reliable": true,
+    "libraries": [
+      "/opt/mimalloc/lib/libmimalloc.so.3.5"
+    ],
+    "status": {
+      "VmHWM": "4184064 kB",
+      "VmRSS": "2830588 kB",
+      "Threads": "28"
+    },
+    "memory": {
+      "Rss": "2830588 kB",
+      "Pss": "2586822 kB",
+      "Private_Dirty": "2254120 kB"
+    }
+  },
+  {
+    "pid": 187,
+    "role": "engine",
+    "configured_allocator": "mimalloc",
+    "observed_env_allocator": "mimalloc",
+    "observed_env_pythonmalloc": null,
+    "process_environment_reliable": false,
+    "libraries": [
+      "/opt/mimalloc/lib/libmimalloc.so.3.5"
+    ],
+    "status": {
+      "VmHWM": "7340740 kB",
+      "VmRSS": "3595588 kB",
+      "Threads": "65"
+    },
+    "memory": {
+      "Rss": "3595588 kB",
+      "Pss": "3351415 kB",
+      "Private_Dirty": "2956956 kB"
+    }
+  }
+]
