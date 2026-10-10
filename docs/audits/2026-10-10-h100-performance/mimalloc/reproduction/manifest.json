@@ -1,0 +1,25 @@
+{
+  "source_checkout_commit": "d9a8c25ecd2ef8b8cfffc06a885f7eb2d100064b",
+  "mimalloc_build_source_commit": "fedc29373c634fd47cf1f4429d133edaa2bc7e91",
+  "source_ledger": ".superpowers/sdd/2026-10-10-h100-turboquant-performance",
+  "files_sha256": {
+    "run_allocator_api.py": "c5feeefb4931c061a687169dd961e1b9e05c909067e63198dcc4a3a8e4c4b2ec",
+    "run_allocator_chat.py": "ce30f86a9bd1987f036aff93864eb1ba7a93a774284cf1ce8cb8b01b49b37bef",
+    "probe_serving_allocator.py": "105e5e6af2847b8c23b289afe50ae5f2d7af4692722f0171493b5b112fae978e",
+    "probe_web_allocator.py": "b1cf0d0eb8a8cb8425545db8c5c3b75289d3e283eb1dcfea17bf5c0f1ace40a4",
+    "allocator_fixture_helper.py": "f4860e5e98d67b155150684e4af3af34189f4ae2ae5093f73ad62a1f2f05a0eb",
+    "build_mimalloc_experiment.py": "2b69f2f36ad374186d13d2be4c09d8021b531b4a1ac0dda59735794239a9a135",
+    "build_web_allocator.py": "8491682d4f84d0e45b00967d3bc1c35b0c62b19e72946e227ce2adc937022819",
+    "Dockerfile.mimalloc-experiment": "58aa5af1e34e61bfe0faa1a7142668f234df93cf36d4c59ecdbd34263ce96ae3",
+    "Dockerfile.web-mimalloc-experiment": "b51ebfd5e24a60f8b230296b8f28fe64e47c4cd6ea08081e491e665c879f637b",
+    "run_prefill_blocks.py": "003e40274bfe63d9b299f92b57008a28ac1d4c0fffbdd4f45aa9ef158c4f69d3"
+  },
+  "repository_dependencies_sha256": {
+    "scripts/h100_performance/allocator_switch.py": "42666767fb6d366010d512ed20f0895ad7392a7cafc9bca3a5e4f92f70ca8c5e",
+    "scripts/h100_performance/web_allocator_switch.py": "2a900209936958340dfc1601e4a3d734604d880670062d91a86c34fb20cd5757",
+    "scripts/h100_performance/serve_bench.py": "f27449e5a1843750b38471c9ed0fe851b1cd5e9534af54b187677bb747e31394",
+    "scripts/h100_performance/quality_bench.py": "9707fa07750c73b55d169787c11105085273b2eee3a1668fae8830d7fe004c7d",
+    "scripts/h100_performance/long_quality_bench.py": "f25a99700a1acdb299c19e438f6602d889bd40677e80e55a3f02d391977d5a2d",
+    "scripts/h100_performance/chat_replay.py": "0fc3bfd00ee3c03bc60fe857c21b4b388cb0c5f21c4dc0f3228926a0f3bbe5f6"
+  }
+}

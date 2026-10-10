@@ -1,0 +1,9 @@
+ARG ALLOCATOR_IMAGE
+ARG WEB_IMAGE
+FROM ${ALLOCATOR_IMAGE} AS allocator
+FROM ${WEB_IMAGE}
+COPY --from=allocator /opt/mimalloc/ /opt/mimalloc/
+COPY --from=allocator /usr/local/bin/aquillm-allocator /usr/local/bin/aquillm-allocator
+ENV AQUILLM_ALLOCATOR=system
+ENTRYPOINT ["/usr/local/bin/aquillm-allocator"]
+CMD ["sh", "/app/deploy/scripts/run.sh"]
