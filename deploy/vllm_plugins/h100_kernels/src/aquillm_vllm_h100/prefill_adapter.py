@@ -4,12 +4,22 @@ from __future__ import annotations
 import functools
 import hashlib
 import inspect
+import logging
 import textwrap
 
 from aquillm_vllm_h100.contracts import AttentionState, KVSpec
 from aquillm_vllm_h100.prefill import (
     PrefillProfile, PrefillRequest, select_prefill_route, validated_request_lengths,
 )
+from aquillm_vllm_h100.prefill_profiles import MODEL_REVISION, matches_runtime
+
+log = logging.getLogger("aquillm.h100")
+
+
+@functools.lru_cache(maxsize=8)
+def _worker_properties(device):
+    import torch
+    return torch.cuda.get_device_properties(device)
 
 PREFILL_FINGERPRINT = "fd7a69b113eecb1e8337426fe1c8b8a1f49d95bcbf2b913c46cb074a2494d1d3"
 _CONSTRUCTOR_PARAMETERS = (
@@ -63,6 +73,14 @@ def _capture_constructor(original):
         # Some installed backends discard these options. Preserve the passed
         # semantic values for the eligibility guard without altering init.
         values = bound.arguments
+        try:
+            from vllm.config import get_current_vllm_config
+            current_config = get_current_vllm_config()
+            resolved_revision = current_config.model_config.hf_config._commit_hash
+            flash_attn_version = getattr(current_config.attention_config, "flash_attn_version", None)
+        except (ImportError, AttributeError, RuntimeError, AssertionError, ValueError):
+            resolved_revision = None
+            flash_attn_version = None
         attn_type = getattr(values["attn_type"], "value", values["attn_type"])
         self._aquillm_h100_semantics = {
             "alibi": values["alibi_slopes"] is not None,
@@ -71,27 +89,40 @@ def _capture_constructor(original):
             "causal": str(attn_type).lower() in ("decoder", "attentiontype.decoder"),
             "kv_sharing": values["kv_sharing_target_layer_name"] is not None,
             "unknown_overlays": bool(values["kwargs"]),
+            "model_revision": resolved_revision,
+            "flash_attn_version": flash_attn_version,
         }
     return initialize
 
 
 def _make_route(profile, runtime_key):
     """Unsupported requests return None before allocating scratch or launching."""
+    exercised = False
     def route(impl, layer, q, k, v, cache, metadata, index, total_tokens, destination):
+        nonlocal exercised
         semantics = getattr(impl, "_aquillm_h100_semantics", None)
         if semantics is None or not getattr(metadata, "is_prefill", False):
+            return None
+        if semantics.get("model_revision") != MODEL_REVISION:
+            return None
+        if semantics.get("flash_attn_version") != 2:
+            return None
+        if getattr(q, "ndim", None) != 3:
             return None
         lengths = validated_request_lengths(getattr(metadata, "query_start_loc_cpu", None),
                                             getattr(metadata, "seq_lens_cpu", None), index, total_tokens)
         if lengths is None or lengths[0] != q.shape[0]:
             return None
         import torch
-        if not q.is_cuda or torch.cuda.is_current_stream_capturing():
+        tensors = (q, k, v, cache, destination)
+        if not all(isinstance(tensor, torch.Tensor) for tensor in tensors):
+            return None
+        if q.ndim != 3 or not q.is_cuda or torch.cuda.is_current_stream_capturing():
             return None
         if cache is None or cache.ndim != 4 or cache.dtype != torch.uint8:
             return None
-        cfg = impl.tq_config
-        if not cfg.key_fp8 or cfg.effective_value_quant_bits != 4:
+        cfg = getattr(impl, "tq_config", None)
+        if not getattr(cfg, "key_fp8", False) or getattr(cfg, "effective_value_quant_bits", None) != 4:
             return None
         # Normalize only metadata. Launch errors after eligibility propagate;
         # falling back after a potentially failed CUDA launch is unsafe.
@@ -99,6 +130,9 @@ def _make_route(profile, runtime_key):
             spec = KVSpec(impl.kv_cache_dtype, q.shape[2], q.shape[1], k.shape[1],
                           cache.shape[1], cfg.key_packed_size, impl._val_data_bytes)
         except (ValueError, TypeError, AttributeError, IndexError):
+            return None
+        properties = _worker_properties(q.device)
+        if not matches_runtime(spec, q.dtype, properties):
             return None
         raw_valid = (k.ndim == 3 and v.shape == k.shape and k.shape == (q.shape[0], spec.num_kv_heads, spec.head_dim)
                      and q.dtype in (torch.float16, torch.bfloat16) and k.dtype == q.dtype and v.dtype == q.dtype
@@ -117,10 +151,13 @@ def _make_route(profile, runtime_key):
                                 multimodal_prefix_mask=masked)
         if not select_prefill_route(request, enabled=True, profile=profile, runtime_key=runtime_key).eligible:
             return None
-        if cache.device != q.device or destination.device != q.device:
+        if (cache.device != q.device or destination.device != q.device
+                or destination.shape != q.shape or destination.dtype != q.dtype
+                or not all(all(stride > 0 for stride in tensor.stride()) for tensor in tensors)):
             return None
-        table = metadata.block_table
-        if table.ndim != 2 or table.device != q.device or not 0 <= index < table.shape[0]:
+        table = getattr(metadata, "block_table", None)
+        if (not isinstance(table, torch.Tensor) or table.ndim != 2 or table.device != q.device
+                or not 0 <= index < table.shape[0] or any(stride <= 0 for stride in table.stride())):
             return None
         if table.dtype not in (torch.int32, torch.int64) or table.shape[1] < (lengths[1] + spec.block_size - 1) // spec.block_size:
             return None
@@ -136,6 +173,10 @@ def _make_route(profile, runtime_key):
         prefix_attention(q, cache, table[index], lengths[1], impl.scale, spec, prefix)
         chunk = raw_chunk_attention(q, k, v, impl.scale)
         merge_attention_states(prefix, chunk, destination)
+        if not exercised:
+            exercised = True
+            log.warning("AQUILLM_H100 route_exercised prefill runtime=%s cached_len=%s query_len=%s",
+                        runtime_key, lengths[1], lengths[0])
         return destination
     return route
 

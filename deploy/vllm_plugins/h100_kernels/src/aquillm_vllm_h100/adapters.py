@@ -88,8 +88,18 @@ def install_adapters(config):
     from sndr.engines.vllm.kernels_legacy import p67_multi_query_kernel as baseline
     if config["split"] != "baseline":
         raise ValueError("adaptive policy requires a qualified runtime profile")
-    if config["prefill"] != "0":
-        raise ValueError("prefill requires a qualified runtime profile")
+    from .prefill_profiles import development_profile, PROFILE_NAME
+    # Select a bundled default only for explicit prefill opt-in. Explicit names
+    # are still validated before either independent adapter can mutate runtime.
+    profile = (development_profile(config.get("profile"))
+               if config["prefill"] == "1" or config.get("profile") is not None else None)
+    prefill_result = {"installed": False, "reason": "disabled"}
+    if config["prefill"] == "1":
+        from .prefill_adapter import install_prefill_adapter
+        prefill_result = install_prefill_adapter(profile, profile.runtime_key)
     if config["mtp"] == "fused":
         baseline.call_p67_splitk = make_verifier_adapter(baseline.call_p67_splitk, config)
-    return {"status": "installed", "mtp": config["mtp"], "split": config["split"], "prefill": False}
+    return {"status": "installed", "mtp": config["mtp"], "split": config["split"],
+            "prefill": prefill_result["installed"], "prefill_reason": prefill_result["reason"],
+            "prefill_profile": PROFILE_NAME if prefill_result["installed"] else None,
+            "prefill_qualification": "experimental_pending_serving" if prefill_result["installed"] else None}

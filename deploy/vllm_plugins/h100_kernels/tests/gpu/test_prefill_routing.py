@@ -27,12 +27,14 @@ def caller(monkeypatch, profile):
     patched.__globals__["triton_turboquant_decode_attention"] = forbidden
     impl = object.__new__(TurboQuantAttentionImpl)
     impl.scale = 0.0625
-    impl.fa_version = 3
+    impl.fa_version = 2
     impl.kv_cache_dtype = "turboquant_k8v4"
     impl._val_data_bytes = 128
     impl.tq_config = SimpleNamespace(key_fp8=True, effective_value_quant_bits=4, key_packed_size=256)
     impl._aquillm_h100_semantics = dict(alibi=False, sliding_window=None, soft_cap=0., causal=True,
-                                       kv_sharing=False, unknown_overlays=False)
+                                       kv_sharing=False, unknown_overlays=False,
+                                       model_revision="2d783431e303148fc6e16622fac5edac83a6b5c4",
+                                       flash_attn_version=2)
     impl._continuation_prefill = forbidden
     return impl, patched
 
@@ -51,7 +53,7 @@ def test_eligible_real_caller_bypasses_old_routes_with_long_and_reused_pages(mon
     from aquillm_vllm_h100.prefill import PrefillProfile, PrefillRegion
     profile = PrefillProfile("gpu-unit-runtime", (PrefillRegion(prior, prior, 129, 129),), "synthetic_correctness_case_only")
     impl, patched = caller(monkeypatch, profile)
-    batch = make_verify_batch([prior], length=129, strided=True)
+    batch = make_verify_batch([prior], length=129, strided=True, block_size=2128)
     q, k, v = batch.q[0], batch.raw_k[0], batch.raw_v[0]
     # Simulate a reused physical page: the current logical block table is authoritative.
     batch.block_table[0, 0] = batch.block_table[0, -1]
@@ -65,7 +67,7 @@ def test_pn401_fresh512_shorter_continuation_actual_caller(monkeypatch):
     from aquillm_vllm_h100.prefill import PrefillProfile, PrefillRegion
     profile = PrefillProfile("gpu-unit-runtime", (PrefillRegion(4096, 4096, 129, 129),), "synthetic_correctness_case_only")
     impl, patched = caller(monkeypatch, profile)
-    batch = make_verify_batch([0, 4096], length=512)
+    batch = make_verify_batch([0, 4096], length=512, block_size=2128)
     q = torch.cat((batch.q[0], batch.q[1, :129]))
     k = torch.cat((batch.raw_k[0], batch.raw_k[1, :129]))
     v = torch.cat((batch.raw_v[0], batch.raw_v[1, :129]))
@@ -82,7 +84,7 @@ def test_unsupported_real_caller_uses_original_continuation(monkeypatch, reason)
     from aquillm_vllm_h100.prefill import PrefillProfile, PrefillRegion
     profile = PrefillProfile("gpu-unit-runtime", (PrefillRegion(4096, 4096, 129, 129),), "synthetic_correctness_case_only")
     impl, patched = caller(monkeypatch, profile)
-    batch = make_verify_batch([4096], length=129)
+    batch = make_verify_batch([4096], length=129, block_size=2128)
     metadata = meta([0, 129], [4225], batch.block_table, mirrors=reason != "missing_mirrors")
     if reason == "verification":
         metadata.is_verification = True
