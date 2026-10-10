@@ -43,6 +43,22 @@ def candidate_orders(candidates, *, rounds: int, seed: int):
     return orders
 
 
+def load_split_plan(path):
+    """Read once at startup. Tables supplied here remain experimental evidence."""
+    from aquillm_vllm_h100.contracts import SplitPlan
+
+    data = json.loads(Path(path).read_text())
+    return SplitPlan(data["max_splits"], tuple(tuple(bucket) for bucket in data["buckets"]))
+
+
+def adaptive_stage_launches(batch, plan, mid, output):
+    from aquillm_vllm_h100.kernels.reduce import reduce_verify_partials
+    from aquillm_vllm_h100.kernels.splitk_reference import launch_reference_stage1
+
+    return (lambda: launch_reference_stage1(batch, plan, mid),
+            lambda: reduce_verify_partials(batch, mid, output))
+
+
 def fixed_stage_launches(batch, splits, mid, output):
     """Expose the exact baseline stage boundaries without allocator timing."""
     from sndr.engines.vllm.kernels_legacy import p67_multi_query_kernel as baseline
@@ -117,10 +133,14 @@ def main(argv=None):
     parser.add_argument("--warmup", type=int, default=5)
     parser.add_argument("--seed", type=int, default=179)
     parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--adaptive-plan", type=Path, help="experimental JSON {max_splits,buckets}; no profile is enabled")
+    parser.add_argument("--best-fixed", type=int, default=15, help="measured fixed winner used for adaptive comparison")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if min(args.rounds, args.iterations, args.warmup) <= 0:
         parser.error("rounds, iterations, and warmup must be positive")
+    if args.best_fixed not in args.splits:
+        parser.error("best-fixed must be included in the fixed candidate sweep")
     # Set once before the first baseline builder call, never in capture/replay.
     os.environ["GENESIS_P67_BLOCK_KV"] = "32"
     if os.environ.get("GENESIS_P67_DOT_PRECISION", "tf32x3").strip().lower() == "fp16":
@@ -137,6 +157,9 @@ def main(argv=None):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tests" / "gpu"))
     from reference import assert_close, make_verify_batch, reference_verify
 
+    plan = load_split_plan(args.adaptive_plan) if args.adaptive_plan else None
+    candidates = (*args.splits, "adaptive") if plan is not None else args.splits
+
     identity = dict(gpu=properties.name, sm_count=properties.multi_processor_count,
                     torch=torch.__version__, triton=triton.__version__, dtype="float16",
                     length=5, gqa=6, head_dim=256, block_kv=32,
@@ -144,44 +167,62 @@ def main(argv=None):
                     genesis_source_sha256=hashlib.sha256(Path(inspect.getfile(baseline)).read_bytes()).hexdigest())
     manifest = json.loads(args.manifest.read_text()) if args.manifest else None
     rows = []
-    orders = candidate_orders(args.splits, rounds=args.rounds, seed=args.seed)
+    orders = candidate_orders(candidates, rounds=args.rounds, seed=args.seed)
     for batch_size in args.batches:
         for prior in args.contexts:
             batch = make_verify_batch([prior] * batch_size, length=5, dtype=torch.float16, seed=args.seed)
             expected = reference_verify(batch)
             runners = {}
             buffers = {}
-            for splits in args.splits:
+            for candidate in candidates:
+                splits = plan.max_splits if candidate == "adaptive" else candidate
                 mid = torch.empty(scratch_shape(batch_size, batch.spec.num_kv_heads, 5, 6, 256, splits),
                                   device="cuda", dtype=torch.float32)
                 output = torch.empty_like(batch.q)
-                launch1, launch2 = fixed_stage_launches(batch, splits, mid, output)
+                launch1, launch2 = (adaptive_stage_launches(batch, plan, mid, output) if candidate == "adaptive"
+                                    else fixed_stage_launches(batch, splits, mid, output))
                 total = lambda one=launch1, two=launch2: (one(), two())
                 # Also qualify the public unchanged launcher with these buffers.
-                baseline.call_p67_splitk(batch.q, batch.kv_cache, batch.block_table, batch.seq_lens,
-                                        batch.raw_k, batch.raw_v, batch.scale, batch.spec.block_size,
-                                        batch.spec.key_packed_size, batch.spec.value_data_bytes,
-                                        output=output, num_splits=splits, mid_o=mid)
+                if candidate == "adaptive":
+                    total()
+                else:
+                    baseline.call_p67_splitk(batch.q, batch.kv_cache, batch.block_table, batch.seq_lens,
+                                            batch.raw_k, batch.raw_v, batch.scale, batch.spec.block_size,
+                                            batch.spec.key_packed_size, batch.spec.value_data_bytes,
+                                            output=output, num_splits=splits, mid_o=mid)
                 assert_close(output, expected, batch.q.dtype)
-                buffers[splits] = (mid, output)
-                runners[splits] = {name: timed_runner(fn, mode=args.mode, iterations=args.iterations, warmup=args.warmup)
+                buffers[candidate] = (mid, output)
+                runners[candidate] = {name: timed_runner(fn, mode=args.mode, iterations=args.iterations, warmup=args.warmup)
                                    for name, fn in (("stage1", launch1), ("reduction", launch2), ("total", total))}
-            samples = {splits: {name: [] for name in runners[splits]} for splits in args.splits}
+            samples = {candidate: {name: [] for name in runners[candidate]} for candidate in candidates}
             for order in orders:
                 for splits in order:
                     for name, runner in runners[splits].items():
                         samples[splits][name].append(runner())
-            for splits in args.splits:
-                mid, output = buffers[splits]
-                row = dict(batch=batch_size, prior_len=prior, committed_splits=splits,
-                           raw_slot=splits, workspace_bytes=mid.numel() * mid.element_size(),
-                           correct=True, samples_us=samples[splits],
-                           median_us={name: statistics.median(values) for name, values in samples[splits].items()})
+            for candidate in candidates:
+                mid, output = buffers[candidate]
+                assert_close(output, expected, batch.q.dtype)
+                maximum = plan.max_splits if candidate == "adaptive" else candidate
+                if candidate == "adaptive":
+                    from aquillm_vllm_h100.split_policy import select_active_splits
+                    active = select_active_splits(prior, plan)
+                else:
+                    active = candidate
+                row = dict(batch=batch_size, prior_len=prior, candidate=candidate,
+                           committed_splits=active, max_splits=maximum, inactive_ctas_per_kv=maximum - active,
+                           raw_slot=maximum, workspace_bytes=mid.numel() * mid.element_size(),
+                           workspace_ratio_to_best_fixed=(maximum + 1) / (args.best_fixed + 1),
+                           correct=True, samples_us=samples[candidate],
+                           median_us={name: statistics.median(values) for name, values in samples[candidate].items()})
+                best_total = statistics.median(samples[args.best_fixed]["total"])
+                row["total_ratio_to_best_fixed"] = row["median_us"]["total"] / best_total
                 rows.append(row)
                 print(json.dumps(row), flush=True)
     result = dict(schema=1, identity=identity, baseline_manifest=manifest,
                   qualification="microbenchmark only; serving acceptance/TPS and runtime matching required",
                   baseline_splits=15, mode=args.mode, seed=args.seed, candidate_order=orders,
+                  best_fixed=args.best_fixed,
+                  experimental_plan=dict(max_splits=plan.max_splits, buckets=plan.buckets) if plan else None,
                   iterations=args.iterations, warmup=args.warmup, measurements=rows,
                   selected_profile=None)
     args.output.parent.mkdir(parents=True, exist_ok=True)

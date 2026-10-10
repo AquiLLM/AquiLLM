@@ -1,5 +1,6 @@
 """Catch missing validation, scratch undercounting, and biased sweep ordering."""
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -35,3 +36,21 @@ def test_randomized_order_visits_every_candidate_each_round():
     assert all(sorted(order) == list(candidates) for order in orders)
     assert len({tuple(order) for order in orders}) > 1
     assert orders == bench.candidate_orders(candidates, rounds=8, seed=179)
+
+
+def test_adaptive_table_loaded_as_frozen_validated_plan(tmp_path):
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps({"max_splits": 31, "buckets": [[2048, 7], [8192, 15]]}))
+    plan = benchmark().load_split_plan(path)
+    assert plan.max_splits == 31
+    assert plan.buckets == ((2048, 7), (8192, 15))
+    from aquillm_vllm_h100.split_policy import select_active_splits
+    assert select_active_splits(1000000, plan) == 15
+
+
+@pytest.mark.parametrize("payload", [{"max_splits": 7, "buckets": [[32, 15]]}, {"max_splits": 0, "buckets": []}, {"max_splits": 15, "buckets": [[33, 7], [32, 15]]}])
+def test_invalid_adaptive_table_cannot_enter_benchmark(tmp_path, payload):
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        benchmark().load_split_plan(path)
