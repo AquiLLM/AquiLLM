@@ -1,0 +1,149 @@
+{
+  "scope": "synthetic direct-serving requests on development 254 only",
+  "kernel_source_commit": "e766a05a",
+  "block1_harness_commit": "e766a05a",
+  "blocks2_3_harness_commit": "82f2d5a5",
+  "baseline_image": "sha256:00441111dd81532d55310362a55b57b100fd48aa0cc589fb16b836ab042f885f",
+  "candidate_image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+  "candidate_controls": {
+    "AQUILLM_H100_MTP_KERNEL": "baseline",
+    "AQUILLM_H100_SPLIT_POLICY": "baseline",
+    "AQUILLM_H100_PREFILL": "1",
+    "AQUILLM_H100_GDN": "baseline"
+  },
+  "unique_output_texts": 11,
+  "output_hashes_without_captured_text": [
+    "5c8b41e27e2d2aeddbf648f8dec6af239f6f790cb0b68048249ad814e56d51a7",
+    "674f3e0ea5779385a614c003e2c419f14bc695ba5f10ef9e4f6d3ddefccdb24a",
+    "bf6723ff100ab71db93516686eca80f8e885f397f0210a3a4262b8aaa9d91a36"
+  ],
+  "text_capture_limit": "baseline block1 predates output_text capture; hashes remain available",
+  "files": {
+    "h100-prefill-ab-baseline-block1.jsonl": {
+      "source_sha256": "c9f361d06456455ec7e02d062af0a700ec93bf7fc2ed5f904453d308fb799f21",
+      "capture_sha256": "0a00465e4c28005365bc1dfea7907c1d98f17fecfef34798b63739ce715e1c93",
+      "transformation": "output_text deduplicated into outputs.json"
+    },
+    "h100-prefill-ab-baseline-block1-baseline-block1-metrics.json": {
+      "source_sha256": "dbcba9b62a0d65803f5799771cee8edf8bf3fdb3f2cf2a11aa9ad03e116cce59",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-baseline-block2.jsonl": {
+      "source_sha256": "a8ea0553313799b6fd9d4489ea4fbd9b73cb7ab2d7518d96c87c03f6fb756adf",
+      "capture_sha256": "622010a4a2a7989d82a43bc2c9562487012f57c96479ed3ad0c70f79b679d3b3",
+      "transformation": "output_text deduplicated into outputs.json"
+    },
+    "h100-prefill-ab-baseline-block2-baseline-block2-metrics.json": {
+      "source_sha256": "f50004ffd418f162e6ac1060aef004f57a7ce68b2dd27a28838e2df9dfb30f72",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-baseline-block2-activation.json": {
+      "source_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-baseline-block3.jsonl": {
+      "source_sha256": "b20ebef888a56d2b09d293a1f719b56396f1ccb332e2497d83c80fe71b849e2c",
+      "capture_sha256": "f539626f5de2b1b9b0db94031bfa124301bfe0803424346d1a18cfac90248027",
+      "transformation": "output_text deduplicated into outputs.json"
+    },
+    "h100-prefill-ab-baseline-block3-baseline-block3-metrics.json": {
+      "source_sha256": "9fa67f0d48d4218a9351910f64e5f3db00b76959b278bea06c8238408e3be935",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-baseline-block3-activation.json": {
+      "source_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-prefill-block1.jsonl": {
+      "source_sha256": "dbe84dc691658d03cede15b14e32e186caf671d882a79ef074a389ab08c8119b",
+      "capture_sha256": "d6155c97e7649a01b05f6ea1472b007af5ec7ce1c0b8ab20abbc4ab1f5cfe267",
+      "transformation": "output_text deduplicated into outputs.json"
+    },
+    "h100-prefill-ab-prefill-block1-prefill-block1-metrics.json": {
+      "source_sha256": "2d82923baa5878e6acddd7cdc296cec0f3f1bc3d07d114a978c6c26d262fa992",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-prefill-block1-activation.json": {
+      "source_sha256": "237a7fd5ce19bc9471e5aab000dd9df1866d89d653df7d9c1f6970d772057974",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-prefill-block2.jsonl": {
+      "source_sha256": "45d0f40dcc9e2f581d16bac371daad857f2cc38ec74aac9cdb7494e623e00132",
+      "capture_sha256": "6831fdc30a8681aba58338fccc33bf69a711a3f597e9fa14ccba0a145add7cf9",
+      "transformation": "output_text deduplicated into outputs.json"
+    },
+    "h100-prefill-ab-prefill-block2-prefill-block2-metrics.json": {
+      "source_sha256": "fc1b6dcd68e3c25a305eb072ebc50e11611097185f4a8cf818b6eb2fe0eabf98",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-prefill-block2-activation.json": {
+      "source_sha256": "237a7fd5ce19bc9471e5aab000dd9df1866d89d653df7d9c1f6970d772057974",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-prefill-block3.jsonl": {
+      "source_sha256": "cfaed6d40665fa2b6a1e4cf6b3339aa5e4bec1cdce4f57475371ac51b305be39",
+      "capture_sha256": "ce27d1960302a88cdb24079a5b66ebd8d4b8c27b3376c975221ef3c636e85ed1",
+      "transformation": "output_text deduplicated into outputs.json"
+    },
+    "h100-prefill-ab-prefill-block3-prefill-block3-metrics.json": {
+      "source_sha256": "7e528e6ef15074b3af9b767ea25c7198c7f0f556c9ca6aad871d7cf2039181b3",
+      "transformation": "none"
+    },
+    "h100-prefill-ab-prefill-block3-activation.json": {
+      "source_sha256": "237a7fd5ce19bc9471e5aab000dd9df1866d89d653df7d9c1f6970d772057974",
+      "transformation": "none"
+    },
+    "h100-quality-baseline-strict.jsonl": {
+      "source_sha256": "95c3b5563133ca9f8d5e034c7b4da1c731e207efc614614f86aba4782153c9f7",
+      "transformation": "none"
+    },
+    "h100-quality-prefill-strict.jsonl": {
+      "source_sha256": "901eb30d6d34062d87bd1c6c2de72226a94285ba2f9ecf517f2d3c1f59ff5c14",
+      "transformation": "none"
+    },
+    "h100-quality-baseline-long.jsonl": {
+      "source_sha256": "11515e1d4faf8ace8289f989c62927ef99751ae04285803c4008cd0e4ffb6c6c",
+      "transformation": "none"
+    },
+    "h100-quality-prefill-long.jsonl": {
+      "source_sha256": "b7fafdfa5473a8c8009733dc81c50357521930081bc34e64c024a45a0d6dedc8",
+      "transformation": "none"
+    },
+    "h100-quality-extended.json": {
+      "source_sha256": "15c36f8c39a7af3d85c33ca20d08cee7ef7fc5196afcf323ea9765ceaf439a9f",
+      "transformation": "none"
+    },
+    "h100-cancel-reuse.json": {
+      "source_sha256": "3a968e40b5af6e3b706d39e24b16fbf3287af73fb51047426e1ab46e0943c74b",
+      "transformation": "none"
+    },
+    "aquillm-h100-baseline-identity.json": {
+      "source_sha256": "0ef5fe377cc4cd9ab52a26a5207419f1e693e30fcf4aa4eb965ae740bd32326b",
+      "transformation": "none"
+    },
+    "h100-prefill-first-activation.json": {
+      "source_sha256": "237a7fd5ce19bc9471e5aab000dd9df1866d89d653df7d9c1f6970d772057974",
+      "transformation": "none"
+    }
+  },
+  "additional_untransformed_files": {
+    "h100-final-state.json": {
+      "sha256": "c407b5b73889c66f055f8784571c515388d2518a0bc796b41e97cd549511ee62"
+    },
+    "h100-prefill-history.jsonl": {
+      "sha256": "8b51b9227c33e04ef294a6fc69dae55be5f5d3e882c601d7eaad05ac77d49315"
+    },
+    "h100-prefill-block3-route-timeline.log": {
+      "sha256": "1dfb390bf76fac7b1eef8c2908553714f0de64ccd651c9915907994fb59e3993"
+    },
+    "h100-memory-watch.jsonl": {
+      "sha256": "0ed8de49692a9a6bd97271611097217168d2f04a35b3c5e1108d2e5bb382c573"
+    },
+    "h100-prefill-final-error-word-matches.txt": {
+      "sha256": "8de43a80396de8ebd329cc3df9542dc5955dff9e0be80cfb0497159ed0cac4b9"
+    }
+  },
+  "derived_files": {
+    "per-shape-acceptance.json": "Computed from versioned metrics captures; block1 has aggregate counters only."
+  }
+}

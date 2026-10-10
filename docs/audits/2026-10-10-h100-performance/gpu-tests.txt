@@ -1,0 +1,17 @@
+........................................................................ [ 39%]
+........................................................................ [ 78%]
+.......................................                                  [100%]
+=============================== warnings summary ===============================
+tests/gpu/test_actual_store_roundtrip.py::test_actual_k8v4_store_roundtrip_crosses_reordered_pages_and_preserves_other_slots[actual-tq-page16]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/gpu/test_actual_store_roundtrip.py::test_actual_k8v4_store_roundtrip_crosses_reordered_pages_and_preserves_other_slots[actual-tq-page16]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+tests/gpu/test_actual_store_roundtrip.py: 14 warnings
+  /usr/local/lib/python3.12/dist-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+183 passed, 16 warnings in 12.11s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute

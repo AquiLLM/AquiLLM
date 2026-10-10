@@ -1,0 +1,330 @@
+{
+  "status": "fail",
+  "groups": [
+    {
+      "input_sha256": "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+      "prompt_tokens": 512,
+      "requested_output_tokens": 256,
+      "paired_blocks": 3,
+      "baseline": {
+        "requests": 30,
+        "ttft_ms": {
+          "median": 108.03896099969279,
+          "p95": 108.67158534783812
+        },
+        "aggregate_decode_ms_per_token": 5.852963270849109,
+        "decode_ms_per_token": {
+          "median": 5.454090876460837,
+          "p95": 6.711767512941721
+        },
+        "output_tokens_per_second": 160.24751480927142
+      },
+      "candidate": {
+        "requests": 30,
+        "ttft_ms": {
+          "median": 108.29395550172194,
+          "p95": 110.75900514733803
+        },
+        "aggregate_decode_ms_per_token": 6.58156980758208,
+        "decode_ms_per_token": {
+          "median": 6.5539628353173045,
+          "p95": 6.640667087258942
+        },
+        "output_tokens_per_second": 143.18104064993776
+      },
+      "paired_completed_repeats_by_block": {
+        "1": 10,
+        "2": 10,
+        "3": 10
+      },
+      "ttft_improvement_percent": -0.2360208758670712,
+      "decode_improvement_percent": -12.44850690182564,
+      "ttft_improvement_ci95_percent": [
+        -9.249719451184713,
+        0.10331849999392095
+      ],
+      "decode_improvement_ci95_percent": [
+        -21.595805871767805,
+        2.2260634817255394
+      ],
+      "ttft_p95_regression_percent": 1.9208515204949483,
+      "decode_p95_regression_percent": -1.0593398169063906,
+      "changed_greedy_output_pairs": 20
+    },
+    {
+      "input_sha256": "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+      "prompt_tokens": 8192,
+      "requested_output_tokens": 256,
+      "paired_blocks": 3,
+      "baseline": {
+        "requests": 30,
+        "ttft_ms": {
+          "median": 1271.844468996278,
+          "p95": 1276.5985517988156
+        },
+        "aggregate_decode_ms_per_token": 7.701040401702307,
+        "decode_ms_per_token": {
+          "median": 7.648594019616105,
+          "p95": 8.104538904304967
+        },
+        "output_tokens_per_second": 79.10598280419353
+      },
+      "candidate": {
+        "requests": 30,
+        "ttft_ms": {
+          "median": 1274.0867480024463,
+          "p95": 1278.8784208012657
+        },
+        "aggregate_decode_ms_per_token": 7.739554878560715,
+        "decode_ms_per_token": {
+          "median": 7.784074121560016,
+          "p95": 8.000683010001975
+        },
+        "output_tokens_per_second": 78.8190428893924
+      },
+      "paired_completed_repeats_by_block": {
+        "1": 10,
+        "2": 10,
+        "3": 10
+      },
+      "ttft_improvement_percent": -0.17630135294277594,
+      "decode_improvement_percent": -0.5001204363230594,
+      "ttft_improvement_ci95_percent": [
+        -0.3156617690800445,
+        0.12566414229914485
+      ],
+      "decode_improvement_ci95_percent": [
+        -8.528033213921693,
+        7.993846455614237
+      ],
+      "ttft_p95_regression_percent": 0.17858934582353214,
+      "decode_p95_regression_percent": -1.2814534611935269,
+      "changed_greedy_output_pairs": 30
+    },
+    {
+      "input_sha256": "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+      "prompt_tokens": 32768,
+      "requested_output_tokens": 256,
+      "paired_blocks": 3,
+      "baseline": {
+        "requests": 30,
+        "ttft_ms": {
+          "median": 5595.013319001737,
+          "p95": 5602.643232251648
+        },
+        "aggregate_decode_ms_per_token": 13.147036779214044,
+        "decode_ms_per_token": {
+          "median": 13.12601707058824,
+          "p95": 13.312851382556712
+        },
+        "output_tokens_per_second": 28.613511663244886
+      },
+      "candidate": {
+        "requests": 30,
+        "ttft_ms": {
+          "median": 5600.95288550292,
+          "p95": 5607.749485699969
+        },
+        "aggregate_decode_ms_per_token": 14.140434457383689,
+        "decode_ms_per_token": {
+          "median": 14.359355427444042,
+          "p95": 14.489972256279525
+        },
+        "output_tokens_per_second": 27.806805762642398
+      },
+      "paired_completed_repeats_by_block": {
+        "1": 10,
+        "2": 10,
+        "3": 10
+      },
+      "ttft_improvement_percent": -0.10615821915940238,
+      "decode_improvement_percent": -7.556057648977177,
+      "ttft_improvement_ci95_percent": [
+        -0.1880880667614493,
+        0.037634189674189425
+      ],
+      "decode_improvement_ci95_percent": [
+        -11.412402847160703,
+        -1.9858090728423607
+      ],
+      "ttft_p95_regression_percent": 0.09114007864943208,
+      "decode_p95_regression_percent": 8.841989141898976,
+      "changed_greedy_output_pairs": 30
+    },
+    {
+      "input_sha256": "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+      "prompt_tokens": 36864,
+      "requested_output_tokens": 256,
+      "paired_blocks": 3,
+      "baseline": {
+        "requests": 30,
+        "ttft_ms": {
+          "median": 11593.81577649765,
+          "p95": 11605.839490098515
+        },
+        "aggregate_decode_ms_per_token": 14.045459185622319,
+        "decode_ms_per_token": {
+          "median": 13.979731650989361,
+          "p95": 14.168599920784462
+        },
+        "output_tokens_per_second": 16.869314562338154
+      },
+      "candidate": {
+        "requests": 30,
+        "ttft_ms": {
+          "median": 7463.167065001471,
+          "p95": 7472.292654252669
+        },
+        "aggregate_decode_ms_per_token": 14.010013340912636,
+        "decode_ms_per_token": {
+          "median": 13.974135945090001,
+          "p95": 14.107106117248893
+        },
+        "output_tokens_per_second": 23.203495919266015
+      },
+      "paired_completed_repeats_by_block": {
+        "1": 10,
+        "2": 10,
+        "3": 10
+      },
+      "ttft_improvement_percent": 35.62803473097791,
+      "decode_improvement_percent": 0.252365154041867,
+      "ttft_improvement_ci95_percent": [
+        35.58668900467039,
+        35.7544590812885
+      ],
+      "decode_improvement_ci95_percent": [
+        0.06912808573572155,
+        0.4246783877132967
+      ],
+      "ttft_p95_regression_percent": -35.61609515082789,
+      "decode_p95_regression_percent": -0.4340146794981625,
+      "changed_greedy_output_pairs": 20
+    }
+  ],
+  "gates": {
+    "sample_support": {
+      "status": "pass",
+      "reason": "requires three alternating AB pairs and >=10 repeats/shape/block"
+    },
+    "serving_improvement": {
+      "status": "pass",
+      "reason": ">=5% TTFT or aggregate decode gain with paired CI excluding zero for each designated target"
+    },
+    "protected_p95": {
+      "status": "fail",
+      "reason": "<=5% p95 regression across measured protected workloads"
+    },
+    "mtp_acceptance": {
+      "status": "fail",
+      "reason": "no unexplained acceptance reduction beyond two percentage points"
+    },
+    "quality": {
+      "status": "pass",
+      "reason": "preserve every baseline pass"
+    },
+    "quality_oracle": {
+      "status": "pass",
+      "reason": "strict completed quality captures required"
+    },
+    "stream_completion": {
+      "status": "pass",
+      "reason": "requires DONE, terminal length, correct usage and explicit complete/error"
+    },
+    "target_kernel": {
+      "status": "pass",
+      "reason": ">=10% target-kernel median reduction; separate benchmark evidence required"
+    },
+    "activation_verified": {
+      "status": "pass",
+      "reason": "separate evidence required"
+    },
+    "runtime_identity_frozen": {
+      "status": "pass",
+      "reason": "separate evidence required"
+    },
+    "numerical_graph_checks_passed": {
+      "status": "pass",
+      "reason": "separate evidence required"
+    },
+    "memory_gate_passed": {
+      "status": "pass",
+      "reason": "separate evidence required"
+    },
+    "application_replay_passed": {
+      "status": "missing",
+      "reason": "separate evidence required"
+    },
+    "errors": {
+      "status": "pass",
+      "reason": "no increased errors; completed-request JSONL alone does not count failed attempts"
+    },
+    "greedy_evidence": {
+      "status": "pass",
+      "reason": "valid output SHA256 required for every completed latency row in both captures"
+    },
+    "greedy_output_review": {
+      "status": "missing",
+      "reason": "complete greedy evidence and inspection of changed outputs required"
+    }
+  },
+  "speculation": {
+    "baseline": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 9438.0,
+        "vllm:spec_decode_num_draft_tokens": 37752.0,
+        "vllm:spec_decode_num_accepted_tokens": 24343.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 24343.0
+      },
+      "draft_tokens": 37752.0,
+      "accepted_tokens": 24343.0,
+      "acceptance_rate": 0.6448135198135199,
+      "interval_includes_warmups": true
+    },
+    "candidate": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 9911.0,
+        "vllm:spec_decode_num_draft_tokens": 39644.0,
+        "vllm:spec_decode_num_accepted_tokens": 23892.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 23892.0
+      },
+      "draft_tokens": 39644.0,
+      "accepted_tokens": 23892.0,
+      "acceptance_rate": 0.6026637069922308,
+      "interval_includes_warmups": true
+    },
+    "acceptance_change_percentage_points": -4.214981282128905
+  },
+  "quality": {
+    "status": "pass",
+    "reason": "preserve every baseline pass",
+    "lost_passes": [],
+    "changed_outputs": [
+      "tool-0",
+      "tool-1",
+      "tool-2",
+      "tool-3",
+      "tool-4",
+      "tool-5",
+      "tool-6",
+      "tool-7"
+    ],
+    "baseline_passes": 32,
+    "candidate_passes": 32
+  },
+  "baseline_errors": 0,
+  "candidate_errors": 0,
+  "bootstrap": {
+    "method": "hierarchical paired blocks then paired repeats",
+    "samples": 2000,
+    "seed": 17,
+    "confidence": 0.95
+  },
+  "scope": "development 254; client TTFT is not prefill latency; aggregate decode is not stream-chunk token timing",
+  "baseline_attempted_requests": 120,
+  "candidate_attempted_requests": 120,
+  "baseline_latency_rows": 120,
+  "candidate_latency_rows": 120
+}

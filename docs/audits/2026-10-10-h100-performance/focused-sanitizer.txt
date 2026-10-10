@@ -1,0 +1,17 @@
+========= COMPUTE-SANITIZER
+.                                                                        [100%]
+=============================== warnings summary ===============================
+tests/gpu/test_prefill_routing.py::test_eligible_real_caller_bypasses_old_routes_with_long_and_reused_pages[4096]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyPacked has no __module__ attribute
+
+tests/gpu/test_prefill_routing.py::test_eligible_real_caller_bypasses_old_routes_with_long_and_reused_pages[4096]
+  <frozen importlib._bootstrap>:488: DeprecationWarning: builtin type SwigPyObject has no __module__ attribute
+
+tests/gpu/test_prefill_routing.py: 14 warnings
+  /usr/local/lib/python3.12/dist-packages/torch/jit/_script.py:365: DeprecationWarning: `torch.jit.script_method` is deprecated. Please switch to `torch.compile` or `torch.export`.
+    warnings.warn(
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+1 passed, 8 deselected, 16 warnings in 8.02s
+sys:1: DeprecationWarning: builtin type swigvarlink has no __module__ attribute
+========= ERROR SUMMARY: 0 errors
