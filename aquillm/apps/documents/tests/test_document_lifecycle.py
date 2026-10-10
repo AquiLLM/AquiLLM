@@ -1,9 +1,13 @@
 """Non-graph document lifecycle and atomic chunk publication regressions."""
 
+from uuid import UUID
+
 import pytest
 from django.contrib.auth.models import User
+
 from apps.collections.models import Collection
 from apps.documents.models import DocumentFigure, RawTextDocument, TextChunk
+from apps.documents.models.chunk_publication import ChunkPublication
 from apps.documents.tasks.chunking import _commit_chunks, create_chunks
 
 
@@ -33,18 +37,36 @@ def test_content_save_publishes_exact_identity_only_after_commit(
     document, monkeypatch, django_capture_on_commit_callbacks
 ):
     calls = []
-    monkeypatch.setattr(create_chunks, "delay", lambda *args: calls.append(args))
+    monkeypatch.setattr(
+        create_chunks, "delay", lambda *args, **kwargs: calls.append((args, kwargs))
+    )
     with django_capture_on_commit_callbacks(execute=True):
         document.full_text = "updated text"
         document.save(update_fields=["full_text"])
         assert not calls
     document.refresh_from_db()
+    intent = ChunkPublication.objects.get(
+        concrete_model_label="apps_documents.rawtextdocument",
+        document_pkid=document.pkid,
+        document_id=document.id,
+        source_hash=document.hash_fn("updated text"),
+    )
+    assert intent.pk > 0
+    assert isinstance(intent.generation, UUID)
+    assert intent.attempts == 1
     assert calls == [
         (
-            str(document.id),
-            document.hash_fn("updated text"),
-            "apps_documents.rawtextdocument",
-            document.pkid,
+            (
+                str(document.id),
+                document.hash_fn("updated text"),
+                "apps_documents.rawtextdocument",
+                document.pkid,
+            ),
+            {
+                "publication_id": intent.pk,
+                "publication_generation": str(intent.generation),
+                "publication_attempt": intent.attempts,
+            },
         )
     ]
     assert not document.ingestion_complete

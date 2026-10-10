@@ -13,8 +13,19 @@ from apps.chat.evals.evidence_quality_eval import load_cases
 from apps.chat.evals.evidence_review_packet import import_reviews, prepare_packet
 
 
+def _reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
 def _read(path):
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json.loads(
+        path.read_text(encoding="utf-8"), object_pairs_hook=_reject_duplicate_keys
+    )
 
 
 def _write(path, data):

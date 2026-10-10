@@ -414,3 +414,72 @@ def test_offline_cli_roundtrip_rejects_unchanged_template(tmp_path):
         (output / "imported" / "report-001-reviews.json").read_text(encoding="utf-8")
     )
     assert imported_reviews[case["case_id"]]["answer_faithful"] is False
+
+
+@pytest.mark.parametrize("duplicate", ["review_id", "judgment_label"])
+def test_offline_cli_rejects_duplicate_response_object_keys(tmp_path, duplicate):
+    from apps.chat.evals.evidence_review_packet import prepare_packet
+
+    case, report = sample()
+    packet, bindings = prepare_packet(
+        {"report-001": report}, {case["case_id"]: case}, random_seed=4
+    )
+    responses = completed(packet)
+    review_id = next(iter(responses["reviews"]))
+    labels = next(iter(responses["reviews"][review_id]["claims"].values()))
+    label = next(iter(labels))
+    response_text = json.dumps(responses, ensure_ascii=False)
+    if duplicate == "review_id":
+        key = json.dumps(review_id)
+        response_text = response_text.replace(
+            f"{key}: {{", f"{key}: {{}}, {key}: {{", 1
+        )
+        expected_key = review_id
+    else:
+        key = json.dumps(label)
+        response_text = response_text.replace(
+            f"{key}: false", f"{key}: true, {key}: false", 1
+        )
+        expected_key = label
+
+    assert response_text != json.dumps(responses, ensure_ascii=False)
+    report_file = tmp_path / "observations.json"
+    packet_file = tmp_path / "packet.json"
+    bindings_file = tmp_path / "bindings.json"
+    responses_file = tmp_path / "responses.json"
+    report_file.write_text(json.dumps(report), encoding="utf-8")
+    packet_file.write_text(json.dumps(packet), encoding="utf-8")
+    bindings_file.write_text(json.dumps(bindings), encoding="utf-8")
+    responses_file.write_text(response_text, encoding="utf-8")
+    output = tmp_path / "imported"
+    runner = Path(__file__).parents[1] / "evals/run_evidence_review_packet.py"
+    env = dict(os.environ)
+    for name in list(env):
+        if name == "SECRET_KEY" or name.startswith(
+            ("DJANGO_", "POSTGRES_", "OPENAI_", "GEMINI_", "ANTHROPIC_", "GOOGLE_")
+        ):
+            env.pop(name)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(runner),
+            "import",
+            "--packet",
+            str(packet_file),
+            "--bindings",
+            str(bindings_file),
+            "--responses",
+            str(responses_file),
+            "--observations",
+            str(report_file),
+            "--output-dir",
+            str(output),
+        ],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 2, result.stderr
+    assert f"duplicate JSON key: {expected_key}" in result.stderr
+    assert not output.exists()

@@ -10,8 +10,12 @@ document's media and a new receipt.
 The ordinary facade exposes `get_embedding_result`, `get_embedding_results` and
 `get_multimodal_embedding_result`. Each returns `EmbeddingResult(vector,
 provenance)` after the existing dimension adaptation. Existing list-returning
-APIs share the same policy and provider paths. Requests, configured dimensions,
-role handling, context retries, fallback policy and strict KG APIs are unchanged.
+APIs retain their list return types, payload fields, configured dimensions, role
+handling and provider policy. Outage recovery now caps context repair attempts, stops
+batch-to-item and multimodal format/text fallbacks on outages, and lets strict
+KG embedding calls accept optional deadline/timeout controls. See
+[embedding outage recovery](../operations/embedding-outage-recovery.md) for the
+retry, fallback and deadline behavior.
 
 Receipt schema version 1 contains:
 
