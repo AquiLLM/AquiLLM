@@ -52,6 +52,20 @@ No model weights or corpus data are downloaded at runtime.
 
 ## Browser tests
 
+Run unit and component tests in the same isolated frontend image with explicit
+test files:
+
+```powershell
+rtk proxy python scripts/run_rag_remediation_tests.py --project aquillm-rag-review --vitest react/src/utils/textOffsetMatch.test.ts react/src/features/chat/components/CitationModalProvider.test.tsx
+```
+
+This mode retains the repository Vitest configuration and per-file environments,
+but replaces its include list with exactly those files. Paths must identify
+existing `.test.ts` or `.test.tsx` files beneath `react/src/`; globs, runner flags,
+duplicate paths and mixed wrapper commands are refused. It uses the inspected
+owned frontend without creating browser authentication state. The wrapper saves
+the actual output and exit code in the same local run-artifact directory.
+
 ```powershell
 rtk proxy python scripts/run_rag_remediation_tests.py --project aquillm-rag-review --playwright react/tests/usersettings.spec.ts
 ```

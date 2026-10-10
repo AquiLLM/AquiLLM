@@ -84,6 +84,28 @@ def resolve_spec(spec):
     return candidate.relative_to(ROOT / "react").as_posix()
 
 
+def resolve_vitest_specs(specs, *, root=ROOT):
+    """Resolve an exact, nonempty test selection without accepting runner options."""
+    frontend = (root / "react").resolve()
+    selected = []
+    for spec in specs:
+        path = Path(spec)
+        if path.is_absolute() or not re.fullmatch(r"react/src/[A-Za-z0-9_./-]+\.test\.tsx?", path.as_posix()):
+            raise IsolationError("Vitest requires explicit react/src/*.test.ts or .tsx paths")
+        candidate = (root / path).resolve()
+        if not candidate.is_relative_to(frontend / "src") or not candidate.is_file():
+            raise IsolationError("Vitest test must exist beneath react/src/")
+        relative = candidate.relative_to(frontend).as_posix()
+        if not re.fullmatch(r"src/[A-Za-z0-9_./-]+\.test\.tsx?", relative):
+            raise IsolationError("Vitest test must have a literal, non-glob path")
+        if relative in selected:
+            raise IsolationError("duplicate Vitest test selection")
+        selected.append(relative)
+    if not selected:
+        raise IsolationError("Vitest requires at least one explicit test")
+    return tuple(selected)
+
+
 def _owned(labels, project):
     if labels.get(OWNER_LABEL) != "v1" or labels.get("com.docker.compose.project") != project:
         raise IsolationError("resource lacks the owned test-project labels")
@@ -278,6 +300,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", required=True)
     parser.add_argument("--playwright")
+    parser.add_argument("--vitest", nargs="+", help="run only the named react/src/*.test.ts[x] files")
     parser.add_argument("--base-url", default="http://app:8000")
     parser.add_argument("--storage-state")
     parser.add_argument("--cleanup", action="store_true")
@@ -286,6 +309,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         validate_project(args.project)
+        if args.vitest is not None and (args.cleanup or args.playwright or args.manage is not None or args.pytest_args):
+            raise IsolationError("Vitest cannot be combined with another command")
+        vitest_specs = resolve_vitest_specs(args.vitest, root=ROOT) if args.vitest is not None else None
         validate_arguments(args.manage or args.pytest_args, manage=bool(args.manage))
         # Reject inherited connection settings before Compose or Django startup.
         expected = test_environment()
@@ -328,9 +354,15 @@ def main(argv=None):
             docker(*compose, "exec", "-T", "app", "python", "scripts/rag_remediation_provision.py")
             artifact = ROOT / ".superpowers/sdd/rag-harness" / args.project / ("run-" + str(uuid.uuid4()))
             artifact.mkdir(parents=True, exist_ok=False)
-            if spec:
+            if spec or vitest_specs:
                 docker(*compose, "--profile", "browser", "up", "--build", "-d", "frontend")
-                inspect_project(args.project)
+                frontend_containers, _, _ = inspect_project(args.project)
+                frontend = [c for c in frontend_containers if c['Config']['Labels']['com.docker.compose.service'] == 'frontend']
+                if len(frontend) != 1 or frontend[0]['Config']['WorkingDir'] != '/app/react':
+                    raise IsolationError('owned frontend identity/workdir unavailable')
+            if vitest_specs:
+                command = ["docker", *compose, "exec", "-T", "frontend", "node", "scripts/rag-remediation-vitest.cjs", json.dumps(vitest_specs)]
+            elif spec:
                 docker(*compose, "exec", "-T", "app", "python", "scripts/rag_remediation_seed_browser.py", state)
                 receipt = refresh_frontend_assets(args.project)
                 (artifact / 'frontend-assets.json').write_text(json.dumps(receipt), encoding='utf-8')
