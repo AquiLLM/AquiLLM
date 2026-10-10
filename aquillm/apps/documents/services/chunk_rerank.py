@@ -154,11 +154,6 @@ def rerank_chunks_scored(
     turn_budget = state.budget
     from .chunk_rerank_window_acquisition import dispatch_windowed
 
-    windowed = dispatch_windowed(
-        query, chunks_list, top_k, turn_budget, window_scorer, shadow=True
-    )
-    if windowed is not None:
-        return windowed
     candidate_ids = tuple(chunk.pk for chunk in chunks_list)
     pool = fingerprint_pool(
         tuple(
@@ -190,6 +185,11 @@ def rerank_chunks_scored(
     provider = rerank_provider()
     if not state.can_admit():
         return unavailable(candidate_ids[:top_k])
+    windowed = dispatch_windowed(
+        query, chunks_list, top_k, turn_budget, window_scorer, shadow=True
+    )
+    if windowed is not None:
+        return windowed
     if provider in ("auto", "local", "vllm"):
         try:
             local = rerank_via_local_vllm_scored(

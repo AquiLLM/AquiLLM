@@ -6,6 +6,7 @@ from time import monotonic
 
 from .chunk_rerank_results import fingerprint_pair
 from .chunk_rerank_windows import WindowPlan
+from .rerank_request_lifetime import rerank_state_for
 
 
 @dataclass(frozen=True)
@@ -44,8 +45,16 @@ class _AttemptBudget:
         return getattr(self.budget, name)
 
     def start_pair(self, *, phase):
-        admitted = self.budget.start_pair(phase=phase)
-        self.attempts += int(admitted)
+        return self.start_pairs(1, phase=phase)
+
+    def record_admission(self, count):
+        with self.budget._lock:
+            self.attempts += count
+
+    def start_pairs(self, count, *, phase):
+        admitted = self.budget.start_pairs(count, phase=phase)
+        if admitted:
+            self.record_admission(count)
         return admitted
 
 
@@ -54,17 +63,18 @@ def score_window_plan(
 ):
     """Complete candidates in rank order, windows in source order.
 
-    Providers with ``score_budgeted_pair`` own transport leases (including retries).
+    Providers with ``score_budgeted_pair`` own their one-attempt transport leases.
     Simple nonretrying scorers get a single lease here. No ledger means no inference.
     """
     successful = []
     deadline = clock() + timeout_seconds
     if budget is None or plan.preparation_coverage != "complete":
         return WindowScoreSet(plan, (), 0)
+    state = rerank_state_for(budget)
     budget = _AttemptBudget(budget)
     for window_id, window in zip(plan.required_window_ids, plan.windows):
         remaining = min(deadline - clock(), budget.scoring_remaining_ms(phase) / 1000)
-        if remaining <= 0:
+        if remaining <= 0 or not state.can_admit():
             break
         pair = (plan.query, window.text)
         try:
@@ -80,6 +90,7 @@ def score_window_plan(
                 finally:
                     budget.finish_pair()
             if result is None:
+                state.fail()
                 break
             value, actual = result
             if (
@@ -89,9 +100,10 @@ def score_window_plan(
                 or len(actual) != 2
                 or any(type(x) is not str for x in actual)
             ):
+                state.fail()
                 break
             item = SuccessfulWindow(window_id, actual, float(value))
-            if clock() >= deadline or not budget.publish(
+            if clock() >= deadline or not state.publish(
                 lambda: successful.append(item)
             ):
                 break

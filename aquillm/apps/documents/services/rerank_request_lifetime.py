@@ -36,7 +36,10 @@ class TurnRerankState:
         with self.budget._lock:
             return not self._failed and self.budget.publish(callback)
 
-    def submit(self, count, callback, *, phase="acquisition", timeout=None):
+    def submit(
+        self, count, callback, *, phase="acquisition", timeout=None, on_admitted=None
+    ):
+        """Diagnostics observe admission after the real ledger grants its lease."""
         with self.budget._lock:
             remaining = self.budget.scoring_remaining_ms(phase) / 1000
             if timeout is not None:
@@ -47,6 +50,13 @@ class TurnRerankState:
                 or not self.budget.start_pairs(count, phase=phase)
             ):
                 return None
+            if on_admitted is not None:
+                try:
+                    on_admitted(count)
+                except Exception:
+                    self.budget.finish_pairs(count)
+                    self.fail()
+                    return None
             future = Future()
             # Admitted work cannot be cancelled into releasing a live I/O lease.
             future.set_running_or_notify_cancel()
@@ -83,8 +93,12 @@ class TurnRerankState:
             return None
         return future
 
-    def run(self, count, callback, *, phase="acquisition", timeout=None):
-        future = self.submit(count, callback, phase=phase, timeout=timeout)
+    def run(
+        self, count, callback, *, phase="acquisition", timeout=None, on_admitted=None
+    ):
+        future = self.submit(
+            count, callback, phase=phase, timeout=timeout, on_admitted=on_admitted
+        )
         if future is None:
             return None
         remaining = self.budget.scoring_remaining_ms(phase) / 1000
