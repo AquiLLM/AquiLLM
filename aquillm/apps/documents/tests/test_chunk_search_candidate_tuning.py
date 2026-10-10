@@ -1,8 +1,10 @@
 """Env-driven hybrid search candidate limits and trigram threshold."""
+
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from django.test import override_settings
 
 from apps.documents.services.chunk_search import text_chunk_search
@@ -106,11 +108,33 @@ class _ModelCls:
     objects = MagicMock()
 
 
+@pytest.fixture(autouse=True)
+def controlled_dense_adapter(monkeypatch):
+    """Exercise limits at the R2 adapter seam; raw vectors grant no authority."""
+    from types import SimpleNamespace
+
+    from apps.documents.services import chunk_search, chunk_search_candidates
+
+    monkeypatch.setattr(
+        chunk_search,
+        "load_query_embedding",
+        lambda _: SimpleNamespace(compatibility_key="synthetic"),
+    )
+
+    def dense(model, observation, scope, limit):
+        root = model.objects.filter_by_documents.return_value
+        return tuple(root.exclude().order_by()[:limit])
+
+    monkeypatch.setattr(chunk_search_candidates, "dense_rows", dense)
+
+
 @override_settings(RAG_CACHE_ENABLED=True)
 @patch("apps.documents.services.chunk_search.apps.get_app_config")
 @patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_candidate_limits_follow_env_min_max_and_multiplier(mock_embed, mock_rerank, mock_app_cfg):
+def test_candidate_limits_follow_env_min_max_and_multiplier(
+    mock_embed, mock_rerank, mock_app_cfg
+):
     mock_embed.return_value = [0.5] * 16
     chunks = [MagicMock(pk=i, content=f"c{i}") for i in range(20)]
     mock_rerank.return_value = chunks[:3]
@@ -186,7 +210,9 @@ def test_vector_min_limit_raises_floor(mock_embed, mock_rerank, mock_app_cfg):
 @patch("apps.documents.services.chunk_search.apps.get_app_config")
 @patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_trigram_similarity_threshold_from_settings(mock_embed, mock_rerank, mock_app_cfg):
+def test_trigram_similarity_threshold_from_settings(
+    mock_embed, mock_rerank, mock_app_cfg
+):
     mock_embed.return_value = [0.5] * 16
     chunks = [MagicMock(pk=i, content=f"c{i}") for i in range(10)]
     mock_rerank.return_value = chunks[:3]
@@ -215,7 +241,9 @@ def test_trigram_similarity_threshold_from_settings(mock_embed, mock_rerank, moc
 @patch("apps.documents.services.chunk_search.apps.get_app_config")
 @patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_exact_domain_terms_are_added_as_candidates(mock_embed, mock_rerank, mock_app_cfg):
+def test_exact_domain_terms_are_added_as_candidates(
+    mock_embed, mock_rerank, mock_app_cfg
+):
     mock_embed.return_value = [0.5] * 16
     vector_chunk = MagicMock(pk=1, content="generic vector hit")
     trigram_chunk = MagicMock(pk=2, content="generic trigram hit")

@@ -7,7 +7,6 @@ from unittest.mock import MagicMock
 import pytest
 
 from apps.documents.services import rag_cache
-from apps.documents.services.chunk_rerank_local_vllm import rerank_via_local_vllm
 from apps.documents.services.chunk_rerank_parse import (
     parse_score_results,
     parse_single_score,
@@ -30,36 +29,27 @@ def test_equal_scores_keep_original_candidate_order_after_shuffled_completion():
 
 
 def test_boolean_single_scores_do_not_populate_result_cache(monkeypatch):
-    module = "apps.documents.services.chunk_rerank_local_vllm"
-    monkeypatch.setattr(f"{module}.rerank_base_url", lambda: "http://reranker/v1")
-    monkeypatch.setattr(f"{module}.rerank_model", lambda: "reranker")
-    monkeypatch.setattr(f"{module}.rerank_model_is_qwen3_vl", lambda: True)
-    monkeypatch.setattr(
-        f"{module}.rerank_document_payload", lambda chunk: chunk.content
-    )
-    monkeypatch.setattr(rag_cache, "get_cached_rerank_result", lambda *_args: None)
-    monkeypatch.setattr(
-        rag_cache,
-        "get_cached_rerank_capability",
-        lambda *_args: {
-            "endpoint": "http://reranker/score",
-            "shape": "score_single_text_pair",
-        },
-    )
-    monkeypatch.setattr(
-        rag_cache, "delete_cached_rerank_capability", lambda *_args: None
-    )
-    stored_rankings: list[list[int]] = []
+    from apps.documents.services import chunk_rerank_local_scored as local
+    from apps.documents.tests.test_rerank_score_providers import _configure_verified
+
+    _configure_verified(monkeypatch)
+    monkeypatch.setattr(local, "rerank_model_revision", lambda: "synthetic-revision")
+    monkeypatch.setattr(rag_cache, "cache_get", lambda *a, **k: None)
+    stored_rankings = []
+    monkeypatch.setattr(rag_cache, "get_cached_rerank_result", lambda *a, **k: None)
     monkeypatch.setattr(
         rag_cache,
         "set_cached_rerank_result",
-        lambda _query, _candidates, _top_k, _model, ranked: stored_rankings.append(
-            ranked
-        ),
+        lambda *a, **k: stored_rankings.append((a, k)),
     )
+    monkeypatch.setattr(
+        rag_cache, "cache_set", lambda *a, **k: stored_rankings.append((a, k))
+    )
+    calls = []
 
     class Response:
         status_code = 200
+        url = "http://test/score"
 
         @staticmethod
         def json():
@@ -67,13 +57,16 @@ def test_boolean_single_scores_do_not_populate_result_cache(monkeypatch):
 
     monkeypatch.setattr(
         "apps.documents.services.chunk_rerank_score.requests.post",
-        lambda *_args, **_kwargs: Response(),
+        lambda *_args, **_kwargs: calls.append(_kwargs) or Response(),
     )
     rows = [MagicMock(pk=1, content="a"), MagicMock(pk=2, content="b")]
 
     class Model:
         objects = MagicMock()
 
-    rerank_via_local_vllm(Model, "query", rows, 2)
+    result = local.rerank_via_local_vllm_scored(Model, "query", rows, 2)
 
+    assert 1 <= len(calls) <= 2
+    assert result.score_set.status == "unavailable"
+    assert result.ranked_ids == (1, 2)
     assert stored_rankings == []

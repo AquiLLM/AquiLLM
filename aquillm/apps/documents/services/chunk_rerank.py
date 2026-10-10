@@ -269,12 +269,12 @@ def rerank_chunks_scored(
             or len(set(ranked_ids)) != len(candidate_ids)
             or set(ranked_ids) != set(candidate_ids)
         ):
-            return unavailable(ranked_ids)
+            return unavailable(candidate_ids[:top_k])
         scores_by_id = {}
         for result in all_results:
             value = getattr(result, "relevance_score", None)
             if type(value) not in (int, float):
-                return unavailable(ranked_ids)
+                return unavailable(candidate_ids[:top_k])
             chunk = by_id[result.document.id]
             scores_by_id[chunk.pk] = PassageScore(
                 chunk.pk,
@@ -286,7 +286,7 @@ def rerank_chunks_scored(
             )
 
         if not all(isfinite(score.value) for score in scores_by_id.values()):
-            return unavailable(ranked_ids)
+            return unavailable(candidate_ids[:top_k])
         scores = tuple(scores_by_id[pk] for pk in candidate_ids)
         stable_ranked = tuple(
             sorted(

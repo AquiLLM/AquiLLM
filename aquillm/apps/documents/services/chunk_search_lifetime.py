@@ -61,7 +61,14 @@ def enter_search(model_cls, documents, authorization, query, graph_enabled):
             )
         from dataclasses import replace
 
-        scope = replace(scope, bodies={}, dense_rows={}, lexical_ids=set())
+        scope = replace(
+            scope,
+            bodies={},
+            dense_rows={},
+            lexical_ids=set(),
+            fts_rows={},
+            fusion_v2=None,
+        )
         token = bind_search_scope(scope, query, graph_enabled=graph_enabled)
         stack.callback(reset_search_scope, token)
         return stack, scope

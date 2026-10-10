@@ -60,6 +60,8 @@ class FrozenRetrievalScope:
     bodies: dict = field(default_factory=dict)
     dense_rows: dict = field(default_factory=dict)
     lexical_ids: set = field(default_factory=set)
+    fts_rows: dict = field(default_factory=dict)
+    fusion_v2: object | None = None
     query_digest: str = ""
     query_compatibility: str | None = None
     graph_enabled: bool = False
@@ -107,6 +109,7 @@ class FrozenRetrievalScope:
         return keys
 
     def cache_key(self):
+        from .chunk_search_rank_policy import ranking_policy
         from .retrieval_scope_identity import retrieval_scope_key
 
         # The V1 graph route has no captured V2 authority digest. Never cache it.
@@ -114,6 +117,14 @@ class FrozenRetrievalScope:
             return None
         with self.database():
             valid = self.validate()
+            from types import SimpleNamespace
+
+            from .lexical_readiness import valid_full_text_ids
+
+            if set(self.fts_rows) != valid_full_text_ids(
+                self, tuple(SimpleNamespace(pk=pk) for pk in self.fts_rows)
+            ):
+                return None
         if self.dense and set(valid) != set(self.dense.generation_keys):
             return None
         return retrieval_scope_key(
@@ -128,7 +139,8 @@ class FrozenRetrievalScope:
             query_digest=self.query_digest,
             ranking_policy=digest(
                 {
-                    "version": "hybrid-baseline-original-query-v1",
+                    "version": "hybrid-exact-coverage-v2",
+                    "lexical_policy": ranking_policy(self),
                     "requested_document_ids": sorted(
                         str(v) for v in self.requested_document_ids
                     ),

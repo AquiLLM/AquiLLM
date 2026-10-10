@@ -23,9 +23,19 @@ def scoped_rows(queryset, scope, *, lexical=False):
     with scope.database():
         rows = source_query_rows(queryset)
         scope.validate()
+        if lexical == "full_text":
+            bindings = dict(
+                queryset.model.objects.using(scope.using)
+                .filter(pk__in=[row.pk for row in rows])
+                .values_list("pk", "search_vector_binding")
+            )
+            for row in rows:
+                row.search_vector_binding = bindings.get(row.pk)
         for row in rows:
             scope.bodies.setdefault(row.pk, fingerprint(row))
-            if lexical:
+            if lexical == "full_text":
+                scope.fts_rows.setdefault(row.pk, row.search_vector_binding)
+            elif lexical:
                 scope.lexical_ids.add(row.pk)
         return validate_rows(rows, scope=scope)
 
@@ -76,6 +86,9 @@ def validate_rows(rows, *, scope=None, dense_only=False):
 
     with scope.database():
         valid_dense = set(scope.validate())
+        from .lexical_readiness import valid_full_text_ids
+
+        valid_fts = valid_full_text_ids(scope, rows)
         metadata = (
             scope.queryset(
                 TextChunk.objects.using(scope.using).filter(
@@ -97,6 +110,13 @@ def validate_rows(rows, *, scope=None, dense_only=False):
             captured = scope.bodies.get(row.pk)
             actual = fingerprint(row)
             dense = scope.dense_rows.get(row.pk)
+            if (
+                row.pk in scope.fts_rows
+                and row.pk not in valid_fts
+                and row.pk not in scope.lexical_ids
+                and dense is None
+            ):
+                continue
             if captured is None:
                 # Graph rows still cross the original frozen representation scope.
                 captured = actual
@@ -105,7 +125,7 @@ def validate_rows(rows, *, scope=None, dense_only=False):
                 continue
             if (
                 dense
-                and (dense_only or row.pk not in scope.lexical_ids)
+                and (dense_only or row.pk not in scope.lexical_ids | valid_fts)
                 and (
                     dense.embedding_generation_key not in valid_dense
                     or actual[2] != dense.source_md5
@@ -119,7 +139,7 @@ def validate_rows(rows, *, scope=None, dense_only=False):
             row
             for row in result
             if row.pk not in scope.dense_rows
-            or (not dense_only and row.pk in scope.lexical_ids)
+            or (not dense_only and row.pk in scope.lexical_ids | valid_fts)
             or scope.dense_rows[row.pk].embedding_generation_key in final_keys
         )
 

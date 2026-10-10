@@ -32,58 +32,63 @@ from apps.knowledge_graph.retrieval.topology.contracts import HybridBranchKind
 @pytest.mark.parametrize(
     "failure", ("materialization", "mismatched_candidate_object", "fusion")
 )
+@pytest.mark.parametrize("use_rrf", (False, True))
 @override_settings(KG_OVERLAY_ENABLED=True, RAG_CACHE_ENABLED=False)
 def test_materialization_or_fusion_failure_discards_entire_graph_pool_once(
     monkeypatch,
     failure,
+    use_rrf,
 ) -> None:
-    baseline = (chunk(1), chunk(2))
-    snapshot = selected_snapshot(baseline=baseline)
+    with override_settings(
+        RAG_RRF_ENABLED=use_rrf, RAG_PROTECTED_EXACT_ENABLED=use_rrf
+    ):
+        baseline = (chunk(1), chunk(2))
+        snapshot = selected_snapshot(baseline=baseline)
 
-    class Runtime:
-        def prepare_shared(self, **_kwargs):
-            return object()
+        class Runtime:
+            def prepare_shared(self, **_kwargs):
+                return object()
 
-        def run_direct(self, **_kwargs):
-            return successful_branch(
-                HybridBranchKind.DIRECT,
-                (GraphBranchCandidateV1(KEYS[0], 1, 0.9),),
-            )
+            def run_direct(self, **_kwargs):
+                return successful_branch(
+                    HybridBranchKind.DIRECT,
+                    (GraphBranchCandidateV1(KEYS[0], 1, 0.9),),
+                )
 
-        def prepare_extended(self, **_kwargs):
-            return object()
+            def prepare_extended(self, **_kwargs):
+                return object()
 
-        def run_extended(self, **_kwargs):
-            return successful_branch(
-                HybridBranchKind.EXTENDED,
-                (GraphBranchCandidateV1(KEYS[1], 1, 0.8),),
-            )
+            def run_extended(self, **_kwargs):
+                return successful_branch(
+                    HybridBranchKind.EXTENDED,
+                    (GraphBranchCandidateV1(KEYS[1], 1, 0.8),),
+                )
 
-    def materialize(**_kwargs):
-        if failure == "materialization":
-            return ()
-        if failure == "mismatched_candidate_object":
+        def materialize(**_kwargs):
+            if failure == "materialization":
+                return ()
+            if failure == "mismatched_candidate_object":
+                return (
+                    MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, chunk(99, _DOC_B)),
+                    MaterializedGraphChunkV1(KEYS[1], 4, _DOC_B, 3, chunk(4, _DOC_B)),
+                )
             return (
-                MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, chunk(99, _DOC_B)),
-                MaterializedGraphChunkV1(KEYS[1], 4, _DOC_B, 3, chunk(4, _DOC_B)),
+                MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, chunk(3)),
+                MaterializedGraphChunkV1(KEYS[1], 3, _DOC_B, 3, chunk(3, _DOC_B)),
             )
-        return (
-            MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, chunk(3)),
-            MaterializedGraphChunkV1(KEYS[1], 3, _DOC_B, 3, chunk(3, _DOC_B)),
+
+        returned, rerank_inputs = run_hybrid_test_search(
+            monkeypatch,
+            snapshot=snapshot,
+            authorization_context=authorization(Policy()),
+            runtime=Runtime(),
+            materialize=materialize,
         )
 
-    returned, rerank_inputs = run_hybrid_test_search(
-        monkeypatch,
-        snapshot=snapshot,
-        authorization_context=authorization(Policy()),
-        runtime=Runtime(),
-        materialize=materialize,
-    )
-
-    assert rerank_inputs == [(1, 2)]
-    assert tuple(row.pk for row in returned[2]) == (1, 2)
-    assert returned[3]["graph_status"] == "error"
-    assert returned[3]["graph_candidate_count"] == 0
+        assert rerank_inputs == [(1, 2)]
+        assert tuple(row.pk for row in returned[2]) == (1, 2)
+        assert returned[3]["graph_status"] == "error"
+        assert returned[3]["graph_candidate_count"] == 0
 
 
 @override_settings(KG_OVERLAY_ENABLED=True, RAG_CACHE_ENABLED=False)

@@ -1,21 +1,25 @@
 """
 TextChunk model for storing document chunks with embeddings.
 
-Vector search, trigram similarity, and reranking live in apps.documents.services.chunk_*.
+Retrieval and reranking live in apps.documents.services.chunk_*.
 """
+
 from __future__ import annotations
 
-import structlog
-from typing import TYPE_CHECKING, Callable, List, Optional
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
+import structlog
 from django.contrib.postgres.indexes import GinIndex
+from django.contrib.postgres.search import SearchVectorField
 from django.core.exceptions import ValidationError
 from django.db import models
 from pgvector.django import HnswIndex, VectorField
+
 from lib.embeddings.persistence import EmbeddingQuerySet, prepare_embedding_save
 
 if TYPE_CHECKING:
-    from django.db.models.query import QuerySet
+    pass
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -24,23 +28,23 @@ class TextChunkQuerySet(EmbeddingQuerySet):
     """Custom QuerySet for TextChunk with document filtering."""
 
     def filter_by_documents(self, docs_or_ids):
-        ids = [
-            getattr(doc_or_id, "id", doc_or_id)
-            for doc_or_id in docs_or_ids
-        ]
+        ids = [getattr(doc_or_id, "id", doc_or_id) for doc_or_id in docs_or_ids]
         return self.filter(doc_id__in=ids)
 
 
 def _get_descended_from_document():
     """Lazy import to avoid circular dependency."""
     from .document_types import DESCENDED_FROM_DOCUMENT
+
     return DESCENDED_FROM_DOCUMENT
 
 
 def doc_id_validator(id):
     descended_from_document = _get_descended_from_document()
     if sum([t.objects.filter(id=id).exists() for t in descended_from_document]) != 1:
-        raise ValidationError("Invalid Document UUID -- either no such document or multiple")
+        raise ValidationError(
+            "Invalid Document UUID -- either no such document or multiple"
+        )
 
 
 class TextChunk(models.Model):
@@ -64,9 +68,30 @@ class TextChunk(models.Model):
         max_length=16, choices=Modality.choices, default=Modality.TEXT, db_index=True
     )
     metadata = models.JSONField(default=dict, blank=True)
+    search_vector = SearchVectorField(null=True, editable=False)
+    search_vector_binding = models.JSONField(null=True, editable=False)
+    source_kind = models.CharField(
+        max_length=32,
+        default="unknown",
+        choices=[
+            (kind, kind)
+            for kind in (
+                "unknown",
+                "body",
+                "heading",
+                "table",
+                "formula",
+                "figure",
+                "bibliography",
+            )
+        ],
+    )
+    section_path = models.JSONField(default=list)
     embedding = VectorField(dimensions=1024, blank=True, null=True)
     embedding_provenance = models.JSONField(blank=True, null=True)
-    representation_generation = models.UUIDField(null=True, db_column='representation_generation_id')
+    representation_generation = models.UUIDField(
+        null=True, db_column="representation_generation_id"
+    )
 
     doc_id = models.UUIDField(editable=False, validators=[doc_id_validator])
 
@@ -86,8 +111,11 @@ class TextChunk(models.Model):
             ),
         ]
         indexes = [
+            GinIndex(fields=["search_vector"], name="textchunk_search_vector_gin_v1"),
             models.Index(fields=["doc_id", "start_position", "end_position"]),
-            models.Index(fields=["doc_id", "modality"], name="textchunk_doc_modality_idx"),
+            models.Index(
+                fields=["doc_id", "modality"], name="textchunk_doc_modality_idx"
+            ),
             HnswIndex(
                 name="chunk_embedding_index",
                 fields=["embedding"],
@@ -134,8 +162,10 @@ class TextChunk(models.Model):
         prepare_embedding_save(self, kwargs)
         super().save(*args, **kwargs)
 
-    def get_chunk_embedding(self, callback: Optional[Callable[[], None]] = None):
-        from apps.documents.services.chunk_embeddings import get_chunk_embedding as compute_embedding
+    def get_chunk_embedding(self, callback: Callable[[], None] | None = None):
+        from apps.documents.services.chunk_embeddings import (
+            get_chunk_embedding as compute_embedding,
+        )
 
         return compute_embedding(self, callback)
 
@@ -150,12 +180,14 @@ class TextChunk(models.Model):
         cls,
         query: str,
         top_k: int,
-        docs: List,
+        docs: list,
         *,
         authorization_context: object | None = None,
         hybrid_graph_dependencies: object | None = None,
     ):
-        from apps.documents.services.chunk_search import text_chunk_search as hybrid_search
+        from apps.documents.services.chunk_search import (
+            text_chunk_search as hybrid_search,
+        )
 
         return hybrid_search(
             cls,

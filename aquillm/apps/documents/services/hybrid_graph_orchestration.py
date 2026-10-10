@@ -226,9 +226,11 @@ def hybrid_graph_candidate_pool(
             return final_baseline, diagnostics("error")
         graph_count = fused.diagnostics.graph_only_selected
         branch_diagnostics.fusion = fused.diagnostics
-        return fused.rerank_candidates, diagnostics(
-            "hit" if graph_count else "miss", graph_count
-        )
+        from .chunk_search_rank_policy import fuse_validated_graph
+
+        return fuse_validated_graph(
+            snapshot, fused, query, ready_checksum
+        ), diagnostics("hit" if graph_count else "miss", graph_count)
     except Exception:
         return final_baseline, diagnostics("error")
 
