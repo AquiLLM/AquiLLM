@@ -35,12 +35,24 @@ class CanonicalSourceSnapshotV2:
     revision_digest: str
 
 
-def capture_source(*, using, identity_policy):
+def capture_source(*, using, identity_policy, expected_artifacts=None):
     from apps.knowledge_graph.models import CollectionEntity, GraphArtifact
 
     artifacts = c._active_collection_artifact_snapshot(
         using=using, identity_policy=identity_policy
     )
+    if expected_artifacts is not None and artifacts != expected_artifacts:
+        raise c._CanonicalSnapshotChanged("publication source set changed")
+    # The provenance adapter locks links and document artifacts. Take the whole
+    # collection prefix first, as lifecycle cleanup does, in both transactions.
+    _lock_source_artifacts(artifacts, using=using)
+    if (
+        c._active_collection_artifact_snapshot(
+            using=using, identity_policy=identity_policy
+        )
+        != artifacts
+    ):
+        raise c._CanonicalSnapshotChanged("source changed before capture")
     ids = tuple(a for a, _ in artifacts)
     artifact_rows = tuple(
         GraphArtifact.objects.using(using)
@@ -122,15 +134,15 @@ def capture_source(*, using, identity_policy):
     )
 
 
-def lock_source(snapshot, *, using):
+def _lock_source_artifacts(artifacts, *, using):
     from django.db import connections
 
     from apps.collections.models import Collection
     from apps.knowledge_graph.graph.assembly import _lock_collection_scope
     from apps.knowledge_graph.models import CollectionEntity, GraphArtifact
 
-    collection_ids = tuple(sorted(cid for _, cid in snapshot.artifacts))
-    artifact_ids = tuple(sorted(aid for aid, _ in snapshot.artifacts))
+    collection_ids = tuple(sorted(cid for _, cid in artifacts))
+    artifact_ids = tuple(sorted(aid for aid, _ in artifacts))
     with connections[using].cursor() as cursor:
         for cid in collection_ids:
             _lock_collection_scope(cursor, cid)

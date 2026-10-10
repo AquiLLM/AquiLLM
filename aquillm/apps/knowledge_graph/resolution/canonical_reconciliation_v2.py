@@ -12,7 +12,7 @@ from .canonical_deadline_v2 import (
     bounded_transaction,
     check_deadline,
 )
-from .canonical_snapshot_v2 import capture_source, lock_source
+from .canonical_snapshot_v2 import capture_source
 
 
 def configured_reconciliation(*, using):
@@ -79,9 +79,10 @@ def reconcile_canonical_v2(
         projected_links = c.project_canonical_link_decisions(resolution)
         check_deadline(deadline, clock)
         with bounded_transaction(using=using, deadline=deadline, clock=clock):
-            lock_source(snapshot, using=using)
             current = capture_source(
-                using=using, identity_policy=snapshot.identity_policy
+                using=using,
+                identity_policy=snapshot.identity_policy,
+                expected_artifacts=snapshot.artifacts,
             )
             if current.revision_digest != snapshot.revision_digest:
                 return CanonicalReconciliationOutcomeV2("stale")

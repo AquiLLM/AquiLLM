@@ -53,6 +53,7 @@ from .representation_build_identity import (
 )
 from .representation_request_guard import (
     validate_guarded_request_context,
+    validate_request_completion_snapshot,
     validate_requested_representation_context,
 )
 from .requested_representation import (
@@ -2841,8 +2842,7 @@ def advance_rebuild_request(request_id: uuid.UUID | str) -> None:
         expected = tuple(request.requested_documents)
         try:
             current = _lock_request_completion_snapshot(request, expected)
-            if current != expected:
-                raise StaleBuildError("request snapshot changed")
+            validate_request_completion_snapshot(expected=expected, current=current)
             active = _completed_request_document_artifacts(
                 request,
                 expected,
