@@ -43,3 +43,21 @@ def test_prefix_excludes_poisoned_future_slots_and_handles_constant_values(value
         batch.kv_cache[page, position % batch.spec.block_size].fill_(0x7f)
     prefix_attention(q, batch.kv_cache, batch.block_table[0], 37, batch.scale, batch.spec, state)
     torch.testing.assert_close(state.output, before, atol=0, rtol=0)
+
+
+def test_prefix_honors_query_dimension_cache_byte_table_and_state_strides():
+    from aquillm_vllm_h100.kernels.prefix import prefix_attention
+    batch = make_verify_batch([65], length=129)
+    q = torch.empty(129, 24, 512, device="cuda", dtype=torch.float16)[..., ::2]
+    q.copy_(batch.q[0])
+    packed = torch.empty(*batch.kv_cache.shape[:-1], 800, device="cuda", dtype=torch.uint8)[..., ::2]
+    packed.copy_(batch.kv_cache)
+    table = torch.empty(batch.block_table.shape[1] * 2, device="cuda", dtype=torch.int32)[::2]
+    table.copy_(batch.block_table[0])
+    state = AttentionState(torch.empty(129, 24, 512, device="cuda")[..., ::2],
+                           torch.empty(24, 129, device="cuda").t())
+    prefix_attention(q, packed, table, 65, batch.scale, batch.spec, state)
+    pk, pv = unpack_prefix(batch, 0)
+    expected = reference_attention(q, pk, pv, causal_prefix=None)
+    assert_close(state.output, expected.output, q.dtype)
+    torch.testing.assert_close(state.lse, expected.lse, atol=0.015, rtol=0.002)
