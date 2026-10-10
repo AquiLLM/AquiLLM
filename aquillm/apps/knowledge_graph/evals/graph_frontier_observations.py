@@ -41,6 +41,7 @@ def validate_invocations(row):
             "query_sha256",
             "requested_subset_signature",
             "frontier_budget",
+            "request_algorithm_signature",
         },
         "graph_invocation_unknown",
     )
@@ -53,6 +54,11 @@ def validate_invocations(row):
         and sha(event["requested_subset_signature"])
         and event["frontier_budget"] == row["frontier_budget"],
         "graph_invocation_binding_mismatch",
+    )
+    require(
+        sha(event["request_algorithm_signature"])
+        and event["request_algorithm_signature"] == row["request_algorithm_signature"],
+        "graph_request_signature_mismatch",
     )
 
 

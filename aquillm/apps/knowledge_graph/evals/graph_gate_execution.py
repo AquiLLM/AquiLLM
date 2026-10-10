@@ -21,6 +21,7 @@ def validate_arm(row, query_id, expected_binding):
         "latency_budget_ms",
         "frontier_budget",
         "frontier_invocations",
+        "request_algorithm_signature",
     }
     require(type(row) is dict and set(row) == fields, "invalid_execution_observation")
     require(row["binding"] == expected_binding, "comparison_binding_mismatch")
@@ -39,6 +40,11 @@ def validate_arm(row, query_id, expected_binding):
         "invalid_execution_inputs",
     )
     validate_invocations(row)
+    require(
+        sha(row["request_algorithm_signature"])
+        and row["request_algorithm_signature"] != row["binding"]["algorithm_signature"],
+        "graph_request_signature_unknown",
+    )
     ids(row["ranked"])
     ids(row["repeated_ranked"])
     require(

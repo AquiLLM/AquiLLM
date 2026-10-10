@@ -36,7 +36,7 @@ def test_missing_identity_cannot_opt_out():
 def test_attachment_digest_binds_every_original_observation():
     report = fixture_report()
     attached = module().graph_activation_attachment_v2(report)
-    report["queries"][0]["candidate"]["ranked"] = []
+    report["queries"][0]["executions"]["baseline"]["candidate"]["ranked"] = []
     changed = module().graph_activation_attachment_v2(report)
     assert changed["attachment_sha256"] != attached["attachment_sha256"]
     assert changed["report_sha256"] != attached["report_sha256"]

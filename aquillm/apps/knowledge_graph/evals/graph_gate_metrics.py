@@ -77,6 +77,25 @@ def retrieval_scores(row, arm):
 
 
 def retrieval_metrics(rows, policy, intended, reasons):
+    from .graph_mode_observations import MODES
+
+    modes = {}
+    for mode in MODES:
+        selected = [
+            {
+                **{k: row[k] for k in ("query_id", "strata", "labels")},
+                **row["executions"][mode],
+            }
+            for row in rows
+        ]
+        mode_reasons = []
+        modes[mode] = paired_mode_metrics(selected, policy, intended, mode_reasons)
+        modes[mode]["blocking_reasons"] = sorted(set(mode_reasons))
+        reasons.extend(mode_reasons)
+    return dict(query_pairs=len(rows), modes=modes)
+
+
+def paired_mode_metrics(rows, policy, intended, reasons):
     if len(rows) < policy.min_query_pairs:
         reasons.append("query_pairs_insufficient")
     if not any(r["labels"]["no_answer"] for r in rows):

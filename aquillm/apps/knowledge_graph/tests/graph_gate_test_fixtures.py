@@ -29,6 +29,21 @@ def digest(value):
 
 
 def fixture_report():
+    from apps.knowledge_graph.evals.graph_effective_controls import (
+        graph_effective_controls,
+    )
+    from apps.knowledge_graph.tests.graph_review_fixtures import (
+        expand_modes,
+        rebind,
+        rehash,
+    )
+
+    baseline = graph_effective_controls()
+    baseline["remediation_mode"] = "legacy"
+    rehash(baseline)
+    candidate = deepcopy(baseline)
+    candidate["remediation_mode"] = "v2"
+    rehash(candidate)
     binding = {
         key: digest(key)
         for key in (
@@ -88,6 +103,7 @@ def fixture_report():
                 provider_cache="unknown",
                 latency_ms=10,
                 latency_budget_ms=20,
+                request_algorithm_signature=digest(f"request-{i}-{arm}"),
                 frontier_budget=dict(
                     policy_signature=digest("synthetic-budget-policy"),
                     max_queries=64,
@@ -112,6 +128,9 @@ def fixture_report():
                     query_sha256=digest(inputs["question"]),
                     requested_subset_signature=digest(i),
                     frontier_budget=deepcopy(observation["frontier_budget"]),
+                    request_algorithm_signature=observation[
+                        "request_algorithm_signature"
+                    ],
                 )
             ]
         queries.append(dict(query_id=f"q{i}", strata=tags, labels=labels, **arms))
@@ -125,7 +144,7 @@ def fixture_report():
             for arm in ("baseline", "candidate"):
                 row[arm]["ranked"] = row[arm]["repeated_ranked"] = []
                 row[arm]["abstained"] = True
-    return seal(
+    report = seal(
         dict(
             schema="graph-evaluation-v2",
             backend="live",
@@ -151,8 +170,12 @@ def fixture_report():
             ),
             decisions=decisions,
             queries=queries,
+            controls=dict(baseline=baseline, candidate=candidate),
+            treatment={"remediation_mode": {"baseline": "legacy", "candidate": "v2"}},
         )
     )
+    rebind(report)
+    return expand_modes(report)
 
 
 def seal(report):

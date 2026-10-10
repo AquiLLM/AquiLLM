@@ -42,14 +42,15 @@ def test_relabelled_same_pair_and_query_cannot_inflate_sample():
         in evaluate(seal(report))["blocking_reasons"]
     )
     report = fixture_report()
-    for arm in ("baseline", "candidate"):
-        report["queries"][1][arm]["inputs"].update(
-            question=report["queries"][0][arm]["inputs"]["question"],
-            scope_sha256=report["queries"][0][arm]["inputs"]["scope_sha256"],
-        )
-        report["queries"][1][arm]["frontier_invocations"][0]["query_sha256"] = digest(
-            report["queries"][1][arm]["inputs"]["question"]
-        )
+    for mode, pair in report["queries"][1]["executions"].items():
+        for arm in ("baseline", "candidate"):
+            original = report["queries"][0]["executions"][mode][arm]["inputs"]
+            pair[arm]["inputs"].update(
+                question=original["question"], scope_sha256=original["scope_sha256"]
+            )
+            pair[arm]["frontier_invocations"][0]["query_sha256"] = digest(
+                original["question"]
+            )
     assert (
         "invalid_or_missing_observation:duplicate_query_content"
         in evaluate(report)["blocking_reasons"]
@@ -101,10 +102,9 @@ def test_thresholds_cannot_be_weakened_after_measurement(field, value):
 def test_zero_deltas_cannot_prove_targeted_improvement():
     report = fixture_report()
     for row in report["queries"]:
-        row["baseline"] = deepcopy(row["candidate"])
-        row["baseline"]["frontier_invocations"][0]["invocation_id"] = (
-            row["query_id"] + "-baseline"
-        )
+        pair = row["executions"]["baseline"]
+        for field in ("ranked", "repeated_ranked", "abstained"):
+            pair["baseline"][field] = deepcopy(pair["candidate"][field])
     result = evaluate(report)
     assert not result["eligible"]
     assert any("intended_improvement_unproven" in r for r in result["blocking_reasons"])
@@ -115,7 +115,7 @@ def test_zero_deltas_cannot_prove_targeted_improvement():
 def test_bounded_graph_cannot_claim_exhaustive_or_contradict_abstention(arm):
     for field in ("exhaustive", "abstained"):
         report = fixture_report()
-        report["queries"][0][arm][field] = True
+        report["queries"][0]["executions"]["baseline"][arm][field] = True
         assert not evaluate(report)["eligible"]
 
 
@@ -144,9 +144,9 @@ def test_malformed_and_unmatched_study_values_block(mutation):
     report = fixture_report()
     row = report["queries"][0]
     if mutation == "nan":
-        row["candidate"]["latency_ms"] = float("nan")
+        row["executions"]["baseline"]["candidate"]["latency_ms"] = float("nan")
     elif mutation == "negative":
-        row["candidate"]["latency_ms"] = -1
+        row["executions"]["baseline"]["candidate"]["latency_ms"] = -1
     elif mutation == "unknown_boolean":
         report["decisions"][0]["expected_same"] = None
     elif mutation == "late_policy":
@@ -170,11 +170,11 @@ def test_malformed_and_unmatched_study_values_block(mutation):
     elif mutation == "candidate_count":
         report["decisions"][0]["candidate"] = None
     elif mutation == "completion":
-        row["candidate"]["completion"] = "cancelled"
+        row["executions"]["baseline"]["candidate"]["completion"] = "cancelled"
     elif mutation == "determinism":
-        row["candidate"]["repeated_ranked"] = ["other"]
+        row["executions"]["baseline"]["candidate"]["repeated_ranked"] = ["other"]
     elif mutation == "safety":
-        row["candidate"]["authorization_violations"] = 1
+        row["executions"]["baseline"]["candidate"]["authorization_violations"] = 1
     else:
-        row["candidate"]["latency_ms"] = 21
+        row["executions"]["baseline"]["candidate"]["latency_ms"] = 21
     assert not evaluate(report)["eligible"]

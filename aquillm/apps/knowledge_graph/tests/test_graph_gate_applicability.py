@@ -11,8 +11,8 @@ from apps.knowledge_graph.evals.graph_activation_attachment_v2 import (
     validate_graph_activation_attachment_v2 as validate,
 )
 from apps.knowledge_graph.evals.graph_effective_controls import graph_effective_controls
-from apps.knowledge_graph.evals.graph_frontier_observations import combined_graph_budget
 from apps.knowledge_graph.tests.graph_gate_test_fixtures import digest, fixture_report
+from apps.knowledge_graph.tests.graph_review_fixtures import rebind
 
 
 def reports(control=None):
@@ -99,8 +99,10 @@ def test_equal_adaptive_ranking_cannot_use_unchanged_legacy_exception(monkeypatc
     assert "graph_report_missing" in result["blocking_reasons"]
 
 
-def test_required_attachment_binds_actual_subject_and_mutations(monkeypatch):
+def attachment_pair(monkeypatch, control_override=None):
     quality = v2_reports(monkeypatch)
+    if control_override is not None:
+        quality = reports(control_override)
     report = fixture_report()
     control = quality["combined"]["observations"][0]["comparison_controls"][
         "graph_policy"
@@ -111,40 +113,44 @@ def test_required_attachment_binds_actual_subject_and_mutations(monkeypatch):
     for binding in (report["binding"], report["baseline_binding"]):
         binding["model_runtime"] = digest(model_runtime)
         binding["budget"] = digest({})
-        binding["graph_budget"] = combined_graph_budget(
-            control, report["queries"][0]["candidate"]["frontier_budget"]
-        )
-    report["binding"]["runtime"] = control["runtime_sha256"]
-    report["binding"]["algorithm_signature"] = control["algorithm_signature"]
-    for q in report["queries"]:
-        q["candidate"]["binding"] = deepcopy(report["binding"])
-        q["baseline"]["binding"] = deepcopy(report["baseline_binding"])
+    report["controls"]["candidate"] = deepcopy(control)
+    rebind(report)
     source_scope = {"kind": "synthetic", "sources": ["source"]}
-    for arm in ("baseline", "candidate"):
-        report["queries"][0][arm]["inputs"]["scope_sha256"] = digest(source_scope)
+    for pair in report["queries"][0]["executions"].values():
+        for arm in ("baseline", "candidate"):
+            pair[arm]["inputs"]["scope_sha256"] = digest(source_scope)
     attached = graph_activation_attachment_v2(report)
-    for arm in quality.values():
+    for mode, arm in quality.items():
         row = arm["observations"][0]
         row["snapshot"].update(model_runtime)
         row["source_scope"] = source_scope
         query = report["queries"][0]
+        candidate = query["executions"][mode]["candidate"]
         row.update(
             code_revision="a" * 40,
-            primary_question=query["candidate"]["inputs"]["question"],
+            primary_question=candidate["inputs"]["question"],
         )
         row["lane_observations"]["graph"].update(
             query_id=query["query_id"],
             observation_sha256=digest(query),
+            execution_sha256=digest(candidate),
+            mode=mode,
+            request_algorithm_signature=candidate["request_algorithm_signature"],
             attachment_sha256=attached["attachment_sha256"],
             corpus_sha256=report["binding"]["corpus"],
             budget_sha256=report["binding"]["budget"],
             policy_sha256=attached["policy_sha256"],
-            frontier_budget=deepcopy(query["candidate"]["frontier_budget"]),
-            frontier_invocations=deepcopy(query["candidate"]["frontier_invocations"]),
-            requested_subset_signature=query["candidate"]["frontier_invocations"][0][
+            frontier_budget=deepcopy(candidate["frontier_budget"]),
+            frontier_invocations=deepcopy(candidate["frontier_invocations"]),
+            requested_subset_signature=candidate["frontier_invocations"][0][
                 "requested_subset_signature"
             ],
         )
+    return report, quality
+
+
+def test_required_attachment_binds_actual_subject_and_mutations(monkeypatch):
+    report, quality = attachment_pair(monkeypatch)
     assert validate(report, quality_reports=quality)["passed"]
     for key in (
         "attachment_sha256",
@@ -157,6 +163,9 @@ def test_required_attachment_binds_actual_subject_and_mutations(monkeypatch):
         "frontier_budget",
         "frontier_invocations",
         "requested_subset_signature",
+        "execution_sha256",
+        "mode",
+        "request_algorithm_signature",
     ):
         changed = deepcopy(quality)
         changed["combined"]["observations"][0]["lane_observations"]["graph"][key] = (

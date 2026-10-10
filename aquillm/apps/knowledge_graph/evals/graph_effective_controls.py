@@ -16,41 +16,8 @@ def graph_effective_controls():
     algorithm = _load_algorithm_config()
     mode = settings.KG_GRAPH_REMEDIATION_MODE
     # Explicit allowlist avoids endpoints, credentials and connection settings.
-    fields = (
-        "graph_algorithm",
-        "graph_topology_backend",
-        "graph_direct_enabled",
-        "graph_extended_enabled",
-        "graph_overall_timeout_ms",
-        "graph_direct_timeout_ms",
-        "graph_extended_timeout_ms",
-        "graph_direct_max_candidates",
-        "graph_extended_max_candidates",
-        "graph_direct_max_depth",
-        "graph_extended_max_depth",
-        "graph_direct_max_nodes",
-        "graph_extended_max_nodes",
-        "graph_direct_max_edges",
-        "graph_extended_max_edges",
-        "graph_direct_max_seeds",
-        "graph_extended_max_seeds",
-        "query_extractor_timeout_ms",
-        "query_max_bytes",
-        "query_max_codepoints",
-        "query_max_spans",
-        "direct_embedding_enabled",
-        "direct_min_similarity",
-        "direct_winner_margin",
-        "query_extractor_model",
-        "query_extractor_model_revision",
-        "query_extractor_build_hash",
-        "query_extractor_expected_schema_version",
-        "query_extractor_expected_schema_checksum",
-        "ppr_restart_mode",
-        "projection_schema_version",
-        "projection_format_version",
-        "memgraph_image",
-    )
+    from .graph_runtime_control_values import RUNTIME_FIELDS
+
     result = dict(
         identity_policy=policy,
         remediation_mode=mode,
@@ -61,7 +28,7 @@ def graph_effective_controls():
         algorithm_config=asdict(algorithm),
         algorithm_signature=effective_signature(algorithm, mode),
         runtime_observations={
-            key: getattr(settings, "KG_" + key.upper()) for key in fields
+            key: getattr(settings, "KG_" + key.upper()) for key in RUNTIME_FIELDS
         },
     )
     result["runtime_sha256"] = digest(result)
@@ -102,7 +69,7 @@ def graph_budget_digest(controls):
     )
 
 
-def validate_controls(value):
+def validate_controls(value, *, observed_only=False):
     from apps.knowledge_graph.resolution import resolver_version_for_policy
     from apps.knowledge_graph.retrieval.ppr import (
         PPRAlgorithmConfig,
@@ -138,6 +105,10 @@ def validate_controls(value):
     )
     algorithm = PPRAlgorithmConfig(**value["algorithm_config"])
     require(
+        set(value["algorithm_config"]) == set(asdict(algorithm)),
+        "graph_algorithm_config_incomplete",
+    )
+    require(
         algorithm.max_hops == 2
         and algorithm.ppr_iterations == 8
         and value["algorithm_signature"]
@@ -150,9 +121,15 @@ def validate_controls(value):
         == digest({k: v for k, v in value.items() if k != "runtime_sha256"}),
         "graph_applicability_unknown",
     )
-    current = graph_effective_controls()
+    from .graph_runtime_control_values import validate_runtime
+
+    validate_runtime(value["runtime_observations"])
     require(
-        set(value["runtime_observations"]) == set(current["runtime_observations"]),
-        "graph_applicability_unknown",
+        algorithm.canonical_resolver_version
+        in {
+            resolver_version_for_policy("canonical", "legacy"),
+            resolver_version_for_policy("canonical", policy),
+        },
+        "graph_resolver_config_unknown",
     )
-    return current
+    return value if observed_only else graph_effective_controls()

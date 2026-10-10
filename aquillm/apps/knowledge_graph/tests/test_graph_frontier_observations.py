@@ -27,7 +27,7 @@ from apps.knowledge_graph.tests.graph_gate_test_fixtures import fixture_report
 )
 def test_frontier_unknown_or_overrun_blocks(mutation):
     report = fixture_report()
-    row = report["queries"][0]["candidate"]
+    row = report["queries"][0]["executions"]["baseline"]["candidate"]
     observation = row["frontier_budget"]
     if mutation == "missing":
         del row["frontier_budget"]
@@ -65,13 +65,15 @@ def test_distinct_graph_caps_cannot_hide_in_declared_policy_treatment():
 @pytest.mark.parametrize("mutation", ["zero", "two", "reuse", "query", "subset"])
 def test_all_invocations_must_match_singleton_query_study(mutation):
     report = fixture_report()
-    events = report["queries"][0]["candidate"]["frontier_invocations"]
+    events = report["queries"][0]["executions"]["baseline"]["candidate"][
+        "frontier_invocations"
+    ]
     if mutation == "zero":
         events.clear()
     elif mutation == "two":
         events.append(deepcopy(events[0]))
     elif mutation == "reuse":
-        events[0]["invocation_id"] = "q0-baseline"
+        events[0]["invocation_id"] = "q0-baseline-baseline"
     elif mutation == "query":
         events[0]["query_sha256"] = "a" * 64
     else:

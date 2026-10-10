@@ -100,11 +100,37 @@ def binding(value):
 
 
 def validate_report(report):
-    from .graph_frontier_observations import frontier_identity
-    from .graph_gate_execution import validate_arm
+    from .graph_mode_observations import validate_modes
+    from .graph_study_controls import validate_study_controls
+
+    require(
+        set(report)
+        == {
+            "schema",
+            "backend",
+            "split",
+            "binding",
+            "baseline_binding",
+            "controls",
+            "treatment",
+            "intended_improvement",
+            "preregistered",
+            "heldout_independent",
+            "predeclared_at",
+            "heldout_opened_at",
+            "development_decision_ids",
+            "development_query_ids",
+            "policy_sha256",
+            "labels_sha256",
+            "decisions",
+            "queries",
+        },
+        "graph_report_fields_unknown",
+    )
 
     binding(report["binding"])
     binding(report["baseline_binding"])
+    validate_study_controls(report)
     require(
         all(
             report["binding"][k] == report["baseline_binding"][k]
@@ -179,7 +205,7 @@ def validate_report(report):
     for row in queries:
         require(
             type(row) is dict
-            and set(row) == {"query_id", "strata", "labels", "baseline", "candidate"},
+            and set(row) == {"query_id", "strata", "labels", "executions"},
             "invalid_query_observation",
         )
         identity = row["query_id"]
@@ -205,40 +231,10 @@ def validate_report(report):
             labels["coverage"] in ("complete", "partial", "unavailable"),
             "coverage_label_unknown",
         )
-        for arm in ("baseline", "candidate"):
-            validate_arm(
-                row[arm],
-                row["query_id"],
-                report["baseline_binding" if arm == "baseline" else "binding"],
-            )
-            invocation = row[arm]["frontier_invocations"][0]["invocation_id"]
-            require(invocation not in invocations_seen, "graph_invocation_reused")
-            invocations_seen.add(invocation)
-        require(
-            row["baseline"]["inputs"] == row["candidate"]["inputs"],
-            "unmatched_query_inputs",
-        )
-        require(
-            frontier_identity(row["baseline"]["frontier_budget"])
-            == frontier_identity(row["candidate"]["frontier_budget"]),
-            "unmatched_frontier_budget",
-        )
-        require(
-            row["baseline"]["frontier_invocations"][0]["requested_subset_signature"]
-            == row["candidate"]["frontier_invocations"][0][
-                "requested_subset_signature"
-            ],
-            "unmatched_invocation_subset",
-        )
-        inputs = row["candidate"]["inputs"]
+        inputs = validate_modes(row, report, invocations_seen)
         query_key = (inputs["question"], inputs["scope_sha256"])
         require(query_key not in inputs_seen, "duplicate_query_content")
         inputs_seen.add(query_key)
-        require(
-            row["baseline"]["cache_state"] == row["candidate"]["cache_state"]
-            and row["baseline"]["provider_cache"] == row["candidate"]["provider_cache"],
-            "unmatched_cache_state",
-        )
     require(
         not seen.intersection(ids(report["development_query_ids"])),
         "heldout_query_leak",

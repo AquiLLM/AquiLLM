@@ -75,7 +75,7 @@ def test_invalid_or_missing_observations_fail(mutation):
     elif mutation == "missing_label":
         del query["labels"]["no_answer"]
     elif mutation == "bool_metric":
-        query["candidate"]["latency_ms"] = True
+        query["executions"]["baseline"]["candidate"]["latency_ms"] = True
     elif mutation == "known_conflict":
         report["decisions"][-1]["automatic"] = True
     elif mutation == "missing_identity_stratum":
@@ -85,13 +85,17 @@ def test_invalid_or_missing_observations_fail(mutation):
         for row in report["queries"]:
             row["strata"] = ["homonym"]
     elif mutation.endswith("_drift"):
-        query["candidate"]["binding"][mutation.split("_")[0]] = "f" * 64
+        query["executions"]["baseline"]["candidate"]["binding"][
+            mutation.split("_")[0]
+        ] = "f" * 64
     elif mutation == "leaked_labels":
-        query["candidate"]["inputs"]["labels"] = query["labels"]
+        query["executions"]["baseline"]["candidate"]["inputs"]["labels"] = query[
+            "labels"
+        ]
     elif mutation == "unknown_cache":
-        del query["candidate"]["provider_cache"]
+        del query["executions"]["baseline"]["candidate"]["provider_cache"]
     else:
-        query["candidate"]["coverage"] = "complete"
+        query["executions"]["baseline"]["candidate"]["coverage"] = "complete"
     assert not evaluate(seal(report))["eligible"]
 
 
@@ -109,14 +113,22 @@ def test_one_all_tag_gain_cannot_hide_regressions():
     for i, row in enumerate(report["queries"]):
         if row["labels"]["no_answer"]:
             continue
-        row["baseline"]["ranked"] = row["baseline"]["repeated_ranked"] = ["good"]
-        row["candidate"]["ranked"] = row["candidate"]["repeated_ranked"] = ["bad"]
+        row["executions"]["baseline"]["baseline"]["ranked"] = row["executions"][
+            "baseline"
+        ]["baseline"]["repeated_ranked"] = ["good"]
+        row["executions"]["baseline"]["candidate"]["ranked"] = row["executions"][
+            "baseline"
+        ]["candidate"]["repeated_ranked"] = ["bad"]
     row = report["queries"][0]
     from apps.knowledge_graph.tests.graph_gate_test_fixtures import STRATA
 
     row["strata"] = list(STRATA)
-    row["baseline"]["ranked"] = row["baseline"]["repeated_ranked"] = ["bad"]
-    row["candidate"]["ranked"] = row["candidate"]["repeated_ranked"] = ["good"]
+    row["executions"]["baseline"]["baseline"]["ranked"] = row["executions"]["baseline"][
+        "baseline"
+    ]["repeated_ranked"] = ["bad"]
+    row["executions"]["baseline"]["candidate"]["ranked"] = row["executions"][
+        "baseline"
+    ]["candidate"]["repeated_ranked"] = ["good"]
     result = evaluate(seal(report))
     assert "aggregate_retrieval_regression" in result["blocking_reasons"]
 
@@ -129,32 +141,34 @@ def test_intersection_regression_cannot_hide_behind_stratum_marginals():
     report["queries"] = [deepcopy(report["queries"][0]) for _ in range(312)]
     for i, row in enumerate(report["queries"]):
         row["query_id"] = f"cohort-{i}"
-        for arm in ("baseline", "candidate"):
-            row[arm]["inputs"]["query_id"] = row["query_id"]
-            row[arm]["inputs"]["question"] = f"cohort question {i}"
-            row[arm]["frontier_invocations"][0].update(
-                invocation_id=f"cohort-{i}-{arm}",
-                query_sha256=digest(row[arm]["inputs"]["question"]),
-            )
+        for mode, pair in row["executions"].items():
+            for arm, execution in pair.items():
+                execution["inputs"].update(
+                    query_id=row["query_id"], question=f"cohort question {i}"
+                )
+                execution["frontier_invocations"][0].update(
+                    invocation_id=f"cohort-{i}-{mode}-{arm}",
+                    query_sha256=digest(execution["inputs"]["question"]),
+                )
         row["strata"] = (
             [STRATA[i % 6]] if i < 300 or i >= 306 else [STRATA[0], STRATA[1]]
         )
-        row["candidate"]["ranked"] = row["candidate"]["repeated_ranked"] = (
-            ["good"] if i < 300 else ["bad"]
-        )
-        row["baseline"]["ranked"] = row["baseline"]["repeated_ranked"] = (
-            ["bad"] if i < 300 else ["good"]
-        )
+        row["executions"]["baseline"]["candidate"]["ranked"] = row["executions"][
+            "baseline"
+        ]["candidate"]["repeated_ranked"] = ["good"] if i < 300 else ["bad"]
+        row["executions"]["baseline"]["baseline"]["ranked"] = row["executions"][
+            "baseline"
+        ]["baseline"]["repeated_ranked"] = ["bad"] if i < 300 else ["good"]
         if i >= 306:
             row["labels"].update(relevant=[], no_answer=True)
-            for arm in ("baseline", "candidate"):
-                row[arm].update(ranked=[], repeated_ranked=[], abstained=True)
+            for pair in row["executions"].values():
+                for execution in pair.values():
+                    execution.update(ranked=[], repeated_ranked=[], abstained=True)
     result = evaluate(seal(report))
     assert not any("insufficient" in r for r in result["blocking_reasons"])
-    assert result["retrieval"]["cohorts"]["aggregate"]["recall_at_10"]["lower"] > 0
-    assert all(
-        result["retrieval"]["cohorts"][s]["recall_at_10"]["lower"] > 0 for s in STRATA
-    )
+    cohorts = result["retrieval"]["modes"]["baseline"]["cohorts"]
+    assert cohorts["aggregate"]["recall_at_10"]["lower"] > 0
+    assert all(cohorts[s]["recall_at_10"]["lower"] > 0 for s in STRATA)
     assert any("homonym&relation_intent" in r for r in result["blocking_reasons"])
 
 

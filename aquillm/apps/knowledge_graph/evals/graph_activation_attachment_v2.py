@@ -30,7 +30,7 @@ def validate_graph_activation_attachment_v2(report, *, quality_reports):
             == {"baseline", "selection", "preservation", "combined"},
             "graph_applicability_unknown",
         )
-        for quality in quality_reports.values():
+        for mode, quality in quality_reports.items():
             require(bool(quality["observations"]), "graph_applicability_unknown")
             for row in quality["observations"]:
                 control = row["comparison_controls"]["graph_policy"]
@@ -48,7 +48,7 @@ def validate_graph_activation_attachment_v2(report, *, quality_reports):
                     "graph_applicability_unknown",
                 )
                 controls.append(control)
-                rows.append((row, quality))
+                rows.append((row, quality, mode))
         unchanged = all(c == controls[0] for c in controls)
         applicable = not (
             unchanged
@@ -70,7 +70,7 @@ def validate_graph_activation_attachment_v2(report, *, quality_reports):
         attachment = graph_activation_attachment_v2(report)
         reasons.extend(attachment["result"]["blocking_reasons"])
         queries = {q["query_id"]: q for q in report["queries"]}
-        for row, quality in rows:
+        for row, quality, mode in rows:
             control, graph = (
                 row["comparison_controls"]["graph_policy"],
                 row["lane_observations"]["graph"],
@@ -79,6 +79,17 @@ def validate_graph_activation_attachment_v2(report, *, quality_reports):
             require(
                 query is not None and graph.get("observation_sha256") == digest(query),
                 "graph_query_provenance_mismatch",
+            )
+            candidate = query["executions"][mode]["candidate"]
+            require(
+                graph.get("execution_sha256") == digest(candidate)
+                and graph.get("mode") == mode,
+                "graph_execution_provenance_mismatch",
+            )
+            require(
+                graph.get("request_algorithm_signature")
+                == candidate["request_algorithm_signature"],
+                "graph_request_signature_mismatch",
             )
             require(
                 graph.get("attachment_sha256") == attachment["attachment_sha256"],
@@ -93,9 +104,8 @@ def validate_graph_activation_attachment_v2(report, *, quality_reports):
                 "graph_runtime_revision_source_mismatch",
             )
             require(
-                query["candidate"]["inputs"]["question"] == row["primary_question"]
-                and query["candidate"]["inputs"]["scope_sha256"]
-                == digest(row["source_scope"])
+                candidate["inputs"]["question"] == row["primary_question"]
+                and candidate["inputs"]["scope_sha256"] == digest(row["source_scope"])
                 and graph.get("corpus_sha256") == bound["corpus"]
                 and graph.get("budget_sha256") == bound["budget"]
                 and graph.get("policy_sha256") == attachment["policy_sha256"],
@@ -122,21 +132,18 @@ def validate_graph_activation_attachment_v2(report, *, quality_reports):
                 ),
                 "graph_budget_controls_mismatch",
             )
-            frontier = query["candidate"]["frontier_budget"]
+            frontier = candidate["frontier_budget"]
             require(
                 graph.get("frontier_budget") == frontier,
                 "graph_frontier_observation_mismatch",
             )
             require(
-                graph.get("frontier_invocations")
-                == query["candidate"]["frontier_invocations"],
+                graph.get("frontier_invocations") == candidate["frontier_invocations"],
                 "graph_invocation_collection_mismatch",
             )
             require(
                 graph.get("requested_subset_signature")
-                == query["candidate"]["frontier_invocations"][0][
-                    "requested_subset_signature"
-                ],
+                == candidate["frontier_invocations"][0]["requested_subset_signature"],
                 "graph_invocation_subset_mismatch",
             )
             require(
@@ -144,7 +151,7 @@ def validate_graph_activation_attachment_v2(report, *, quality_reports):
                 "graph_cap_controls_mismatch",
             )
             require(
-                query["candidate"]["latency_budget_ms"]
+                candidate["latency_budget_ms"]
                 <= control["runtime_observations"]["graph_overall_timeout_ms"],
                 "graph_effective_latency_budget_mismatch",
             )
