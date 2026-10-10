@@ -74,11 +74,33 @@ def test_fused_matches_oracle_and_initializes_empty_lanes(runtime, length, prior
         assert torch.count_nonzero(padded[..., :-1]) == 0
         assert torch.isneginf(padded[..., -1]).all()
     for b, committed in enumerate(prior):
+        fallback = plan.buckets[-1][1] if plan.buckets else plan.max_splits
         active = next((splits for upper, splits in plan.buckets
-                       if committed <= upper), plan.max_splits)
+                       if committed <= upper), fallback)
         empty = mid[b, :, active:plan.max_splits]
         assert torch.count_nonzero(empty[..., :-1]) == 0
         assert torch.isneginf(empty[..., -1]).all()
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("buckets,active", [(((2048, 7), (8192, 15)), 15), ((), 31)])
+def test_exhausted_bucket_uses_last_count_and_fixed_plan_uses_max(runtime, buckets, active):
+    torch, Plan, launch, reduce, close, make, oracle = runtime
+    batch = make([8193], length=5)
+    plan = Plan(31, buckets)
+    mid, output = _buffers(torch, batch, plan)
+    launch(batch, plan, mid)
+    reduce(batch, mid, output)
+    close(output, oracle(batch), batch.q.dtype)
+    # All expected committed splits are nonempty; anything above the selected
+    # count must be neutral even though enough tokens exist to populate it.
+    g = batch.spec.num_q_heads // batch.spec.num_kv_heads
+    consumed = mid[:, :, :active, :5, :g, -1]
+    assert torch.isfinite(consumed).all()
+    inactive = mid[:, :, active:31]
+    assert torch.count_nonzero(inactive[..., :-1]) == 0
+    assert torch.isneginf(inactive[..., -1]).all()
+    assert torch.isfinite(mid[:, :, 31, :5, :g, -1]).all()
 
 
 @pytest.mark.gpu

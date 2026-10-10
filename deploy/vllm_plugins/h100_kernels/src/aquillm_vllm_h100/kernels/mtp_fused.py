@@ -45,7 +45,12 @@ def _kernel():
                     mask=live[:, None] & dmask[None, :], other=0,
                     cache_modifier=".ca").to(tl.float32)
         prior = tl.maximum(tl.load(Lengths + b * ls) - L, 0)
-        active = tl.full((), MAX_SPLITS, tl.int32)
+        # Beyond the final bound, keep the final measured bucket's count.
+        # Empty buckets mean a fixed policy using all reserved splits.
+        if len(BUCKETS) > 0:
+            active = tl.full((), BUCKETS[-1][1], tl.int32)
+        else:
+            active = tl.full((), MAX_SPLITS, tl.int32)
         for i in tl.static_range(len(BUCKETS) - 1, -1, -1):
             active = tl.where(prior <= BUCKETS[i][0], BUCKETS[i][1], active)
         m = tl.full((ROWS,), -float("inf"), tl.float32)
