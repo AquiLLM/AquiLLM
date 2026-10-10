@@ -5,7 +5,9 @@ Restore the original configuration before retrying any failed preflight.
 """
 import argparse
 import hashlib
+import itertools
 import json
+import math
 import os
 from pathlib import Path
 import socket
@@ -61,9 +63,54 @@ def service_digest(service):
     return digest({key: value for key, value in service.items() if key not in ("image", "environment")})
 
 
-def runtime_digest(current):
+def runtime_snapshot(current, *, canonical=True):
     config = {key: value for key, value in current["Config"].items() if key not in ("Image", "Env", "Labels", "Hostname")}
-    return digest(dict(config=config, host=current.get("HostConfig"), mounts=current.get("Mounts")))
+    host = dict(current["HostConfig"]) if isinstance(current.get("HostConfig"), dict) else current.get("HostConfig")
+    mounts = current.get("Mounts")
+    if canonical:
+        order = lambda value: json.dumps(value, sort_keys=True, separators=(",", ":"))
+        if isinstance(mounts, list):
+            mounts = sorted(mounts, key=order)
+        if isinstance(host, dict):
+            # Compose builds these two mount collections from a Go map as well.
+            for name in ("Binds", "Mounts"):
+                if isinstance(host.get(name), list):
+                    host[name] = sorted(host[name], key=order)
+    return dict(config=config, host=host, mounts=mounts)
+
+
+def runtime_digest(current, *, canonical=True):
+    return digest(runtime_snapshot(current, canonical=canonical))
+
+
+def runtime_matches(state, current):
+    format_name = state.get("runtime_digest_format")
+    if format_name == "mount-order-v1":
+        return runtime_digest(current) == state["runtime_digest"]
+    if format_name is not None:
+        return False
+    snapshot = runtime_snapshot(current, canonical=False)
+    if digest(snapshot) == state["runtime_digest"]:
+        return True
+    # Legacy states contain only a digest. Prove the exact historical digest
+    # by reordering mount collections, retaining every protected record/value.
+    # This admits no changed mounts, commands, logging, or other runtime fields.
+    locations = []
+    if isinstance(snapshot["mounts"], list):
+        locations.append((snapshot, "mounts"))
+    if isinstance(snapshot["host"], dict):
+        for name in ("Binds", "Mounts"):
+            if isinstance(snapshot["host"].get(name), list):
+                locations.append((snapshot["host"], name))
+    if math.prod(math.factorial(len(owner[name])) for owner, name in locations) > 4096:
+        return False
+    choices = [itertools.permutations(owner[name]) for owner, name in locations]
+    for combination in itertools.product(*choices):
+        for (owner, name), values in zip(locations, combination):
+            owner[name] = list(values)
+        if digest(snapshot) == state["runtime_digest"]:
+            return True
+    return False
 
 
 def prepare_state(state, current, resolved, compose_hash, *, verified=False):
@@ -81,10 +128,10 @@ def prepare_state(state, current, resolved, compose_hash, *, verified=False):
             raise SystemExit("Resolved environment differs from running baseline; refusing preparation")
     if state.get("schema_version") == 2:
         validate_configuration(state, current, resolved, check_resolved_environment=False)
-        return state
+        return dict(state, runtime_digest_format="mount-order-v1", runtime_digest=runtime_digest(current))
     return dict(state, schema_version=2, environment_digests=protected_environment(values),
                 baseline_flags={name: value for name, value in values.items() if name in FLAGS},
-                service_digest=service_digest(resolved), runtime_digest=runtime_digest(current))
+                service_digest=service_digest(resolved), runtime_digest_format="mount-order-v1", runtime_digest=runtime_digest(current))
 
 
 def validate_configuration(state, current, resolved, *, check_resolved_environment=True):
@@ -94,7 +141,7 @@ def validate_configuration(state, current, resolved, *, check_resolved_environme
         raise SystemExit("Running protected environment drift; restore original configuration before switch or rollback")
     if check_resolved_environment and protected_environment(resolved.get("environment", {})) != state["environment_digests"]:
         raise SystemExit("Compose protected environment key/value drift; refusing switch or rollback")
-    if service_digest(resolved) != state["service_digest"] or runtime_digest(current) != state["runtime_digest"]:
+    if service_digest(resolved) != state["service_digest"] or not runtime_matches(state, current):
         raise SystemExit("Protected command/mount/runtime configuration drift; refusing switch or rollback")
 
 

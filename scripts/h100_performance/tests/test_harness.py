@@ -1,4 +1,5 @@
 import io
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -46,6 +47,8 @@ class StreamTests(unittest.TestCase):
         self.assertTrue(result['complete'])
         self.assertEqual(result['nonempty_chunks'], 1)
         self.assertEqual(result['output_tokens'], 4)
+        self.assertEqual(result['output_text'], 'four tokens at once')
+        self.assertEqual(result['output_sha256'], hashlib.sha256(result['output_text'].encode()).hexdigest())
         self.assertIsNotNone(result['ttft_seconds'])
         empty = self.probe({'choices': [{'delta': {'role': 'assistant'}, 'finish_reason': 'length'}]},
                            {'usage': {'completion_tokens': 4}}, '[DONE]')
@@ -287,6 +290,73 @@ class SwitchTests(unittest.TestCase):
         self.assertEqual(rollback['services']['vllm']['environment']['AQUILLM_H100_PREFILL'], '0')
         with self.assertRaises(SystemExit):
             dev_switch.make_override(state, current, 'candidate', prefill='arbitrary')
+
+    def mount_fixture(self):
+        current = json.loads(json.dumps(self.current))
+        current['Config']['Cmd'] = ['serve', '--model', 'model']
+        current['Mounts'].extend([{'Type': 'volume', 'Name': 'compile-cache', 'Source': '/volumes/compile-cache', 'Destination': '/compile', 'RW': True},
+                                 {'Type': 'bind', 'Source': '/script.py', 'Destination': '/script.py', 'RW': False}])
+        current['HostConfig']['Binds'].append('/script.py:/script.py:ro')
+        current['HostConfig']['Mounts'] = [{'Type': 'volume', 'Source': 'cache', 'Target': '/cache'},
+                                          {'Type': 'volume', 'Source': 'compile-cache', 'Target': '/compile'}]
+        return current
+
+    def test_runtime_digest_ignores_only_mount_collection_order(self):
+        current = self.mount_fixture()
+        reordered = json.loads(json.dumps(current))
+        reordered['Mounts'].reverse()
+        reordered['HostConfig']['Binds'].reverse()
+        reordered['HostConfig']['Mounts'].reverse()
+        self.assertEqual(dev_switch.runtime_digest(current), dev_switch.runtime_digest(reordered))
+        for change in ('mount', 'volume_name', 'rw', 'command', 'log_config'):
+            changed = json.loads(json.dumps(reordered))
+            if change == 'mount':
+                changed['Mounts'][0]['Source'] = '/changed'
+            elif change == 'volume_name':
+                changed['Mounts'][1]['Name'] = 'different-data'
+            elif change == 'rw':
+                changed['Mounts'][0]['RW'] = True
+            elif change == 'command':
+                changed['Config']['Cmd'].reverse()
+            else:
+                changed['HostConfig']['LogConfig'] = {'Type': 'none'}
+            self.assertNotEqual(dev_switch.runtime_digest(current), dev_switch.runtime_digest(changed))
+
+    def test_legacy_digest_migration_requires_exact_mount_permutation_proof(self):
+        current = self.mount_fixture()
+        state = dev_switch.prepare_state(self.legacy, current, self.service, 'verified', verified=True)
+        state.pop('runtime_digest_format', None)
+        state['runtime_digest'] = dev_switch.runtime_digest(current, canonical=False)
+        reordered = json.loads(json.dumps(current))
+        reordered['Mounts'].reverse()
+        reordered['HostConfig']['Binds'].reverse()
+        reordered['HostConfig']['Mounts'].reverse()
+        dev_switch.validate_configuration(state, reordered, self.service)
+        migrated = dev_switch.prepare_state(state, reordered, self.service, 'verified', verified=True)
+        self.assertEqual(migrated['runtime_digest_format'], 'mount-order-v1')
+        self.assertEqual(migrated['runtime_digest'], dev_switch.runtime_digest(current))
+        for change in ('mount', 'command'):
+            drifted = json.loads(json.dumps(reordered))
+            if change == 'mount':
+                drifted['Mounts'][0]['Source'] = '/changed'
+            else:
+                drifted['Config']['Cmd'].reverse()
+            with self.assertRaises(SystemExit):
+                dev_switch.prepare_state(state, drifted, self.service, 'verified', verified=True)
+
+    def test_legacy_digest_permutation_search_is_bounded_and_unknown_format_fails(self):
+        current = self.mount_fixture()
+        state = dev_switch.prepare_state(self.legacy, current, self.service, 'verified', verified=True)
+        state.pop('runtime_digest_format', None)
+        state['runtime_digest'] = 'f' * 64
+        current['Mounts'] = [{'Source': str(index), 'Destination': '/' + str(index)} for index in range(9)]
+        with self.assertRaises(SystemExit):
+            dev_switch.validate_configuration(state, current, self.service)
+        current = self.mount_fixture()
+        state = dev_switch.prepare_state(self.legacy, current, self.service, 'verified', verified=True)
+        state['runtime_digest_format'] = 'future-unknown-format'
+        with self.assertRaises(SystemExit):
+            dev_switch.validate_configuration(state, current, self.service)
 
 
 if __name__ == '__main__':

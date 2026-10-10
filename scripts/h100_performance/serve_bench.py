@@ -71,13 +71,14 @@ def stream_request(base, payload):
         elif first is None:
             error = "missing_output"
     complete = error is None
+    text = "".join(output)
     return dict(complete=complete, error=error, finish_reason=finish, stream_done=done,
                 headers_seconds=headers_at - started if headers_at is not None else None,
                 ttft_seconds=first - started if first is not None else None,
                 total_seconds=ended - started, output_tokens=count, nonempty_chunks=chunks,
                 aggregate_decode_seconds_per_token=(ended - first) / (count - 1)
                 if complete and first is not None and count > 1 else None,
-                output_sha256=hashlib.sha256("".join(output).encode()).hexdigest(), usage=usage)
+                output_text=text, output_sha256=hashlib.sha256(text.encode()).hexdigest(), usage=usage)
 
 
 def speculation_metrics(base):
