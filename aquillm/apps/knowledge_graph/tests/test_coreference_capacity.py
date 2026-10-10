@@ -49,9 +49,11 @@ def test_resolver_preserves_tail_evidence_at_extraction_character_capacity(
     assert result.input_fingerprint == resolution_input_fingerprint(mentions)
     # Changing evidence at the very end must remain visible to snapshot validation.
     changed = [
-        {**item, "source_text": item["source_text"][:-1] + "X"}
-        if item["source_key"] == f"chunk:{context_count - 1}"
-        else item
+        (
+            {**item, "source_text": item["source_text"][:-1] + "X"}
+            if item["source_key"] == f"chunk:{context_count - 1}"
+            else item
+        )
         for item in mentions
     ]
     assert result.input_fingerprint != resolution_input_fingerprint(changed)
@@ -112,3 +114,57 @@ def test_resolution_input_fingerprint_rejects_excess_unique_source_context():
     ) as error:
         resolution_input_fingerprint(mentions)
     assert error.value.code is ExtractionCapacityCode.CHARACTER_LIMIT
+
+
+def test_initialism_collisions_preserve_all_mentions_without_exhausting_audit():
+    # All full labels have initialism RAG, but distinct normalized names. Only
+    # the undefined acronym/full-form pairs need conservative cannot-link audit.
+    mentions = tuple(
+        _mention(f"full-{index}", f"Rapid a{index} generation", start=index * 40)
+        for index in range(1025)
+    ) + (
+        _mention("undefined", "RAG", start=50_000),
+    )
+
+    result = resolve_document_mentions(mentions, _ontology())
+
+    assert _cluster_ids(result) == {
+        frozenset((mention.mention_id,)) for mention in mentions
+    }
+    assert len(result.decisions) == 1025
+    assert all(decision.method == "undefined_acronym" for decision in result.decisions)
+
+
+@pytest.mark.parametrize("identified_full_forms", [False, True])
+def test_dense_acronym_cannot_links_still_exhaust_the_candidate_cap(
+    identified_full_forms,
+):
+    mentions = tuple(
+        _mention(
+            f"dense-{index}",
+            f"Rapid a{index} generation" if identified_full_forms else "RAG",
+            start=index * 40,
+            identifier=f"doi:10.5555/{index}" if identified_full_forms else "",
+        )
+        for index in range(1025)
+    ) + (_mention("undefined", "RAG", start=50_000),)
+    with pytest.raises(ExtractionCapacityError, match="candidate audit cap") as error:
+        resolve_document_mentions(mentions, _ontology())
+    assert error.value.code is ExtractionCapacityCode.ENTITY_LIMIT
+
+
+def test_collision_audit_accepts_exact_budget_and_rejects_one_more(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0)
+    monkeypatch.setattr(coreference, "MAX_DOCUMENT_DECISIONS", 4)
+    mentions = tuple(
+        _mention(f"full-{index}", f"Rapid a{index} generation", start=index * 40)
+        for index in range(5)
+    )
+    acronym = _mention("undefined", "RAG", start=1000)
+    result = resolve_document_mentions((*mentions[:4], acronym), _ontology())
+    assert len(result.clusters) == 5
+    assert len(result.decisions) == 4
+    with pytest.raises(ExtractionCapacityError, match="candidate audit cap"):
+        resolve_document_mentions((*mentions, acronym), _ontology())

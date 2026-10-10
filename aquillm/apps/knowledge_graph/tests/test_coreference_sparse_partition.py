@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from test_coreference import _mention, _ontology
 
 from apps.knowledge_graph.resolution import DOCUMENT_RESOLVER_VERSION
@@ -14,6 +15,7 @@ OTHER_DOCUMENT_ID = uuid.UUID("22222222-2222-4222-8222-222222222222")
 CONTENT_OBJECT_ID = uuid.UUID("33333333-3333-4333-8333-333333333333")
 RESOLVER_VERSION = DOCUMENT_RESOLVER_VERSION
 MAX_DB_INTEGER = 2**63 - 1
+
 
 def test_sparse_resolver_matches_exhaustive_adversarial_cluster_partition(monkeypatch):
     import apps.knowledge_graph.resolution.coreference as coreference
@@ -152,3 +154,125 @@ def test_sparse_resolver_matches_exhaustive_adversarial_cluster_partition(monkey
 
     assert signature(sparse) == signature(exhaustive)
     assert len(sparse.decisions) < len(exhaustive.decisions)
+
+
+@pytest.mark.parametrize("definition", ["undefined", "defined", "ambiguous"])
+def test_collision_enumeration_matches_complete_memberships_and_cannot_links(
+    monkeypatch, definition
+):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    labels = (
+        ("pre", "RAG", "method", ""),
+        ("full", "Rapid alpha generation", "method", ""),
+        ("alias", "Rapid alpha generation", "approach", ""),
+        ("other", "Rapid alternate generation", "method", ""),
+        ("id-a", "Rapid associated generation", "method", "doi:10.5555/12345678"),
+        ("id-b", "Rapid affiliated generation", "method", "doi:10.5555/12345678"),
+        ("conflict-a", "Rapid argued generation", "method", "doi:10.5555/12345678"),
+        ("bridge", "Rapid argued generation", "method", ""),
+        ("conflict-b", "Rapid argued generation", "method", "doi:10.5555/87654321"),
+    )
+    mentions = [
+        _mention(
+            key,
+            label,
+            entity_type,
+            start=1000 + index * 100,
+            identifier=identifier,
+            source_key=key,
+        )
+        for index, (key, label, entity_type, identifier) in enumerate(labels)
+    ]
+    mentions.append(
+        _mention(
+            "foreign-acronym",
+            "RAG",
+            start=10_000,
+            chunk_id=2,
+            position_basis="chunk_content",
+            content_object_id=CONTENT_OBJECT_ID,
+        )
+    )
+    text = "RAG. Rapid alpha generation (RAG). RAG. rag."
+    if definition == "ambiguous":
+        text += " Rapid alternate generation (RAG)."
+    if definition != "undefined":
+        for key, label, start in (
+            ("source-pre", "RAG", 0),
+            ("source-full", "Rapid alpha generation", text.index("Rapid")),
+            ("source-definition", "RAG", text.index("(RAG") + 1),
+            ("source-later", "RAG", text.index("RAG.", 4)),
+            ("source-lower", "rag", text.index("rag")),
+        ):
+            mentions.append(
+                _mention(
+                    key,
+                    label,
+                    start=start,
+                    source_text=text,
+                    source_key="definition-text",
+                )
+            )
+        if definition == "ambiguous":
+            mentions.extend(
+                (
+                    _mention(
+                        "ambiguous-full",
+                        "Rapid alternate generation",
+                        start=text.rindex("Rapid"),
+                        source_text=text,
+                        source_key="definition-text",
+                    ),
+                    _mention(
+                        "ambiguous-definition",
+                        "RAG",
+                        start=text.rindex("RAG"),
+                        source_text=text,
+                        source_key="definition-text",
+                    ),
+                )
+            )
+
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", len(mentions))
+    exhaustive = resolve_document_mentions(mentions, _ontology())
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0)
+    sparse = resolve_document_mentions(mentions, _ontology())
+
+    # Full immutable clusters include representative, canonical key, confidence,
+    # provenance tree, membership reasons, and their deterministic ordering.
+    assert sparse.clusters == exhaustive.clusters
+    assert sparse.mention_ids == exhaustive.mention_ids
+    assert sparse.input_fingerprint == exhaustive.input_fingerprint
+
+    def meaningful(result):
+        return tuple(
+            decision
+            for decision in result.decisions
+            if decision.method != "normalized_name_mismatch"
+        )
+
+    assert meaningful(sparse) == meaningful(exhaustive)
+    assert resolve_document_mentions(reversed(mentions), _ontology()) == sparse
+
+
+def test_collision_enumeration_preserves_full_form_version_cannot_links(monkeypatch):
+    import apps.knowledge_graph.resolution.coreference as coreference
+
+    mentions = (
+        _mention("v1", "Rapid alpha generation v1", start=0),
+        _mention("v2", "Rapid alpha generation v2", start=100),
+        _mention("other", "Rapid alternate generation v1", start=200),
+        _mention("acronym", "RAGV", start=300),
+    )
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", len(mentions))
+    exhaustive = resolve_document_mentions(mentions, _ontology())
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 0)
+    sparse = resolve_document_mentions(mentions, _ontology())
+    assert sparse.clusters == exhaustive.clusters
+    assert tuple(
+        d for d in sparse.decisions if d.method != "normalized_name_mismatch"
+    ) == tuple(
+        d for d in exhaustive.decisions if d.method != "normalized_name_mismatch"
+    )
+    assert any(d.method == "version_mismatch" for d in sparse.decisions)

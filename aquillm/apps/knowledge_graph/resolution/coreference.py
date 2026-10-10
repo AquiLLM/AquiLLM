@@ -1000,7 +1000,32 @@ def _sparse_candidate_decisions(
         ):
             add_star(unique_group, anchor=equivalent_anchor)
         else:
-            add_complete(unique_group)
+            # Sharing initials alone does not make two full forms candidates.
+            # Retain every accepted/hard-cannot-link pair from the old clique;
+            # omit only full/full normalized-name mismatches. Enumerate buckets
+            # directly so irrelevant pairs consume neither work nor audit cap.
+            full_names: dict[str, list[_MentionView]] = defaultdict(list)
+            full_bases: dict[str, list[_MentionView]] = defaultdict(list)
+            identified_full: list[_MentionView] = []
+            for mention in unique_group:
+                if (
+                    mention.is_acronym
+                    or mention.is_pronoun
+                    or has_local_acronym_definition(mention)
+                ):
+                    for other in unique_group:
+                        add_pair(mention, other)
+                else:
+                    full_names[mention.normalized_label].append(mention)
+                    full_bases[mention.base_key].append(mention)
+                    if mention.identifier:
+                        identified_full.append(mention)
+            for full_group in full_names.values():
+                add_complete(full_group)
+            add_complete(identified_full)
+            for full_group in full_bases.values():
+                if len({mention.version_signature for mention in full_group}) > 1:
+                    add_complete(full_group)
 
     return tuple(
         _decide_pair(
