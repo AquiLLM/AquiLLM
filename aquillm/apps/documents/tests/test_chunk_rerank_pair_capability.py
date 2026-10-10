@@ -19,8 +19,10 @@ class Tokenizer:
 
 
 @pytest.mark.parametrize("silent_overflow", [False, True])
+@pytest.mark.parametrize("score", [0.5, None, "invalid", float("nan"), float("inf")])
 def test_warm_validation_requires_token_ids_usage_and_recognized_overflow(
     silent_overflow,
+    score,
 ):
     from apps.documents.services.chunk_rerank_pair_capability import (
         registered_pair_counter,
@@ -62,7 +64,10 @@ def test_warm_validation_requires_token_ids_usage_and_recognized_overflow(
             return SimpleNamespace(status_code=400, json=lambda: body)
         return SimpleNamespace(
             status_code=200,
-            json=lambda: {"score": 0.5, "usage": {"prompt_tokens": size}},
+            json=lambda: {
+                "data": [{"index": 0, "object": "score", "score": score}],
+                "usage": {"prompt_tokens": size},
+            },
         )
 
     from hashlib import sha256
@@ -82,6 +87,8 @@ def test_warm_validation_requires_token_ids_usage_and_recognized_overflow(
         budget=budget,
         post=post,
     )
-    assert (result is not None) is (not silent_overflow)
-    assert budget.pairs_used["acquisition"] == 3
-    assert (registered_pair_counter(provider) is not None) is (not silent_overflow)
+    valid_score = score == 0.5
+    expected = not silent_overflow and valid_score
+    assert (result is not None) is expected
+    assert budget.pairs_used["acquisition"] == (3 if valid_score else 1)
+    assert (registered_pair_counter(provider) is not None) is expected

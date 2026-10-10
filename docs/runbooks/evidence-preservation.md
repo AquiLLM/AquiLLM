@@ -76,6 +76,12 @@ actual `/tokenize` counts, normal `/score` pairs and an overflow rejection. A mo
 name or `/models` response is insufficient. Keep attestations valid for at most
 300 seconds and renew them through the existing deployment process.
 
+Both normal score probes must also contain a finite score accepted by the actual
+window scorer. Matching token usage without a usable score leaves capability
+unknown. A malformed response or usage object during verified window scoring is
+unavailable evidence; its charged pair is released and existing coverage/fallback
+rules apply. Neither condition grants another allowance.
+
 Each worker has one daemon slot, no queue, a whole-attempt caller limit of 15
 seconds and at most three charged score pairs. Tokenizer/HTTP/filesystem hangs can
 occupy this one slot but cannot create more workers or publish after timeout.
@@ -308,3 +314,69 @@ RTK is not a runtime dependency. Failed Git discovery/inspection aborts a new re
 rather than declaring unknown code clean. Rescoring retains saved code revision and
 checkout state without consulting the current checkout. Fixture reports remain
 ineligible for activation.
+
+## Isolated development experiment recipe
+
+The coordinator owns runtime access and runs this recipe only in a dedicated
+development database/cache/provider environment. Do not run `--seed` against the
+application database. Set `RAG_EVAL_ISOLATED=1` in that process, supply required
+Django settings through the isolated environment, and keep artifacts outside Git.
+The flag is an operator assertion, not a database sandbox. Preserve graph budgets
+of extractor 3000 ms, direct/extended 4500 ms and overall 5000 ms. Keep all current
+evidence caps and model revisions unchanged.
+
+1. Record the clean application revision, frozen corpus hashes, actual immutable
+   model/image/tokenizer/code identities, exact template bytes/hash and hardware
+   allocation. Successful `/score` and `/tokenize` requests establish protocol
+   observations only. Missing attestation, missing pinned local tokenizer assets
+   or unverified hardware prevents a candidate comparison from being eligible.
+   Renew the real operator attestation throughout each candidate run and record
+   each serving worker's warm result separately from turn inference costs.
+2. Seed each quality split once with the existing live command above; retain its
+   initial output as an unmeasured bootstrap artifact. The seed runner immediately
+   attempts turns, so do not count that output as a measured comparison when its
+   new manifest lacks verified runtime identities. Record the four verified
+   `runtime.*_digest` values in the manifest, preserve its hash, then omit `--seed`
+   for every measured run. Keep the same source/vector bindings across arms.
+3. In separate processes, run baseline, selection, preservation and combined for
+   each split and each cold/warm condition at the same declared concurrency (the
+   example uses 4). Alternate arm order over predeclared repetitions, retain all
+   results and repeat the existing command with distinct report names. Do not
+   pool repetitions or operational runs into a fabricated four-arm report.
+   Compare matched split/cache/repetition sets; keep cold and warm evidence
+   separately for operator review. These frozen arms are the existing activation
+   comparison. Any subsequent retrieval change gets a separate one-change
+   experiment; do not select it from heldout answers.
+4. Seed each operational profile once, then execute all 30 scheduled run IDs
+   across both modes and repetitions 1–3 using the existing operational CLI.
+   Attach all resulting report files. First-pass success or an unexercised
+   exhaustion subtype remains visible; it cannot be relabeled as refinement.
+5. Give independent humans the original reports, exact answers, delivered spans,
+   source bindings, final SDK payloads, event traces and `review_subject` values.
+   Leave the reviews absent until those humans supply the required labels.
+   Rescore each immutable report using `--observations` and `--reviews`; retain
+   both versions. Attach actual operator artifacts using `--rollout-evidence`.
+6. Evaluate each matched four-arm set with the following command, substituting
+   real reviewed report paths and measured deployment targets. The current
+   wrapper CLI requires backend/split/mode even for comparison; fixture mode
+   avoids extra provider calls and the nested `gate` evaluates only the four
+   supplied reports. The wrapper's top-level `activation_eligible` remains false.
+
+```text
+rtk proxy python aquillm/apps/chat/evals/run_evidence_quality_eval.py --backend fixture --split development --mode combined --compare artifacts/evidence/dev-baseline-reviewed.json artifacts/evidence/dev-selection-reviewed.json artifacts/evidence/dev-preservation-reviewed.json artifacts/evidence/dev-combined-reviewed.json --operational-reports artifacts/evidence/ops-preservation-pilot-r1-reviewed.json artifacts/evidence/ops-combined-pilot-r1-reviewed.json --targets artifacts/evidence/targets.json --require-activation --report artifacts/evidence/dev-comparison.json
+```
+
+The two operational paths above illustrate syntax only: supply **all** scheduled
+operational report files, including every repetition and `one_action` profile.
+The runner returns 2 when activation is blocked. Some command wrappers translate
+nonzero exit codes; automation should inspect the Python child return code and
+saved `gate.blocking_reasons`, not infer eligibility from wrapper output.
+
+The evidence bundle index must list each artifact's SHA256, revision, manifest,
+split/mode/cache state/repetition, measured concurrency and observation status.
+Keep retrieval-only replay separate: its `targets.pool_ranks`, `rerank_ranks`,
+`packet_ranks` and `answer_span_covered` locate evidence loss but do not establish
+SDK delivery, human entailment or activation eligibility. Unknown coverage and
+incomplete turns remain unknown/failed. Preserve original failures and pending
+human/runtime prerequisites in the bundle; never create placeholder attestations
+or model-authored human labels to fill them.

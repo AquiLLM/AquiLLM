@@ -6,6 +6,8 @@ from time import monotonic
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from apps.documents.services.chunk_rerank_selection_provider import LocalSelectionScorer
 from lib.retrieval import TurnBudget, TurnLimits
 
@@ -22,6 +24,28 @@ def provider():
         timeout=3,
         deadline=monotonic() + 3,
     )
+
+
+@pytest.mark.parametrize(
+    "body",
+    [None, [], 0.5, {"score": 0.5, "usage": None}, {"score": 0.5, "usage": []}],
+)
+def test_verified_window_malformed_usage_returns_unavailable_without_leaking_pair(body):
+    scorer = provider()
+    scorer.verified_pair_counter = lambda query, document: 7
+    budget = TurnBudget(TurnLimits(acquisition_pairs=1, in_flight_pairs=1))
+    with patch(
+        "apps.documents.services.chunk_rerank_selection_provider.requests.post",
+        return_value=SimpleNamespace(status_code=200, json=lambda: body),
+    ):
+        result = scorer.score_budgeted_pair(
+            ("q", "text"), 1, budget=budget, phase="acquisition"
+        )
+    assert result is None
+    assert budget.pairs_used["acquisition"] == 1
+    # The failed acquisition still releases the only shared in-flight slot.
+    assert budget.start_pair(phase="final")
+    budget.finish_pair()
 
 
 def test_independent_providers_share_six_actual_transports_and_reject_late_results():

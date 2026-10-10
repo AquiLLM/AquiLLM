@@ -52,6 +52,10 @@ def score_budgeted_pair(scorer, pair, timeout_seconds, *, budget, phase, post):
             body = response.json()
             counter = getattr(scorer, "verified_pair_counter", None)
             if counter is not None:
+                if not isinstance(body, dict) or not isinstance(
+                    body.get("usage"), dict
+                ):
+                    return None
                 work = len(successful[0]) + len(successful[1])
                 if hasattr(counter, "input_codepoints"):
                     work = counter.input_codepoints(*successful)

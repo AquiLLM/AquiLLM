@@ -14,6 +14,7 @@ from time import monotonic
 
 import requests
 
+from .chunk_rerank_parse import parse_single_score
 from .chunk_rerank_results import fingerprint_text
 
 _registered = {}
@@ -202,6 +203,10 @@ def verify_pair_capability(
                 "prompt_tokens"
             ) != len(local_ids):
                 return None
+            else:
+                # Token usage alone cannot establish a usable scoring protocol.
+                # Apply the same finite-score contract as the window scorer.
+                parse_single_score(body)
 
         def register():
             with _lock:
