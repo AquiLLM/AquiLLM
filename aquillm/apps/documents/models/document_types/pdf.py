@@ -19,7 +19,7 @@ class PDFDocument(Document):
         help_text="Zotero item key to prevent duplicate syncing"
     )
 
-    class Meta:
+    class Meta(Document.Meta):
         app_label = 'apps_documents'
         db_table = 'aquillm_pdfdocument'
 

@@ -18,6 +18,6 @@ class ImageUploadDocument(Document):
     ocr_provider = models.CharField(max_length=64, blank=True, default="")
     ocr_model = models.CharField(max_length=200, blank=True, default="")
 
-    class Meta:
+    class Meta(Document.Meta):
         app_label = 'apps_documents'
         db_table = 'aquillm_imageuploaddocument'

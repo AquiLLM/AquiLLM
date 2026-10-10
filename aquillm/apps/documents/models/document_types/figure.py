@@ -351,11 +351,12 @@ class DocumentFigure(Document):
     ocr_provider = models.CharField(max_length=64, blank=True, default="")
     ocr_model = models.CharField(max_length=200, blank=True, default="")
 
-    class Meta:
+    class Meta(Document.Meta):
         app_label = 'apps_documents'
         db_table = 'aquillm_documentfigure'
         ordering = ['source_format', 'figure_index']
         constraints = [
+            *Document.Meta.constraints,
             models.CheckConstraint(
                 condition=(
                     models.Q(
@@ -377,10 +378,13 @@ class DocumentFigure(Document):
             ),
         ]
         indexes = [
-            models.Index(fields=['parent_content_type', 'parent_object_id']),
+            models.Index(
+                fields=['parent_content_type', 'parent_object_id'],
+                name='aquillm_doc_parent__a1b2c3_idx',
+            ),
             models.Index(
                 fields=["parent_content_type", "parent_object_pkid"],
                 name="docfigure_parent_pkid_idx",
             ),
-            models.Index(fields=['source_format']),
+            models.Index(fields=['source_format'], name='aquillm_doc_source__d4e5f6_idx'),
         ]

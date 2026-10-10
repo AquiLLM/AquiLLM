@@ -18,7 +18,7 @@ class HandwrittenNotesDocument(Document):
     bypass_extraction = False
     bypass_min_length = True
     
-    class Meta:
+    class Meta(Document.Meta):
         app_label = 'apps_documents'
         db_table = 'aquillm_handwrittennotesdocument'
 

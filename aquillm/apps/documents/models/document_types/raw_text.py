@@ -9,6 +9,6 @@ class RawTextDocument(Document):
     # so the citation modal can reuse the PDF highlight UX for web content.
     rendered_pdf = models.FileField(upload_to='crawled_pdfs/', null=True, blank=True)
 
-    class Meta:
+    class Meta(Document.Meta):
         app_label = 'apps_documents'
         db_table = 'aquillm_rawtextdocument'

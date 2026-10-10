@@ -6,6 +6,6 @@ from ..document import Document
 class TeXDocument(Document):
     pdf_file = models.FileField(upload_to='pdfs/', null=True)
 
-    class Meta:
+    class Meta(Document.Meta):
         app_label = 'apps_documents'
         db_table = 'aquillm_texdocument'

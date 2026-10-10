@@ -11,6 +11,6 @@ class VTTDocument(Document):
         validators=[FileExtensionValidator(['mp4', 'ogg', 'opus', 'm4a', 'aac'])]
     )
 
-    class Meta:
+    class Meta(Document.Meta):
         app_label = 'apps_documents'
         db_table = 'aquillm_vttdocument'
