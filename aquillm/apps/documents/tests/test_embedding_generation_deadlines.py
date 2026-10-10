@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from apps.documents.models.embedding_index import EmbeddingGeneration
 from apps.documents.services import embedding_index_store as store
+from apps.documents.services import embedding_index_query_scope as query_scope
 from apps.documents.services import representation_store as representations
 from apps.documents.services.embedding_index_deadline import embedding_build_transaction
 from apps.documents.tasks import embedding_index as task
@@ -57,7 +58,7 @@ def test_final_reauthorization_cannot_return_after_original_turn_deadline(
     observed = observe_query_embedding(
         "query", space=transport[0], budget=runtime.budget
     )
-    original = query.revalidate_retrieval_authorization_context
+    original = query_scope.revalidate_retrieval_authorization_context
     calls = []
 
     def reauthorize(**kwargs):
@@ -68,7 +69,7 @@ def test_final_reauthorization_cannot_return_after_original_turn_deadline(
         return result
 
     monkeypatch.setattr(
-        query, "revalidate_retrieval_authorization_context", reauthorize
+        query_scope, "revalidate_retrieval_authorization_context", reauthorize
     )
     with pytest.raises(SourcePreparationLimited, match="source deadline"):
         rank(frozen, dense, observed, runtime)
