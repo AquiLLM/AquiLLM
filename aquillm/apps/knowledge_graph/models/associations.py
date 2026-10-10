@@ -527,6 +527,11 @@ class CanonicalEntityLink(ValidatedGraphModel):
                     )
                     | Q(outcome="candidate", method="embedding_similarity")
                     | Q(
+                        outcome="candidate",
+                        resolver_version="canonical-resolution-v2-contextual",
+                        method__in=("exact_name_or_alias", "defined_acronym"),
+                    )
+                    | Q(
                         outcome="rejected",
                         method__in=(
                             "stable_identifier",
@@ -619,6 +624,10 @@ class CanonicalEntityLink(ValidatedGraphModel):
         if (
             self.outcome == self.Outcome.CANDIDATE
             and self.method != "embedding_similarity"
+            and not (
+                self.resolver_version == "canonical-resolution-v2-contextual"
+                and self.method in {"exact_name_or_alias", "defined_acronym"}
+            )
         ):
             errors["method"] = (
                 "Only audited embedding similarity creates v1 candidates."
@@ -637,6 +646,10 @@ class CanonicalEntityLink(ValidatedGraphModel):
                 "embedding_similarity",
             },
         }
+        if self.resolver_version == "canonical-resolution-v2-contextual":
+            allowed_methods[self.Outcome.CANDIDATE].update(
+                {"exact_name_or_alias", "defined_acronym"}
+            )
         if self.method not in allowed_methods.get(self.outcome, set()):
             errors["method"] = "Method is not valid for the canonical outcome."
         if self.collection_entity_id and self.canonical_entity_id:

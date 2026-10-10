@@ -172,6 +172,58 @@ def _session(vectors_by_text, *, signature=_EMBEDDING_SIGNATURE):
     )
 
 
+@pytest.mark.parametrize("other_artifact", [201, 202])
+def test_contextual_collection_names_do_not_promote_from_similarity(other_artifact):
+    config = CollectionResolutionConfig(identity_policy="contextual_v2")
+    entities = (
+        _document_entity("a", "Mercury"),
+        _document_entity(
+            "b",
+            "Mercury",
+            document_artifact_id=other_artifact,
+            document_id=uuid.UUID(int=other_artifact),
+        ),
+    )
+    session, _backend = _session({"Mercury": _unit_vector(1.0)})
+    result = resolve_collection_entities(
+        _snapshot(*sorted({201, other_artifact}), config=config),
+        entities,
+        _ontology(),
+        config=config,
+        embedding_session=session,
+    )
+    assert {cluster.document_entity_ids for cluster in result.clusters} == {(1,), (2,)}
+    assert result.decisions[0].outcome is ResolutionOutcome.CANDIDATE
+    assert result.resolver_version == "collection-resolution-v2-contextual"
+
+
+@pytest.mark.parametrize(
+    "right_identifier,outcome,cluster_count",
+    [
+        ("doi:10.1000/a", ResolutionOutcome.AUTOMATIC, 1),
+        ("doi:10.1000/b", ResolutionOutcome.REJECTED, 2),
+    ],
+)
+def test_contextual_collection_anchors_control_identity(
+    right_identifier, outcome, cluster_count
+):
+    config = CollectionResolutionConfig(identity_policy="contextual_v2")
+    entities = (
+        _document_entity("a", "Mercury", identifier="doi:10.1000/a"),
+        _document_entity("b", "Mercury", identifier=right_identifier),
+    )
+    session, _backend = _session({"Mercury": _unit_vector(1.0)})
+    result = resolve_collection_entities(
+        _snapshot(config=config),
+        entities,
+        _ontology(),
+        config=config,
+        embedding_session=session,
+    )
+    assert len(result.clusters) == cluster_count
+    assert result.decisions[0].outcome is outcome
+
+
 def _cluster_memberships(result):
     return {
         frozenset(
@@ -237,9 +289,7 @@ def test_final_cluster_audit_work_is_linear_in_resolved_output(monkeypatch):
         group_calls += 1
         groups = real_groups(self)
         if group_calls == 2:
-            return {
-                root: CountingMembers(members) for root, members in groups.items()
-            }
+            return {root: CountingMembers(members) for root, members in groups.items()}
         return groups
 
     real_set = set
@@ -395,9 +445,7 @@ def test_collection_resolution_writes_use_bounded_batches_in_one_transaction(
         return {}
 
     def full_clean(self, **kwargs):
-        local_validations.append(
-            (self._test_kind, self._test_index, "full", kwargs)
-        )
+        local_validations.append((self._test_kind, self._test_index, "full", kwargs))
 
     def unsafe_validate_for_persistence(self):
         unsafe_manager_validations.append((self._test_kind, self._test_index))
@@ -1652,24 +1700,6 @@ def test_initial_persistence_projection_rejects_recomputed_row_audit_corruption(
     assert not _collection_resolution_link_matches(forged_link, expected_link)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_resolution_outputs_recursively_reject_forged_exact_types():
     session, _backend = _session({})
     result = resolve_collection_entities(
@@ -1739,18 +1769,6 @@ def test_locked_source_replay_rejects_forged_result_with_recomputed_checksum():
         )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 def test_large_exact_label_block_records_linear_deterministic_edges():
     entities = tuple(
         _document_entity(
@@ -1803,19 +1821,13 @@ def test_result_audits_the_exact_supported_relation_snapshot():
     assert len(result.source_relation_fingerprint) == 64
 
 
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_collection_resolution_persistence_is_idempotent_and_marker_bound(monkeypatch):
+@pytest.mark.parametrize("identity_policy", ["legacy", "contextual_v2"])
+def test_collection_resolution_persistence_is_idempotent_and_marker_bound(
+    monkeypatch,
+    identity_policy,
+):
     """PostgreSQL CI exercises the complete manifest/marker write boundary."""
     from django.contrib.auth.models import User
     from django.db import IntegrityError, connection, transaction
@@ -1836,6 +1848,7 @@ def test_collection_resolution_persistence_is_idempotent_and_marker_bound(monkey
         GraphArtifact,
         GraphBuildRun,
     )
+    from apps.knowledge_graph.resolution import resolver_version_for_policy
     from apps.knowledge_graph.resolution.collection import (
         _validate_bulk_rows_without_database_probes,
         _write_collection_resolution,
@@ -1862,7 +1875,11 @@ def test_collection_resolution_persistence_is_idempotent_and_marker_bound(monkey
         source_hash="d" * 64,
         ontology_version=_ontology().version,
         extractor_version="extractor-v1",
-        resolver_version="document-coreference-v1",
+        resolver_version=(
+            "document-coreference-v1"
+            if identity_policy == "legacy"
+            else resolver_version_for_policy("document", identity_policy)
+        ),
         filter_policy_version="document-filter-v1",
         ontology_checksum=_ontology().checksum,
     )
@@ -1905,13 +1922,13 @@ def test_collection_resolution_persistence_is_idempotent_and_marker_bound(monkey
     policy = FilterPolicy(
         version="collection-filter-v1", utility_activation_threshold=1.0
     )
-    config = CollectionResolutionConfig()
+    config = CollectionResolutionConfig(identity_policy=identity_policy)
     destination, manifest = build_collection_snapshot(
         collection=collection,
         document_artifacts=(source,),
         ontology=_ontology(),
         extractor_version="extractor-v1",
-        resolver_version="collection-resolution-v1",
+        resolver_version=resolver_version_for_policy("collection", identity_policy),
         filter_policy_version="collection-filter-v1",
         filter_policy=policy,
         resolution_config=config,
@@ -1924,7 +1941,9 @@ def test_collection_resolution_persistence_is_idempotent_and_marker_bound(monkey
         attempt=1,
     )
     snapshot, entities, relations = load_collection_resolution_inputs(
-        destination.pk, run.pk
+        destination.pk,
+        run.pk,
+        config=config,
     )
     session, _backend = _session({})
     result = resolve_collection_entities(

@@ -65,7 +65,9 @@ def seeds(request):
     permission = CollectionPermission.objects.create(
         user=user, collection=collection, permission="VIEW"
     )
-    content = "Alpha Beta Gamma"
+    homonyms = versions.get("homonyms", False)
+    content = "Alpha Alpha Gamma" if homonyms else "Alpha Beta Gamma"
+    positions = ((0, 5), (6, 11), (12, 17)) if homonyms else ((0, 5), (6, 10), (11, 16))
     document = RawTextDocument(
         title="seed integration",
         full_text=content,
@@ -83,7 +85,9 @@ def seeds(request):
             doc_id=document.id,
             embedding=[0.0] * 1024,
         )
-        for number, (start, end) in enumerate(((0, 10), (0, 5), (11, 16)))
+        for number, (start, end) in enumerate(
+            ((0, positions[1][1]), positions[0], positions[2])
+        )
     )
     artifact = _artifact(
         scope_type="collection",
@@ -104,7 +108,7 @@ def seeds(request):
     document_artifact.save()
     document_entities = []
     for index, (label, start, end) in enumerate(
-        (("Alpha", 0, 5), ("Beta", 6, 10), ("Gamma", 11, 16))
+        tuple((content[start:end], start, end) for start, end in positions)
     ):
         mention = EntityMention.objects.create(
             artifact=document_artifact,
@@ -155,6 +159,7 @@ def seeds(request):
             label=document_entity.label,
             normalized_label=document_entity.normalized_label,
             entity_type="model",
+            identifier=versions.get("identifier", "") if index == 0 else "",
             retrieval_utility=0.5,
             extraction_confidence=0.9,
             resolution_confidence=0.9,
@@ -179,15 +184,16 @@ def seeds(request):
         entity_type="model",
         resolver_version=canonical_resolver,
     )
-    CanonicalEntityLink.objects.create(
-        canonical_entity=canonical,
-        collection_entity=entities[0],
-        score=0.9,
-        method="exact_name_or_alias",
-        reason="exact",
-        outcome="automatic",
-        resolver_version=canonical_resolver,
-    )
+    if not homonyms:
+        CanonicalEntityLink.objects.create(
+            canonical_entity=canonical,
+            collection_entity=entities[0],
+            score=0.9,
+            method="exact_name_or_alias",
+            reason="exact",
+            outcome="automatic",
+            resolver_version=canonical_resolver,
+        )
     artifact.status = "active"
     artifact.save(update_fields=["status"])
     codec = HmacSha256ProjectionIdentifierCodec(b"audit-test-key", key_version="key-v1")
@@ -271,7 +277,7 @@ def seeds(request):
         codec=codec,
     )
     spans = tuple(
-        QueryEntitySpanV1("model", start, end, 1.0) for start, end in ((0, 5), (6, 10))
+        QueryEntitySpanV1("model", start, end, 1.0) for start, end in positions[:2]
     )
     direct = DirectSeedRepository(
         scope=DirectSeedScopeV1(

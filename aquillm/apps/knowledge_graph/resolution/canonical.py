@@ -20,6 +20,7 @@ from apps.knowledge_graph.resolution.normalization import (
     parse_stable_identifier,
 )
 
+from . import resolver_version_for_policy
 from .canonical_query_planning import canonical_provenance_scan
 from .canonical_validation import (
     _bounded_text,
@@ -29,6 +30,7 @@ from .canonical_validation import (
     _normalized_key,
     _positive_int,
 )
+from .identity_policy import IdentityEndpointV2, decide_identity_v2
 
 CANONICAL_RESOLVER_VERSION = "canonical-resolution-v1"
 
@@ -755,10 +757,23 @@ def resolve_canonical_entities(
     entities: tuple[CanonicalEntityInput, ...],
     *,
     embedding_candidates: tuple[CanonicalEmbeddingCandidate, ...] = (),
-    resolver_version: str = CANONICAL_RESOLVER_VERSION,
+    resolver_version: str | None = None,
+    identity_policy: str = "legacy",
 ) -> CanonicalResolutionResult:
     """Resolve exact evidence into deterministic components and audit decisions."""
 
+    expected_version = resolver_version_for_policy("canonical", identity_policy)
+    resolver_version = (
+        expected_version if resolver_version is None else resolver_version
+    )
+    if (
+        identity_policy == "contextual_v2" and resolver_version != expected_version
+    ) or (
+        identity_policy == "legacy"
+        and resolver_version
+        == resolver_version_for_policy("canonical", "contextual_v2")
+    ):
+        raise ValueError("resolver version does not match identity policy")
     _bounded_text(resolver_version, "resolver_version", maximum=128)
     if type(entities) is not tuple or any(
         type(item) is not CanonicalEntityInput for item in entities
@@ -891,6 +906,37 @@ def resolve_canonical_entities(
                 if len(left_forms) > 1 or len(right_forms) > 1
                 else "undefined_acronym"
             )
+            if identity_policy == "contextual_v2" and reason == "undefined_acronym":
+                left, right = by_id[left_id], by_id[right_id]
+                conflict = _pair_conflict(left, right)
+                policy = decide_identity_v2(
+                    left=IdentityEndpointV2(
+                        left.entity_type,
+                        left.normalized_label,
+                        left.identifier,
+                        left.version_signature,
+                        None,
+                    ),
+                    right=IdentityEndpointV2(
+                        right.entity_type,
+                        right.normalized_label,
+                        right.identifier,
+                        right.version_signature,
+                        None,
+                    ),
+                    explicit_local_binding=False,
+                )
+                rejected_decisions[pair] = CanonicalDecision(
+                    *pair,
+                    score=0.0,
+                    method="defined_acronym",
+                    outcome=CanonicalOutcome.REJECTED
+                    if conflict
+                    else CanonicalOutcome(policy.outcome),
+                    reason=conflict or policy.reason,
+                    evidence_key=acronym,
+                )
+                continue
             rejected_decisions[pair] = _rejected(
                 left_id,
                 right_id,
@@ -898,6 +944,40 @@ def resolve_canonical_entities(
                 reason=reason,
                 evidence_key=acronym,
             )
+
+    if identity_policy == "contextual_v2":
+        # Collection identities have no one-document local binding authority.
+        # Remove proposals before any union, retaining the original audit tier.
+        for edges in (stable_edges, lower_edges):
+            for pair, edge in tuple(edges.items()):
+                left, right = by_id[edge.left], by_id[edge.right]
+                policy = decide_identity_v2(
+                    left=IdentityEndpointV2(
+                        left.entity_type,
+                        left.normalized_label,
+                        left.identifier,
+                        left.version_signature,
+                        None,
+                    ),
+                    right=IdentityEndpointV2(
+                        right.entity_type,
+                        right.normalized_label,
+                        right.identifier,
+                        right.version_signature,
+                        None,
+                    ),
+                    explicit_local_binding=False,
+                )
+                if policy.outcome != "automatic":
+                    rejected_decisions[pair] = CanonicalDecision(
+                        *pair,
+                        score=0.0,
+                        method=edge.method,
+                        outcome=CanonicalOutcome(policy.outcome),
+                        reason=policy.reason,
+                        evidence_key=edge.evidence_key,
+                    )
+                    del edges[pair]
 
     dsu = _DisjointSet(by_id)
     accepted_edges: list[_EvidenceEdge] = []
@@ -1681,12 +1761,20 @@ _CANONICAL_REGISTRY_ADVISORY_LOCK = 5_497_240_000_000_000_000
 _CANONICAL_REBUILD_ATTEMPTS = 3
 
 
-def _active_collection_artifact_snapshot(*, using: str) -> tuple[tuple[int, int], ...]:
+def _active_collection_artifact_snapshot(
+    *, using: str, identity_policy: str = "legacy"
+) -> tuple[tuple[int, int], ...]:
     from apps.knowledge_graph.models import GraphArtifact
 
+    queryset = GraphArtifact.objects.using(using)
+    contextual_version = resolver_version_for_policy("collection", "contextual_v2")
+    queryset = (
+        queryset.filter(resolver_version=contextual_version)
+        if identity_policy == "contextual_v2"
+        else queryset.exclude(resolver_version=contextual_version)
+    )
     rows = list(
-        GraphArtifact.objects.using(using)
-        .filter(
+        queryset.filter(
             scope_type=GraphArtifact.ScopeType.COLLECTION,
             status=GraphArtifact.Status.ACTIVE,
         )
@@ -1898,8 +1986,13 @@ def _load_locked_canonical_inputs(
             )
             .select_related("mention")
             .only(
-                "pk", "document_entity_id", "mention_id", "method",
-                "parent_mention_id", "mention__id", "mention__raw_text",
+                "pk",
+                "document_entity_id",
+                "mention_id",
+                "method",
+                "parent_mention_id",
+                "mention__id",
+                "mention__raw_text",
             )
             .order_by("pk")
             .iterator(chunk_size=1_000),
@@ -2347,6 +2440,7 @@ def _rebuild_canonical_snapshot(
     snapshot: tuple[tuple[int, int], ...],
     *,
     using: str,
+    identity_policy: str = "legacy",
 ) -> CanonicalRebuildResult:
     from django.db import connections, transaction
     from django.db.models import F
@@ -2415,10 +2509,16 @@ def _rebuild_canonical_snapshot(
             active_artifact_ids=artifact_ids,
             using=using,
         )
-        if _active_collection_artifact_snapshot(using=using) != snapshot:
+        if (
+            _active_collection_artifact_snapshot(
+                using=using, identity_policy=identity_policy
+            )
+            != snapshot
+        ):
             raise _CanonicalSnapshotChanged("canonical active snapshot expanded")
         resolution = resolve_canonical_entities(
             inputs,
+            identity_policy=identity_policy,
             embedding_candidates=_derive_locked_embedding_candidates(
                 entity_rows,
                 artifact_embedding_signatures={
@@ -2442,13 +2542,19 @@ def rebuild_canonical_registry(
 ) -> CanonicalRebuildResult:
     """Atomically reconcile the full current registry with bounded drift retries."""
 
+    from lib.knowledge_graph.config import load_identity_policy
+
+    identity_policy = load_identity_policy()
     last_error: _CanonicalSnapshotChanged | None = None
     for _attempt in range(_CANONICAL_REBUILD_ATTEMPTS):
-        snapshot = _active_collection_artifact_snapshot(using=using)
+        snapshot = _active_collection_artifact_snapshot(
+            using=using, identity_policy=identity_policy
+        )
         try:
             return _rebuild_canonical_snapshot(
                 snapshot,
                 using=using,
+                identity_policy=identity_policy,
             )
         except _CanonicalSnapshotChanged as exc:
             last_error = exc

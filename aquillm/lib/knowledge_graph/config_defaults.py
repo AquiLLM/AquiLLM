@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 
 DEFAULT_EXTRACTOR_PROVIDER = "gliner2_local"
+DEFAULT_IDENTITY_POLICY = "legacy"
 DEFAULT_GLINER2_MODEL = "fastino/gliner2-base-v1"
 DEFAULT_GLINER2_REVISION = "8437ba583a733d87f56ae902f3b197934eedd58e"
 DEFAULT_GLINER2_DEVICE = "cpu"

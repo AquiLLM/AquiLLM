@@ -26,6 +26,7 @@ from .config_defaults import (
     DEFAULT_GLINER2_MAX_BATCH_CHARACTERS,
     DEFAULT_GLINER2_MODEL,
     DEFAULT_GLINER2_REVISION,
+    DEFAULT_IDENTITY_POLICY,
     KnowledgeGraphConfigError,
 )
 from .config_defaults import (
@@ -73,6 +74,17 @@ from .worker_config import (
 from .worker_config import (
     validate_extraction_queue as validate_extraction_queue,
 )
+
+
+def load_identity_policy(source: Mapping[str, str] | None = None) -> str:
+    """Fail closed on unknown policies; preserve legacy when the flag is absent."""
+    values = process_environ if source is None else source
+    policy = values.get("KG_IDENTITY_POLICY", DEFAULT_IDENTITY_POLICY)
+    if type(policy) is not str or policy not in ("legacy", "contextual_v2"):
+        raise KnowledgeGraphConfigError(
+            "KG_IDENTITY_POLICY must be legacy or contextual_v2"
+        )
+    return policy
 
 
 @dataclass(frozen=True, slots=True)

@@ -5,12 +5,14 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import date, datetime
 from hashlib import sha256
 from itertools import islice
 from math import isfinite
 from uuid import UUID
 
+from . import DOCUMENT_CONTEXTUAL_RESOLVER_VERSION
 from .commit_validation import resolution_commit_is_valid
 from .coreference import (
     MAX_DOCUMENT_DECISIONS,
@@ -21,6 +23,7 @@ from .coreference import (
     ResolvedCluster,
     resolution_input_fingerprint,
     resolution_result_checksum,
+    resolve_document_mentions,
 )
 from .coreference_types import _is_hash
 from .source_exclusions import resolvable_mentions, source_exclusion_audit
@@ -74,6 +77,14 @@ _RESOLUTION_LINK_FIELDS = (
 
 class ResolutionPersistenceError(RuntimeError):
     """Raised when a resolution write cannot preserve its immutable snapshot."""
+
+
+def _contextual_decision_audit(result):
+    return {
+        "identity_policy": "contextual_v2",
+        "resolver_version": result.resolver_version,
+        "decisions": [asdict(decision) for decision in result.decisions],
+    }
 
 
 def _record_value(record: object, field: str) -> object:
@@ -530,6 +541,12 @@ def _existing_resolution(
         exclusion_audit=exclusion_audit,
     ):
         raise ResolutionPersistenceError("existing resolution commit marker is invalid")
+    if result.resolver_version == DOCUMENT_CONTEXTUAL_RESOLVER_VERSION and stats.get(
+        "contextual_identity_decisions"
+    ) != _contextual_decision_audit(result):
+        raise ResolutionPersistenceError(
+            "contextual identity decision audit is invalid"
+        )
     entity_rows = _bounded_rows(
         entity_query,
         MAX_DOCUMENT_MENTIONS,
@@ -609,6 +626,7 @@ def persist_document_resolution(
     build_run_id,
     result,
     *,
+    ontology=None,
     lease_owner=None,
     lease_generation=None,
 ):
@@ -689,6 +707,21 @@ def persist_document_resolution(
                 "result ontology checksum does not match extraction snapshot"
             )
         source_fingerprint = _validate_source_snapshot(artifact, result, mentions)
+        if result.resolver_version == DOCUMENT_CONTEXTUAL_RESOLVER_VERSION:
+            try:
+                if ontology is None or ontology.checksum != result.ontology_checksum:
+                    raise ValueError("captured ontology snapshot is required")
+                replayed = resolve_document_mentions(
+                    resolvable_mentions(mentions),
+                    ontology,
+                    identity_policy="contextual_v2",
+                )
+                if replayed != result:
+                    raise ValueError("decisions differ from captured contextual policy")
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ResolutionPersistenceError(
+                    "contextual identity policy replay failed"
+                ) from exc
         exclusion_audit = source_exclusion_audit(mentions, relations)
         ontology_checksum = artifact.ontology_checksum
         existing = _existing_resolution(
@@ -741,6 +774,11 @@ def persist_document_resolution(
             **stats,
             "resolution_rows_fingerprint": rows_fingerprint,
             "resolution_commit": marker,
+            **(
+                {"contextual_identity_decisions": _contextual_decision_audit(result)}
+                if result.resolver_version == DOCUMENT_CONTEXTUAL_RESOLVER_VERSION
+                else {}
+            ),
         }
         run.save(update_fields=["stats"])
         return entity_rows

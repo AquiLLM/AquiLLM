@@ -18,6 +18,7 @@ from heapq import merge
 from itertools import islice
 from math import isfinite, sqrt
 
+from . import resolver_version_for_policy
 from .candidate_pool import iter_candidate_pools
 from .embedding_session import (
     _HASH_PATTERN,
@@ -31,6 +32,7 @@ from .embedding_session import (
     _require_hash,
     embedding_text_hash,
 )
+from .identity_policy import IdentityEndpointV2, decide_identity_v2
 from .normalization import normalize_entity_label
 from .relation_evidence import relation_participation
 from .scoring import (
@@ -341,8 +343,10 @@ class CollectionResolutionConfig:
     max_relations: int = MAX_RELATIONS
     # Independent output envelope: a larger input cap never truncates links.
     max_links: int = MAX_COLLECTION_LINKS
+    identity_policy: str = "legacy"
 
     def __post_init__(self) -> None:
+        resolver_version_for_policy("collection", self.identity_policy)
         if type(self.thresholds) is not ResolutionThresholds:
             raise ValueError("thresholds must be exact ResolutionThresholds")
         self.thresholds.__post_init__()
@@ -392,7 +396,9 @@ def resolution_config_checksum(config: CollectionResolutionConfig) -> str:
     config.__post_init__()
     return _hash(
         {
-            "resolver_version": COLLECTION_RESOLVER_VERSION,
+            "resolver_version": resolver_version_for_policy(
+                "collection", config.identity_policy
+            ),
             "thresholds": {
                 "automatic": config.thresholds.automatic,
                 "candidate": config.thresholds.candidate,
@@ -1609,6 +1615,7 @@ def resolve_collection_entities(
     config.__post_init__()
     if resolution_config_checksum(config) != snapshot.resolution_config_checksum:
         raise ValueError("resolution config checksum does not match snapshot")
+    resolver_version = resolver_version_for_policy("collection", config.identity_policy)
     from apps.knowledge_graph.services.ontology import validate_ontology_definition
 
     validate_ontology_definition(
@@ -1653,6 +1660,29 @@ def resolve_collection_entities(
     canonical_type = {
         item.entity_id: canonical_map.get(item.entity_type) for item in ordered
     }
+
+    def contextual_policy(left: int, right: int):
+        first, second = by_id[left], by_id[right]
+        return decide_identity_v2(
+            left=IdentityEndpointV2(
+                canonical_type[left] or first.entity_type,
+                first.normalized_label,
+                first.identifier,
+                first.version_signature,
+                str(first.document_id),
+            ),
+            right=IdentityEndpointV2(
+                canonical_type[right] or second.entity_type,
+                second.normalized_label,
+                second.identifier,
+                second.version_signature,
+                str(second.document_id),
+            ),
+            # Document entities are already resolved. Collection alias strings
+            # alone cannot attest a binding between two distinct source entities.
+            explicit_local_binding=False,
+        )
+
     relation_signatures = _precomputed_relation_signatures(
         ordered_relations,
         entities=by_id,
@@ -1705,6 +1735,12 @@ def resolve_collection_entities(
         for _version, version_members in sorted(by_version.items()):
             representatives.append(min(version_members))
             for left, right in _star_pairs(version_members):
+                if config.identity_policy == "contextual_v2":
+                    policy = contextual_policy(left, right)
+                    if policy.outcome != "automatic":
+                        raise ValueError(
+                            "stable identifier block lacks identity authority"
+                        )
                 decisions[(left, right)] = _decision(
                     left,
                     right,
@@ -1773,6 +1809,19 @@ def resolve_collection_entities(
                 pair = _pair(left, right)
                 if pair in decisions:
                     continue
+                if config.identity_policy == "contextual_v2":
+                    policy = contextual_policy(left, right)
+                    if policy.outcome != "automatic":
+                        decisions[pair] = _decision(
+                            left,
+                            right,
+                            outcome=ResolutionOutcome(policy.outcome),
+                            tier=ResolutionTier.EXACT_LABEL_OR_ALIAS,
+                            confidence=0.99,
+                            alias_score=1.0,
+                            reason_codes=(policy.reason,),
+                        )
+                        continue
                 if undefined:
                     decisions[pair] = _decision(
                         left,
@@ -1948,6 +1997,17 @@ def resolve_collection_entities(
             deterministic_groups[right_root][0],
         )
         outcome = classify_resolution_score(score, config.thresholds)
+        policy = (
+            contextual_policy(*representative)
+            if config.identity_policy == "contextual_v2"
+            else None
+        )
+        if policy is not None:
+            if policy.outcome == "rejected":
+                outcome = ResolutionOutcome.REJECTED
+            elif outcome is ResolutionOutcome.AUTOMATIC:
+                # Context may propose an identity but cannot mint an anchor.
+                outcome = ResolutionOutcome.CANDIDATE
         reasons: tuple[str, ...]
         acronym_automatic_allowed = _semantic_acronym_automatic_allowed(
             left_root,
@@ -1975,6 +2035,13 @@ def resolve_collection_entities(
                 )
         left_embedding = embedded_by_root[left_root]
         right_embedding = embedded_by_root[right_root]
+        if policy is not None and outcome is not ResolutionOutcome.AUTOMATIC:
+            reasons = (
+                (policy.reason,)
+                if policy.outcome == "rejected"
+                or outcome is ResolutionOutcome.CANDIDATE
+                else reasons
+            )
         decisions[representative] = _decision(
             *representative,
             outcome=outcome,
@@ -1995,8 +2062,8 @@ def resolve_collection_entities(
         for root, member_ids in final_groups.items()
         for member_id in member_ids
     }
-    automatic_decisions_by_root: dict[int, list[CollectionPairDecision]] = (
-        defaultdict(list)
+    automatic_decisions_by_root: dict[int, list[CollectionPairDecision]] = defaultdict(
+        list
     )
     for decision in decisions.values():
         if decision.outcome is not ResolutionOutcome.AUTOMATIC:
@@ -2049,7 +2116,7 @@ def resolve_collection_entities(
         )
         cluster_key = _hash(
             {
-                "resolver_version": COLLECTION_RESOLVER_VERSION,
+                "resolver_version": resolver_version,
                 "ontology_checksum": snapshot.ontology_checksum,
                 "document_cluster_keys": list(document_cluster_keys),
                 "entity_type": entity_type,
@@ -2125,7 +2192,7 @@ def resolve_collection_entities(
     )
     result = CollectionResolutionResult(
         snapshot=snapshot,
-        resolver_version=COLLECTION_RESOLVER_VERSION,
+        resolver_version=resolver_version,
         input_fingerprint=_input_fingerprint(
             snapshot,
             ordered,

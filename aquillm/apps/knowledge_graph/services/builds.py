@@ -596,8 +596,11 @@ def _document_context(
         ASSEMBLY_NOT_APPLICABLE_VERSION,
         graph_identity_checksum,
     )
-    from apps.knowledge_graph.resolution import DOCUMENT_RESOLVER_VERSION
-    from lib.knowledge_graph.config import load_extraction_settings
+    from apps.knowledge_graph.resolution import resolver_version_for_policy
+    from lib.knowledge_graph.config import (
+        load_extraction_settings,
+        load_identity_policy,
+    )
 
     if type(document_id) is not uuid.UUID:
         raise ValueError("document id must be an exact UUID")
@@ -617,6 +620,7 @@ def _document_context(
     )
     ontology = _active_ontology(collection_id) if ontology is None else ontology
     settings = load_extraction_settings() if settings is None else settings
+    resolver_version = resolver_version_for_policy("document", load_identity_policy())
     identity = DocumentBuildIdentity(
         document_id=document_id,
         source_hash=source_hash,
@@ -650,9 +654,9 @@ def _document_context(
         ),
         ontology_version=_text(ontology.version, "ontology version", maximum=128),
         ontology_checksum=_hash(ontology.checksum, "ontology checksum"),
-        resolver_version=DOCUMENT_RESOLVER_VERSION,
+        resolver_version=resolver_version,
         resolver_checksum=graph_identity_checksum(
-            "document-resolver", DOCUMENT_RESOLVER_VERSION
+            "document-resolver", resolver_version
         ),
         filter_version="pending-v1",
         filter_checksum=graph_identity_checksum("document-filter-policy", "pending-v1"),
@@ -2366,6 +2370,11 @@ def _document_artifact_values(context: _DocumentContext, build_key: str):
         context.identity.ontology_version,
         context.identity.ontology_checksum,
         settings=context.settings,
+        identity_policy=(
+            "contextual_v2"
+            if context.identity.resolver_version == "document-coreference-v4-contextual"
+            else "legacy"
+        ),
     )
     values["build_key"] = build_key
     return values
@@ -3914,12 +3923,20 @@ def build_document_graph(
                     except ValueError as exc:
                         raise CorruptBuildError(str(exc)) from exc
                     result = resolve_document_mentions(
-                        resolvable_mentions(mentions), context.ontology
+                        resolvable_mentions(mentions),
+                        context.ontology,
+                        identity_policy=(
+                            "contextual_v2"
+                            if context.identity.resolver_version
+                            == "document-coreference-v4-contextual"
+                            else "legacy"
+                        ),
                     )
                     persist_document_resolution(
                         artifact.pk,
                         run.pk,
                         result,
+                        ontology=context.ontology,
                         lease_owner=lease_owner,
                         lease_generation=lease_generation,
                     )
@@ -4084,12 +4101,13 @@ def _collection_context(
         collection_manifest_source_hash,
         document_membership_signature,
     )
-    from apps.knowledge_graph.resolution import COLLECTION_RESOLVER_VERSION
+    from apps.knowledge_graph.resolution import resolver_version_for_policy
     from apps.knowledge_graph.resolution.collection import (
         CollectionResolutionConfig,
         resolution_config_checksum,
     )
     from aquillm.utils import strict_index_embedding_signature
+    from lib.knowledge_graph.config import load_identity_policy
 
     if type(collection_id) is not int or not 0 < collection_id < 2**63:
         raise ValueError("collection id must be a positive database integer")
@@ -4219,6 +4237,26 @@ def _collection_context(
     resolution_config, assembly_config = select_capacity_configs(
         entity_count, *capacity_overrides,
     )
+    if capacity_overrides[0] is None:
+        from dataclasses import replace
+
+        resolution_config = replace(
+            resolution_config, identity_policy=load_identity_policy()
+        )
+    if resolution_config.identity_policy == "contextual_v2" and any(
+        artifact.resolver_version
+        != resolver_version_for_policy("document", "contextual_v2")
+        for artifact in artifacts
+    ):
+        raise StaleBuildError("collection awaits contextual document graph artifacts")
+    if resolution_config.identity_policy == "legacy" and any(
+        artifact.resolver_version
+        == resolver_version_for_policy("document", "contextual_v2")
+        for artifact in artifacts
+    ):
+        raise StaleBuildError(
+            "legacy collection cannot consume contextual document graph artifacts"
+        )
     _validate_collection_context_caps(
         document_count=document_count,
         entity_count=entity_count,
@@ -4290,7 +4328,9 @@ def _collection_context(
         extractor_version=extractor_version,
         ontology_version=ontology.version,
         ontology_checksum=ontology.checksum,
-        resolver_version=COLLECTION_RESOLVER_VERSION,
+        resolver_version=resolver_version_for_policy(
+            "collection", resolution_config.identity_policy
+        ),
         resolver_checksum=resolution_config_checksum(resolution_config),
         filter_version=filter_policy.version,
         filter_checksum=filter_policy_checksum(filter_policy),

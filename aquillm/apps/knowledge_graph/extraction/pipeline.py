@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from ..resolution import DOCUMENT_RESOLVER_VERSION
 from .evidence import (
     ExtractedDocumentEvidence,
     ExtractionCapacityCode,
@@ -804,6 +803,7 @@ def document_artifact_identity_values(
     ontology_checksum: str,
     *,
     settings,
+    identity_policy: str = "legacy",
 ) -> dict[str, object]:
     from apps.knowledge_graph.models import (
         ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
@@ -811,6 +811,9 @@ def document_artifact_identity_values(
         GraphArtifact,
     )
     from apps.knowledge_graph.models.artifacts import graph_identity_checksum
+    from apps.knowledge_graph.resolution import resolver_version_for_policy
+
+    resolver_version = resolver_version_for_policy("document", identity_policy)
 
     return {
         "scope_type": GraphArtifact.ScopeType.DOCUMENT,
@@ -818,14 +821,14 @@ def document_artifact_identity_values(
         "source_hash": expected_source_hash,
         "ontology_version": ontology_version,
         "extractor_version": _extractor_identity(settings),
-        "resolver_version": DOCUMENT_RESOLVER_VERSION,
+        "resolver_version": resolver_version,
         "filter_policy_version": "pending-v1",
         "ontology_checksum": ontology_checksum,
         "filter_policy_checksum": graph_identity_checksum(
             "document-filter-policy", "pending-v1"
         ),
         "resolution_config_checksum": graph_identity_checksum(
-            "document-resolver", DOCUMENT_RESOLVER_VERSION
+            "document-resolver", resolver_version
         ),
         "assembly_version": ASSEMBLY_NOT_APPLICABLE_VERSION,
         "assembly_config_checksum": ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,

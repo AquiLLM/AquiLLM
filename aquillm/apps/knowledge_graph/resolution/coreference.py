@@ -18,7 +18,7 @@ from apps.knowledge_graph.extraction.pipeline import (
 )
 from apps.knowledge_graph.extraction.windows import sanitize_graph_source_text
 
-from . import DOCUMENT_RESOLVER_VERSION
+from . import DOCUMENT_RESOLVER_VERSION, resolver_version_for_policy
 from .coreference_types import (
     _HASH,
     ClusterMembership,
@@ -43,6 +43,7 @@ from .coreference_validation import (
     _validated_source_text,
     _validated_span,
 )
+from .identity_policy import IdentityEndpointV2, decide_identity_v2
 from .normalization import normalize_entity_label, parse_stable_identifier
 
 MAX_DOCUMENT_MENTIONS = 65_536
@@ -439,7 +440,7 @@ def _prepare_source_contexts(
                 raise ExtractionCapacityError(
                     ExtractionCapacityCode.CHARACTER_LIMIT,
                     "aggregate unique source context exceeds the "
-                    f"{_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS}-character limit"
+                    f"{_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS}-character limit",
                 )
             context_digest = _source_context_digest(
                 source_key=source_key,
@@ -930,9 +931,8 @@ def _sparse_candidate_decisions(
         )
         if is_acronym_block:
             continue
-        requires_complete_audit = (
-            name_key in conflict_blocks
-            or any(mention.is_pronoun for mention in group)
+        requires_complete_audit = name_key in conflict_blocks or any(
+            mention.is_pronoun for mention in group
         )
         if requires_complete_audit:
             add_complete(group)
@@ -1329,6 +1329,7 @@ def _constrain_component_merges(
                     f"{blocker.method} between {blocker.left_mention_id} and "
                     f"{blocker.right_mention_id}."
                 ),
+                outcome="rejected" if candidate.outcome is not None else None,
             )
             pair_key = frozenset(
                 (candidate.left_mention_id, candidate.right_mention_id)
@@ -1362,9 +1363,10 @@ def _cluster_key(
     normalized_label: str,
     version_signature: str,
     identifier: str,
+    resolver_version: str = DOCUMENT_RESOLVER_VERSION,
 ) -> str:
     value = {
-        "resolver_version": DOCUMENT_RESOLVER_VERSION,
+        "resolver_version": resolver_version,
         "ontology_checksum": ontology_checksum,
         "document_ids": sorted({mention.document_id for mention in mentions}),
         "member_keys": sorted(mention.member_key for mention in mentions),
@@ -1382,6 +1384,7 @@ def _build_clusters(
     merge_edges: tuple[PairDecision, ...],
     *,
     ontology_checksum: str,
+    resolver_version: str = DOCUMENT_RESOLVER_VERSION,
 ) -> tuple[ResolvedCluster, ...]:
     disjoint_set = _DisjointSet(len(mentions))
     indexes = {mention.mention_id: index for index, mention in enumerate(mentions)}
@@ -1474,6 +1477,7 @@ def _build_clusters(
                 cluster_key=_cluster_key(
                     mentions=ordered,
                     ontology_checksum=ontology_checksum,
+                    resolver_version=resolver_version,
                     entity_type=representative.entity_type,
                     normalized_label=representative.normalized_label,
                     version_signature=version_signature,
@@ -1508,7 +1512,14 @@ def _result_payload(
         "input_fingerprint": input_fingerprint,
         "mention_ids": mention_ids,
         "clusters": [asdict(cluster) for cluster in clusters],
-        "decisions": [asdict(decision) for decision in decisions],
+        "decisions": [
+            {
+                key: value
+                for key, value in asdict(decision).items()
+                if key != "outcome" or value is not None
+            }
+            for decision in decisions
+        ],
     }
 
 
@@ -1538,10 +1549,14 @@ def resolution_result_checksum(result: ResolutionResult) -> str:
 
 
 def resolve_document_mentions(
-    mentions: Iterable[object], ontology: object
+    mentions: Iterable[object],
+    ontology: object,
+    *,
+    identity_policy: str = "legacy",
 ) -> ResolutionResult:
     """Partition one bounded document's mentions using deterministic exact rules."""
 
+    resolver_version = resolver_version_for_policy("document", identity_policy)
     try:
         bounded = tuple(islice(iter(mentions), MAX_DOCUMENT_MENTIONS + 1))
     except TypeError as exc:
@@ -1584,14 +1599,72 @@ def resolve_document_mentions(
             expansions=expansions,
             conflict_blocks=conflict_blocks,
         )
+    if identity_policy == "contextual_v2":
+        by_id = {mention.mention_id: mention for mention in adapted}
+        contextual_decisions = []
+        for original in candidate_decisions:
+            left, right = (
+                by_id[original.left_mention_id],
+                by_id[original.right_mention_id],
+            )
+            binding = _acronym_decision(left, right, expansions)
+            policy = decide_identity_v2(
+                left=IdentityEndpointV2(
+                    left.entity_type,
+                    left.normalized_label,
+                    left.identifier,
+                    left.version_signature or "",
+                    left.document_id,
+                ),
+                right=IdentityEndpointV2(
+                    right.entity_type,
+                    right.normalized_label,
+                    right.identifier,
+                    right.version_signature or "",
+                    right.document_id,
+                ),
+                explicit_local_binding=binding is not None and binding.accepted,
+            )
+            if policy.outcome == "rejected":
+                decision = _rejected(left, right, policy.reason, policy.reason)
+                outcome = "rejected"
+            elif original.accepted:
+                decision = original
+                outcome = policy.outcome
+            elif (
+                original.method in {"undefined_acronym", "source_mismatch"}
+                and left.normalized_label == right.normalized_label
+            ):
+                decision = original
+                outcome = "candidate"
+            else:
+                decision = original
+                outcome = "rejected"
+            contextual_decisions.append(
+                PairDecision(
+                    decision.left_mention_id,
+                    decision.right_mention_id,
+                    outcome == "automatic",
+                    decision.method,
+                    decision.confidence,
+                    (
+                        f"Candidate: {policy.reason}."
+                        if outcome == "candidate"
+                        else decision.explanation
+                    ),
+                    outcome=outcome,
+                )
+            )
+        candidate_decisions = tuple(contextual_decisions)
     decisions, merge_edges = _constrain_component_merges(adapted, candidate_decisions)
     clusters = _build_clusters(
         adapted,
         merge_edges,
         ontology_checksum=ontology_checksum,
+        resolver_version=resolver_version,
     )
     payload = _result_payload(
-        resolver_version=DOCUMENT_RESOLVER_VERSION,
+        resolver_version=resolver_version,
         ontology_checksum=ontology_checksum,
         input_fingerprint=input_fingerprint,
         mention_ids=mention_ids,
@@ -1599,7 +1672,7 @@ def resolve_document_mentions(
         decisions=decisions,
     )
     return ResolutionResult(
-        resolver_version=DOCUMENT_RESOLVER_VERSION,
+        resolver_version=resolver_version,
         ontology_checksum=ontology_checksum,
         input_fingerprint=input_fingerprint,
         mention_ids=mention_ids,

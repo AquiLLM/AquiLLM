@@ -17,6 +17,37 @@ RESOLVER_VERSION = DOCUMENT_RESOLVER_VERSION
 MAX_DB_INTEGER = 2**63 - 1
 
 
+def test_contextual_sparse_partition_retains_homonym_singletons_and_anchors(
+    monkeypatch,
+):
+    from apps.knowledge_graph.resolution import coreference
+
+    mentions = (
+        _mention("a", "Mercury", "model", start=0),
+        _mention("b", "Mercury", "model", start=20),
+        _mention("c", "Orion", "model", start=40, identifier="doi:10.1000/a"),
+        _mention("d", "Orion", "model", start=60, identifier="doi:10.1000/a"),
+    )
+    exhaustive = resolve_document_mentions(
+        mentions, _ontology(), identity_policy="contextual_v2"
+    )
+    monkeypatch.setattr(coreference, "_EXHAUSTIVE_PAIR_LIMIT", 1)
+    sparse = resolve_document_mentions(
+        mentions, _ontology(), identity_policy="contextual_v2"
+    )
+    assert sparse.clusters == exhaustive.clusters
+    assert {cluster.mention_ids for cluster in sparse.clusters} == {
+        ("a",),
+        ("b",),
+        ("c", "d"),
+    }
+    assert any(decision.outcome == "candidate" for decision in sparse.decisions)
+    assert all(
+        decision.accepted == (decision.outcome == "automatic")
+        for decision in sparse.decisions
+    )
+
+
 def test_sparse_resolver_matches_exhaustive_adversarial_cluster_partition(monkeypatch):
     import apps.knowledge_graph.resolution.coreference as coreference
 
