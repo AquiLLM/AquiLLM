@@ -163,6 +163,8 @@ def _resolve(env: Mapping[str, str], extra_args: Sequence[str], *, planning: boo
                    kv_dtype="turboquant_k8v4", full_attention_payload_bytes=payload,
                    retained_full_attention_payload_bytes=retained_payload,
                    storage_mode=storage, execution_mode=execution,
+                   storage_readiness="disabled" if storage == "off" else "blocked-on-mixed-group-registration",
+                   active_pager="not-implemented",
                    tier_budgets=budgets, tier_budget_requests=requests,
                    validation_status="unvalidated")
     if not planning:
