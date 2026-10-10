@@ -212,6 +212,47 @@ class IsolationTests(unittest.TestCase):
             with driver.session() as session:
                 self.assertEqual(session.run("RETURN 1 AS ready").single()["ready"], 1)
 
+    def test_delayed_tasks_do_not_run_eagerly_inside_the_test_caller(self):
+        if os.environ.get("RAG_REMEDIATION_TEST") != "1":
+            self.skipTest("queue behavior uses the owned Celery/Redis configuration")
+        from celery import shared_task
+        @shared_task(name="rag_harness.delayed_execution_sentinel")
+        def sentinel():
+            raise AssertionError("delayed work ran synchronously in the test caller")
+        result = sentinel.apply_async(countdown=60)
+        self.assertFalse(result.ready())
+
+    def test_git_provenance_copy_is_detached_and_has_no_host_configuration(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "source"
+            source.mkdir()
+            def git(*args, cwd=source):
+                return subprocess.run(["git", *args], cwd=cwd, text=True,
+                                      capture_output=True, check=True).stdout.strip()
+            git("init", "--quiet")
+            git("config", "user.name", "Synthetic test")
+            git("config", "user.email", "synthetic@example.invalid")
+            (source / "tracked.txt").write_text("committed")
+            git("add", "tracked.txt")
+            git("commit", "--quiet", "-m", "fixture")
+            revision = git("rev-parse", "HEAD")
+            git("remote", "add", "origin", "https://private.invalid/credentials-must-not-copy")
+            (source / "untracked-secret.txt").write_text("never copy")
+            snapshot = root / "snapshot"
+            snapshot.mkdir()
+            self.h.prepare_git_provenance(source, snapshot)
+            self.assertEqual(git("rev-parse", "HEAD", cwd=snapshot), revision)
+            self.assertEqual(git("remote", cwd=snapshot), "")
+            self.assertEqual((snapshot / ".git/HEAD").read_text().strip(), revision)
+            self.assertFalse((snapshot / "untracked-secret.txt").exists())
+            self.assertFalse((snapshot / ".git/hooks").exists())
+            self.assertFalse((snapshot / ".git/objects/info/alternates").exists())
+            (snapshot / "tracked.txt").write_text("modified snapshot")
+            self.assertIn("M tracked.txt", git("status", "--porcelain", cwd=snapshot))
+            self.assertNotIn(str(source), (snapshot / ".git/config").read_text())
+
     def test_owned_frontend_bundle_uses_application_static_prefix(self):
         if os.environ.get("RAG_REMEDIATION_TEST") != "1" or not Path("/frontend-build/main.js").exists():
             self.skipTest("frontend assertion requires the owned browser build volume")

@@ -194,6 +194,36 @@ def validate_arguments(arguments, *, manage=False):
         raise IsolationError("only isolated Django check/migration commands are supported")
 
 
+def prepare_git_provenance(source, destination):
+    """Copy only HEAD commit/tree objects, with no host config, refs or secrets.
+
+    The application image keeps its own source snapshot. A normal Git index
+    compares that snapshot against the captured commit, so dirty/deleted files
+    remain visible rather than being relabeled as a clean checkout.
+    """
+    def git(*arguments, cwd=source, data=None):
+        return subprocess.run(["git", *arguments], cwd=cwd, input=data,
+                              capture_output=True, check=True, timeout=120).stdout
+    revision = git("rev-parse", "HEAD").decode("ascii").strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise IsolationError("test provenance requires a valid SHA-1 Git revision")
+    objects = git("rev-list", "--objects", "--no-object-names", revision + "^{tree}")
+    pack = git("pack-objects", "--stdout", data=revision.encode("ascii") + b"\n" + objects)
+    # An empty template prevents workstation hooks/config from entering tests.
+    with tempfile.TemporaryDirectory(prefix="rag-git-template-") as template:
+        git("init", "--quiet", "--template=" + template, str(destination.resolve()))
+    git("index-pack", "--stdin", cwd=destination, data=pack)
+    gitdir = destination / ".git"
+    (gitdir / "HEAD").write_text(revision + "\n", encoding="ascii")
+    (gitdir / "shallow").write_text(revision + "\n", encoding="ascii")
+    (gitdir / "config").write_text(
+        "[core]\nrepositoryformatversion = 0\nbare = false\nfilemode = true\n",
+        encoding="ascii",
+    )
+    git("read-tree", "HEAD", cwd=destination)
+    return revision
+
+
 def run_recorded(command, artifact, project):
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -255,6 +285,12 @@ def main(argv=None):
             docker(*compose, "up", "--build", "-d", "--wait", "app")
             containers, networks, volumes = inspect_project(args.project)
             print("Owned resources: " + ", ".join(c["Name"].lstrip("/") for c in containers), flush=True)
+            provenance = Path(temp) / "provenance"
+            provenance.mkdir()
+            revision = prepare_git_provenance(ROOT, provenance)
+            app = next(c for c in containers if c["Config"]["Labels"]["com.docker.compose.service"] == "app")
+            docker("cp", str(provenance / ".git"), app["Id"] + ":/app/")
+            print("Source snapshot against Git revision: " + revision, flush=True)
             docker(*compose, "exec", "-T", "app", "python", "scripts/rag_remediation_provision.py")
             if spec:
                 docker(*compose, "--profile", "browser", "up", "--build", "-d", "frontend")

@@ -20,7 +20,8 @@ STORAGES = {
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
 MEDIA_ROOT = "/artifacts/media"
-CELERY_TASK_ALWAYS_EAGER = True
+# Keep delayed jobs queued; eager recursion is not representative worker behavior.
+CELERY_TASK_ALWAYS_EAGER = False
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_BROKER_URL = os.environ["CELERY_BROKER_URL"]
 CELERY_RESULT_BACKEND = os.environ["CELERY_RESULT_BACKEND"]

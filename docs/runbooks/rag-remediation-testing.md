@@ -93,3 +93,15 @@ probe success alone cannot establish remediation.
 The coordinator owns schema/migration numbering, shared contracts, evaluation
 labels/statistical policies, activation gates and deployment. This stack is
 disposable verification infrastructure and performs no production operations.
+
+The runner installs a detached Git index containing only the current commit and
+its tree objects into the disposable app, so standalone evaluation reports can
+identify their source revision. Host Git configuration, hooks, remotes and
+untracked files are excluded. The copied application tree still reports its
+actual differences from that commit; this does not certify a clean release or
+satisfy any live evaluation gate. Fixture reports remain ineligible for activation.
+
+Delayed Celery work is queued in the owned Redis service, not executed eagerly
+inside the caller. There is no background Celery worker in this harness. Tests
+that need a worker body invoke the task explicitly or use their existing bounded
+worker fixtures; a queued result does not establish successful ingestion.
