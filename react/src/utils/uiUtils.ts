@@ -35,4 +35,4 @@ export const parseCollections = (collectionsData: any[]): Collection[] => {
     created_at: new Date(col.created_at || new Date()).toLocaleString(),
     updated_at: new Date(col.updated_at || new Date()).toISOString(),
   }));
-}; 
+};
