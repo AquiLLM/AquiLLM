@@ -6,18 +6,21 @@ import zipfile
 from hashlib import sha256
 
 import pytest
-from pypdf import PdfReader, PdfWriter
+from pypdf import PdfReader
 
 from aquillm.ingestion.parsers import extract_text_payloads
 from aquillm.ingestion.types import ExtractionError
 
 
-def pdf_bytes(width):
-    writer = PdfWriter()
-    writer.add_blank_page(width=width, height=100)
-    output = io.BytesIO()
-    writer.write(output)
-    return output.getvalue()
+def pdf_bytes(width, *, blank=False):
+    import fitz
+    document = fitz.open()
+    page = document.new_page(width=width, height=100)
+    if not blank:
+        page.insert_text((10, 25), f'PDF {width}', fontsize=8)
+    data = document.tobytes()
+    document.close()
+    return data
 
 
 def zip_bytes(members):
@@ -32,10 +35,6 @@ def zip_bytes(members):
 
 @pytest.fixture
 def fake_pdf(monkeypatch):
-    monkeypatch.setattr(
-        "aquillm.ingestion.parsers.extract_pdf_text",
-        lambda data: f"PDF {PdfReader(io.BytesIO(data)).pages[0].mediabox.width}",
-    )
     monkeypatch.setattr(
         "aquillm.ingestion.parsers.extract_figure_payloads_for_format",
         lambda *_args: None,
@@ -341,11 +340,7 @@ def test_same_title_figure_cannot_acquire_other_members_parent(
     monkeypatch.setattr(
         "aquillm.models.create_chunks.delay", lambda *_args, **_kwargs: None
     )
-    first, second = pdf_bytes(100), pdf_bytes(200)
-    monkeypatch.setattr(
-        "aquillm.ingestion.parsers.extract_pdf_text",
-        lambda data: "first text" if data == first else "",
-    )
+    first, second = pdf_bytes(100), pdf_bytes(200, blank=True)
 
     def figures(_filename, data, _format, outputs):
         outputs.append(

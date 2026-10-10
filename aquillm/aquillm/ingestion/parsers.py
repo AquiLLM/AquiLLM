@@ -8,6 +8,7 @@ including figure extraction and media transcription.
 import io
 import structlog
 import os
+from dataclasses import replace
 
 from aquillm.ocr_utils import extract_text_from_image
 from aquillm.vtt import coalesce_captions, parse as parse_vtt, to_text as vtt_to_text
@@ -16,7 +17,8 @@ from .media import transcribe_media_bytes
 from .parser_archive import ArchiveBudget, extract_archive_payloads
 from .parser_figures import extract_figure_payloads_for_format
 from .types import ExtractedTextPayload, ExtractionError, UnsupportedFileTypeError
-from lib.parsers.source_contracts import ArchiveMemberStepV1, source_artifact_ref
+from lib.parsers.source_contracts import ArchiveMemberStepV1, ExtractionV1, SourceElementV1, source_artifact_ref
+from lib.parsers.structural import extract_structure
 
 # Import from lib/parsers
 from lib.parsers import (
@@ -34,15 +36,8 @@ from lib.parsers import (
     guess_content_type as _guess_content_type,
     detect_ingest_type as _detect_ingest_type_lib,
     read_text_bytes as _read_text_bytes,
-    extract_pdf_text,
     extract_html_text,
-    extract_docx_text,
     extract_epub_text,
-    extract_xlsx_text,
-    extract_xls_text,
-    extract_ods_text,
-    extract_csv_text,
-    extract_pptx_text,
     extract_odp_text,
     extract_json_text,
     extract_jsonl_text,
@@ -61,16 +56,17 @@ def detect_ingest_type(filename: str, content_type: str | None = None) -> str:
         raise UnsupportedFileTypeError(str(e)) from e
 
 
+def _native_text_payload(filename, data, normalized_type):
+    artifact = source_artifact_ref(data, member_path=None, container_sha256=None)
+    extraction = extract_structure(filename, data, artifact=artifact)
+    return ExtractedTextPayload(title=_stem(filename), normalized_type=normalized_type,
+                                full_text=extraction.canonical_text, extraction=extraction)
+
+
 def _extract_pdf(filename: str, data: bytes) -> list[ExtractedTextPayload]:
     """Extract text and figures from a PDF."""
     payloads: list[ExtractedTextPayload] = []
-    full_text = extract_pdf_text(data)
-    
-    payloads.append(ExtractedTextPayload(
-        title=_stem(filename),
-        normalized_type="pdf",
-        full_text=full_text,
-    ))
+    payloads.append(_native_text_payload(filename, data, 'pdf'))
     
     extract_figure_payloads_for_format(filename, data, "pdf", payloads)
     
@@ -98,37 +94,33 @@ def _extract_yaml(filename: str, data: bytes) -> ExtractedTextPayload:
 
 
 def _extract_csv_like(filename: str, data: bytes, delimiter: str) -> ExtractedTextPayload:
-    return ExtractedTextPayload(title=_stem(filename), normalized_type="tabular", full_text=extract_csv_text(data, delimiter))
+    return _native_text_payload(filename, data, 'tabular')
 
 
 def _extract_docx(filename: str, data: bytes) -> list[ExtractedTextPayload]:
-    text = extract_docx_text(data)
-    payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="docx", full_text=text)]
+    payloads = [_native_text_payload(filename, data, 'docx')]
     extract_figure_payloads_for_format(filename, data, "docx", payloads)
     return payloads
 
 
 def _extract_xlsx(filename: str, data: bytes) -> list[ExtractedTextPayload]:
-    text = extract_xlsx_text(data)
-    payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="xlsx", full_text=text)]
+    payloads = [_native_text_payload(filename, data, 'xlsx')]
     extract_figure_payloads_for_format(filename, data, "xlsx", payloads)
     return payloads
 
 
 def _extract_xls(filename: str, data: bytes) -> ExtractedTextPayload:
-    return ExtractedTextPayload(title=_stem(filename), normalized_type="xls", full_text=extract_xls_text(data))
+    return _native_text_payload(filename, data, 'xls')
 
 
 def _extract_ods(filename: str, data: bytes) -> list[ExtractedTextPayload]:
-    text = extract_ods_text(data)
-    payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="ods", full_text=text)]
+    payloads = [_native_text_payload(filename, data, 'ods')]
     extract_figure_payloads_for_format(filename, data, "ods", payloads)
     return payloads
 
 
 def _extract_pptx(filename: str, data: bytes) -> list[ExtractedTextPayload]:
-    text = extract_pptx_text(data)
-    payloads = [ExtractedTextPayload(title=_stem(filename), normalized_type="pptx", full_text=text)]
+    payloads = [_native_text_payload(filename, data, 'pptx')]
     extract_figure_payloads_for_format(filename, data, "pptx", payloads)
     return payloads
 
@@ -212,6 +204,15 @@ def extract_text_payloads(
         data, member_path=leaf.member_path if leaf else None,
         container_sha256=leaf.container_sha256 if leaf else None,
     )
+    body = next((payload for payload in payloads if payload.modality == 'text'), payloads[0] if payloads else None)
+    extraction = None
+    if body is not None:
+        if body.extraction is not None:
+            extraction = replace(body.extraction, artifact=artifact)
+        else:
+            text = body.full_text
+            elements = (SourceElementV1('element-1', 'paragraph', 0, len(text), None, None, None, None),) if text else ()
+            extraction = ExtractionV1(f'existing-{body.normalized_type}-text-v1', artifact, text, elements, 'partial', ('structure_unavailable',))
     for payload in payloads:
         payload.source_artifact = artifact
         payload.source_bytes = data
@@ -219,6 +220,7 @@ def extract_text_payloads(
         payload.source_content_type = content_type or _guess_content_type(filename)
         payload.archive_lineage = _archive_lineage
         payload.source_containers = _source_containers
+        payload.extraction = extraction
         if payload.media_bytes is not None:
             payload.media_artifact = source_artifact_ref(payload.media_bytes, member_path=None, container_sha256=None)
     return payloads
@@ -246,14 +248,16 @@ def _extract_unbound_text_payloads(filename: str, data: bytes, content_type: str
 
     if extension == ".pdf":
         return _extract_pdf(filename, data)
-    if extension in (".txt", ".md", ".doc", ".rtf"):
-        return [ExtractedTextPayload(title=_stem(filename), normalized_type=extension.lstrip("."), full_text=_read_text_bytes(data))]
+    if extension in (".txt", ".md"):
+        return [_native_text_payload(filename, data, extension.lstrip('.'))]
+    if extension in ('.doc', '.ppt', '.rtf', '.odt'):
+        # Unsupported legacy paths still carry a typed extraction snapshot;
+        # binary decoding is never advertised as successful native extraction.
+        return [_native_text_payload(filename, data, extension.lstrip('.'))]
     if extension in (".html", ".htm"):
         return [_extract_html(filename, data)]
     if extension == ".docx":
         return _extract_docx(filename, data)
-    if extension == ".odt":
-        return [ExtractedTextPayload(title=_stem(filename), normalized_type="odt", full_text=_read_text_bytes(data))]
     if extension == ".epub":
         return _extract_epub(filename, data)
     if extension == ".csv":
@@ -268,8 +272,6 @@ def _extract_unbound_text_payloads(filename: str, data: bytes, content_type: str
         return _extract_ods(filename, data)
     if extension == ".pptx":
         return _extract_pptx(filename, data)
-    if extension == ".ppt":
-        return [ExtractedTextPayload(title=_stem(filename), normalized_type="ppt", full_text=_read_text_bytes(data))]
     if extension == ".odp":
         return [_extract_odp(filename, data)]
     if extension == ".json":

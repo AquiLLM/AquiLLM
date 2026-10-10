@@ -47,35 +47,6 @@ def _normalize_image(image_bytes: bytes) -> tuple[bytes, str]:
         return image_bytes, "png"
 
 
-def _extract_via_pdf(data: bytes, source_format: str, filename: str) -> Iterator[ExtractedFigure] | None:
-    """
-    Try to extract figures by converting to PDF first.
-    
-    Returns None if conversion is not available or fails.
-    """
-    try:
-        from .office_convert import convert_to_pdf, is_libreoffice_available
-        from .pdf import extract_figures as extract_pdf_figures
-    except ImportError:
-        return None
-    
-    if not is_libreoffice_available():
-        logger.debug("obs.figures.libreoffice_unavailable", source_format=source_format)
-        return None
-
-    pdf_bytes = convert_to_pdf(data, source_format, filename)
-    if not pdf_bytes:
-        logger.debug("obs.figures.convert_failed", source_format=source_format, filename=filename or source_format)
-        return None
-
-    logger.info("obs.figures.convert_used", source_format=source_format.upper(), filename=filename)
-    
-    # Update location metadata to indicate conversion was used
-    for figure in extract_pdf_figures(pdf_bytes, filename):
-        figure.location_metadata["converted_from"] = source_format
-        yield figure
-
-
 def _extract_xlsx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
     """Extract embedded raster images directly from XLSX."""
     try:
@@ -198,51 +169,11 @@ def _extract_ods_direct(data: bytes, filename: str = "") -> Iterator[ExtractedFi
         logger.info("obs.figures.extract_done", source_format="ods", figure_count=total_extracted, filename=filename)
 
 
-def extract_figures_xlsx(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
-    """
-    Extract figures from an XLSX file.
-    
-    First tries PDF conversion (to capture charts and other vector graphics),
-    falls back to direct extraction if LibreOffice is not available.
-    
-    Args:
-        data: Raw XLSX bytes
-        filename: Optional filename for logging
-        
-    Yields:
-        ExtractedFigure for each valid image found
-    """
-    # Try PDF conversion first (captures charts)
-    pdf_result = _extract_via_pdf(data, "xlsx", filename)
-    if pdf_result is not None:
-        yield from pdf_result
-        return
-    
-    # Fall back to direct extraction
-    logger.debug("obs.figures.direct_fallback", source_format="xlsx", filename=filename)
-    yield from _extract_xlsx_direct(data, filename)
+def extract_figures_xlsx(data: bytes, filename: str = '') -> Iterator[ExtractedFigure]:
+    from .office import _extract_office_figures
+    yield from _extract_office_figures(data, 'xlsx', filename, _extract_xlsx_direct)
 
 
-def extract_figures_ods(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
-    """
-    Extract figures from an ODS file.
-    
-    First tries PDF conversion (to capture charts and other vector graphics),
-    falls back to direct extraction if LibreOffice is not available.
-    
-    Args:
-        data: Raw ODS bytes
-        filename: Optional filename for logging
-        
-    Yields:
-        ExtractedFigure for each valid image found
-    """
-    # Try PDF conversion first (captures charts)
-    pdf_result = _extract_via_pdf(data, "ods", filename)
-    if pdf_result is not None:
-        yield from pdf_result
-        return
-    
-    # Fall back to direct extraction
-    logger.debug("obs.figures.direct_fallback", source_format="ods", filename=filename)
-    yield from _extract_ods_direct(data, filename)
+def extract_figures_ods(data: bytes, filename: str = '') -> Iterator[ExtractedFigure]:
+    from .office import _extract_office_figures
+    yield from _extract_office_figures(data, 'ods', filename, _extract_ods_direct)

@@ -1,25 +1,11 @@
-"""
-PowerPoint PPTX presentation parsing.
-"""
-
-import io
+# Compatibility wrapper for faithful ordered extraction.
+from lib.parsers.source_contracts import source_artifact_ref
+from lib.parsers.structural import extract_structure
 
 
 def extract_pptx_text(data: bytes) -> str:
-    """Extract text content from PPTX bytes."""
-    try:
-        from pptx import Presentation  # type: ignore
-    except Exception as exc:
-        raise ValueError("python-pptx is required for .pptx extraction.") from exc
-    prs = Presentation(io.BytesIO(data))
-    lines: list[str] = []
-    for i, slide in enumerate(prs.slides, start=1):
-        lines.append(f"# Slide {i}")
-        for shape in slide.shapes:
-            text = getattr(shape, "text", "")
-            if isinstance(text, str) and text.strip():
-                lines.append(text.strip())
-    return "\n".join(lines)
+    artifact = source_artifact_ref(data, member_path=None, container_sha256=None)
+    return extract_structure('source.pptx', data, artifact=artifact).canonical_text
 
 
 __all__ = ['extract_pptx_text']

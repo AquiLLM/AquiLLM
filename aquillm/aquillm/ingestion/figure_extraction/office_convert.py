@@ -5,6 +5,8 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
+from dataclasses import dataclass
+from typing import Literal
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -24,6 +26,29 @@ CONVERTIBLE_FORMATS = {
 
 # LibreOffice command (try soffice first, then libreoffice)
 LIBREOFFICE_COMMANDS = ["soffice", "libreoffice"]
+
+
+@dataclass(frozen=True)
+class ConversionOutcomeV1:
+    status: Literal['unavailable', 'failed', 'converted']
+    pdf_bytes: bytes | None
+
+    def __post_init__(self):
+        if self.status not in ('unavailable', 'failed', 'converted') or ((self.status == 'converted') != (isinstance(self.pdf_bytes, bytes) and bool(self.pdf_bytes))):
+            raise ValueError('invalid_office_conversion_outcome')
+        if self.status != 'converted' and self.pdf_bytes is not None:
+            raise ValueError('invalid_office_conversion_outcome')
+
+
+def convert_figures_pdf(data: bytes, source_format: str, filename: str = '') -> ConversionOutcomeV1:
+    """Concrete result; never hide fallback decisions in a generator body."""
+    if not is_libreoffice_available():
+        return ConversionOutcomeV1('unavailable', None)
+    try:
+        pdf = convert_to_pdf(data, source_format, filename)
+    except (OSError, subprocess.SubprocessError):
+        pdf = None
+    return ConversionOutcomeV1('converted', pdf) if pdf else ConversionOutcomeV1('failed', None)
 
 
 def _find_libreoffice() -> str | None:

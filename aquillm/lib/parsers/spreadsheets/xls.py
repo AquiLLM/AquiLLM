@@ -1,23 +1,11 @@
-"""
-Excel XLS spreadsheet parsing.
-"""
+# Compatibility wrapper for faithful ordered extraction.
+from lib.parsers.source_contracts import source_artifact_ref
+from lib.parsers.structural import extract_structure
 
 
 def extract_xls_text(data: bytes) -> str:
-    """Extract text content from XLS bytes."""
-    try:
-        import xlrd  # type: ignore
-    except Exception as exc:
-        raise ValueError("xlrd is required for .xls extraction.") from exc
-    book = xlrd.open_workbook(file_contents=data)
-    lines: list[str] = []
-    for sheet in book.sheets():
-        lines.append(f"# Sheet: {sheet.name}")
-        for row_index in range(sheet.nrows):
-            values = [str(value).strip() for value in sheet.row_values(row_index) if str(value).strip()]
-            if values:
-                lines.append(", ".join(values))
-    return "\n".join(lines)
+    artifact = source_artifact_ref(data, member_path=None, container_sha256=None)
+    return extract_structure('source.xls', data, artifact=artifact).canonical_text
 
 
 __all__ = ['extract_xls_text']
