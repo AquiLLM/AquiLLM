@@ -144,6 +144,85 @@ def test_multimodal_receipt_binds_successful_route_without_raw_logging(monkeypat
     assert "private" not in json.dumps(logs)
 
 
+@pytest.mark.parametrize("route_attempt", [1, 2])
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [{"index": 0, "embedding": [1.0]}, {"index": 1, "embedding": [2.0]}],
+        [{"index": 1, "embedding": [1.0]}],
+        [{"index": -1, "embedding": [1.0]}],
+        [{"index": True, "embedding": [1.0]}],
+        [{"index": 0.0, "embedding": [1.0]}],
+        [{"index": "0", "embedding": [1.0]}],
+        [{"index": None, "embedding": [1.0]}],
+        [],
+        None,
+        [None],
+        [{"embedding": []}],
+    ],
+)
+def test_multimodal_ambiguous_response_fails_closed_without_fallback(
+    monkeypatch, route_attempt, rows
+):
+    from lib.embeddings.utils import EmbeddingContractError
+
+    calls = []
+
+    def post(*_, **kwargs):
+        calls.append(kwargs["json"])
+        assert len(calls) <= route_attempt, "ambiguous response retried another route"
+        if len(calls) < route_attempt:
+            return SimpleNamespace(status_code=400)
+        return SimpleNamespace(status_code=200, json=lambda: {"data": rows})
+
+    monkeypatch.setattr(multimodal.requests, "post", post)
+    monkeypatch.setattr(
+        facade,
+        "get_embedding_result_via_local_openai",
+        lambda *_, **__: pytest.fail("ambiguous multimodal response fell back to text"),
+    )
+    with pytest.raises(EmbeddingContractError):
+        facade.get_multimodal_embedding_result(
+            "caption", "data:image/png;base64,fixture"
+        )
+    assert len(calls) == route_attempt
+
+
+@pytest.mark.parametrize("route_attempt", [1, 2])
+@pytest.mark.parametrize("index", [{}, {"index": 0}])
+def test_multimodal_singleton_binds_receipt_with_missing_or_zero_index(
+    monkeypatch, route_attempt, index
+):
+    calls = []
+
+    def post(*_, **kwargs):
+        calls.append(kwargs["json"])
+        if len(calls) < route_attempt:
+            return SimpleNamespace(status_code=400)
+        return SimpleNamespace(
+            status_code=200,
+            json=lambda: {"data": [{**index, "embedding": [1.0]}]},
+        )
+
+    monkeypatch.setattr(multimodal.requests, "post", post)
+    monkeypatch.setenv("APP_EMBED_DIMS", "1")
+    result = facade.get_multimodal_embedding_result(
+        "caption", "data:image/png;base64,fixture"
+    )
+    assert result.vector == [1.0]
+    assert len(calls) == route_attempt
+    assert result.provenance["route"] == (
+        "vllm-multi-modal-data" if route_attempt == 1 else "vllm-openai-content"
+    )
+    payload = calls[-1]
+    prepared = (
+        {"input": payload["input"], "multi_modal_data": payload["multi_modal_data"]}
+        if route_attempt == 1
+        else payload["input"]
+    )
+    assert result.provenance["prepared_input_sha256"] == digest(prepared)
+
+
 def test_vector_integrity_survives_storage_roundtrip_and_rejects_replacement():
     from lib.embeddings.provenance import make_result, valid_provenance
 

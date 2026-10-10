@@ -8,9 +8,26 @@ import requests
 
 from .config import get_local_embed_config
 from .provenance import EmbeddingResult, make_result
-from .utils import EmbeddingContractError
+from .utils import EmbeddingContractError, validate_embedding
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+def _single_response_vector(data: object) -> list[float]:
+    """Require one unambiguous result for a single text/image input."""
+    rows = data.get("data") if isinstance(data, dict) else None
+    if not isinstance(rows, (list, tuple)) or len(rows) != 1:
+        raise EmbeddingContractError("Multimodal response must contain one vector")
+    row = rows[0]
+    if not isinstance(row, dict):
+        raise EmbeddingContractError("Multimodal response entry is invalid")
+    # Some pooling responses omit indices. An explicit index must bind to the
+    # only submitted multimodal item; bool/float/string coercion is unsafe.
+    if "index" in row and (type(row["index"]) is not int or row["index"] != 0):
+        raise EmbeddingContractError("Multimodal response has invalid input index")
+    vector = row.get("embedding")
+    validate_embedding(vector)
+    return list(vector)
 
 
 def _format_qwen_vl_embed_prompt(instruction: str, text: str, has_image: bool) -> str:
@@ -94,28 +111,24 @@ def get_multimodal_embedding_result_via_vllm_pooling(
         )
         if response.status_code == 200:
             data = response.json()
-            if "data" in data and len(data["data"]) > 0:
-                embedding = data["data"][0].get("embedding")
-                if embedding:
-                    logger.info(
-                        "obs.embed.multimodal_succeeded", format="multi_modal_data"
-                    )
-                    return make_result(
-                        embedding,
-                        provider="local-openai",
-                        route="vllm-multi-modal-data",
-                        role=input_type,
-                        prepared_input={
-                            "input": formatted_prompt,
-                            "multi_modal_data": payload["multi_modal_data"],
-                        },
-                        original_input={
-                            "input": formatted_prompt,
-                            "multi_modal_data": payload["multi_modal_data"],
-                        },
-                        model=model,
-                        response_model=data.get("model"),
-                    )
+            embedding = _single_response_vector(data)
+            logger.info("obs.embed.multimodal_succeeded", format="multi_modal_data")
+            return make_result(
+                embedding,
+                provider="local-openai",
+                route="vllm-multi-modal-data",
+                role=input_type,
+                prepared_input={
+                    "input": formatted_prompt,
+                    "multi_modal_data": payload["multi_modal_data"],
+                },
+                original_input={
+                    "input": formatted_prompt,
+                    "multi_modal_data": payload["multi_modal_data"],
+                },
+                model=model,
+                response_model=data.get("model"),
+            )
         else:
             logger.debug(
                 "obs.embed.multimodal_non_200",
@@ -145,22 +158,18 @@ def get_multimodal_embedding_result_via_vllm_pooling(
         )
         if response.status_code == 200:
             data = response.json()
-            if "data" in data and len(data["data"]) > 0:
-                embedding = data["data"][0].get("embedding")
-                if embedding:
-                    logger.info(
-                        "obs.embed.multimodal_succeeded", format="openai_content"
-                    )
-                    return make_result(
-                        embedding,
-                        provider="local-openai",
-                        route="vllm-openai-content",
-                        role=input_type,
-                        prepared_input=content_payload["input"],
-                        original_input=content_payload["input"],
-                        model=model,
-                        response_model=data.get("model"),
-                    )
+            embedding = _single_response_vector(data)
+            logger.info("obs.embed.multimodal_succeeded", format="openai_content")
+            return make_result(
+                embedding,
+                provider="local-openai",
+                route="vllm-openai-content",
+                role=input_type,
+                prepared_input=content_payload["input"],
+                original_input=content_payload["input"],
+                model=model,
+                response_model=data.get("model"),
+            )
         else:
             logger.debug(
                 "obs.embed.multimodal_non_200",
