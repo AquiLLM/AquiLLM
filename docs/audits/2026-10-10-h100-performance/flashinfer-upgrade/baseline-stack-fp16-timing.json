@@ -1,0 +1,52 @@
+{
+  "kind": "full_native_adapter_single_cute_launch",
+  "T": 5,
+  "shape": [
+    1,
+    5,
+    16,
+    48,
+    128
+  ],
+  "state_stride": [
+    786560,
+    16384,
+    128,
+    1
+  ],
+  "gate_stride": [
+    48,
+    1
+  ],
+  "original_module": "vllm.model_executor.layers.fla.ops.fused_sigmoid_gating",
+  "operand_precision": "fp16",
+  "repeats": 200,
+  "packages": {
+    "flashinfer-python": "0.6.13",
+    "nvidia-cutlass-dsl": "4.5.2",
+    "vllm": "0.23.1rc1.dev748+g2dfaae752",
+    "torch": "2.11.0+cu130",
+    "triton": "3.6.0"
+  },
+  "timings_us": {
+    "original": {
+      "eager": 44.81247901916504,
+      "cuda_graph": 14.213279485702515
+    },
+    "full_adapter": {
+      "eager": 48.084959983825684,
+      "cuda_graph": 12.344640493392944
+    }
+  },
+  "speedup": {
+    "eager": 0.9319437727355621,
+    "cuda_graph": 1.1513724918364125
+  },
+  "identity": {
+    "image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+    "base": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+    "commit": "6dd3678f5afac1b882b655928b818abc4e9661e2",
+    "checkout": "/home/exouser/AquiLLM-flashinfer",
+    "source_mode": "Read-only checkout mounted via PYTHONPATH; direct kernel qualification only"
+  }
+}

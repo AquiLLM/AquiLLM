@@ -1,0 +1,117 @@
+{
+  "kind": "synthetic_raw_FI_ceiling_not_adapter_qualification",
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "T": 5,
+  "repeats": 300,
+  "rounds": 5,
+  "numerical_check": {
+    "rounded_output": {
+      "max": 1.52587890625e-05,
+      "rms": 3.0262669952207943e-06
+    },
+    "rounded_state": {
+      "max": 2.2351741790771484e-08,
+      "rms": 1.174608854626058e-09
+    }
+  },
+  "packages": {
+    "vllm": "0.23.1rc1.dev748+g2dfaae752",
+    "torch": "2.11.0+cu130",
+    "triton": "3.6.0",
+    "flashinfer-python": "0.6.18",
+    "nvidia-cutlass-dsl": "4.6.2"
+  },
+  "timings_us": {
+    "original_fp16_dense_gates48": {
+      "median": 14.402666091918945,
+      "min": 14.391786257425943,
+      "max": 14.406933784484863,
+      "samples": [
+        14.406933784484863,
+        14.403947194417318,
+        14.398080507914225,
+        14.402666091918945,
+        14.391786257425943
+      ]
+    },
+    "original_fp16_strided_pool_gates48": {
+      "median": 14.383999506632486,
+      "min": 14.375999768575033,
+      "max": 14.400854110717773,
+      "samples": [
+        14.400854110717773,
+        14.375999768575033,
+        14.394027392069498,
+        14.380267461140951,
+        14.383999506632486
+      ]
+    },
+    "original_fp16_strided_pool_gates96": {
+      "median": 17.90496031443278,
+      "min": 17.886932690938313,
+      "max": 17.9365332921346,
+      "samples": [
+        17.90496031443278,
+        17.904000282287598,
+        17.886932690938313,
+        17.9365332921346,
+        17.917226155598957
+      ]
+    },
+    "raw_lower_bf16_dense_one_launch": {
+      "median": 9.429333209991455,
+      "min": 9.41152016321818,
+      "max": 9.435733159383139,
+      "samples": [
+        9.420586427052816,
+        9.435733159383139,
+        9.429333209991455,
+        9.41152016321818,
+        9.43125327428182
+      ]
+    },
+    "raw_public_bf16_dense": {
+      "median": 10.63477357228597,
+      "min": 10.619626839955648,
+      "max": 10.875306924184164,
+      "samples": [
+        10.619626839955648,
+        10.63477357228597,
+        10.633066495259603,
+        10.875306924184164,
+        10.717439651489258
+      ]
+    },
+    "raw_public_fp16_dense_including_staging": {
+      "median": 27.642240524291992,
+      "min": 27.37514813741048,
+      "max": 27.662614186604817,
+      "samples": [
+        27.64661471048991,
+        27.37514813741048,
+        27.662614186604817,
+        27.642240524291992,
+        27.636372248331707
+      ]
+    },
+    "raw_lower_plus_existing_meta_pack_unpack": {
+      "median": 15.531733830769857,
+      "min": 15.434667269388834,
+      "max": 15.665599505106607,
+      "samples": [
+        15.665599505106607,
+        15.434667269388834,
+        15.531733830769857,
+        15.584746996561686,
+        15.455679893493652
+      ]
+    }
+  },
+  "notes": [
+    "lower BF16 route has no external metadata/preparation or checkpoint traffic",
+    "public BF16 wrapper includes its dummy-zero launch",
+    "all destinations positive and dense pool; unsafe strided/null direct scatter is never exercised",
+    "gate stride96 is inferred from Qwen ba.chunk; not an observed serving trace",
+    "existing prepare allocates unused checkpoint scratch here, but no checkpoint traffic"
+  ]
+}
