@@ -1,7 +1,7 @@
 """Real H100 qualification; a missing adapter fails collection on the candidate.
 
-Limits are declared before running the candidate. BF16-rounded vLLM is the
-primary recurrence comparator. FP16 vLLM errors are reported separately.
+Limits are declared before running the candidate. BF16 cases retain their
+rounded primary comparator; FP16 cases use the saved FP16 original directly.
 Large-gate stress deliberately fails if upstream arithmetic produces NaNs.
 """
 import json
@@ -20,7 +20,10 @@ PRIMARY_OUTPUT = dict(atol=0.005, rtol=0.025)
 PRIMARY_STATE = dict(atol=0.0003, rtol=0.02)
 FP16_OUTPUT = dict(atol=0.01, rtol=0.05)
 FP16_STATE = dict(atol=0.003, rtol=0.05)
+FP16_PRIMARY_OUTPUT = dict(atol=0.0001, rtol=0.002)
+FP16_PRIMARY_STATE = dict(atol=0.00001, rtol=0.002)
 STATE_SIZE = 48 * 128 * 128
+QUALIFICATION_PRECISION = "bf16"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -38,6 +41,27 @@ def genesis_before_vllm_imports():
             os.environ.pop("AQUILLM_H100_GDN", None)
         else:
             os.environ["AQUILLM_H100_GDN"] = previous
+
+
+@pytest.fixture(autouse=True, params=[pytest.param("bf16", id="precision_bf16"),
+                                   pytest.param("fp16", id="precision_fp16")])
+def operand_precision(request, monkeypatch):
+    from functools import partial
+    from aquillm_vllm_h100.gdn import native
+    precision = request.param
+    launch = partial(native.launch, _operand_precision=precision)
+    launch._operand_precision = precision
+    monkeypatch.setattr(native, "launch", launch)
+    monkeypatch.setitem(globals(), "QUALIFICATION_PRECISION", precision)
+    return precision
+
+
+def output_limits():
+    return PRIMARY_OUTPUT if QUALIFICATION_PRECISION == "bf16" else FP16_PRIMARY_OUTPUT
+
+
+def state_limits():
+    return PRIMARY_STATE if QUALIFICATION_PRECISION == "bf16" else FP16_PRIMARY_STATE
 
 
 def original():
@@ -89,6 +113,10 @@ def reference(args, backing, rounded, direct_bf16=False):
     return original()(**args)[0], state, copied
 
 
+def primary_reference(args, backing, direct_bf16=False):
+    return reference(args, backing, QUALIFICATION_PRECISION == "bf16", direct_bf16)
+
+
 def errors(actual, expected):
     error = actual.float() - expected.float()
     return {"max": error.abs().max().item(), "rms": error.square().mean().sqrt().item()}
@@ -110,7 +138,7 @@ def assert_untouched(args, before, after):
 
 def compare(args, backing, direct_bf16=False):
     before = backing.clone()
-    primary_o, primary_s, _ = reference(args, before, True, direct_bf16)
+    primary_o, primary_s, _ = primary_reference(args, before, direct_bf16)
     fp16_o, fp16_s, _ = reference(args, before, False)
     route_calls = []
     def fallback(*a, **kw):
@@ -131,12 +159,13 @@ def compare(args, backing, direct_bf16=False):
         for value in (active, returned, po, primary_s, fo, fp16_s):
             assert torch.isfinite(value).all(), "finite operands produced nonfinite recurrence"
         print(json.dumps({"T": args["q"].shape[1], "accepted": accepted,
-                          "rounded_output": errors(active, po),
-                          "rounded_state": errors(returned, primary_s),
+                          "operand_precision": QUALIFICATION_PRECISION,
+                          "primary_output": errors(active, po),
+                          "primary_state": errors(returned, primary_s),
                           "fp16_output": errors(active, fo),
                           "fp16_state": errors(returned, fp16_s)}))
-        torch.testing.assert_close(active, po, **PRIMARY_OUTPUT)
-        torch.testing.assert_close(returned, primary_s, **PRIMARY_STATE)
+        torch.testing.assert_close(active, po, **output_limits())
+        torch.testing.assert_close(returned, primary_s, **state_limits())
         torch.testing.assert_close(active, fo, **FP16_OUTPUT)
         torch.testing.assert_close(returned, fp16_s, **FP16_STATE)
     return output
@@ -241,12 +270,12 @@ def test_real_alias_installation_wraps_actual_post_genesis_and_exercises_route(m
     assert installed.__wrapped__ is saved
     args, backing = inputs()
     before = backing.clone()
-    expected_o, expected_s, _ = reference(args, before, True)
+    expected_o, expected_s, _ = primary_reference(args, before)
     output, state = installed(**args)
     assert any("route_exercised gdn=flashinfer" in record.getMessage() for record in caplog.records)
     assert state is args["initial_state"]
-    torch.testing.assert_close(output, expected_o, **PRIMARY_OUTPUT)
-    torch.testing.assert_close(state, expected_s, **PRIMARY_STATE)
+    torch.testing.assert_close(output, expected_o, **output_limits())
+    torch.testing.assert_close(state, expected_s, **state_limits())
 
 
 def test_graph_replay_changed_metadata_and_two_independent_workspaces():
@@ -283,13 +312,13 @@ def test_graph_replay_changed_metadata_and_two_independent_workspaces():
                 [indices], device="cuda", dtype=torch.int32))
             offsets = [3,3] if replay == 2 else [replay%2,5]
             args["cu_seqlens"].copy_(torch.tensor(offsets, device="cuda", dtype=torch.int32))
-            expected_o, expected_s, _ = reference(args, seed, True)
+            expected_o, expected_s, _ = primary_reference(args, seed)
             graph.replay()
             begin, end = offsets
             if end > begin and indices[accepted-1] > 0:
-                torch.testing.assert_close(outputs[i][:,begin:end], expected_o[:,begin:end], **PRIMARY_OUTPUT)
+                torch.testing.assert_close(outputs[i][:,begin:end], expected_o[:,begin:end], **output_limits())
                 assert torch.isfinite(outputs[i][:,begin:end]).all()
-            torch.testing.assert_close(args["initial_state"], expected_s, **PRIMARY_STATE)
+            torch.testing.assert_close(args["initial_state"], expected_s, **state_limits())
             assert_untouched(args, seed, backing)
 
 
@@ -366,3 +395,40 @@ def test_eligible_native_route_launches_one_cuda_kernel():
               if event.device_type == torch.autograd.DeviceType.CUDA]
     assert len(events) == 1, [event.name for event in events]
     assert "native_mtp" in events[0].name
+
+
+@pytest.mark.parametrize("operand_precision", [pytest.param("fp16", id="precision_fp16")], indirect=True)
+def test_fp16_checkpoint_drift_across_200_changing_t5_windows():
+    args, backing = inputs()
+    args = strided_operands(args)
+    args["use_qk_l2norm_in_kernel"] = True
+    expected_state, expected_backing = clone_pool(args["initial_state"], backing)
+    baseline_args = dict(args, initial_state=expected_state)
+    saved_original = original()
+    def no_fallback(**unused):
+        pytest.fail("FP16 drift qualification silently used baseline")
+    call = make_adapter(no_fallback)
+    generator = torch.Generator(device="cuda").manual_seed(992431)
+    worst_output, worst_state = 0.0, 0.0
+    for window in range(200):
+        before = backing.clone()
+        before_reference = expected_backing.clone()
+        for name in ("q", "k", "v", "a", "b"):
+            value = args[name]
+            value.copy_((torch.randn(value.shape, device="cuda", generator=generator)*0.2).half())
+        args["num_accepted_tokens"].fill_(window%5+1)
+        indices = [(position+window)%5+1 for position in range(5)] + [7,8]
+        args["ssm_state_indices"].copy_(torch.tensor([indices], device="cuda", dtype=torch.int32))
+        expected_o, returned_reference = saved_original(**baseline_args)
+        actual_o, returned = call(**args)
+        assert returned_reference is expected_state and returned is args["initial_state"]
+        for value in (actual_o, returned, expected_o, expected_state):
+            assert torch.isfinite(value).all(), f"nonfinite checkpoint at window {window}"
+        torch.testing.assert_close(actual_o, expected_o, **FP16_PRIMARY_OUTPUT)
+        torch.testing.assert_close(returned, expected_state, **FP16_PRIMARY_STATE)
+        assert_untouched(args, before, backing)
+        assert_untouched(baseline_args, before_reference, expected_backing)
+        worst_output = max(worst_output, errors(actual_o, expected_o)["max"])
+        worst_state = max(worst_state, errors(returned, expected_state)["max"])
+    print(json.dumps({"operand_precision":"fp16", "windows":200,
+                      "max_output_drift":worst_output,"max_state_drift":worst_state}))

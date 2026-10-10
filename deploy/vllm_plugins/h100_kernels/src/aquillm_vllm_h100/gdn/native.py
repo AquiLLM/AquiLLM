@@ -16,8 +16,9 @@ https://github.com/flashinfer-ai/flashinfer/blob/v0.6.18/flashinfer/gdn_kernels/
 Source SHA256: a091f7fc33e4c5a3209683e3b8c3a8da2a0126a1cb5447c58a243bad2fff5907
 
 Specialization: N1, H16/HV48, K128/V128, tile_v8, vec_size4, two state rows
-per warp. FP16 operands are explicitly rounded to BF16 in registers before
-FP32 recurrence. Metadata, output conversion and masked direct state scatter
+per warp. FP16 operands feed FP32 recurrence directly by default. A private
+compile-time variant retains BF16 operand/output rounding for comparison.
+Metadata, output conversion and masked direct state scatter
 run in the same kernel. Compilation cache holds code only, never GPU scratch.
 """
 import threading
@@ -40,7 +41,7 @@ def _native_mtp(
     Offsets: cute.Tensor, Indices: cute.Tensor, Accepted: cute.Tensor,
     T: cutlass.Constexpr[int], SLOTS: cutlass.Constexpr[int],
     COLUMNS: cutlass.Constexpr[int], SCALE: cutlass.Constexpr[float],
-    NORM: cutlass.Constexpr[bool],
+    NORM: cutlass.Constexpr[bool], ROUND_BF16: cutlass.Constexpr[bool],
 ):
     tidx, _, _ = cute.arch.thread_idx()
     lane = tidx % 32
@@ -88,8 +89,11 @@ def _native_mtp(
                     sum_q = cutlass.Float32(0.0)
                     sum_k = cutlass.Float32(0.0)
                     for i in cutlass.range_constexpr(4):
-                        q_value = cutlass.Float32(cutlass.BFloat16(q_source[i]))
-                        k_value = cutlass.Float32(cutlass.BFloat16(k_source[i]))
+                        q_value = cutlass.Float32(q_source[i])
+                        k_value = cutlass.Float32(k_source[i])
+                        if cutlass.const_expr(ROUND_BF16):
+                            q_value = cutlass.Float32(cutlass.BFloat16(q_source[i]))
+                            k_value = cutlass.Float32(cutlass.BFloat16(k_source[i]))
                         q_all[t,i] = q_value
                         k_all[t,i] = k_value
                         if cutlass.const_expr(NORM):
@@ -104,8 +108,11 @@ def _native_mtp(
                         inv_q[t] = cute.rsqrt(sum_q + 1e-6, fastmath=True) * SCALE
                         inv_k[t] = cute.rsqrt(sum_k + 1e-6, fastmath=True)
 
-                    a_value = cutlass.Float32(cutlass.BFloat16(A[0,start+t,head]))
-                    b_value = cutlass.Float32(cutlass.BFloat16(B[0,start+t,head]))
+                    a_value = cutlass.Float32(A[0,start+t,head])
+                    b_value = cutlass.Float32(B[0,start+t,head])
+                    if cutlass.const_expr(ROUND_BF16):
+                        a_value = cutlass.Float32(cutlass.BFloat16(A[0,start+t,head]))
+                        b_value = cutlass.Float32(cutlass.BFloat16(B[0,start+t,head]))
                     x = a_value + dt_bias
                     # Only guard the inactive exponential. Ordinary softplus
                     # operands and threshold20 are preserved exactly; no x clamp.
@@ -131,8 +138,11 @@ def _native_mtp(
                     if cutlass.const_expr(NORM):
                         sum_hk0 *= inv_k[t]
                         sum_hk1 *= inv_k[t]
-                    value0 = cutlass.Float32(cutlass.BFloat16(V[0,start+t,head,v0]))
-                    value1 = cutlass.Float32(cutlass.BFloat16(V[0,start+t,head,v1]))
+                    value0 = cutlass.Float32(V[0,start+t,head,v0])
+                    value1 = cutlass.Float32(V[0,start+t,head,v1])
+                    if cutlass.const_expr(ROUND_BF16):
+                        value0 = cutlass.Float32(cutlass.BFloat16(V[0,start+t,head,v0]))
+                        value1 = cutlass.Float32(cutlass.BFloat16(V[0,start+t,head,v1]))
                     update0 = (value0 - sum_hk0) * beta[t]
                     update1 = (value1 - sum_hk1) * beta[t]
                     if cutlass.const_expr(NORM):
@@ -161,23 +171,32 @@ def _native_mtp(
                         sum_hq0 *= inv_q[t]
                         sum_hq1 *= inv_q[t]
                     if lane == 0:
-                        O[0,start+t,head,v0] = cutlass.Float16(cutlass.BFloat16(sum_hq0))
-                        O[0,start+t,head,v1] = cutlass.Float16(cutlass.BFloat16(sum_hq1))
+                        if cutlass.const_expr(ROUND_BF16):
+                            O[0,start+t,head,v0] = cutlass.Float16(cutlass.BFloat16(sum_hq0))
+                            O[0,start+t,head,v1] = cutlass.Float16(cutlass.BFloat16(sum_hq1))
+                        else:
+                            O[0,start+t,head,v0] = cutlass.Float16(sum_hq0)
+                            O[0,start+t,head,v1] = cutlass.Float16(sum_hq1)
 
 
 @cute.jit
 def _entry(State, A_log, Dt, Q, K, V, A, B, O, Offsets, Indices, Accepted,
            T: cutlass.Constexpr[int], SLOTS: cutlass.Constexpr[int],
            COLUMNS: cutlass.Constexpr[int], SCALE: cutlass.Constexpr[float],
-           NORM: cutlass.Constexpr[bool], stream: cuda.CUstream):
+           NORM: cutlass.Constexpr[bool], ROUND_BF16: cutlass.Constexpr[bool],
+           stream: cuda.CUstream):
     _native_mtp(State,A_log,Dt,Q,K,V,A,B,O,Offsets,Indices,Accepted,
-                T,SLOTS,COLUMNS,SCALE,NORM).launch(
+                T,SLOTS,COLUMNS,SCALE,NORM,ROUND_BF16).launch(
         grid=(48*16,1,1), block=(128,1,1), smem=0, stream=stream)
 
 
 def launch(A_log,a,b,dt_bias,q,k,v,initial_state,cu_seqlens,ssm_state_indices,
-           num_accepted_tokens,scale=None,use_qk_l2norm_in_kernel=False,**unused):
+           num_accepted_tokens,scale=None,use_qk_l2norm_in_kernel=False,
+           _operand_precision="fp16",**unused):
     """One CuTe launch; output allocations belong to this call/captured graph."""
+    if _operand_precision not in ("fp16", "bf16"):
+        raise ValueError("unsupported private operand precision")
+    round_bf16 = _operand_precision == "bf16"
     if a.ndim == 2:
         a = a.unsqueeze(0)
     if b.ndim == 2:
@@ -191,7 +210,7 @@ def launch(A_log,a,b,dt_bias,q,k,v,initial_state,cu_seqlens,ssm_state_indices,
     # for operands/metadata are dynamic; the packed-inner pool is static.
     key = (q.device,t,initial_state.shape[0],tuple(initial_state.stride()),
            ssm_state_indices.shape[1],scale_value,use_qk_l2norm_in_kernel,
-           tuple(tensor.dtype for tensor in values))
+           tuple(tensor.dtype for tensor in values),round_bf16)
     stream = cuda.CUstream(torch.cuda.current_stream(q.device).cuda_stream)
     compiled = _compiled.get(key)
     if compiled is None:
@@ -208,7 +227,7 @@ def launch(A_log,a,b,dt_bias,q,k,v,initial_state,cu_seqlens,ssm_state_indices,
                 compiled = cute.compile(
                     _entry,*arguments,T=t,SLOTS=initial_state.shape[0],
                     COLUMNS=ssm_state_indices.shape[1],SCALE=scale_value,
-                    NORM=use_qk_l2norm_in_kernel,stream=stream,
+                    NORM=use_qk_l2norm_in_kernel,ROUND_BF16=round_bf16,stream=stream,
                     options="--enable-tvm-ffi --generate-line-info")
                 _compiled[key] = compiled
     compiled(*values,stream)

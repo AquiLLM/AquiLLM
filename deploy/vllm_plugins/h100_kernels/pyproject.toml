@@ -13,7 +13,7 @@ dependencies = []
 where = ["src"]
 
 [tool.setuptools.package-data]
-aquillm_vllm_h100 = ["kernels/*.LICENSE"]
+aquillm_vllm_h100 = ["kernels/*.LICENSE", "gdn/*.LICENSE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

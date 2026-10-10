@@ -233,7 +233,7 @@ def test_qualification_captures_saved_post_genesis_alias_even_when_installed():
     assert adapter.capture_original(qwen) is _original
 
 
-def test_eligible_native_route_has_no_packing_or_parameter_conversion(monkeypatch):
+def test_eligible_native_route_has_no_packing_or_parameter_conversion(monkeypatch, caplog):
     import sys
     from aquillm_vllm_h100.gdn import adapter
     args = _call_metadata()
@@ -251,6 +251,54 @@ def test_eligible_native_route_has_no_packing_or_parameter_conversion(monkeypatc
     output,state = adapter.make_adapter(_original)(**args)
     assert output is args["v"]
     assert state is args["initial_state"]
+    message = caplog.records[-1].getMessage()
+    assert "precision=fp16" in message
+    assert "gate_strides=" in message and "state_strides=" in message
+
+
+def test_native_precision_variants_compile_separately_without_gpu_dependencies():
+    import ast
+    import pathlib
+    import threading
+    from aquillm_vllm_h100.gdn import adapter
+    # Execute the real host launcher with every allocation, descriptor, stream
+    # and compiler dependency stubbed. No CuTe import or CUDA pointer is needed.
+    source = pathlib.Path(adapter.__file__).with_name("native.py").read_text()
+    launch_ast = next(node for node in ast.parse(source).body
+                      if isinstance(node, ast.FunctionDef) and node.name == "launch")
+    compilations, launches = [], []
+    def compile_kernel(*args, **kwargs):
+        compilations.append(kwargs)
+        return lambda *values: launches.append(values)
+    class Tensor:
+        ndim = 3
+        shape = (1,5,48,128)
+        device = "cuda:0"
+        dtype = "fp16"
+        def stride(self):
+            return (5*48*128,48*128,128,1)
+    state = Tensor()
+    state.shape, state.dtype = (9,48,128,128), "fp32"
+    indices = Tensor()
+    indices.shape = (1,7)
+    namespace = dict(_compiled={}, _compile_lock=threading.Lock(), _entry=object(),
+                     torch=SimpleNamespace(float16="fp16", empty=lambda *a, **kw: Tensor(),
+                         cuda=SimpleNamespace(current_stream=lambda device: SimpleNamespace(cuda_stream=123))),
+                     cuda=SimpleNamespace(CUstream=lambda value: value),
+                     from_dlpack=lambda *a, **kw: SimpleNamespace(mark_layout_dynamic=lambda: object()),
+                     cute=SimpleNamespace(compile=compile_kernel))
+    exec(compile(ast.Module(body=[launch_ast], type_ignores=[]), "native.py", "exec"), namespace)
+    kwargs = {name:Tensor() for name in ("A_log","a","b","dt_bias","q","k","v",
+                                       "cu_seqlens","num_accepted_tokens")}
+    kwargs.update(initial_state=state,ssm_state_indices=indices)
+    launch = namespace["launch"]
+    launch(**kwargs)
+    launch(**kwargs, _operand_precision="bf16")
+    launch(**kwargs)
+    assert [entry["ROUND_BF16"] for entry in compilations] == [False, True]
+    assert len(namespace["_compiled"]) == 2 and len(launches) == 3
+    with pytest.raises(ValueError, match="precision"):
+        launch(**kwargs, _operand_precision="fp32")
 
 
 @pytest.mark.parametrize("layout", ["inner_stride", "misaligned_offset", "misaligned_row"])

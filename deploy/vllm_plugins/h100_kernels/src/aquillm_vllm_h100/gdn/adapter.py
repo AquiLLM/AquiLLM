@@ -113,7 +113,10 @@ def make_adapter(original, candidate=None):
             raise SystemExit(f"AquiLLM FlashInfer GDN launch failed: {error}") from error
         if not exercised:
             exercised = True
-            log.warning("AQUILLM_H100 route_exercised gdn=flashinfer shape=%s", tuple(q.shape))
+            log.warning("AQUILLM_H100 route_exercised gdn=flashinfer shape=%s "
+                        "precision=%s gate_strides=%s state_strides=%s", tuple(q.shape),
+                        getattr(launch,"_operand_precision","fp16"),
+                        (tuple(a.stride()),tuple(b.stride())),tuple(initial_state.stride()))
         return output, initial_state
 
     call._aquillm_gdn_adapter = True

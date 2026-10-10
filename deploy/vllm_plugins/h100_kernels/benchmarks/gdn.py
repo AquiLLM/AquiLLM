@@ -24,9 +24,10 @@ def main():
                       help="time full T5 adapter and original, eager and CUDA graph")
     parser.add_argument("--repeats", type=int, default=200)
     parser.add_argument("--gate-stride", type=int, choices=(48,96), default=48)
+    parser.add_argument("--operand-precision", choices=("fp16","bf16"), default="fp16")
     args = parser.parse_args()
     if args.benchmark:
-        benchmark(args.repeats, args.gate_stride)
+        benchmark(args.repeats, args.gate_stride, args.operand_precision)
         return
     from aquillm_vllm_h100.gdn.capability import inspect as inspect_capability
 
@@ -65,13 +66,15 @@ def main():
     print(json.dumps(result, indent=2))
 
 
-def benchmark(repeats, gate_stride=48):
+def benchmark(repeats, gate_stride=48, operand_precision="fp16"):
     # Genesis rewrites source before any backend/FlashInfer imports. Capture
     # the actual Qwen baseline alias, even if the opt-in bridge is installed.
     import sndr.plugin
     sndr.plugin.register()
     import torch
     from aquillm_vllm_h100.gdn.adapter import make_adapter, supported, capture_original
+    from aquillm_vllm_h100.gdn import native
+    from functools import partial
     original = capture_original()
     if repeats < 1:
         raise ValueError("repeats must be positive")
@@ -101,10 +104,13 @@ def benchmark(repeats, gate_stride=48):
               "T":5,"shape":[1,5,16,48,128],"state_stride":list(state.stride()),
               "gate_stride":list(kwargs["a"].stride()),
               "original_module":original.__module__,
+              "operand_precision":operand_precision,
               "repeats":repeats,"packages":{},"timings_us":{}}
     for name in ("flashinfer-python","nvidia-cutlass-dsl","vllm","torch","triton"):
         result["packages"][name] = importlib.metadata.version(name)
-    for name, function in (("original",original),("full_adapter",make_adapter(original))):
+    launch = partial(native.launch, _operand_precision=operand_precision)
+    launch._operand_precision = operand_precision
+    for name, function in (("original",original),("full_adapter",make_adapter(original,launch))):
         stream = torch.cuda.Stream()
         stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(stream):
