@@ -283,3 +283,18 @@ Display names are mutable and do not establish source identity. Legacy figure st
 The private frontier factory receives the original `SelectedGraphScopeV2` and identifier codec. It derives exact graph-generation/document-key bindings to the captured representation generation, including explicit legacy nulls, from that selection. Missing or ambiguous mappings fail closed. Each requested group must match its captured member and recomputed checksum; callers do not supply a dictionary as authority or select a newer snapshot.
 
 A successful `BoundedGraphTopologyV2` always preserves complete artifact-provenance scope closure. When missing index data or an exhausted budget prevents constructing a closed snapshot, the loader produces a typed unavailable/budget failure with truthful coverage and consumed work. G3 retains that accounting and returns no candidates for the unavailable group. Corrupted authority cannot trigger a legacy retry. An empty V2 success is valid only when required provenance was actually acquired and its identities, seeds, relations, mentions, and audits are empty.
+
+
+### D15 production index and ranking context
+
+Ordinary projection workers request the additive frontier index when writing new staged generations. Construction uses the existing staging timeout, heartbeat, validation, and ready publication lifecycle. A partial or invalid index cannot publish ready. Existing ready generations remain untouched, and V2 retrieval remains disabled by default. Explicit legacy repository callers can continue omitting the optional index.
+
+V2 ranking receives the loader's exact immutable frontier context, including the captured group checksum, effective cumulative caps, and acquisition policy. Missing or altered context is rejected; stricter operator caps cannot be replaced by hard maxima. The context binds algorithm identity, while the original selected group and current source/ready authorization still establish authority. V1 ranking calls and signatures remain unchanged.
+
+### D17 independent calibration and activation trust
+
+Independent review enrollment uses a versioned administrator-controlled manifest at `/etc/aquillm/evidence-review-trust.json`, separate from evaluated source revisions. Candidate reports and CLI arguments cannot select or populate the trust source. Missing, malformed, or untrusted enrollment keeps policies and activation disabled. The bounded reader validates the exact schema and canonical digests, rejects ambiguous entries, and observes rotation and revocation. Deployment requires administrator-controlled, read-only ownership. This program does not install production trust.
+
+Reusable support-policy calibration and current-run activation have separate artifact pins. Calibration binds the policy, independent reviewer provenance, predeclared numeric criteria, reviewed subjects, runtime, scope, corpus/splits, uncertainty, and expiry. Activation separately binds the exact current report revision and subject set, its independent human reviews, and the accepted calibration-policy digest. This permits enrollment without changing the code revision being evaluated. Calibration does not certify each future answer; trusted human provenance does not mathematically prove a judgment true.
+
+Evaluation captures the original question, actual delivered evidence, support decision, final outbound message, and exact persisted message under the same conversation and message identity. Missing or mismatched observations block eligibility. Synthetic cases and injected trust fixtures test this plumbing only. Missing independent human or live evidence remains pending or inconclusive, with optional policies disabled.
