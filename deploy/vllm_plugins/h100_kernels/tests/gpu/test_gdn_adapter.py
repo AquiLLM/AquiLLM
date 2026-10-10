@@ -302,6 +302,68 @@ def test_native_baseline_alias_installation_preserves_prefill_and_exercises_fp16
     assert_untouched(args,before,backing)
 
 
+@pytest.mark.parametrize("operand_precision", [pytest.param("fp16", id="precision_fp16")], indirect=True)
+@pytest.mark.parametrize("a_dtype,dt_dtype", [(torch.float32,torch.float16),
+                                            (torch.float16,torch.float16),
+                                            (torch.float16,torch.float32),
+                                            (torch.float32,torch.float32)])
+@pytest.mark.parametrize("created_in_inference", [False,True])
+def test_real_parameters_cold_cached_and_graph_preserve_storage_and_grad_flags(a_dtype,dt_dtype,created_in_inference):
+    from contextlib import nullcontext
+    from aquillm_vllm_h100.gdn import native
+    args, backing = inputs()
+    args = strided_operands(args)
+    args["use_qk_l2norm_in_kernel"] = True
+    # Unique scale per construction mode guarantees a new specialization even
+    # after the nominal suite has warmed its default/custom-scale kernels.
+    args["scale"] = 0.131271 + (0.00001 if created_in_inference else 0.0)
+    context = torch.inference_mode() if created_in_inference else nullcontext()
+    with context:
+        args["A_log"] = torch.nn.Parameter(args["A_log"].to(a_dtype).clone())
+        args["dt_bias"] = torch.nn.Parameter(args["dt_bias"].to(dt_dtype).clone())
+    parameters = (args["A_log"],args["dt_bias"])
+    pointers = tuple(value.data_ptr() for value in parameters)
+    values = tuple(value.detach().clone() for value in parameters)
+    def no_fallback(**unused):
+        pytest.fail("real Parameter qualification silently used baseline")
+    call = make_adapter(no_fallback,route="native-fp16")
+    def check(output,state,before,expected_o,expected_s):
+        assert state is args["initial_state"]
+        assert torch.isfinite(output).all() and torch.isfinite(state).all()
+        torch.testing.assert_close(output,expected_o,**FP16_PRIMARY_OUTPUT)
+        torch.testing.assert_close(state,expected_s,**FP16_PRIMARY_STATE)
+        assert_untouched(args,before,backing)
+        assert tuple(value.data_ptr() for value in parameters) == pointers
+        assert all(value.requires_grad for value in parameters)
+        for parameter,value in zip(parameters,values):
+            assert torch.equal(parameter.detach(),value)
+    prior_keys = set(native._compiled)
+    for iteration in range(2):
+        before = backing.clone()
+        with torch.inference_mode():
+            expected_o, expected_s, _ = reference(args,before,False)
+            output,state = call(**args)
+        check(output,state,before,expected_o,expected_s)
+        current_keys = set(native._compiled)
+        if iteration == 0:
+            assert len(current_keys-prior_keys) == 1, "test must exercise cold Parameter export"
+            cached_keys = current_keys
+        else:
+            assert current_keys == cached_keys, "cached Parameter call unexpectedly recompiled"
+    seed = backing.clone()
+    graph = torch.cuda.CUDAGraph()
+    with torch.inference_mode(), torch.cuda.graph(graph):
+        graph_output,graph_state = call(**args)
+    for accepted in (1,3,5):
+        backing.copy_(seed)
+        args["num_accepted_tokens"].fill_(accepted)
+        with torch.inference_mode():
+            expected_o,expected_s,_ = reference(args,seed,False)
+            graph.replay()
+        check(graph_output,graph_state,seed,expected_o,expected_s)
+        assert set(native._compiled) == cached_keys
+
+
 def test_graph_replay_changed_metadata_and_two_independent_workspaces():
     fixtures = [inputs(), inputs(5, 3)]
     for args, _ in fixtures:

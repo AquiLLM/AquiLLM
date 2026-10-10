@@ -204,6 +204,10 @@ def launch(A_log,a,b,dt_bias,q,k,v,initial_state,cu_seqlens,ssm_state_indices,
     output = torch.empty(v.shape,device=v.device,dtype=torch.float16)
     values = (initial_state,A_log,dt_bias,q,k,v,a,b,output,cu_seqlens,
               ssm_state_indices,num_accepted_tokens)
+    # Real model Parameters retain requires_grad even in inference_mode.
+    # DLPack/FFI need detached views on cold and cached calls; detach shares
+    # storage and leaves original Parameter flags, pointers and dtype intact.
+    values = tuple(tensor.detach() if tensor.requires_grad else tensor for tensor in values)
     t = q.shape[1]
     scale_value = 128**-0.5 if scale is None else float(scale)
     # Every static shape/stride and polymorphic dtype is represented. Layouts

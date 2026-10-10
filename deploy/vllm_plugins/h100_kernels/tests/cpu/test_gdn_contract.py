@@ -272,6 +272,7 @@ def test_native_precision_variants_compile_separately_without_gpu_dependencies()
         return lambda *values: launches.append(values)
     class Tensor:
         ndim = 3
+        requires_grad = False
         shape = (1,5,48,128)
         device = "cuda:0"
         dtype = "fp16"
@@ -299,6 +300,60 @@ def test_native_precision_variants_compile_separately_without_gpu_dependencies()
     assert len(namespace["_compiled"]) == 2 and len(launches) == 3
     with pytest.raises(ValueError, match="precision"):
         launch(**kwargs, _operand_precision="fp32")
+
+
+def test_native_cold_and_cached_parameter_exports_use_zero_copy_inference_views():
+    import ast
+    import pathlib
+    import threading
+    import torch
+    from aquillm_vllm_h100.gdn import adapter
+    source = pathlib.Path(adapter.__file__).with_name("native.py").read_text()
+    launch_ast = next(node for node in ast.parse(source).body
+                      if isinstance(node,ast.FunctionDef) and node.name == "launch")
+    descriptors, calls, compilations = [], [], []
+    def descriptor(tensor, **unused):
+        if tensor.requires_grad:
+            raise BufferError("Can't export tensors that require gradient")
+        descriptors.append(tensor)
+        result = SimpleNamespace()
+        result.mark_layout_dynamic = lambda: result
+        return result
+    def compile_kernel(*a, **kw):
+        compilations.append(kw)
+        def invoke(*values):
+            assert not any(t.requires_grad for t in values[:-1])
+            calls.append(values)
+        return invoke
+    namespace = dict(_compiled={},_compile_lock=threading.Lock(),_entry=object(),
+        torch=SimpleNamespace(float16=torch.float16,
+            empty=lambda shape,**kw:torch.empty(shape,dtype=kw["dtype"],device="cpu"),
+            cuda=SimpleNamespace(current_stream=lambda device:SimpleNamespace(cuda_stream=123))),
+        cuda=SimpleNamespace(CUstream=lambda value:value),from_dlpack=descriptor,
+        cute=SimpleNamespace(compile=compile_kernel))
+    exec(compile(ast.Module(body=[launch_ast],type_ignores=[]),"native.py","exec"),namespace)
+    args = dict(A_log=torch.nn.Parameter(torch.full((48,),-1.0)),
+        dt_bias=torch.nn.Parameter(torch.full((48,),-0.2,dtype=torch.float16)),
+        q=torch.zeros((1,5,16,128),dtype=torch.float16),k=torch.zeros((1,5,16,128),dtype=torch.float16),
+        v=torch.zeros((1,5,48,128),dtype=torch.float16),a=torch.zeros((1,5,48),dtype=torch.float16),
+        b=torch.zeros((1,5,48),dtype=torch.float16),
+        initial_state=torch.empty((9,48,128,128),device="meta"),
+        cu_seqlens=torch.tensor([0,5],dtype=torch.int32),
+        ssm_state_indices=torch.tensor([[1,2,3,4,5,7,8]],dtype=torch.int32),
+        num_accepted_tokens=torch.tensor([1],dtype=torch.int32))
+    pointers = [args[name].data_ptr() for name in ("A_log","dt_bias")]
+    with torch.inference_mode():
+        namespace["launch"](**args)
+        namespace["launch"](**args)
+    namespace["launch"](**args)
+    assert len(compilations) == len(namespace["_compiled"]) == 1 and len(calls) == 3
+    for values in (descriptors,*calls):
+        for index,name in ((1,"A_log"),(2,"dt_bias")):
+            assert values[index].data_ptr() == args[name].data_ptr()
+            assert values[index] is not args[name] and not values[index].requires_grad
+    assert [args[name].data_ptr() for name in ("A_log","dt_bias")] == pointers
+    assert args["A_log"].requires_grad and args["dt_bias"].requires_grad
+    assert calls[0][3] is args["q"]  # Ordinary activation tensors keep identity.
 
 
 @pytest.mark.parametrize("layout", ["inner_stride", "misaligned_offset", "misaligned_row"])
