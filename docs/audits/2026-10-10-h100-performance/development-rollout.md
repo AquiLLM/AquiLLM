@@ -26,4 +26,12 @@ The helper preserves the protected configuration and replaces only the main vLLM
 
 The user also requested mimalloc testing for end-to-end latency. The first comparison isolates the main vLLM service with bounded prefill enabled in both arms. It measures client TTFT, generation time and full model-API response latency, with allocator activation verified in the serving processes. This does not establish full application/RAG latency. The broader mimalloc branch changes many services and is not included implicitly in the H100 merge.
 
-Deployment and allocator measurements are pending the fresh checks recorded by this rollout.
+## Deployment verification
+
+Merged into `development` by fast-forward at `5c84b2f7a2ca55244a2ed83beb0d21d6bdb9ac5d`, then pulled into `/home/exouser/AquiLLM` on `.254`. Fresh pre-merge checks passed: 334 plugin/harness CPU tests and 13 Genesis/readiness/LMCache deployment tests.
+
+At `2026-10-10T16:12:42Z`, the selected image was healthy, all four controls matched the selection above, and the engine emitted both an installed-profile record and an exercised prefill route at cached length 32768/query length 4096. The parent-process fingerprint rejection is expected; the engine's positive installation and exercised-route records establish activation.
+
+All 32 short exact quality cases and all six long recall/tool cases passed after this deployment. Other service container IDs remained unchanged. See the [runtime and activation record](serving/h100-development-rollout.json), [short cases](serving/h100-development-rollout-strict.jsonl), and [long cases](serving/h100-development-rollout-long.jsonl).
+
+Mimalloc comparison is additional work in progress, using [PR #240](https://github.com/AquiLLM/AquiLLM/pull/240). The requested order is model API, then full chat and RAG. Its new Compose CI test has an environment-resolution assertion defect; the pinned allocator source and serving dependencies are unchanged by that test correction.
