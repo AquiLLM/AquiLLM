@@ -219,7 +219,7 @@ def test_contextual_schema_reverse_is_safe_before_use(legacy_row):
             reason="legacy",
             resolver_version=target.resolver_version,
         ).pk
-    current = [("apps_knowledge_graph", "0012_contextual_candidate_methods")]
+    current = MigrationExecutor(connection).loader.graph.leaf_nodes()
     try:
         MigrationExecutor(connection).migrate(
             [("apps_knowledge_graph", "0011_projection_bulk_chunk_fence")]
@@ -267,10 +267,14 @@ def test_contextual_schema_reverse_refuses_used_candidate_rows():
         resolver_version=target.resolver_version,
         status="suppressed",
     )
-    with pytest.raises(IrreversibleError, match="candidate"):
-        MigrationExecutor(connection).migrate(
-            [("apps_knowledge_graph", "0011_projection_bulk_chunk_fence")]
-        )
+    current = MigrationExecutor(connection).loader.graph.leaf_nodes()
+    try:
+        with pytest.raises(IrreversibleError, match="candidate"):
+            MigrationExecutor(connection).migrate(
+                [("apps_knowledge_graph", "0011_projection_bulk_chunk_fence")]
+            )
+    finally:
+        MigrationExecutor(connection).migrate(current)
     assert CanonicalEntityLink.objects.get(pk=candidate.pk).outcome == "candidate"
 
 

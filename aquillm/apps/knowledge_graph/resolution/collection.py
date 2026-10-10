@@ -2367,6 +2367,7 @@ def build_collection_snapshot(
     orchestration_version: int = 0,
     rebuild_request=None,
     evaluation_only: bool = False,
+    representation_snapshot=None,
 ):
     """Create a building collection artifact and its immutable source manifest."""
 
@@ -2629,7 +2630,9 @@ def build_collection_snapshot(
                 (source, document_id, membership_signature, source_signature)
             )
         source_hash = collection_manifest_source_hash(row[3] for row in source_rows)
+        from apps.knowledge_graph.projection.representation_inputs import binding_values
         artifact = GraphArtifact.objects.create(
+            **binding_values(representation_snapshot),
             scope_type=GraphArtifact.ScopeType.COLLECTION,
             scope_id=collection.pk,
             status=GraphArtifact.Status.BUILDING,

@@ -946,6 +946,9 @@ def test_fast_document_consumer_is_reconciled_after_cursor_publication(
         requested_documents=(
             {
                 "document_id": str(DOCUMENT_ID),
+                "document_pkid": 1,
+                "model_label": "apps_documents.rawtextdocument",
+                "collection_id": 1,
                 "source_hash": "a" * 64,
             },
         ),

@@ -1,0 +1,183 @@
+"""Exact captured-generation materialization; failed fences return no stale body."""
+
+from django.core.exceptions import ObjectDoesNotExist, ValidationError
+
+from apps.documents.services.representation_contracts import SourceScopeUnavailable
+from apps.documents.services.representation_store import active_chunk_scope
+from apps.knowledge_graph.projection.identifiers import (
+    OpaqueProjectionKey,
+    ProjectionIdentifierDomain,
+)
+from apps.knowledge_graph.projection.runtime import (
+    load_projection_runtime_settings,
+    projection_identifier_codec,
+)
+
+from .graph_handoff import GraphCandidateRefV2
+from .ready_provenance_v2 import provenance_for_chunk
+from .ready_scope_repository_v2 import load_authorities_v2, validate_original_scope
+from .ready_scope_v2 import SelectedGraphScopeV2
+
+
+def validate_captured_selection(*, selected, authorization, settings, codec):
+    validate_original_scope(
+        authorization=authorization,
+        representation_snapshot=selected.representation_snapshot,
+    )
+    if (
+        selected.authorization_context_signature
+        != authorization.authorization_context_signature
+    ):
+        raise ValueError("authorization signature changed")
+    captured = tuple(
+        sorted(
+            (a for g in selected.groups for a in g.scope.projections),
+            key=lambda a: a.collection_id,
+        )
+    )
+    current = load_authorities_v2(
+        authorization=authorization,
+        settings=settings,
+        representation_snapshot=selected.representation_snapshot,
+        codec=codec,
+    )
+    if current != captured:
+        raise ValueError("captured authority changed")
+
+
+def materialize_graph_candidates_v2(*, selected, refs, authorization):
+    from apps.documents.models import TextChunk
+    from apps.knowledge_graph.models import ProjectionChunkReference
+
+    from .ready_materialization import (
+        DjangoPrivateChunkMapRepository,
+        materialize_selected_ready_chunks,
+    )
+
+    if type(selected) is not SelectedGraphScopeV2:
+        raise TypeError("selection must be exact")
+    if (
+        type(refs) is not tuple
+        or len(refs) > 40
+        or any(type(r) is not GraphCandidateRefV2 for r in refs)
+    ):
+        raise ValueError(
+            "candidate union must be exact and within existing two-branch cap"
+        )
+    if len({r.chunk_key for r in refs}) != len(refs):
+        raise ValueError("duplicate candidate keys")
+    if not refs:
+        return ()
+    groups = {g.group_checksum: g for g in selected.groups}
+    selections = {s.document.id: s for s in selected.representation_snapshot.selections}
+    try:
+        # Verify every reference against the captured envelope before source I/O.
+        for ref in refs:
+            group = groups.get(ref.authority_group_checksum)
+            if (
+                group is None
+                or ref.ready_bundle_checksum != group.scope.ready.bundle_checksum
+            ):
+                return ()
+            group.scope.projection_for_generation(ref.graph_generation_key)
+            if ref.representation_generation_key not in {
+                s.generation_key for s in selections.values()
+            }:
+                return ()
+        settings = load_projection_runtime_settings()
+        codec = projection_identifier_codec(settings)
+        validate_captured_selection(
+            selected=selected,
+            authorization=authorization,
+            settings=settings,
+            codec=codec,
+        )
+
+        class ActiveRepository(DjangoPrivateChunkMapRepository):
+            def load_chunk_objects(
+                self, *, chunk_predicates, authorized_document_ids, database_alias
+            ):
+                return tuple(
+                    active_chunk_scope(
+                        TextChunk.objects.using(database_alias).filter(
+                            pk__in=tuple(row[0] for row in chunk_predicates),
+                            doc_id__in=authorized_document_ids,
+                        ),
+                        snapshot=selected.representation_snapshot,
+                    ).order_by("pk")
+                )
+
+        result = {}
+        repository = ActiveRepository(source_using=authorization.database_alias)
+        for group in selected.groups:
+            group_refs = tuple(
+                r for r in refs if r.authority_group_checksum == group.group_checksum
+            )
+            if not group_refs:
+                continue
+            for ref in group_refs:
+                owner = group.scope.projection_for_generation(ref.graph_generation_key)
+                if (
+                    not ProjectionChunkReference.objects.using(
+                        authorization.database_alias
+                    )
+                    .filter(
+                        projection_id=owner.projection_id,
+                        projection_chunk_key=ref.chunk_key,
+                    )
+                    .exists()
+                ):
+                    return ()
+            rows = materialize_selected_ready_chunks(
+                scope=group.scope,
+                chunk_keys=tuple(
+                    OpaqueProjectionKey(ProjectionIdentifierDomain.CHUNK, r.chunk_key)
+                    for r in group_refs
+                ),
+                authorization=authorization,
+                repository=repository,
+            )
+            for row, ref in zip(rows, group_refs, strict=True):
+                chunk = row.candidate_object
+                selection = selections.get(chunk.doc_id)
+                if (
+                    type(chunk) is not TextChunk
+                    or selection is None
+                    or chunk.doc_id not in group.scope.selected_document_ids
+                    or selection.generation_key != ref.representation_generation_key
+                    or chunk.representation_generation
+                    != ref.representation_generation_key
+                ):
+                    return ()
+                provenance = provenance_for_chunk(
+                    authority=group.scope.projection_for_generation(
+                        ref.graph_generation_key
+                    ),
+                    chunk=chunk,
+                    codec=codec,
+                    using=authorization.database_alias,
+                )
+                if not set(ref.evidence_provenance_keys) <= set(provenance):
+                    return ()
+                if set(ref.relation_types) != {
+                    provenance[k]
+                    for k in ref.evidence_provenance_keys
+                    if provenance[k] is not None
+                }:
+                    return ()
+                result[ref.chunk_key] = chunk
+        validate_captured_selection(
+            selected=selected,
+            authorization=authorization,
+            settings=settings,
+            codec=codec,
+        )
+        return tuple(result[r.chunk_key] for r in refs)
+    except (
+        SourceScopeUnavailable,
+        ValidationError,
+        ObjectDoesNotExist,
+        ValueError,
+        KeyError,
+    ):
+        return ()

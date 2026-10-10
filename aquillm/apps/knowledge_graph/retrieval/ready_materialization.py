@@ -151,4 +151,10 @@ def materialize_selected_ready_chunks(
 __all__ = [
     "DjangoPrivateChunkMapRepository",
     "materialize_selected_ready_chunks",
+    "materialize_graph_candidates_v2",
 ]
+
+
+def materialize_graph_candidates_v2(*, selected, refs, authorization):
+    from .ready_materialization_v2 import materialize_graph_candidates_v2 as materialize
+    return materialize(selected=selected, refs=refs, authorization=authorization)

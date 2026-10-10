@@ -24,6 +24,7 @@ CHUNK_REFERENCE_READ_FIELDS = (
     "chunk__id",
     "chunk__doc_id",
     "chunk__chunk_number",
+    "chunk__representation_generation",
 )
 
 
@@ -47,6 +48,20 @@ def validate_current_chunk_row(row: object) -> None:
         or chunk.chunk_number != getattr(row, "chunk_number")
     ):
         raise ValueError("projection chunk mapping conflicts with current chunk")
+    from .representation_binding import validate_record_binding
+
+    projection = getattr(row, "projection", None)
+    if projection is not None:
+        snapshot = validate_record_binding(projection)
+        selections = (
+            {} if snapshot is None else {s.document.id: s for s in snapshot.selections}
+        )
+        selected = selections.get(chunk.doc_id)
+        expected = None if selected is None else selected.generation_key
+        if (
+            snapshot is not None and selected is None
+        ) or chunk.representation_generation != expected:
+            raise ValueError("projection chunk representation is stale")
 
 
 class DjangoChunkReferenceStore:

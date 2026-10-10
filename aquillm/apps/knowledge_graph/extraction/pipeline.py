@@ -136,7 +136,7 @@ def collect_document_evidence(
             if raw_entity_count > DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS:
                 raise ExtractionCapacityError(
                     ExtractionCapacityCode.OBSERVATION_LIMIT,
-                    "provider raw entity cap exceeded before candidate materialization"
+                    "provider raw entity cap exceeded before candidate materialization",
                 )
             raw_relation_count += len(result.relations)
             if (
@@ -146,7 +146,7 @@ def collect_document_evidence(
                 raise ExtractionCapacityError(
                     ExtractionCapacityCode.OBSERVATION_LIMIT,
                     "provider raw relation cap exceeded before candidate "
-                    "materialization"
+                    "materialization",
                 )
             fatal_codes = sorted(
                 diagnostic.code
@@ -261,6 +261,12 @@ def validate_build_identity(
 
     from apps.knowledge_graph.models import GraphArtifact
 
+    if getattr(artifact, "representation_snapshot", None) is not None:
+        from apps.knowledge_graph.projection.representation_binding import (
+            validate_binding_current,
+        )
+
+        validate_binding_current(artifact, using=artifact._state.db or "default")
     if run.artifact_id != artifact.pk:
         raise ValueError("build run must be owned by the destination artifact")
     if getattr(run, "build_key", None) != getattr(artifact, "build_key", None):
@@ -622,58 +628,14 @@ def _validate_source(document, expected_source_hash: str) -> None:
         )
 
 
-def _ordered_chunks(document_id, *, for_update: bool = False):
-    from django.db.models import Sum
-    from django.db.models.functions import Coalesce, Length
+def _ordered_chunks(document_id, *, for_update=False, representation_snapshot=None):
+    from .representation_chunks import ordered_chunks
 
-    from apps.documents.models import TextChunk
-
-    queryset = (
-        TextChunk.objects.filter(doc_id=document_id)
-        .only(
-            "pk",
-            "doc_id",
-            "chunk_number",
-            "start_position",
-            "end_position",
-            "modality",
-            "content",
-        )
-        .order_by("chunk_number", "pk")
+    return ordered_chunks(
+        document_id,
+        for_update=for_update,
+        representation_snapshot=representation_snapshot,
     )
-    if for_update:
-        queryset = queryset.select_for_update()
-    if queryset.count() > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
-        raise ExtractionCapacityError(
-            ExtractionCapacityCode.CHUNK_LIMIT,
-            "ordered document chunk cap exceeded",
-        )
-    totals = queryset.aggregate(total_characters=Coalesce(Sum(Length("content")), 0))
-    total_characters = totals.get("total_characters")
-    if type(total_characters) is not int or total_characters < 0:
-        raise StaleSourceError("ordered document chunk character count is invalid")
-    if total_characters > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS:
-        raise ExtractionCapacityError(
-            ExtractionCapacityCode.CHARACTER_LIMIT,
-            "ordered document chunk character cap exceeded",
-        )
-    chunks = tuple(
-        islice(
-            queryset.iterator(
-                chunk_size=min(
-                    DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
-                    _QUERY_ITERATOR_BATCH_SIZE,
-                )
-            ),
-            DOCUMENT_EXTRACTION_V1_MAX_CHUNKS + 1,
-        )
-    )
-    if len(chunks) > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
-        raise ExtractionCapacityError(
-            ExtractionCapacityCode.CHUNK_LIMIT,
-            "ordered document chunk cap exceeded",
-        )
-    return chunks
 
 
 def _chunk_snapshot(chunks) -> tuple[tuple[object, ...], ...]:
@@ -686,6 +648,7 @@ def _chunk_snapshot(chunks) -> tuple[tuple[object, ...], ...]:
             chunk.end_position,
             chunk.modality,
             chunk.content,
+            getattr(chunk, "representation_generation", None),
         )
         for chunk in chunks
     )

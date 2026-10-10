@@ -9,6 +9,8 @@ from django.core.exceptions import FieldDoesNotExist, ValidationError
 from django.db import models
 from django.db.models import Q
 
+from ..services.requested_representation import requested_representation_generation
+from .representation_binding import binding_constraint, legacy_graph_artifact_build_key
 from .vector_validation import django_safe_vector_values, immutable_field_value
 
 _DOCUMENT_SCOPE_PATTERN = (
@@ -22,7 +24,7 @@ _RESNAPSHOT_RECONCILING_ERROR_CODES = frozenset(
     {"resnapshot_pending", "resnapshot_churn"}
 )
 _RESNAPSHOT_FINAL_ERROR_CODES = frozenset(
-    {"resnapshot_churn", "scope_deleted", "scope_ineligible"}
+    {"resnapshot_churn", "scope_deleted", "scope_ineligible", "representation_changed"}
 )
 
 
@@ -124,33 +126,6 @@ def _activation_audit_values(artifact: object, run: object) -> dict[str, object]
         "activated_source_hash": getattr(artifact, "source_hash", ""),
         "activated_occurrence_signature": signature,
     }
-
-
-def legacy_graph_artifact_build_key(instance: object) -> str:
-    """Address pre-orchestrator artifacts without weakening their old identity."""
-
-    fields = (
-        "scope_type",
-        "scope_id",
-        "source_hash",
-        "ontology_version",
-        "extractor_version",
-        "resolver_version",
-        "filter_policy_version",
-        "embedding_model_signature",
-        "ontology_checksum",
-        "filter_policy_checksum",
-        "resolution_config_checksum",
-        "assembly_version",
-        "assembly_config_checksum",
-    )
-    payload = {
-        "namespace": "legacy-graph-artifact-v1",
-        "identity": {field: str(getattr(instance, field, "")) for field in fields},
-    }
-    return sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
 
 
 ASSEMBLY_NOT_APPLICABLE_VERSION = "not-applicable"
@@ -710,6 +685,12 @@ class GraphArtifact(ValidatedGraphModel):
         default=ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
         editable=False,
     )
+    representation_snapshot = models.JSONField(
+        null=True, blank=True, default=None, editable=False
+    )
+    representation_digest = models.CharField(
+        max_length=64, null=True, blank=True, default=None, editable=False
+    )
     metadata = models.JSONField(default=dict, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -718,6 +699,8 @@ class GraphArtifact(ValidatedGraphModel):
     superseded_at = models.DateTimeField(null=True, blank=True)
 
     _IMMUTABLE_FIELDS = (
+        "representation_snapshot",
+        "representation_digest",
         "scope_type",
         "scope_id",
         "collection_scope",
@@ -751,6 +734,7 @@ class GraphArtifact(ValidatedGraphModel):
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
+            binding_constraint("kg_artifact_representation_pair"),
             models.CheckConstraint(
                 condition=Q(scope_type__in=("document", "collection")),
                 name="kg_artifact_scope_valid",
@@ -910,6 +894,11 @@ class GraphArtifact(ValidatedGraphModel):
     def prepare_for_persistence(self) -> None:
         self.scope_id = canonical_graph_scope_id(self.scope_type, self.scope_id)
         self._validate_collection_scope()
+        from apps.knowledge_graph.projection.representation_binding import (
+            validate_record_binding,
+        )
+
+        validate_record_binding(self)
         self.source_hash = _validate_source_hash(self.source_hash)
         self.embedding_model_signature = _validate_embedding_model_signature(
             self.scope_type, self.embedding_model_signature
@@ -1935,7 +1924,9 @@ class GraphRebuildRequest(ValidatedGraphModel):
         }
         canonical_rows = []
         for row in self.requested_documents:
-            if type(row) is not dict or set(row) != required:
+            if type(row) is not dict or set(row) not in (
+                required, required | {"representation_binding"}
+            ):
                 raise ValidationError(
                     {
                         "requested_documents": (
@@ -1966,6 +1957,7 @@ class GraphRebuildRequest(ValidatedGraphModel):
                 raise ValidationError(
                     {"requested_documents": "Document snapshot scalar is invalid."}
                 )
+            requested_representation_generation(row)
             canonical_rows.append(
                 (
                     row["model_label"],

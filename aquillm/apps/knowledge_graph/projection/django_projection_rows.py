@@ -26,19 +26,16 @@ from .limits import (
 from .limits import (
     bounded_projection_rows as _bounded,
 )
-
-_PURPOSE_STATES = {
-    "build": ("building",),
-    "audit": ("ready",),
-    "prune": ("failed", "superseded"),
-}
-_ARTIFACT_FIELDS = (
-    "id scope_type scope_id collection_scope_id rebuild_request_id evaluation_only "
-    "build_key build_generation orchestration_version source_hash ontology_version "
-    "ontology_checksum extractor_version resolver_version resolution_config_checksum "
-    "filter_policy_version filter_policy_checksum embedding_model_signature "
-    "assembly_version assembly_config_checksum"
-).split()
+from .projection_source_fields import (
+    ARTIFACT_FIELDS,
+    PURPOSE_STATES,
+    artifact_source_row,
+)
+from .representation_inputs import (
+    active_build_chunks,
+    projection_input_snapshot,
+    validate_projection_current,
+)
 
 
 class DjangoProjectionOrmLoader:
@@ -49,7 +46,7 @@ class DjangoProjectionOrmLoader:
     def load(
         self, *, projection_id: UUID, batch_size: int, purpose: str = "build"
     ) -> Mapping[str, object]:
-        if type(purpose) is not str or purpose not in _PURPOSE_STATES:
+        if type(purpose) is not str or purpose not in PURPOSE_STATES:
             raise ValueError("projection load purpose must be build, audit, or prune")
         projection = self._projection(projection_id, purpose)
         artifact_id = projection["artifact_id"]
@@ -71,14 +68,22 @@ class DjangoProjectionOrmLoader:
         entities = self._entities(artifact_id, collection_id, batch_size, purpose)
         entity_ids = tuple(row["id"] for row in entities)
         chunks = _bounded(
-            TextChunk.objects.using(self.using).filter(doc_id__in=document_ids),
+            TextChunk.objects.using(self.using).filter(doc_id__in=document_ids)
+            if purpose == "prune"
+            else active_build_chunks(
+                TextChunk.objects.using(self.using).filter(doc_id__in=document_ids),
+                document_ids,
+                snapshot=projection_input_snapshot(artifact_id, using=self.using)
+                if projection.get("representation_snapshot") is not None
+                else None,
+            ),
             ("id", "doc_id", "chunk_number"),
             batch_size,
         )
         artifact_ids = (artifact_id, *document_artifact_ids)
         artifacts = _bounded(
             GraphArtifact.objects.using(self.using).filter(pk__in=artifact_ids),
-            tuple(_ARTIFACT_FIELDS),
+            tuple(ARTIFACT_FIELDS),
             batch_size,
             maximum=MAX_ARTIFACT_ROWS,
         )
@@ -97,7 +102,7 @@ class DjangoProjectionOrmLoader:
         )
         return {
             "projection": projection,
-            "artifacts": tuple(self._artifact(row) for row in artifacts),
+            "artifacts": tuple(artifact_source_row(row) for row in artifacts),
             "entities": entities,
             "memberships": self._memberships(entity_ids, batch_size),
             "documents": tuple(
@@ -132,7 +137,7 @@ class DjangoProjectionOrmLoader:
             CollectionGraphProjection.objects.using(self.state_using)
             .filter(
                 pk=projection_id,
-                state__in=_PURPOSE_STATES[purpose],
+                state__in=PURPOSE_STATES[purpose],
                 collection__isnull=False,
                 artifact__isnull=False,
             )
@@ -149,6 +154,8 @@ class DjangoProjectionOrmLoader:
                 "membership_epoch",
                 "membership_checksum",
                 "state",
+                "representation_snapshot",
+                "representation_digest",
             )
             .get()
         )
@@ -174,6 +181,9 @@ class DjangoProjectionOrmLoader:
         ):
             raise ValueError("projection source identity is stale")
         if purpose != "prune":
+            from types import SimpleNamespace
+
+            validate_projection_current(SimpleNamespace(**row), using=self.using)
             membership = (
                 CollectionGraphMembershipState.objects.using(self.state_using)
                 .filter(collection_id=row["collection_id"])
@@ -287,10 +297,3 @@ class DjangoProjectionOrmLoader:
             ("id", "artifact_id", "source_id", "relation_type", "target_id"),
             batch_size,
         )
-
-    @staticmethod
-    def _artifact(row: dict) -> dict:
-        return {
-            ("collection_id" if key == "collection_scope_id" else key): value
-            for key, value in row.items()
-        }

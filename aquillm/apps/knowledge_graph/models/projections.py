@@ -13,6 +13,7 @@ from apps.documents.models import TextChunk
 
 from .artifacts import GraphArtifact
 from .projection_lifecycle_validation import validate_projection_lifecycle
+from .representation_binding import binding_constraint, validate_projection_binding
 
 _CHECKSUM = re.compile(r"^[0-9a-f]{64}$")
 _MAX_BIGINT = 2**63 - 1
@@ -100,6 +101,8 @@ class CollectionGraphProjection(ProjectionAuthorityModel):
         FAILED = "failed", "Failed"
         SUPERSEDED = "superseded", "Superseded"
 
+    representation_snapshot = models.JSONField(null=True, blank=True, default=None, editable=False)
+    representation_digest = models.CharField(max_length=64, null=True, blank=True, default=None, editable=False)
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     generation_key = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
     # fmt: off
@@ -136,6 +139,7 @@ class CollectionGraphProjection(ProjectionAuthorityModel):
     class Meta:
         app_label = "apps_knowledge_graph"
         constraints = [
+            binding_constraint("kg_projection_representation_pair"),
             models.UniqueConstraint(
                 fields=["generation_key"], name="kg_projection_generation_unique"
             ),  # fmt: skip
@@ -193,6 +197,7 @@ class CollectionGraphProjection(ProjectionAuthorityModel):
         ):
             if getattr(self, name) < 0:
                 errors[name] = "Projection counts must be nonnegative."
+        validate_projection_binding(self)
         validate_projection_lifecycle(self, errors, _FAILURE_CODES)
         if errors:
             raise ValidationError(errors)
