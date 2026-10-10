@@ -31,6 +31,7 @@ RUN python3 -m pip install --no-deps --no-build-isolation /opt/aquillm-h100 \
 COPY --chmod=755 ./deploy/scripts/vllm_start.sh /vllm_start.sh
 COPY --chmod=755 ./deploy/scripts/genesis_vllm_entrypoint.sh /genesis_entrypoint.sh
 COPY --chmod=755 ./deploy/scripts/parse_vllm_extra_args.py /parse_vllm_extra_args.py
+COPY --chmod=755 ./deploy/scripts/kv_cache_config.py /kv_cache_config.py
 COPY ./deploy/docker/vllm/chat_templates /templates
 
 EXPOSE 8000
