@@ -152,7 +152,6 @@ def configure_runtime(args):
     from vllm.config import VllmConfig
     from vllm.v1.attention.backends.turboquant_attn import TurboQuantAttentionImpl
     config = VllmConfig()
-    config.attention_config.flash_attn_version = 2
     config.attention_config.tq_max_kv_splits_for_cuda_graph = args.kv_splits
     # The serving TurboQuant configuration overrides H100's default FA3 to FA2.
     config.attention_config.flash_attn_version = 2

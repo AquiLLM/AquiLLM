@@ -15,12 +15,14 @@ Captured baseline image: `sha256:00441111dd81532d55310362a55b57b100fd48aa0cc589f
 | Model | `hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16` |
 | Resolved model revision | `2d783431e303148fc6e16622fac5edac83a6b5c4` |
 | Activation / KV | FP16 / `turboquant_k8v4` |
-| Attention geometry | Q24, KV4, head dimension 256, physical pages 2128 tokens |
+| Attention geometry | Q24, KV4, head dimension 256, actual attention-cache pages 16 tokens |
 | Verifier | 15 committed splits, one raw speculative-tail slot, tile 32 |
 | Serving | MTP depth 4, context 131072, scheduling budget 4096, one sequence, TP1 |
 | Memory / prefix caching | GPU fraction 0.45 / disabled |
 
 One-change comparisons preserve these settings and the other GPU services.
+
+The PN522 startup warmup reports a worker-level block size of 2128. Live route diagnostics verified that the actual TurboQuant attention cache has 16-token pages. Profiles and final microbenchmarks use the live cache geometry.
 
 ## Feature controls
 

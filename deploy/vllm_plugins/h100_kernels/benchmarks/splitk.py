@@ -128,7 +128,7 @@ def main(argv=None):
     parser.add_argument("--contexts", type=parse_split_counts, default=(1, 32, 2048, 8192, 32768, 131072))
     parser.add_argument("--batches", type=parse_split_counts, default=(1, 2, 4))
     parser.add_argument("--block-size", type=int, default=32,
-                        help="Actual physical cache page size; development hybrid runtime uses 2128")
+                        help="Physical cache page size; use 16 for the observed development attention cache")
     parser.add_argument("--mode", choices=("graph", "eager"), default="graph")
     parser.add_argument("--rounds", type=int, default=7)
     parser.add_argument("--iterations", type=int, default=100)

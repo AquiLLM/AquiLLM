@@ -1,0 +1,41 @@
+{
+  "code_commit": "d71d88d9cccd628ec1b98bd108d1f969be7473b7",
+  "package_gpu": {
+    "passed": 168,
+    "skipped": 14,
+    "skip_reason": "sampler requires explicit opt-in"
+  },
+  "sampler_opt_in": {
+    "passed": 14,
+    "skipped": 0
+  },
+  "package_and_harness_cpu": {
+    "passed": 323
+  },
+  "existing_vllm_integration": {
+    "passed": 84
+  },
+  "sanitizer": {
+    "small_routed_fa2": {
+      "passed": 1,
+      "reported_errors": 0
+    },
+    "prior_focused_kernels": {
+      "passed": 10,
+      "reported_errors": 0
+    },
+    "bundled_long_route_with_oracle": {
+      "status": "failed_allocator_oom",
+      "passed": 0,
+      "reported_allocation_errors": 10
+    },
+    "allocator_override": "expandable_segments:False only in diagnostic subprocess; serving unchanged"
+  },
+  "log_sha256": {
+    "h100-final-gpu.log": "4994528b028304e07961c1fb38f4d997ab25d507135a942cf880b1f67b77ae56",
+    "h100-final-sampler.log": "060060dbb57aced9151a5f97e5c8221485b19636d96a928638790d10affd705c",
+    "h100-final-prefill-sanitizer-small.log": "c78bd76bbc593dedbcc74b59445cc18d93161a6f3173f153ebd5612c72c8c1e8",
+    "h100-final-prefill-sanitizer.log": "81b5604852ffb02708cbe3b3961f59d2d1e0d178690251fd4946bcd9a53e525b",
+    "h100-sanitizer-focused.log": "19269a79ac6457d7330294c1056d178b09012a291115faceec82284e90d85ab5"
+  }
+}

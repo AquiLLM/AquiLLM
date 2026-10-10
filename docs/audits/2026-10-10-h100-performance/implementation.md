@@ -17,17 +17,19 @@ The package is installed without dependency upgrades, through the existing Genes
 
 ## Prefill boundary
 
-The bundled opt-in profile requires the resolved model revision, H100 80GB SM90 with 132 SMs, FP16, k8v4, Q24/KV4/D256, physical page size 2128, and FA2. Only cached prefixes 32768–65536 with current chunks 1024–4096 qualify. Other requests preserve the original PN401/P101/P38 routing. Current semantics retain raw K/V for the current chunk; this differs from the old long-prefix P101 path that can read compressed current K/V.
+The bundled opt-in profile requires the resolved model revision, H100 80GB SM90 with 132 SMs, FP16, k8v4, Q24/KV4/D256, actual attention-cache page size 16, and FA2. Only cached prefixes 32768–65536 with current chunks 1024–4096 qualify. Other requests preserve the original PN401/P101/P38 routing. Current semantics retain raw K/V for the current chunk; this differs from the old long-prefix P101 path that can read compressed current K/V.
 
 The constructor snapshots attention semantics and the resolved model revision. Forward passes the captured FA version explicitly: current-vLLM-configuration scope may end before execution. A real constructor/installer GPU regression exits that configuration context and forbids both version rediscovery and old eligible-request paths.
 
-The six-case complete-caller [microbenchmark](prefill-microbenchmark.json) uses actual FA2, page size 2128, post-Genesis/P38 callers and independent bounded FP32 references. All cases passed numerical checks. At 32k–64k cached tokens, candidate latency is approximately one third of baseline. At 8k it is substantially slower, which is why the installed profile excludes that region. These are kernel/caller results, not first-token serving speedups.
+The six-case complete-caller [microbenchmark](prefill-microbenchmark.json) uses actual FA2, page size 16, post-Genesis/P38 callers and independent bounded FP32 references. All cases passed numerical checks. At 32k–64k cached tokens, candidate latency is approximately one third of baseline. At 8k it is substantially slower, which is why the installed profile excludes that region. These are kernel/caller results, not first-token serving speedups.
+
+Initial experiments used 2128-token pages because PN522 warmup reports that worker-level block size. Positive activation checks caught the mismatch: the live attention-cache tensor has 16-token pages. The inactive canary passed quality but was rolled back and excluded from candidate performance evidence. The final prefill microbenchmark was rerun with the observed 16-token pages before changing the profile.
 
 ## Other measurement limits
 
-The fused microbenchmark's 1.19–1.53× speedup used synthetic physical pages of 32. It does not establish the same gain with deployed pages of 2128. The first actual fused serving sweep improved some longer cases but increased 512-token generation time from 5.491 to 6.451 ms/token. That discovery run is insufficient for promotion, and fused remains disabled.
+The fused microbenchmark's 1.19–1.53× speedup used synthetic physical pages of 32. It does not establish the same gain with deployed pages of 16. The first actual fused serving sweep improved some longer cases but increased 512-token generation time from 5.491 to 6.451 ms/token. That discovery run is insufficient for promotion, and fused remains disabled.
 
-The deployed-page adaptive sweep reduced long-context verifier cost relative to fixed 15, but had no material advantage over fixed 31 and incurred more short-context overhead. It remains disabled.
+The adaptive sweep used synthetic pages of 2128, reduced long-context verifier cost relative to fixed 15, but had no material advantage over fixed 31 and incurred more short-context overhead. It does not qualify the deployed 16-token layout. Adaptive remains disabled pending a separate serving experiment.
 
 Baseline greedy outputs changed across model restarts even with fixed inputs and a fixed seed, while repeated requests within a boot were stable. Paired serving results must therefore include output hashes/text, exact quality checks, MTP acceptance counters, and restart variation. A changed output hash alone cannot be attributed to the candidate kernel.
 
