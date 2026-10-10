@@ -76,6 +76,10 @@ def validate_execution_controls(report, arm, execution):
         "graph_original_budget_binding_mismatch",
     )
     runtime = report["controls"][arm]["runtime_observations"]
+    require(
+        execution["latency_budget_ms"] <= runtime["graph_overall_timeout_ms"],
+        "graph_execution_exceeds_effective_deadline",
+    )
     for branch in ("direct", "extended"):
         if not runtime[f"graph_{branch}_enabled"]:
             continue
