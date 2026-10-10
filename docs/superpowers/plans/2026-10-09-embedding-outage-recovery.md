@@ -53,6 +53,14 @@ Expired budgets reject before transport. Index callers omitting the argument ret
 their payload; ordinary 30-second timeout is capped further for query graph calls.
 The extractor/direct/extended/overall deadline values and zero graph retries remain.
 
+Independent review correction: a relative timeout calculated above signature/client
+setup could outlive the actual graph budget. Preserve an optional absolute deadline
+across the facade and local helper, convert legacy relative timeout at API entry,
+and check remaining time after client preparation immediately before SDK dispatch.
+Also narrow transient HTTPX types to timeout/network/remote-protocol errors, and
+classify permanent protocol/configuration causes inside OpenAI wrappers as contract.
+Both corrections require deterministic no-network RED tests before implementation.
+
 ## Verification sequence
 
 Write and run pure transport/classification and bounded chunk RED tests first.

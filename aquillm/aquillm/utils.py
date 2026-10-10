@@ -35,6 +35,7 @@ from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 from lib.embeddings.provenance import EmbeddingResult, fit_result
 from lib.embeddings.local import (
+    _request_deadline,
     get_embedding_result_via_local_openai,
     get_embedding_results_via_local_openai,
 )
@@ -353,6 +354,7 @@ def get_strict_index_embeddings(
     *,
     expected_model_signature: str,
     timeout: float | None = None,
+    deadline: float | None = None,
 ) -> tuple[list[tuple[int, list[float]]], str]:
     """Embed one durable index batch locally with no cross-provider fallback.
 
@@ -361,6 +363,7 @@ def get_strict_index_embeddings(
     must never silently mix providers or model revisions.
     """
 
+    deadline = _request_deadline(timeout, deadline)
     if type(queries) is not list or any(type(query) is not str for query in queries):
         raise ValueError(
             "strict index embedding inputs must be an exact list of strings"
@@ -375,7 +378,7 @@ def get_strict_index_embeddings(
     if any(len(query) > 8_192 for query in queries):
         raise ValueError("strict index embedding input exceeds max_chars=8192")
     indexed_vectors = get_strict_indexed_embeddings_via_local_openai(
-        queries, **({"timeout": timeout} if timeout is not None else {})
+        queries, **({"deadline": deadline} if deadline is not None else {})
     )
     if not isinstance(indexed_vectors, (list, tuple)) or len(indexed_vectors) != len(
         queries

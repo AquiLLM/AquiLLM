@@ -4,6 +4,7 @@ Local OpenAI-compatible embedding provider.
 
 from typing import Any
 from math import isfinite
+from time import monotonic
 
 import structlog
 from openai import OpenAI, BadRequestError
@@ -232,9 +233,21 @@ def get_embeddings_via_local_openai(
     ]
 
 
+def _request_deadline(timeout: float | None, deadline: float | None) -> float | None:
+    """Convert a relative budget once and never extend an existing absolute one."""
+    if timeout is not None and (type(timeout) not in (float, int) or not isfinite(timeout) or timeout <= 0):
+        raise ValueError("strict embedding timeout must be positive and finite")
+    if deadline is not None and (type(deadline) not in (float, int) or not isfinite(deadline)):
+        raise ValueError("strict embedding deadline must be finite")
+    if timeout is not None:
+        relative_deadline = monotonic() + timeout
+        deadline = relative_deadline if deadline is None else min(deadline, relative_deadline)
+    return deadline
+
+
 def get_strict_indexed_embeddings_via_local_openai(
     queries: list[str],
-    *, timeout: float | None = None,
+    *, timeout: float | None = None, deadline: float | None = None,
 ) -> list[tuple[int, list[float]]]:
     """Embed an exact durable batch once and preserve provider indices.
 
@@ -242,19 +255,25 @@ def get_strict_indexed_embeddings_via_local_openai(
     retries with transformed text, or falls back to another provider.
     """
 
-    if timeout is not None and (type(timeout) not in (float, int) or not isfinite(timeout) or timeout <= 0):
-        raise ValueError("strict embedding timeout must be positive and finite")
+    deadline = _request_deadline(timeout, deadline)
     if type(queries) is not list or any(type(query) is not str for query in queries):
         raise ValueError("strict embedding inputs must be an exact list of strings")
     if not queries:
         return []
     base_url, api_key, model = get_local_embed_config()
     client = _get_local_openai_client(base_url, api_key)
-    response = client.embeddings.create(
+    create = client.embeddings.create
+    timeout_kwargs = {}
+    if deadline is not None:
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise TimeoutError("strict embedding deadline expired before dispatch")
+        timeout_kwargs["timeout"] = min(remaining, REQUEST_TIMEOUT_SECONDS)
+    response = create(
         model=model,
         input=queries,
         dimensions=1024,
-        **({"timeout": min(timeout, REQUEST_TIMEOUT_SECONDS)} if timeout is not None else {}),
+        **timeout_kwargs,
     )
     response_model = getattr(response, "model", None)
     if type(response_model) is not str or response_model != model:

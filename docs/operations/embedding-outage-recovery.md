@@ -17,6 +17,8 @@ Connection failures, timeouts, HTTP 408/429 and 5xx become
 EmbeddingUpstreamUnavailableError. Invalid vectors/receipts, exhausted context
 repair, and other provider HTTP rejections are permanent contract failures.
 Programming exceptions propagate; they are never treated as transient outages.
+Unsupported protocols, malformed local HTTP requests, and invalid URL/schema/header
+configuration are contract failures, including when wrapped by the OpenAI SDK.
 Malformed successful multimodal responses are contract failures. Multimodal only
 tries its alternate format after unsupported-request statuses 400/404/405/415/422;
 an outage stops after the first failed request. Existing unsupported-format caption
@@ -38,8 +40,11 @@ save or explicit enqueue can retry the incomplete index; no new periodic convers
 recovery job is introduced. Existing owner authorization and snapshot publication
 checks remain in effect.
 
-Query graph embedding passes its remaining deadline as a smaller transport timeout,
-without a minimum floor, and rejects an already expired deadline before transport.
+Query graph embedding preserves the absolute deadline through signature and client
+setup, then computes the smaller transport timeout immediately before SDK dispatch.
+There is no minimum floor, and an exhausted budget never calls the SDK. Optional
+relative timeouts are converted to an absolute budget at API entry so setup time
+also consumes those budgets.
 Extractor 3000 ms, direct/extended 4500 ms and overall 5000 ms remain unchanged;
 graph requests have zero retries.
 

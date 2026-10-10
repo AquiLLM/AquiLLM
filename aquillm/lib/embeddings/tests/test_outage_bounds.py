@@ -111,6 +111,7 @@ def test_provider_http_status_classification(monkeypatch, status):
 
 
 def test_strict_timeout_flows_through_facade_to_sdk(monkeypatch):
+    monkeypatch.setattr(local, "monotonic", lambda: 1.0)
     monkeypatch.setenv("APP_EMBED_MODEL_REVISION", "synthetic-revision")
     monkeypatch.setenv("APP_EMBED_DIMS", "1024")
     monkeypatch.setenv("APP_EMBED_MODEL", "synthetic")
@@ -118,7 +119,7 @@ def test_strict_timeout_flows_through_facade_to_sdk(monkeypatch):
     monkeypatch.setattr(local, "_get_local_openai_client", lambda *_: SimpleNamespace(embeddings=SimpleNamespace(create=create)))
     facade.get_strict_index_embeddings(["synthetic"], expected_model_signature=facade.strict_index_embedding_signature(), timeout=0.001)
     assert create.call_count == 1
-    assert create.call_args.kwargs["timeout"] == 0.001
+    assert create.call_args.kwargs["timeout"] == pytest.approx(0.001)
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("nan"), float("inf"), True])

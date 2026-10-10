@@ -175,3 +175,25 @@ def test_transient_peer_does_not_clear_terminal_failure(document_factory, monkey
     with pytest.raises(EmbeddingUpstreamUnavailableError):
         create_chunks.run(*call.args, **call.kwargs)
     assert ChunkPublication.objects.get(document_id=document.id).failure_kind == "contract"
+
+
+def test_sdk_wrapped_permanent_protocol_failure_never_retries_worker(document_factory, monkeypatch):
+    import httpx
+    import openai
+    from aquillm import utils as facade
+
+    chunking = configure_chunking_runtime(monkeypatch)
+    document, call = queued(document_factory)
+    failure = openai.APIConnectionError(request=httpx.Request("POST", "http://localhost/v1/embeddings"))
+    failure.__cause__ = httpx.UnsupportedProtocol("synthetic configuration")
+    monkeypatch.setenv("APP_EMBED_FALLBACK_POLICY", "local-only")
+    monkeypatch.setattr(facade, "get_embedding_results_via_local_openai", Mock(side_effect=failure))
+    monkeypatch.setattr(chunking, "get_embeddings", facade.get_embedding_results)
+    retry = Mock(side_effect=AssertionError("permanent failure retried"))
+    monkeypatch.setattr(create_chunks, "retry", retry)
+    with pytest.raises(EmbeddingContractError):
+        create_chunks.run(*call.args, **call.kwargs)
+    retry.assert_not_called()
+    intent = ChunkPublication.objects.get(document_id=document.id)
+    assert intent.failure_kind == "contract"
+    assert intent.last_error == "EmbeddingContractError"
