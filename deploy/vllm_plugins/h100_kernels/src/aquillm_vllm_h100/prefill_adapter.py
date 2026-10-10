@@ -171,7 +171,7 @@ def _make_route(profile, runtime_key):
         prefix = AttentionState(torch.empty_like(q, dtype=torch.float32),
                                 torch.empty(q.shape[:2], dtype=torch.float32, device=q.device))
         prefix_attention(q, cache, table[index], lengths[1], impl.scale, spec, prefix)
-        chunk = raw_chunk_attention(q, k, v, impl.scale)
+        chunk = raw_chunk_attention(q, k, v, impl.scale, fa_version=semantics["flash_attn_version"])
         merge_attention_states(prefix, chunk, destination)
         if not exercised:
             exercised = True

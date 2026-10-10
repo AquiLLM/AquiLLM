@@ -25,13 +25,17 @@ def normalize_flash_attention_state(output, lse, *, lse_layout: str, log_base: s
     return AttentionState(output, lse)
 
 
-def raw_chunk_attention(q, k, v, scale: float) -> AttentionState:
+def raw_chunk_attention(q, k, v, scale: float, *, fa_version: int | None = None) -> AttentionState:
     """Installed FA causal attention over current raw K/V, including LSE.
 
     The inspected CUDA vLLM interface returns (output, natural LSE[Hq,Q])
     when return_softmax_lse=True. Equal Q/K lengths make the bottom-right FA
     mask the ordinary causal current-chunk mask. Historical cache is excluded.
+    Runtime adapters pass their validated construction-time version explicitly;
+    forward does not require a current vLLM configuration context in that case.
     """
+    if fa_version is not None and (type(fa_version) is not int or fa_version not in (2, 3)):
+        raise ValueError("unsupported explicit FlashAttention version")
     import torch
     if q.ndim != 3 or k.ndim != 3 or v.shape != k.shape or k.shape[0] != q.shape[0] or k.shape[2] != q.shape[2]:
         raise ValueError("raw K/V must contain exactly the current chunk [Q,Hkv,D]")
@@ -43,7 +47,7 @@ def raw_chunk_attention(q, k, v, scale: float) -> AttentionState:
         raise ValueError("raw chunk inputs must share a CUDA device")
     from vllm.v1.attention.backends.fa_utils import flash_attn_varlen_func, get_flash_attn_version
     cu = torch.tensor([0, q.shape[0]], device=q.device, dtype=torch.int32)
-    version = get_flash_attn_version(head_size=q.shape[2])
+    version = fa_version if fa_version is not None else get_flash_attn_version(head_size=q.shape[2])
     options = {} if version is None else {"fa_version": version}
     result = flash_attn_varlen_func(q=q, k=k, v=v, cu_seqlens_q=cu, cu_seqlens_k=cu,
                                    max_seqlen_q=q.shape[0], max_seqlen_k=q.shape[0],

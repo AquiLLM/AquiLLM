@@ -225,12 +225,25 @@ def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatc
         metadata.seq_lens_cpu = [9216]
     route = adapter._make_route(profile, profile.runtime_key)
     if change is None:
+        active_config = [SimpleNamespace(
+            model_config=SimpleNamespace(hf_config=SimpleNamespace(_commit_hash=profiles().MODEL_REVISION)),
+            attention_config=SimpleNamespace(flash_attn_version=2))]
+        def current_config():
+            assert active_config[0] is not None, "forward queried an ended construction context"
+            return active_config[0]
+        monkeypatch.setitem(sys.modules, "vllm.config", SimpleNamespace(get_current_vllm_config=current_config))
+        Constructed = constructor()
+        Constructed.__init__ = adapter._capture_constructor(Constructed.__init__)
+        initialized = Constructed(24, 256, .0625, 4)
+        impl._aquillm_h100_semantics = initialized._aquillm_h100_semantics
+        active_config[0] = None  # Normal serving forward runs after construction context ends.
         fake_torch.empty_like = lambda tensor, dtype: Tensor(tensor.shape, dtype)
         fake_torch.empty = lambda shape, dtype, device: Tensor(shape, dtype)
         def prefix(q, cache, table, prior, scale, spec, state):
             assert prior == 32768 and spec.block_size == 2128
             state.output.value = 12
-        def chunk(q, k, v, scale):
+        def chunk(q, k, v, scale, *, fa_version=None):
+            assert fa_version == 2, "worker forward must use captured FA2 without a current config"
             return SimpleNamespace(output=SimpleNamespace(value=23))
         def merge(prefix, chunk, output):
             output.value = prefix.output.value + chunk.output.value

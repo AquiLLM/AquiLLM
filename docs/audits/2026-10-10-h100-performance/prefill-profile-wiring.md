@@ -27,13 +27,17 @@ a missing hash. Only `2d783431e303148fc6e16622fac5edac83a6b5c4` and an explicit
 fall back before tensor or CUDA access. Existing prefill source fingerprint and
 P101 insertion remain unchanged.
 
+Forward passes that validated FA2 version explicitly to the raw-chunk helper.
+It does not redetect FA from a configuration context that may have ended after
+model construction. The deployed caller benchmark also pins its helper to FA2.
+
 The successful worker route emits `AQUILLM_H100 route_exercised prefill` once,
 after prefix/raw-chunk/merge execution and outside capture. An enabled but
 inactive canary must not qualify; require that marker in external monitoring.
 There is no per-layer fallback log flood.
 
 CPU verification: `rtk python -m pytest -q
-deploy/vllm_plugins/h100_kernels/tests/cpu` passed 258 tests. New tests exercise
+deploy/vllm_plugins/h100_kernels/tests/cpu` passed 265 tests. New tests exercise
 opt-in/default-off behavior, independent controls, model and FA2 snapshots,
 geometry rejection before allocation, untouched fallback destinations, capture
 fallback, and the successful route marker. GPU allocation/launch boundaries are
@@ -41,3 +45,7 @@ stubbed only in CPU routing tests; these do not prove numerical GPU correctness.
 The existing GPU caller fixtures now use page size 2128 and FA2/revision
 semantics. This worker did not run GPU tests; the coordinator must rerun them
 against the committed wiring before a development canary.
+The GPU suite includes a real installed constructor and bundled-profile case
+at prefix 32768/query 1024 after leaving its FA2 configuration context. It
+forbids runtime version rediscovery and old routes, and uses the bounded
+independent FP32 oracle. This added case also awaits coordinator GPU execution.

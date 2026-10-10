@@ -152,6 +152,7 @@ def configure_runtime(args):
     from vllm.config import VllmConfig
     from vllm.v1.attention.backends.turboquant_attn import TurboQuantAttentionImpl
     config = VllmConfig()
+    config.attention_config.flash_attn_version = 2
     config.attention_config.tq_max_kv_splits_for_cuda_graph = args.kv_splits
     # The serving TurboQuant configuration overrides H100's default FA3 to FA2.
     config.attention_config.flash_attn_version = 2
@@ -261,7 +262,7 @@ def main():
                                        torch.empty(query.shape[:2], device=query.device, dtype=torch.float32))
                 prefix_attention(query,cache,md.block_table[index],prior,self.scale,batch.spec,state,
                                  block_q=args.block_q,num_warps=args.warps)
-                chunk = raw_chunk_attention(query,raw_k,raw_v,self.scale)
+                chunk = raw_chunk_attention(query,raw_k,raw_v,self.scale,fa_version=2)
                 merge_attention_states(state,chunk,destination)
                 return destination
 
