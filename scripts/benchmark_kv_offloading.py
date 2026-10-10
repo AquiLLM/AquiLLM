@@ -213,6 +213,101 @@ def maximum_overlap(rows):
     return maximum
 
 
+def finite_number(value, *, positive=False):
+    try:
+        return (type(value) in (int, float) and math.isfinite(value)
+                and (value > 0 if positive else value >= 0))
+    except OverflowError:
+        return False
+
+
+def valid_accounting(row, context_tokens):
+    """Validate observed accounting; cached verdicts and positive rates are insufficient."""
+    if not isinstance(row, dict) or type(context_tokens) is not int:
+        return False
+    counts = ("supplied_prompt_tokens", "requested_output_tokens", "accepted_output_tokens",
+              "reserved_context_tokens", "exercised_context_tokens", "nonempty_chunks")
+    if any(type(row.get(key)) is not int or row[key] <= 0 for key in counts):
+        return False
+    prompt, requested, accepted = (row[key] for key in counts[:3])
+    if (row.get("token_accounting_source") != "server_usage.completion_tokens"
+            or "error" not in row or row["error"] is not None or row.get("stream_done") is not True
+            or accepted != requested or row["reserved_context_tokens"] != prompt + requested
+            or row["exercised_context_tokens"] != prompt + accepted or prompt + requested > context_tokens):
+        return False
+    observed = row.get("observed_prompt_tokens")
+    if observed is not None and (type(observed) is not int or observed != prompt):
+        return False
+    elapsed, rate, ttft = (row.get(key) for key in
+                           ("elapsed_seconds", "accepted_tokens_per_second", "first_token_latency_seconds"))
+    start, end = row.get("started_seconds"), row.get("ended_seconds")
+    if (not all(finite_number(value, positive=True) for value in (elapsed, rate, ttft, end))
+            or not finite_number(start) or end <= start or ttft > elapsed
+            or not math.isclose(elapsed, end - start, rel_tol=1e-6, abs_tol=1e-8)
+            or not math.isclose(rate, accepted / elapsed, rel_tol=1e-9, abs_tol=1e-9)):
+        return False
+    gaps, terminal = row.get("streaming_gaps_seconds"), row.get("terminal_wait_seconds")
+    if (not isinstance(gaps, list) or len(gaps) != row["nonempty_chunks"] - 1
+            or not all(finite_number(gap) for gap in gaps) or not finite_number(terminal)
+            or not math.isclose(ttft + sum(gaps) + terminal, elapsed, rel_tol=1e-6, abs_tol=1e-8)):
+        return False
+    maximum = row.get("max_stream_gap_seconds")
+    return (maximum is None if not gaps else finite_number(maximum)
+            and math.isclose(maximum, max(gaps), rel_tol=1e-9, abs_tol=1e-9))
+
+
+def valid_run_records(result):
+    try:
+        n = positive(result["configured_n"], "N", 256)
+        t = positive(result["configured_t"], "T", 262144)
+        profile, rows = result["profile"], result["requests"]
+        if (result.get("schema_version") != 1 or result.get("status") != "complete"
+                or profile.get("active_sequences") != n or profile.get("context_tokens") != t
+                or profile.get("kv_dtype") != "turboquant_k8v4" or not isinstance(rows, list)
+                or len(rows) != n or not all(valid_accounting(row, t) for row in rows)):
+            return False
+        if not isinstance(result.get("run_id"), str) or not re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", result["run_id"]):
+            return False
+        fingerprints = [row.get("prompt_sha256") for row in rows]
+        if (any(not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value) for value in fingerprints)
+                or len(set(fingerprints)) != n or any(row.get("request_id") != f"{result['run_id']}:{index}"
+                for index, row in enumerate(rows))):
+            return False
+        reservation = rows[0]["requested_output_tokens"]
+        return (all(row["requested_output_tokens"] == reservation for row in rows)
+                and result.get("workload_sha256") == digest(dict(prompts=fingerprints,
+                    output_tokens=reservation, temperature=0, seed=17, ignore_eos=True))
+                and result.get("client_overlap", {}).get("max_requests") == maximum_overlap(rows))
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return False
+
+
+def refresh_targets(result):
+    """Recompute every performance annotation from validated records, never cached verdicts."""
+    profile = result.get("profile", {})
+    identity_ok = has_identity(profile) and profile["identity"].get("model") == result.get("model")
+    records_ok = valid_run_records(result)
+    t = result.get("configured_t")
+    statuses = []
+    for row in result["requests"]:
+        valid = valid_accounting(row, t)
+        if not valid:
+            row["accepted_tokens_per_second"] = None
+            row["token_accounting_source"] = "unavailable"
+        row["accounting_validation"] = "consistent" if valid else "unavailable"
+        rate = row.get("accepted_tokens_per_second")
+        row["rate_target_status"] = ("unavailable" if not valid or not records_ok or not identity_ok
+                                     else "pass" if rate >= 55 else "fail")
+        row["within_desired_55_75_band"] = None if not valid else 55 <= rate <= 75
+        statuses.append(row["rate_target_status"])
+    result["rate_target"] = dict(status="unavailable" if not statuses or "unavailable" in statuses else
+                                 "pass" if all(s == "pass" for s in statuses) else "fail",
+                                 lower_tokens_per_second=55, preferred_band=[55, 75])
+    result["capacity_target"] = dict(status="unavailable" if not identity_ok or not records_ok else
+        "pass" if all(row["exercised_context_tokens"] == t for row in result["requests"]) else "fail",
+        basis="supplied token IDs plus accepted output; configured ceiling alone is insufficient")
+
+
 def run_benchmark(profile, fixture, url, model, *, output_tokens=256, concurrency=None,
                   timeout=1800, dry_run=False, run_id=None, metrics=None, baseline=None, api_key=None,
                   served_model=None):
@@ -249,20 +344,7 @@ def run_benchmark(profile, fixture, url, model, *, output_tokens=256, concurrenc
     with ThreadPoolExecutor(max_workers=concurrency or n) as executor:
         result["requests"] = list(executor.map(worker, range(n)))
     result["client_overlap"] = dict(max_requests=maximum_overlap(result["requests"]), configured_requests=n)
-    identity = profile.get("identity", {})
-    identity_ok = has_identity(profile) and identity.get("model") == model
-    for row in result["requests"]:
-        rate = row["accepted_tokens_per_second"]
-        row["rate_target_status"] = ("unavailable" if rate is None or not identity_ok else
-                                     "pass" if rate >= 55 else "fail")
-        row["within_desired_55_75_band"] = None if rate is None else 55 <= rate <= 75
-    statuses = [row["rate_target_status"] for row in result["requests"]]
-    result["rate_target"] = dict(status="unavailable" if "unavailable" in statuses else
-                                 "pass" if all(s == "pass" for s in statuses) else "fail",
-                                 lower_tokens_per_second=55, preferred_band=[55, 75])
-    result["capacity_target"] = dict(status="unavailable" if not identity_ok else "pass" if all(
-        row["exercised_context_tokens"] == t for row in result["requests"]) else "fail",
-        basis="supplied token IDs plus accepted output; configured ceiling alone is insufficient")
+    refresh_targets(result)
     result["evidence"] = evidence_summary(result, metrics)
     result["baseline_comparison"] = compare_baseline(result, baseline)
     return result
@@ -271,7 +353,7 @@ def run_benchmark(profile, fixture, url, model, *, output_tokens=256, concurrenc
 def evidence_summary(result, metrics):
     evidence = {"active_decoders": {"status": "unverified"}, "active_paging": {"status": "unverified"},
                 "provenance": "operator-supplied-unattested"}
-    if not isinstance(metrics, dict) or metrics.get("run_id") != result["run_id"]:
+    if not valid_run_records(result) or not isinstance(metrics, dict) or metrics.get("run_id") != result["run_id"]:
         return evidence
     rows = {row["request_id"]: row for row in result["requests"] if row["error"] is None}
     def within(request_id, start, end):
@@ -309,7 +391,7 @@ def evidence_summary(result, metrics):
 
 def compare_baseline(result, baseline):
     unavailable = dict(status="unavailable", reason="compatible complete resident baseline required")
-    if not isinstance(baseline, dict):
+    if not valid_run_records(result) or not valid_run_records(baseline):
         return unavailable
     try:
         profiles = [item["profile"] for item in (result, baseline)]
@@ -389,6 +471,7 @@ def main():
                 raise ValueError("analysis requires a completed schema 1 run")
             if not isinstance(result.get("run_id"), str) or not isinstance(result.get("requests"), list):
                 raise ValueError("analysis requires a run ID and request records")
+            refresh_targets(result)
             result["evidence"] = evidence_summary(result, read(args.metrics))
             result["baseline_comparison"] = compare_baseline(result, read(args.baseline))
         else:

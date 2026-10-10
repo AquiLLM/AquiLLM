@@ -206,6 +206,10 @@ maximum-gap ratios are also reported for pause review. Missing/mismatched N/T,
 model/revision/runtime/KV dtype/AWQ/MTP/Genesis/weights/hardware, workload hash,
 prompt fingerprint or output reservation makes the comparison unavailable.
 Incomplete or serial baseline runs also cannot pass a concurrent comparison.
+Offline imports must retain exact usage provenance, integer accepted counts equal
+to the reservation, consistent elapsed-time rates and context lengths, and
+complete timing records. Analysis recomputes targets; cached verdicts never count
+as evidence, and malformed/incomplete records yield unavailable comparisons.
 CLI exit 0 means the workflow ran; it is not a performance acceptance verdict.
 Request/protocol failures exit 2, input failures exit 64, and argparse misuse exits 2.
 
@@ -277,20 +281,21 @@ missing usage, prompt-count mismatch, redacted errors, redirect refusal, timeout
 token-reservation validation, per-user rate failures, workload/runtime mismatch,
 unverified gauges and prefix restores, and offline analysis. Small fixture N=2,
 T=16 is explicitly synthetic; it is not a 256K serving measurement.
-The final selection passed 53 tests; the focused dry-run/live CLI and deadline
+The final selection passed 68 tests; the focused dry-run/live CLI and deadline
 selection passed 3 tests.
 
 ```powershell
-rtk proxy python -m pytest -p no:django aquillm/tests/integration/test_kv_offloading_benchmark.py aquillm/tests/integration/test_kv_offloading_benchmark_contracts.py -q --tb=short
-rtk proxy python -m pytest -p no:django aquillm/tests/integration/test_kv_offloading_benchmark.py::test_cli_dry_run_and_loopback_smoke -q --tb=short
+rtk proxy python -m pytest -c pyproject.toml aquillm/tests/integration/test_kv_offloading_benchmark.py aquillm/tests/integration/test_kv_offloading_benchmark_contracts.py -q --tb=short
+rtk proxy python -m pytest -c pyproject.toml aquillm/tests/integration/test_kv_offloading_benchmark.py::test_cli_dry_run_and_loopback_smoke -q --tb=short
 ```
 
-The standalone local command disables Django; the repository's remaining
-`DJANGO_SETTINGS_MODULE` pytest option produces one known configuration warning.
+The standalone local commands use `pyproject.toml` and run without the repository's
+Django-specific pytest configuration or its unrelated warning.
 Task 2 configuration/preflight/Compose checks passed locally; the earlier native
 build failed CUDA SDK linkage, followed by a successful bounded allocator-only
 link/load and synthetic 256-byte local RTX 3090 copy. That was not an LMCache
-packed transfer or hybrid registration. The final candidate rebuild/native
-results are pending separate confirmation at this writing. No serving, H100,
+packed transfer or hybrid registration. The latest SDK build succeeded; the
+candidate image build is still in progress and native/kernel results remain
+pending separate confirmation at this writing. No serving, H100,
 SSD round trip, numerical equivalence, sustained 55–75/user target, full 4/8-user
 256K context, or active paging success is claimed.

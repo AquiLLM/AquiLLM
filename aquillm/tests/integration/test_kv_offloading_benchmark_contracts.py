@@ -9,14 +9,22 @@ import pytest
 from .test_kv_offloading_benchmark import SCRIPT, benchmark, inputs, run, server
 
 
+def scale_request(row, factor):
+    for key in ("elapsed_seconds", "first_token_latency_seconds", "terminal_wait_seconds", "max_stream_gap_seconds"):
+        if row[key] is not None:
+            row[key] *= factor
+    row["streaming_gaps_seconds"] = [gap * factor for gap in row["streaming_gaps_seconds"]]
+    row["ended_seconds"] = row["started_seconds"] + row["elapsed_seconds"]
+    row["accepted_tokens_per_second"] = row["accepted_output_tokens"] / row["elapsed_seconds"]
+
+
 def comparable_results():
     with server() as (url, _):
         resident = run(url)
     candidate = copy.deepcopy(resident)
     candidate["profile"]["storage_mode"] = "mooncake"
     for row in candidate["requests"]:
-        row["elapsed_seconds"] *= 1.04
-        row["first_token_latency_seconds"] *= 1.04
+        scale_request(row, 1.04)
     return candidate, resident
 
 
@@ -26,7 +34,7 @@ def test_latency_and_rate_targets_are_independent_and_per_request():
     assert verdict["status"] == "pass"
     assert verdict["preferred_5_percent"] is True
     assert all(row["total_latency_ratio"] == pytest.approx(1.04) for row in verdict["requests"])
-    candidate["requests"][1]["elapsed_seconds"] = resident["requests"][1]["elapsed_seconds"] * 1.11
+    scale_request(candidate["requests"][1], 1.11 / 1.04)
     verdict = benchmark().compare_baseline(candidate, resident)
     assert verdict["status"] == "fail"
     assert verdict["requests"][0]["status"] == "pass"
@@ -137,8 +145,53 @@ def test_analysis_cli_adds_historical_evidence_without_another_request(tmp_path)
 
 def test_first_token_latency_cannot_hide_behind_total_latency():
     candidate, resident = comparable_results()
-    candidate["requests"][0]["first_token_latency_seconds"] = resident["requests"][0]["first_token_latency_seconds"] * 1.2
+    row = candidate["requests"][0]
+    first = resident["requests"][0]["first_token_latency_seconds"] * 1.2
+    row["elapsed_seconds"] += first - row["first_token_latency_seconds"]
+    row["first_token_latency_seconds"] = first
+    row["ended_seconds"] = row["started_seconds"] + row["elapsed_seconds"]
+    row["accepted_tokens_per_second"] = row["accepted_output_tokens"] / row["elapsed_seconds"]
     assert benchmark().compare_baseline(candidate, resident)["status"] == "fail"
+
+
+@pytest.mark.parametrize("field,value", [("token_accounting_source", "unavailable"),
+    ("accepted_output_tokens", 1), ("accepted_output_tokens", True),
+    ("accepted_tokens_per_second", 99999), ("accepted_tokens_per_second", float("inf")),
+    pytest.param("accepted_tokens_per_second", 10 ** 400, id="unbounded-integer-rate"),
+    ("reserved_context_tokens", 15), ("exercised_context_tokens", 15),
+    ("supplied_prompt_tokens", 262144), ("observed_prompt_tokens", 7),
+    ("stream_done", "true"), ("first_token_latency_seconds", 99999)])
+def test_imported_accounting_cannot_pass_matching_malformed_records(field, value):
+    candidate, resident = comparable_results()
+    for result in (candidate, resident):
+        result["requests"][0][field] = value
+    assert benchmark().compare_baseline(candidate, resident)["status"] == "unavailable"
+
+
+@pytest.mark.parametrize("incomplete", ["bad_source", "missing_elapsed", "empty_requests"])
+def test_analysis_recomputes_cached_targets_and_rejects_incomplete_records(tmp_path, incomplete):
+    candidate, resident = comparable_results()
+    for result in (candidate, resident):
+        result["requests"][0].update(token_accounting_source="unavailable", accepted_output_tokens=1,
+                                     rate_target_status="pass")
+        result["rate_target"]["status"] = "pass"
+        result["capacity_target"]["status"] = "pass"
+    if incomplete == "missing_elapsed":
+        del candidate["requests"][0]["elapsed_seconds"]
+    elif incomplete == "empty_requests":
+        candidate["requests"] = []
+    paths = [tmp_path / name for name in ("candidate.json", "resident.json", "out.json")]
+    for path, value in zip(paths, (candidate, resident)):
+        path.write_text(json.dumps(value))
+    completed = subprocess.run([sys.executable, str(SCRIPT), "--analyze", str(paths[0]), "--baseline",
+                                str(paths[1]), "--output", str(paths[2])], capture_output=True, text=True, timeout=10)
+    assert completed.returncode == 0, completed.stderr
+    result = json.loads(paths[2].read_text())
+    assert result["baseline_comparison"]["status"] == "unavailable"
+    assert result["rate_target"]["status"] == "unavailable"
+    assert result["capacity_target"]["status"] == "unavailable"
+    if result["requests"]:
+        assert result["requests"][0]["accepted_tokens_per_second"] is None
 
 
 def test_duplicate_scheduler_ids_cannot_prove_n_decoders():
