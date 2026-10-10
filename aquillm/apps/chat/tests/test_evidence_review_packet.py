@@ -100,6 +100,39 @@ def test_export_preserves_exact_unicode_and_starts_all_human_fields_null():
     assert manifest["bindings"][item["id"]]["subject"] == response["subject"]
 
 
+def test_sheet_maps_each_claim_id_to_its_exact_statement():
+    from apps.chat.evals.evidence_review_packet import prepare_packet
+
+    case, report = sample()
+    case["required_claims"] = [
+        {
+            "claim_id": "measure-β",
+            "statement": "The signal was 4 μg.",
+            "labels": ["units"],
+        },
+        {
+            "claim_id": "condition-2",
+            "statement": "It held only at 8 °C.",
+            "labels": ["conditions"],
+        },
+    ]
+    packet, _ = prepare_packet({"r": report}, {case["case_id"]: case}, random_seed=2)
+    item = packet["items"][0]
+    assert item["required_claims"] == [
+        {"claim_id": "measure-β", "statement": "The signal was 4 μg."},
+        {"claim_id": "condition-2", "statement": "It held only at 8 °C."},
+    ]
+    assert "measure-β: The signal was 4 μg." in packet["sheet"]
+    assert "condition-2: It held only at 8 °C." in packet["sheet"]
+    assert all(
+        value is None
+        for labels in packet["response_template"]["reviews"][item["id"]][
+            "claims"
+        ].values()
+        for value in labels.values()
+    )
+
+
 def test_export_inventories_invalid_safety_and_operational_rows_without_review_slots():
     from apps.chat.evals.evidence_review_packet import prepare_packet
 
@@ -252,6 +285,18 @@ def test_import_rejects_changed_binding_status_and_audit_supplement():
         import_reviews(packet, changed_manifest, reports, completed(packet))
     changed_packet = deepcopy(packet)
     changed_packet["audit_supplement"][item_id]["events"].append({"changed": True})
+    with pytest.raises(ValueError, match="packet digest"):
+        import_reviews(changed_packet, manifest, reports, completed(packet))
+
+
+def test_import_rejects_changed_embedded_response_template_packet_hash():
+    from apps.chat.evals.evidence_review_packet import import_reviews, prepare_packet
+
+    case, report = sample()
+    reports = {"r": report}
+    packet, manifest = prepare_packet(reports, {case["case_id"]: case}, random_seed=1)
+    changed_packet = deepcopy(packet)
+    changed_packet["response_template"]["packet_sha256"] = "changed"
     with pytest.raises(ValueError, match="packet digest"):
         import_reviews(changed_packet, manifest, reports, completed(packet))
 

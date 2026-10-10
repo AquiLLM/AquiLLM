@@ -47,6 +47,11 @@ def _sheet(items):
     ]
     for item in items:
         lines.extend(["", f"## {item['id']}"])
+        lines.extend(["", "### Required claims", ""])
+        lines.extend(
+            f"- {claim['claim_id']}: {claim['statement']}"
+            for claim in item["required_claims"]
+        )
         for label, field in (
             ("Question", "question"),
             ("History", "turns"),
@@ -155,6 +160,10 @@ def prepare_packet(reports, cases, *, random_seed):
             "id": opaque_id,
             "question": deepcopy(case["question"]),
             "turns": deepcopy(case["turns"]),
+            "required_claims": [
+                {key: deepcopy(claim[key]) for key in ("claim_id", "statement")}
+                for claim in case["required_claims"]
+            ],
             **{
                 key: deepcopy(row.get(key, [] if key != "answer" else ""))
                 for key in (
@@ -186,6 +195,11 @@ def import_reviews(packet, binding_manifest, original_reports, responses):
         raise ValueError("packet schema mismatch")
     if _packet_digest(packet) != binding_manifest.get("packet_sha256"):
         raise ValueError("packet digest mismatch")
+    if (
+        packet["response_template"].get("packet_sha256")
+        != binding_manifest["packet_sha256"]
+    ):
+        raise ValueError("embedded response template packet digest mismatch")
     if set(original_reports) != set(binding_manifest.get("reports", {})):
         raise ValueError("report set mismatch")
     for report_id, report in original_reports.items():
