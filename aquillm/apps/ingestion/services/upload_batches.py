@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 from typing import Any
+from django.db import transaction
+from django.core.files.storage import default_storage
 
 from apps.ingestion.models import IngestionBatch, IngestionBatchItem
 from aquillm.tasks import ingest_uploaded_file_task
+from .output_dispatch import dispatch_item
 
 
 def enqueue_upload_batch_files(
@@ -23,9 +26,9 @@ def enqueue_upload_batch_files(
     if len(files) > max_files:
         return ({"error": f"Too many files. Maximum is {max_files} per batch."}, 400)
 
-    batch = IngestionBatch.objects.create(user=user, collection=collection)
     queued_items: list[dict[str, object]] = []
     rejected_items: list[dict[str, object]] = []
+    prepared = []
 
     for source_index, upload in enumerate(files):
         size = int(getattr(upload, "size", 0) or 0)
@@ -42,19 +45,21 @@ def enqueue_upload_batch_files(
             )
             continue
 
-        item = IngestionBatchItem.objects.create(
-            batch=batch,
-            source_file=upload,
-            original_filename=upload.name,
-            content_type=getattr(upload, "content_type", "") or "",
-            file_size_bytes=size,
-            status=IngestionBatchItem.Status.QUEUED,
-        )
-        ingest_uploaded_file_task.delay(item.id)
-        queued_items.append({"id": item.id, "filename": item.original_filename, "source_index": source_index, "status": item.status})
+        field = IngestionBatchItem._meta.get_field('source_file')
+        stored = default_storage.save(field.generate_filename(None, upload.name), upload, max_length=500)
+        prepared.append((source_index, upload.name, getattr(upload, 'content_type', '') or '', size, stored))
+
+    if prepared:
+        with transaction.atomic():
+            batch = IngestionBatch.objects.create(user=user, collection=collection)
+            for source_index, name, content_type, size, stored in prepared:
+                item = IngestionBatchItem.objects.create(batch=batch, source_file=stored,
+                    original_filename=name, content_type=content_type, file_size_bytes=size,
+                    status=IngestionBatchItem.Status.QUEUED)
+                transaction.on_commit(lambda pk=item.id: dispatch_item(pk), robust=True)
+                queued_items.append({'id': item.id, 'filename': name, 'source_index': source_index, 'status': item.status})
 
     if not queued_items:
-        batch.delete()
         return (
             {
                 "status": "error",

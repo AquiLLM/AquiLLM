@@ -9,6 +9,7 @@ from celery import shared_task
 from django.utils import timezone
 
 from apps.documents.tasks.embedding_index import build_embedding_generation
+from apps.ingestion.tasks import publish_ingestion_output, recover_ingestion_outputs
 
 
 def _mem0_infer_idle_seconds() -> int:

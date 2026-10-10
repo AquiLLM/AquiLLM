@@ -11,6 +11,7 @@ from lib.parsers import SUPPORTED_EXTENSIONS, guess_content_type
 from lib.parsers.source_contracts import ArchiveMemberStepV1, SourceContractError, canonical_archive_entry_name
 
 from .types import ExtractionError, ExtractedTextPayload
+from .parser_archive_failures import archive_failure
 
 
 @dataclass
@@ -49,33 +50,59 @@ def extract_archive_payloads(
                 if info.is_dir():
                     continue
                 if budget.members >= budget.max_files:
+                    payloads.append(archive_failure(filename, data, 'archive_member_limit',
+                        lineage=archive_lineage, containers=source_containers,
+                        content_type=content_type or guess_content_type(filename)))
                     break
                 budget.members += 1
-                if info.file_size <= 0:
-                    continue
                 remaining = budget.max_total_bytes - budget.expanded_bytes
                 if info.file_size > remaining:
-                    raise ExtractionError("Archive expanded size exceeds INGEST_ARCHIVE_MAX_TOTAL_BYTES.")
+                    payloads.append(archive_failure(filename, data, 'archive_byte_limit',
+                        lineage=archive_lineage, containers=source_containers,
+                        content_type=content_type or guess_content_type(filename)))
+                    break
                 # Charge all actual members, including unsupported formats, to one tree budget.
                 budget.expanded_bytes += info.file_size
-                if os.path.splitext(member_name)[1].lower() not in SUPPORTED_EXTENSIONS:
-                    continue
                 with archive.open(info, "r") as file_obj:
                     inner_data = file_obj.read(remaining + 1)
                 if len(inner_data) != info.file_size or len(inner_data) > remaining:
                     raise ExtractionError("Archive member size could not be verified.")
                 from aquillm.ingestion.parsers import extract_text_payloads
 
-                payloads.extend(extract_text_payloads(
-                    member_name, inner_data,
-                    content_type=guess_content_type(member_name), depth=depth + 1,
-                    _archive_lineage=archive_lineage + (ArchiveMemberStepV1(container_digest, member_name, ordinal),),
-                    _source_containers=containers, _archive_budget=budget,
-                ))
+                lineage = archive_lineage + (ArchiveMemberStepV1(container_digest, member_name, ordinal),)
+                member_type = guess_content_type(member_name)
+                failure = 'empty_extraction' if not inner_data else (
+                    'unsupported_member' if os.path.splitext(member_name)[1].lower() not in SUPPORTED_EXTENSIONS else '')
+                if not failure:
+                    try:
+                        payloads.extend(extract_text_payloads(member_name, inner_data,
+                            content_type=member_type, depth=depth + 1, _archive_lineage=lineage,
+                            _source_containers=containers, _archive_budget=budget))
+                    except SourceContractError:
+                        raise
+                    except Exception as exc:
+                        from lib.embeddings.errors import require_transient
+                        try:
+                            require_transient(exc)
+                        except Exception:
+                            pass
+                        else:
+                            raise
+                        failure = 'member_extraction_failed'
+                if failure:
+                    payloads.append(archive_failure(member_name, inner_data, failure,
+                        lineage=lineage, containers=containers, content_type=member_type))
     except SourceContractError as exc:
         raise ExtractionError("Unsafe archive member path.") from exc
     except (zipfile.BadZipFile, RuntimeError, EOFError) as exc:
         if isinstance(exc, ExtractionError):
+            raise
+        from lib.embeddings.errors import require_transient
+        try:
+            require_transient(exc)
+        except Exception:
+            pass
+        else:
             raise
         raise ExtractionError("Archive member integrity could not be verified.") from exc
     return payloads

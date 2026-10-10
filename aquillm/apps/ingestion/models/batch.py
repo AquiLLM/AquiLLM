@@ -1,6 +1,8 @@
 """Ingestion batch models."""
 from django.contrib.auth.models import User
 from django.db import models
+from django.utils import timezone
+from uuid import uuid4
 
 
 class IngestionBatch(models.Model):
@@ -24,6 +26,7 @@ class IngestionBatchItem(models.Model):
         QUEUED = "queued", "Queued"
         PROCESSING = "processing", "Processing"
         SUCCESS = "success", "Success"
+        PARTIAL = "partial", "Partial"
         ERROR = "error", "Error"
 
     batch = models.ForeignKey(IngestionBatch, on_delete=models.CASCADE, related_name='items')
@@ -35,6 +38,11 @@ class IngestionBatchItem(models.Model):
     error_message = models.TextField(blank=True, default="")
     document_ids = models.JSONField(default=list, blank=True)
     parser_metadata = models.JSONField(default=dict, blank=True)
+    manifest_complete = models.BooleanField(default=False)
+    generation = models.UUIDField(default=uuid4)
+    attempts = models.PositiveIntegerField(default=0)
+    next_attempt_at = models.DateTimeField(default=timezone.now, db_index=True)
+    failure_code = models.CharField(max_length=64, blank=True, default='')
     created_at = models.DateTimeField(auto_now_add=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
