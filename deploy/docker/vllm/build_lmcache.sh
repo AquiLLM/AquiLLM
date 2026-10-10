@@ -58,7 +58,21 @@ if __name__ == '__main__':
     print(f'Installed transfer engine RPATH: {observed}')
 PY
 python3 -m pip install --no-cache-dir --no-deps -c /opt/kv-storage/constraints.txt grpcio-tools==1.81.1
-python3 -m pip wheel --no-build-isolation --no-deps -c /opt/kv-storage/constraints.txt /opt/LMCache -w /opt/kv-storage/wheels
+# The pinned image packages CUDA component headers beside its Python wheels;
+# nvcc's toolkit include directory alone does not contain cusparse/cublas.
+cuda_component_include=/usr/local/lib/python3.12/dist-packages/nvidia/cu13/include
+python3 - "$cuda_component_include" <<'PY' > /opt/kv-storage/cuda-component-include.txt
+from pathlib import Path
+import sys
+root = Path(sys.argv[1])
+required = ('cusparse.h', 'cublas_v2.h', 'cublasLt.h', 'cusolverDn.h', 'cuda_runtime.h')
+missing = [name for name in required if not (root / name).is_file()]
+if missing:
+    raise RuntimeError(f"Missing pinned CUDA 13 component headers: {', '.join(missing)}")
+print(root)
+PY
+CPATH="${cuda_component_include}${CPATH:+:${CPATH}}" \
+    python3 -m pip wheel --no-build-isolation --no-deps -c /opt/kv-storage/constraints.txt /opt/LMCache -w /opt/kv-storage/wheels
 python3 -m pip install --no-deps /opt/kv-storage/wheels/lmcache-*.whl
 python3 -m pip freeze --all > /opt/kv-storage/python-lock.txt
 sha256sum /opt/kv-storage/wheels/*.whl > /opt/kv-storage/wheel-sha256.txt

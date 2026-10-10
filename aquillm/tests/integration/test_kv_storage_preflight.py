@@ -145,3 +145,21 @@ def test_sdk_runtime_rpath_drops_only_stub_directory():
     sanitize = namespace["runtime_paths_without_stubs"]
     assert sanitize("/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$ORIGIN:/keep/stubs2") == "/usr/local/cuda/lib64:$ORIGIN:/keep/stubs2"
     assert sanitize("$ORIGIN") == "$ORIGIN"
+
+
+@pytest.mark.parametrize("missing", [None, "cusparse.h", "cublas_v2.h", "cublasLt.h", "cusolverDn.h", "cuda_runtime.h"])
+def test_build_requires_complete_installed_cuda_component_headers(tmp_path, missing):
+    blocks = build_python_blocks()
+    assert len(blocks) >= 3, "installed CUDA component header validation missing"
+    for header in ("cusparse.h", "cublas_v2.h", "cublasLt.h", "cusolverDn.h", "cuda_runtime.h"):
+        if header != missing:
+            (tmp_path / header).write_text("// installed header fixture\n")
+    result = subprocess.run([sys.executable, "-c", blocks[2], str(tmp_path)],
+                            capture_output=True, text=True, timeout=15)
+    if missing:
+        assert result.returncode != 0
+        assert missing in result.stderr
+        assert "pinned CUDA 13" in result.stderr
+    else:
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == str(tmp_path)
