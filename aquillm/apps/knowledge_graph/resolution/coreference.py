@@ -856,11 +856,64 @@ def _name_identifier_conflicts(
     return frozenset(key for key, values in identifiers.items() if len(values) > 1)
 
 
+def _apply_contextual_pair_policy(
+    original: PairDecision,
+    left: _MentionView,
+    right: _MentionView,
+    expansions: Mapping[tuple[str, str], tuple[_AcronymDefinition, ...]],
+) -> PairDecision:
+    binding = _acronym_decision(left, right, expansions)
+    policy = decide_identity_v2(
+        left=IdentityEndpointV2(
+            left.entity_type,
+            left.normalized_label,
+            left.identifier,
+            left.version_signature or "",
+            left.document_id,
+        ),
+        right=IdentityEndpointV2(
+            right.entity_type,
+            right.normalized_label,
+            right.identifier,
+            right.version_signature or "",
+            right.document_id,
+        ),
+        explicit_local_binding=binding is not None and binding.accepted,
+    )
+    if policy.outcome == "rejected":
+        decision = _rejected(left, right, policy.reason, policy.reason)
+        outcome = "rejected"
+    elif original.accepted:
+        decision = original
+        outcome = policy.outcome
+    elif (
+        original.method in {"undefined_acronym", "source_mismatch"}
+        and left.normalized_label == right.normalized_label
+    ):
+        decision = original
+        outcome = "candidate"
+    else:
+        decision = original
+        outcome = "rejected"
+    return PairDecision(
+        decision.left_mention_id,
+        decision.right_mention_id,
+        outcome == "automatic",
+        decision.method,
+        decision.confidence,
+        f"Candidate: {policy.reason}."
+        if outcome == "candidate"
+        else decision.explanation,
+        outcome=outcome,
+    )
+
+
 def _sparse_candidate_decisions(
     mentions: tuple[_MentionView, ...],
     *,
     expansions: Mapping[tuple[str, str], tuple[_AcronymDefinition, ...]],
     conflict_blocks: frozenset[tuple[str, str]],
+    identity_policy: str = "legacy",
 ) -> tuple[PairDecision, ...]:
     """Audit only pairs that can merge or conservatively block a merge."""
 
@@ -974,13 +1027,47 @@ def _sparse_candidate_decisions(
             (mention for mention in unique_group if not mention.is_acronym),
             unique_group[0],
         )
-        anchor_decisions = tuple(
-            _decide_pair(
+        if identity_policy == "contextual_v2":
+            # A repeated full form has no anchor by itself. Prefer an acronym
+            # at/after its local definition, so every star edge can retain that
+            # provenance when the contextual policy removes plain-name edges.
+            equivalent_anchor = next(
+                (
+                    mention
+                    for mention in unique_group
+                    if mention.is_acronym
+                    and any(
+                        definition.coordinate_scope == mention.coordinate_scope
+                        and mention.start >= definition.definition_start
+                        for definition in expansions.get(
+                            (mention.entity_type, mention.acronym_shape_key),
+                            (),
+                        )
+                    )
+                ),
+                equivalent_anchor,
+            )
+
+        def anchor_decision(mention: _MentionView) -> PairDecision:
+            decision = _decide_pair(
                 equivalent_anchor,
                 mention,
                 expansions=expansions,
                 conflict_blocks=conflict_blocks,
             )
+            return (
+                _apply_contextual_pair_policy(
+                    decision,
+                    equivalent_anchor,
+                    mention,
+                    expansions,
+                )
+                if identity_policy == "contextual_v2"
+                else decision
+            )
+
+        anchor_decisions = tuple(
+            anchor_decision(mention)
             for mention in unique_group
             if mention is not equivalent_anchor
         )
@@ -1598,64 +1685,19 @@ def resolve_document_mentions(
             adapted,
             expansions=expansions,
             conflict_blocks=conflict_blocks,
+            identity_policy=identity_policy,
         )
     if identity_policy == "contextual_v2":
         by_id = {mention.mention_id: mention for mention in adapted}
-        contextual_decisions = []
-        for original in candidate_decisions:
-            left, right = (
+        candidate_decisions = tuple(
+            _apply_contextual_pair_policy(
+                original,
                 by_id[original.left_mention_id],
                 by_id[original.right_mention_id],
+                expansions,
             )
-            binding = _acronym_decision(left, right, expansions)
-            policy = decide_identity_v2(
-                left=IdentityEndpointV2(
-                    left.entity_type,
-                    left.normalized_label,
-                    left.identifier,
-                    left.version_signature or "",
-                    left.document_id,
-                ),
-                right=IdentityEndpointV2(
-                    right.entity_type,
-                    right.normalized_label,
-                    right.identifier,
-                    right.version_signature or "",
-                    right.document_id,
-                ),
-                explicit_local_binding=binding is not None and binding.accepted,
-            )
-            if policy.outcome == "rejected":
-                decision = _rejected(left, right, policy.reason, policy.reason)
-                outcome = "rejected"
-            elif original.accepted:
-                decision = original
-                outcome = policy.outcome
-            elif (
-                original.method in {"undefined_acronym", "source_mismatch"}
-                and left.normalized_label == right.normalized_label
-            ):
-                decision = original
-                outcome = "candidate"
-            else:
-                decision = original
-                outcome = "rejected"
-            contextual_decisions.append(
-                PairDecision(
-                    decision.left_mention_id,
-                    decision.right_mention_id,
-                    outcome == "automatic",
-                    decision.method,
-                    decision.confidence,
-                    (
-                        f"Candidate: {policy.reason}."
-                        if outcome == "candidate"
-                        else decision.explanation
-                    ),
-                    outcome=outcome,
-                )
-            )
-        candidate_decisions = tuple(contextual_decisions)
+            for original in candidate_decisions
+        )
     decisions, merge_edges = _constrain_component_merges(adapted, candidate_decisions)
     clusters = _build_clusters(
         adapted,
