@@ -1,9 +1,10 @@
-"""Read-only installed GDN source probe. Never launches a CUDA kernel.
+"""Installed GDN source probe and explicit full-adapter timing mode.
 
 Run in the pinned image with the overlay source on PYTHONPATH:
     python benchmarks/gdn.py --inspect
 Source/symbol evidence is emitted as JSON for the serialized GPU coordinator.
-This is a capability experiment, not a throughput benchmark.
+--inspect never launches a CUDA kernel. --benchmark times the real adapter
+against the post-Genesis Qwen alias; synthetic timings are not serving evidence.
 """
 from __future__ import annotations
 
@@ -22,9 +23,10 @@ def main():
     mode.add_argument("--benchmark", action="store_true",
                       help="time full T5 adapter and original, eager and CUDA graph")
     parser.add_argument("--repeats", type=int, default=200)
+    parser.add_argument("--gate-stride", type=int, choices=(48,96), default=48)
     args = parser.parse_args()
     if args.benchmark:
-        benchmark(args.repeats)
+        benchmark(args.repeats, args.gate_stride)
         return
     from aquillm_vllm_h100.gdn.capability import inspect as inspect_capability
 
@@ -63,7 +65,7 @@ def main():
     print(json.dumps(result, indent=2))
 
 
-def benchmark(repeats):
+def benchmark(repeats, gate_stride=48):
     # Genesis rewrites source before any backend/FlashInfer imports. Capture
     # the actual Qwen baseline alias, even if the opt-in bridge is installed.
     import sndr.plugin
@@ -90,10 +92,15 @@ def benchmark(repeats):
                   cu_seqlens=torch.tensor([0,5],device="cuda",dtype=torch.int32),
                   ssm_state_indices=torch.tensor([[1,2,3,4,5,7,8]],device="cuda",dtype=torch.int32),
                   num_accepted_tokens=torch.tensor([3],device="cuda",dtype=torch.int32))
+    if gate_stride == 96:
+        mixed = activation((5,96))
+        kwargs["a"], kwargs["b"] = mixed[:,:48], mixed[:,48:]
     if not supported(**kwargs):
         raise ValueError("full adapter benchmark requires eligible H100 contract")
-    result = {"kind":"full_adapter_including_pack_convert_checkpoints_scatter",
+    result = {"kind":"full_native_adapter_single_cute_launch",
               "T":5,"shape":[1,5,16,48,128],"state_stride":list(state.stride()),
+              "gate_stride":list(kwargs["a"].stride()),
+              "original_module":original.__module__,
               "repeats":repeats,"packages":{},"timings_us":{}}
     for name in ("flashinfer-python","nvidia-cutlass-dsl","vllm","torch","triton"):
         result["packages"][name] = importlib.metadata.version(name)

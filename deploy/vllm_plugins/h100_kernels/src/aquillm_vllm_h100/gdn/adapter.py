@@ -46,6 +46,17 @@ def supported(A_log, a, b, dt_bias, q, k, v, beta=1.0, threshold=20.0,
         return False
     if any(x.dtype not in (torch.float16, torch.float32) for x in (A_log,dt_bias)):
         return False
+    for tensor,heads in ((q,16),(k,16),(v,48)):
+        if (tensor.stride(-1) != 1 or tensor.stride(-2) < 128
+                or tensor.stride(-2) % 8 or tensor.stride(-3) % 8
+                or tensor.stride(-3) < (heads-1)*tensor.stride(-2)+128
+                or tensor.storage_offset() % 8):
+            return False
+    for tensor in (a,b):
+        if tensor.stride(-1) != 1 or tensor.stride(-2) < 48:
+            return False
+    if A_log.stride(0) != 1 or dt_bias.stride(0) != 1:
+        return False
     state = initial_state
     if (state.dtype != torch.float32 or state.ndim != 4
             or state.shape[0] < 2 or state.shape[1:] != (48,128,128)
@@ -92,21 +103,11 @@ def make_adapter(original, candidate=None):
         if not supported(**args):
             return original(**args)
         try:
-            from .kernels import prepare, scatter_and_unpack
             if candidate is None:
-                from flashinfer.gdn_decode import gated_delta_rule_mtp as launch
+                from .native import launch
             else:
                 launch = candidate
-            packed, read, metadata, checkpoints, packed_out, output = prepare(**args)
-            launch(q=packed[0], k=packed[1], v=packed[2], a=packed[3], b=packed[4],
-                   A_log=A_log.float().contiguous(), dt_bias=dt_bias.float().contiguous(),
-                   initial_state=initial_state, initial_state_indices=read,
-                   scale=scale, use_qk_l2norm=use_qk_l2norm_in_kernel,
-                   intermediate_states_buffer=checkpoints, output=packed_out,
-                   disable_state_update=True, ssm_state_indices=None,
-                   output_state_indices=None)
-            scatter_and_unpack(checkpoints, packed_out, output, initial_state,
-                               ssm_state_indices, read, metadata)
+            output = launch(**args)
         except Exception as error:
             # Genesis catches Exception to retry; BaseException ends this worker.
             raise SystemExit(f"AquiLLM FlashInfer GDN launch failed: {error}") from error
@@ -147,8 +148,8 @@ def prepare_install(module=None, candidate=None):
         if actual.parameters[name].default != parameter.default:
             raise ValueError(f"unsupported post-Genesis GDN default: {name}")
     # Import our launch dependencies during setup, before committing the alias.
-    from . import kernels  # noqa: F401
-    return module, make_adapter(original, candidate.gated_delta_rule_mtp)
+    from . import native  # noqa: F401
+    return module, make_adapter(original)
 
 
 def install_adapter(module=None, candidate=None):

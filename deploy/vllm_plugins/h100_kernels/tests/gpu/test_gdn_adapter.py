@@ -78,13 +78,14 @@ def inputs(t=5, accepted=1, indices=None, offsets=None, padded=True):
     return args, backing
 
 
-def reference(args, backing, rounded):
+def reference(args, backing, rounded, direct_bf16=False):
     state, copied = clone_pool(args["initial_state"], backing)
     args = dict(args, initial_state=state)
     if rounded:
         # Preserve the original FP16 output boundary while rounding operands.
         for name in ("q", "k", "v", "a", "b"):
-            args[name] = args[name].bfloat16().half()
+            value = args[name].bfloat16()
+            args[name] = value if direct_bf16 else value.half()
     return original()(**args)[0], state, copied
 
 
@@ -107,9 +108,9 @@ def assert_untouched(args, before, after):
     assert torch.equal(before[mask], after[mask]), "untouched pool or backing padding changed"
 
 
-def compare(args, backing):
+def compare(args, backing, direct_bf16=False):
     before = backing.clone()
-    primary_o, primary_s, _ = reference(args, before, True)
+    primary_o, primary_s, _ = reference(args, before, True, direct_bf16)
     fp16_o, fp16_s, _ = reference(args, before, False)
     route_calls = []
     def fallback(*a, **kw):
@@ -126,7 +127,9 @@ def compare(args, backing):
     assert_untouched(args, before, backing)
     if valid:
         active = output[:,begin:end]
-        po, fo = primary_o[:,begin:end], fp16_o[:,begin:end]
+        po, fo = primary_o[:,begin:end].half(), fp16_o[:,begin:end]
+        for value in (active, returned, po, primary_s, fo, fp16_s):
+            assert torch.isfinite(value).all(), "finite operands produced nonfinite recurrence"
         print(json.dumps({"T": args["q"].shape[1], "accepted": accepted,
                           "rounded_output": errors(active, po),
                           "rounded_state": errors(returned, primary_s),
@@ -248,6 +251,9 @@ def test_real_alias_installation_wraps_actual_post_genesis_and_exercises_route(m
 
 def test_graph_replay_changed_metadata_and_two_independent_workspaces():
     fixtures = [inputs(), inputs(5, 3)]
+    for args, _ in fixtures:
+        args["use_qk_l2norm_in_kernel"] = True
+    fixtures[0][0]["a"].fill_(100.0)
     call = make_adapter(original())
     graphs, outputs, seeds = [], [], []
     stream = torch.cuda.Stream()
@@ -265,17 +271,24 @@ def test_graph_replay_changed_metadata_and_two_independent_workspaces():
             outputs.append(output)
             seeds.append(seed)
     torch.cuda.current_stream().wait_stream(stream)
-    for replay in range(3):
+    for replay in range(5):
         for i, ((args, backing), graph, seed) in enumerate(zip(fixtures, graphs, seeds)):
             backing.copy_(seed)
-            args["num_accepted_tokens"].fill_((replay+i)%5+1)
+            accepted = 1 if replay == 3 else (replay+i)%5+1
+            args["num_accepted_tokens"].fill_(accepted)
+            indices = [2,3,4,5,1,7,8] if replay%2 else [1,2,3,4,5,7,8]
+            if replay == 3:
+                indices[0] = 0
             args["ssm_state_indices"].copy_(torch.tensor(
-                [[2,3,4,5,1,7,8] if replay%2 else [1,2,3,4,5,7,8]], device="cuda", dtype=torch.int32))
-            args["cu_seqlens"].copy_(torch.tensor([replay%2,5], device="cuda", dtype=torch.int32))
+                [indices], device="cuda", dtype=torch.int32))
+            offsets = [3,3] if replay == 2 else [replay%2,5]
+            args["cu_seqlens"].copy_(torch.tensor(offsets, device="cuda", dtype=torch.int32))
             expected_o, expected_s, _ = reference(args, seed, True)
             graph.replay()
-            begin = replay%2
-            torch.testing.assert_close(outputs[i][:,begin:5], expected_o[:,begin:5], **PRIMARY_OUTPUT)
+            begin, end = offsets
+            if end > begin and indices[accepted-1] > 0:
+                torch.testing.assert_close(outputs[i][:,begin:end], expected_o[:,begin:end], **PRIMARY_OUTPUT)
+                assert torch.isfinite(outputs[i][:,begin:end]).all()
             torch.testing.assert_close(args["initial_state"], expected_s, **PRIMARY_STATE)
             assert_untouched(args, seed, backing)
 
@@ -285,3 +298,71 @@ def test_large_gate_stress_reports_upstream_overflow_as_failure():
     args["a"].fill_(100.0)
     output = compare(args, backing)
     assert torch.isfinite(output).all(), "candidate softplus overflow for finite a+dt_bias >88"
+
+
+@pytest.mark.parametrize("parameter_dtype", [torch.float16, torch.float32])
+@pytest.mark.parametrize("norm", [False, True])
+def test_mixed_head_threshold_and_extreme_finite_gates(parameter_dtype, norm):
+    args, backing = inputs()
+    # 65504 rounds to BF16 65536. A BF16->FP16 round trip would manufacture
+    # infinity, so this boundary-only primary reference keeps BF16 operands.
+    values = torch.tensor([19.984375,20.0,20.015625,100.0,-100.0,65504.0,-65504.0,0.0],
+                          device="cuda", dtype=torch.float16).repeat(6)
+    args["a"].copy_(values.expand_as(args["a"]))
+    args["b"].copy_(values.flip(0).expand_as(args["b"]))
+    args["A_log"] = args["A_log"].to(parameter_dtype)
+    args["dt_bias"] = torch.zeros((48,), device="cuda", dtype=parameter_dtype)
+    args["use_qk_l2norm_in_kernel"] = norm
+    compare(args, backing, direct_bf16=True)
+
+
+def strided_operands(args):
+    result = dict(args)
+    for name in ("q", "k", "v"):
+        value = args[name]
+        _, t, heads, _ = value.shape
+        row_stride = heads*136+16
+        storage = torch.empty(16+t*row_stride, device="cuda", dtype=value.dtype)
+        view = storage.as_strided(value.shape, (t*row_stride,row_stride,136,1), 16)
+        view.copy_(value)
+        result[name] = view
+    mixed = torch.empty((1,args["q"].shape[1],96), device="cuda", dtype=torch.float16)
+    result["a"], result["b"] = mixed[...,:48], mixed[...,48:]
+    result["a"].copy_(args["a"])
+    result["b"].copy_(args["b"])
+    return result
+
+
+@pytest.mark.parametrize("metadata_dtype", [torch.int32, torch.int64])
+def test_dynamic_layout_cache_reuses_contiguous_strided_contiguous(metadata_dtype):
+    args, backing = inputs()
+    args["use_qk_l2norm_in_kernel"] = True
+    for name in ("cu_seqlens", "ssm_state_indices", "num_accepted_tokens"):
+        args[name] = args[name].to(metadata_dtype)
+    strided = strided_operands(args)
+    from aquillm_vllm_h100.gdn import native
+    for fixture in (args, strided, args):
+        compare(fixture, backing)
+        # Dynamic activation/gate strides deliberately reuse the same code.
+        if fixture is args:
+            keys = set(native._compiled)
+        else:
+            assert set(native._compiled) == keys
+
+
+def test_eligible_native_route_launches_one_cuda_kernel():
+    args, _ = inputs()
+    args = strided_operands(args)
+    args["use_qk_l2norm_in_kernel"] = True
+    call = make_adapter(original())
+    for _ in range(3):
+        call(**args)
+    torch.cuda.synchronize()
+    with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CPU,
+                                           torch.profiler.ProfilerActivity.CUDA]) as trace:
+        call(**args)
+        torch.cuda.synchronize()
+    events = [event for event in trace.events()
+              if event.device_type == torch.autograd.DeviceType.CUDA]
+    assert len(events) == 1, [event.name for event in events]
+    assert "native_mtp" in events[0].name

@@ -138,8 +138,8 @@ def test_alias_registration_preserves_signature_and_is_idempotent(monkeypatch):
     module = SimpleNamespace(fused_sigmoid_gating_delta_rule_update=_original)
     candidate = SimpleNamespace(gated_delta_rule_mtp=lambda **kw: None)
     monkeypatch.setattr(adapter, "validate_api", lambda module: None)
-    # Triton is an external CUDA-only dependency unavailable on CPU CI.
-    monkeypatch.setitem(sys.modules, "aquillm_vllm_h100.gdn.kernels", SimpleNamespace())
+    # CuTe is an external CUDA-only dependency unavailable on CPU CI.
+    monkeypatch.setitem(sys.modules, "aquillm_vllm_h100.gdn.native", SimpleNamespace())
     adapter.install_adapter(module, candidate)
     installed = module.fused_sigmoid_gating_delta_rule_update
     assert pyinspect.signature(installed) == pyinspect.signature(_original)
@@ -191,20 +191,15 @@ def test_gdn_setup_failure_occurs_before_prefill_installation(monkeypatch):
 
 
 def test_candidate_failure_terminates_worker_without_retrying_original(monkeypatch):
-    import sys
     from aquillm_vllm_h100.gdn import adapter
     args = _call_metadata()
     monkeypatch.setattr(adapter, "_h100", lambda device: True)
-    packed = [args[name] for name in ("q", "k", "v", "a", "b")]
-    monkeypatch.setitem(sys.modules, "aquillm_vllm_h100.gdn.kernels", SimpleNamespace(
-        prepare=lambda **kw: (packed, None, None, None, None, None),
-        scatter_and_unpack=lambda *a: pytest.fail("scatter followed candidate failure")))
     def fallback(**kw):
         pytest.fail("baseline retried after candidate failure")
     def fail_launch(**kw):
         assert kw["initial_state"] is args["initial_state"]
-        assert kw["disable_state_update"] is True
-        assert kw["ssm_state_indices"] is None
+        assert kw["ssm_state_indices"] is args["ssm_state_indices"]
+        assert kw["dt_bias"] is args["dt_bias"]
         raise RuntimeError("injected launch error")
     with pytest.raises(SystemExit, match="injected launch error"):
         adapter.make_adapter(fallback, fail_launch)(**args)
@@ -223,7 +218,7 @@ def test_registration_loads_actual_nested_qwen_module_and_retains_its_alias(monk
     qwen = ModuleType(names[-1] + ".qwen_gdn_linear_attn")
     qwen.fused_sigmoid_gating_delta_rule_update = _original
     monkeypatch.setitem(sys.modules, qwen.__name__, qwen)
-    monkeypatch.setitem(sys.modules, "aquillm_vllm_h100.gdn.kernels", SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "aquillm_vllm_h100.gdn.native", SimpleNamespace())
     monkeypatch.setattr(adapter, "validate_api", lambda module: None)
     module, installed = adapter.prepare_install(candidate=SimpleNamespace(gated_delta_rule_mtp=lambda **kw: None))
     assert module is qwen
@@ -236,3 +231,44 @@ def test_qualification_captures_saved_post_genesis_alias_even_when_installed():
     assert adapter.capture_original(qwen) is _original
     qwen.fused_sigmoid_gating_delta_rule_update = adapter.make_adapter(_original)
     assert adapter.capture_original(qwen) is _original
+
+
+def test_eligible_native_route_has_no_packing_or_parameter_conversion(monkeypatch):
+    import sys
+    from aquillm_vllm_h100.gdn import adapter
+    args = _call_metadata()
+    monkeypatch.setattr(adapter, "_h100", lambda device: True)
+    def native_launch(**kw):
+        assert kw["q"] is args["q"]
+        assert kw["a"] is args["a"]
+        assert kw["dt_bias"] is args["dt_bias"]
+        assert kw["initial_state"] is args["initial_state"]
+        return args["v"]
+    monkeypatch.setitem(sys.modules, "aquillm_vllm_h100.gdn.native", SimpleNamespace(launch=native_launch))
+    monkeypatch.setitem(sys.modules, "aquillm_vllm_h100.gdn.kernels", SimpleNamespace(
+        prepare=lambda **kw: pytest.fail("native route must not pack operands"),
+        scatter_and_unpack=lambda *a: None))
+    output,state = adapter.make_adapter(_original)(**args)
+    assert output is args["v"]
+    assert state is args["initial_state"]
+
+
+@pytest.mark.parametrize("layout", ["inner_stride", "misaligned_offset", "misaligned_row"])
+def test_native_unaligned_or_unpacked_inputs_fall_back_before_launch(monkeypatch, layout):
+    import sys
+    import torch
+    from torch._subclasses.fake_tensor import FakeTensorMode
+    from aquillm_vllm_h100.gdn import adapter
+    args = _call_metadata()
+    monkeypatch.setitem(sys.modules, "aquillm_vllm_h100.gdn.kernels", SimpleNamespace(
+        prepare=lambda **kw: pytest.fail("unsupported layout entered GPU preparation"),
+        scatter_and_unpack=lambda *a: None))
+    monkeypatch.setattr(adapter, "_h100", lambda device: True)
+    with FakeTensorMode():
+        if layout == "inner_stride":
+            args["q"] = torch.empty((1,5,16,256),device="cuda",dtype=torch.float16)[...,::2]
+        elif layout == "misaligned_offset":
+            args["q"] = torch.empty(1+5*16*128,device="cuda",dtype=torch.float16)[1:].view(1,5,16,128)
+        else:
+            args["q"] = torch.empty_strided((1,5,16,128),(10300,2060,128,1),device="cuda",dtype=torch.float16)
+    assert adapter.make_adapter(_original, lambda **kw: pytest.fail("native launched"))(**args)[0] == "original"
