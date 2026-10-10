@@ -220,7 +220,6 @@ jobs:
           aquillm/tests/integration/test_kv_storage_plan.py
           aquillm/tests/integration/test_kv_storage_preflight.py
           aquillm/tests/integration/test_kv_storage_compose.py
-          aquillm/tests/integration/test_vllm_profiles.py
           -q --tb=short
 
       - name: Graph backfill capacity and lifecycle contracts

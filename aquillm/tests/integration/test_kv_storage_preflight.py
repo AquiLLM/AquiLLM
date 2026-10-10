@@ -1,6 +1,7 @@
 """Preflight catches native/transport failures and cannot authorize registration."""
 import importlib
 import socket
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,6 +35,28 @@ def test_cpp_abi_mismatch(preflight):
     actual = dict(PINS, cxx11_abi=False)
     with pytest.raises(ValueError, match="cxx11_abi"):
         preflight.validate_identity(actual)
+
+
+def test_native_cli_missing_distribution_exits_64_without_traceback():
+    # Pin inspection is an unrelated external boundary. Reach the actual CLI
+    # handler with only distribution discovery unavailable, as on a base image.
+    code = """
+import sys
+from importlib import metadata
+import kv_storage_preflight as preflight
+preflight.base_identity = lambda: {}
+def missing_distribution(name):
+    raise metadata.PackageNotFoundError(name)
+preflight.metadata.version = missing_distribution
+sys.argv = ['kv_storage_preflight.py', '--native']
+raise SystemExit(preflight.main())
+"""
+    result = subprocess.run([sys.executable, "-c", code], cwd=ROOT / "deploy/scripts",
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 64, result.stderr
+    assert "LMCache 0.5.5" in result.stderr
+    assert "Dockerfile.kv-storage" in result.stderr
+    assert "Traceback" not in result.stderr
 
 
 def test_unreachable_service_fails(preflight):

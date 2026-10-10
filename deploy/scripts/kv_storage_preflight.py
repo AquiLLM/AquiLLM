@@ -53,7 +53,11 @@ def import_required_native(name):
 
 def native_identity():
     actual = base_identity()
-    if metadata.version("lmcache") != "0.5.5":
+    try:
+        lmcache_version = metadata.version("lmcache")
+    except metadata.PackageNotFoundError as exc:
+        raise ConfigurationError("LMCache 0.5.5 candidate is not installed; build Dockerfile.kv-storage against the pinned Genesis image") from exc
+    if lmcache_version != "0.5.5":
         raise ConfigurationError("LMCache 0.5.5 candidate required; bundled 0.5.0 misclassifies packed K8V4")
     for source, expected in (("/opt/LMCache", PINS["lmcache"]), ("/opt/Mooncake", PINS["mooncake"])):
         observed = subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip()
@@ -64,7 +68,7 @@ def native_identity():
     for symbol in ("L1RegistrationConfig", "LMCacheMooncakeClient"):
         if not hasattr(mooncake, symbol):
             raise ConfigurationError(f"native Mooncake C++ symbol missing: {symbol}")
-    actual.update(lmcache=metadata.version("lmcache"), native_import="passed", gpu_roundtrip="not-validated")
+    actual.update(lmcache=lmcache_version, native_import="passed", gpu_roundtrip="not-validated")
     return actual
 
 

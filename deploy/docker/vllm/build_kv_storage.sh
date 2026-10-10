@@ -17,7 +17,10 @@ cmake -S /opt/Mooncake -B /opt/Mooncake/build -G Ninja \
     -DBUILD_SHARED_LIBS=ON -DWITH_STORE=ON -DWITH_TE=ON -DWITH_STORE_RUST=OFF \
     -DWITH_STORE_C_SHARED=OFF -DUSE_ETCD=OFF -DUSE_CUDA=ON \
     -DBUILD_UNIT_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_BENCHMARK=OFF
-cmake --build /opt/Mooncake/build --parallel 2
+# The nested nvlink allocator invokes g++ outside CMake's CUDA link directories.
+# Supply the driver stub only while linking; runtime must use the real driver.
+LIBRARY_PATH="/usr/local/cuda/lib64/stubs${LIBRARY_PATH:+:${LIBRARY_PATH}}" \
+    cmake --build /opt/Mooncake/build --parallel 2
 cmake --install /opt/Mooncake/build
 test -f /opt/mooncake-sdk/lib/libmooncake_store.so
 printf '%s\n' /opt/mooncake-sdk/lib > /etc/ld.so.conf.d/mooncake.conf

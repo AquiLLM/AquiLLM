@@ -22,6 +22,8 @@ COPY deploy/docker/vllm/build_lmcache.sh /opt/kv-storage/build-lmcache.sh
 RUN bash /opt/kv-storage/build-lmcache.sh
 COPY deploy/scripts/kv_cache_config.py deploy/scripts/kv_storage_layout.py deploy/scripts/kv_storage_plan.py /opt/kv-storage/
 COPY deploy/scripts/kv_storage_preflight.py /opt/kv-storage/
-RUN python3 /opt/kv-storage/kv_storage_preflight.py --native > /opt/kv-storage/native-manifest.json
+# Docker build has no injected NVIDIA driver. This records base identity only.
+# Run --native after build with --gpus all; never load build stubs at runtime.
+RUN python3 /opt/kv-storage/kv_storage_preflight.py --base-identity > /opt/kv-storage/base-manifest.json
 # Keep Genesis and optional H100 integration inherited, with the same default entrypoint.
 # Storage is deliberately not enabled by an image ENV or altered entrypoint.

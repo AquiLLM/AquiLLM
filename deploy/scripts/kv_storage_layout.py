@@ -44,6 +44,8 @@ def validate_layout(record):
             stride = dimensions(group.get("stride"), "attention stride")
             if group.get("dtype") != "uint8" or len(shape) != 4 or shape[2] != 4 or shape[3] < 388:
                 raise ConfigurationError("K8V4 requires 4D uint8 NHD with four heads and >=388 physical bytes/slot")
+            if shape[3] % 2:
+                raise ConfigurationError("K8V4 physical slot width must be even: MP CUDA copy requires two-byte vectorized access")
             if shape[1] != span:
                 raise ConfigurationError("4D K8V4 logical block differs from physical token axis; subpaging adapter unvalidated")
             expected = [shape[1] * shape[2] * shape[3], shape[2] * shape[3], shape[3], 1]

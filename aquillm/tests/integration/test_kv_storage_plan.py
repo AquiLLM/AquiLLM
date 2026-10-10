@@ -96,6 +96,19 @@ def test_local_has_no_mooncake_or_ssd_owner(storage, layout, limits):
     assert result["memory"]["total_bytes"] == 1476395008
 
 
+@pytest.mark.parametrize("width", [388, 400])
+def test_even_physical_slot_width_preserves_packed_payload(storage, layout, limits, width):
+    attention = layout["groups"][0]
+    attention.update(shape=[8, 16, 4, width], stride=[64 * width, 4 * width, width, 1], page_bytes=64 * width)
+    assert storage.plan_storage(env(), layout, limits)["chunk_tokens"] == 32
+
+
+def test_mp_kernel_rejects_odd_slot_width(storage, layout, limits):
+    layout["groups"][0].update(shape=[8, 16, 4, 389], stride=[24896, 1556, 389, 1], page_bytes=24896)
+    with pytest.raises(ValueError, match="even"):
+        storage.plan_storage(env(), layout, limits)
+
+
 def test_off_does_not_require_measurements_or_dependencies(storage):
     assert storage.plan_storage({}, None, None) is None
 
