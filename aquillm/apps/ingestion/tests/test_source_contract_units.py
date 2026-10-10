@@ -17,8 +17,7 @@ def test_artifact_ref_uses_exact_bytes_and_content_addressed_key():
     )
     assert ref.size_bytes == 3
     assert (
-        ref.storage_key
-        == "source_artifacts/v1/sha256/ba/"
+        ref.storage_key == "source_artifacts/v1/sha256/ba/"
         "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
     )
     assert (ref.member_path, ref.container_sha256) == ("nested/notes.txt", "0" * 64)
@@ -45,6 +44,25 @@ def test_archive_names_require_safe_canonical_posix_paths(path):
 
     with pytest.raises(SourceContractError):
         validate_member_path(path)
+
+
+@pytest.mark.parametrize(
+    "original,normalized,directory",
+    [
+        ("notes.txt\x00suffix", "notes.txt", False),
+        ("folder\\notes.txt", "folder/notes.txt", False),
+        ("folder\\", "folder/", True),
+        ("folder//", "folder//", True),
+    ],
+)
+def test_original_archive_names_cannot_be_normalized(original, normalized, directory):
+    from lib.parsers.source_contracts import (
+        SourceContractError,
+        canonical_archive_entry_name,
+    )
+
+    with pytest.raises(SourceContractError):
+        canonical_archive_entry_name(original, normalized, is_directory=directory)
 
 
 def test_occurrence_digest_has_explicit_version_and_ordered_lineage():
@@ -128,12 +146,15 @@ def test_occurrence_unicode_filename_uses_literal_canonical_ascii_wire():
         b'"content_type":"text/plain","original_filename":"caf\\u00e9.txt",'
         b'"version":"source-occurrence-v1"}'
     )
-    assert occurrence_key(
-        ref,
-        original_filename="café.txt",
-        content_type="text/plain",
-        archive_lineage=(),
-    ) == sha256(manifest).hexdigest()
+    assert (
+        occurrence_key(
+            ref,
+            original_filename="café.txt",
+            content_type="text/plain",
+            archive_lineage=(),
+        )
+        == sha256(manifest).hexdigest()
+    )
 
 
 def test_lineage_must_match_immediate_container_and_member():

@@ -391,3 +391,59 @@ def test_s3_conditional_put_and_existing_412_verify_real_digest(monkeypatch, exi
             assert blobs[key] == data
             assert ref.sha256 == digest
             assert SourceArtifact.objects.get(sha256=digest).size_bytes == len(data)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("proof", ["persisted", "transient"])
+def test_raw_nul_archive_name_cannot_prove_truncated_member(artifact_storage, proof):
+    from apps.ingestion.models import SourceArtifactOccurrence
+    from apps.ingestion.services.source_artifacts import (
+        SourceArtifactIntegrityError,
+        bind_payload_source,
+        persist_artifact,
+        persist_occurrence,
+    )
+    from aquillm.ingestion.types import ExtractedTextPayload
+    from lib.parsers.source_contracts import ArchiveMemberStepV1, source_artifact_ref
+
+    data = b"synthetic notes"
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("notes.txt!suffix", data)
+    raw = stream.getvalue()
+    assert raw.count(b"notes.txt!suffix") == 2
+    crafted = raw.replace(b"notes.txt!suffix", b"notes.txt\x00suffix")
+    digest = sha256(crafted).hexdigest()
+    lineage = (ArchiveMemberStepV1(digest, "notes.txt", 0),)
+    if proof == "persisted":
+        persist_artifact(
+            crafted, member_path=None, container_sha256=None, using="default"
+        )
+        artifact = persist_artifact(
+            data, member_path="notes.txt", container_sha256=digest, using="default"
+        )
+        with pytest.raises(SourceArtifactIntegrityError):
+            persist_occurrence(
+                artifact,
+                original_filename="notes.txt",
+                content_type="text/plain",
+                archive_lineage=lineage,
+                using="default",
+            )
+    else:
+        payload = ExtractedTextPayload(
+            title="notes",
+            normalized_type="txt",
+            full_text="synthetic notes",
+            source_artifact=source_artifact_ref(
+                data, member_path="notes.txt", container_sha256=digest
+            ),
+            source_bytes=data,
+            source_filename="notes.txt",
+            source_content_type="text/plain",
+            archive_lineage=lineage,
+            source_containers=(("crafted.zip", crafted, "application/zip"),),
+        )
+        with pytest.raises(SourceArtifactIntegrityError):
+            bind_payload_source(payload, using="default")
+    assert not SourceArtifactOccurrence.objects.exists()

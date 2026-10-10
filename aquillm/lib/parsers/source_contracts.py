@@ -113,6 +113,20 @@ def _validate_digest(digest: str) -> None:
         raise SourceContractError("invalid_source_digest")
 
 
+def canonical_archive_entry_name(
+    original_name: str, library_name: str, *, is_directory: bool
+) -> str:
+    """Validate the decoded archive identity before ZipInfo sanitizes it.
+
+    Only the final slash identifying a directory is excluded from path checks;
+    the returned name remains exact, and library normalization is never accepted.
+    """
+    if original_name != library_name:
+        raise SourceContractError("normalized_archive_member_name")
+    validate_member_path(original_name[:-1] if is_directory else original_name)
+    return original_name
+
+
 def artifact_storage_key(digest: str) -> str:
     _validate_digest(digest)
     return f"source_artifacts/v1/sha256/{digest[:2]}/{digest}"

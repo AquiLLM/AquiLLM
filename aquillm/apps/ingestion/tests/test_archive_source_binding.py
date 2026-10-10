@@ -140,6 +140,63 @@ def test_corrupt_member_bytes_fail_crc_validation():
         extract_text_payloads("corrupt.zip", corrupt)
 
 
+def test_raw_nul_archive_name_is_rejected_before_zipinfo_sanitization():
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("notes.txt!suffix", b"synthetic notes")
+    raw = stream.getvalue()
+    assert raw.count(b"notes.txt!suffix") == 2
+    crafted = raw.replace(b"notes.txt!suffix", b"notes.txt\x00suffix")
+    with zipfile.ZipFile(io.BytesIO(crafted)) as archive:
+        entry = archive.infolist()[0]
+        assert entry.orig_filename == "notes.txt\x00suffix"
+        assert entry.filename == "notes.txt"
+    with pytest.raises(ExtractionError):
+        extract_text_payloads("crafted.zip", crafted)
+
+
+def test_canonical_directory_entry_keeps_member_ordinal():
+    payload = extract_text_payloads(
+        "directory.zip", zip_bytes([("folder/", b""), ("folder/notes.txt", b"notes")])
+    )[0]
+    assert payload.source_filename == "folder/notes.txt"
+    assert payload.archive_lineage[-1].archive_ordinal == 1
+
+
+@pytest.mark.django_db
+def test_nested_duplicate_containers_bind_distinct_occurrences_and_shared_blobs(
+    settings,
+    tmp_path,
+):
+    from apps.ingestion.models import SourceArtifact, SourceArtifactOccurrence
+    from apps.ingestion.services.source_artifacts import bind_payload_source
+
+    settings.STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+            "OPTIONS": {"location": str(tmp_path)},
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
+        },
+    }
+    leaf = b"synthetic notes"
+    inner = zip_bytes([("notes.txt", leaf)])
+    outer = zip_bytes([("inner.zip", inner), ("inner.zip", inner)])
+    payloads = extract_text_payloads("outer.zip", outer)
+    occurrences = [
+        bind_payload_source(payload, using="default") for payload in payloads
+    ]
+    assert len(occurrences) == 2
+    assert occurrences[0].occurrence_id != occurrences[1].occurrence_id
+    assert occurrences[0].occurrence_key != occurrences[1].occurrence_key
+    assert occurrences[0].artifact.sha256 == occurrences[1].artifact.sha256
+    assert [o.archive_lineage[0].archive_ordinal for o in occurrences] == [0, 1]
+    assert SourceArtifact.objects.count() == 3  # root, shared inner, shared leaf
+    assert SourceArtifactOccurrence.objects.count() == 5  # root, two inner, two leaf
+    assert bind_payload_source(payloads[0], using="default") == occurrences[0]
+
+
 def test_top_level_image_keeps_source_and_media_identity(monkeypatch):
     monkeypatch.setattr(
         "aquillm.ingestion.parsers.extract_text_from_image",

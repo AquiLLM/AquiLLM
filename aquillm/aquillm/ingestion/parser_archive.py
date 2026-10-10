@@ -8,7 +8,7 @@ import os
 import zipfile
 
 from lib.parsers import SUPPORTED_EXTENSIONS, guess_content_type
-from lib.parsers.source_contracts import ArchiveMemberStepV1, SourceContractError, validate_member_path
+from lib.parsers.source_contracts import ArchiveMemberStepV1, SourceContractError, canonical_archive_entry_name
 
 from .types import ExtractionError, ExtractedTextPayload
 
@@ -43,7 +43,9 @@ def extract_archive_payloads(
         with zipfile.ZipFile(io.BytesIO(data)) as archive:
             for ordinal, info in enumerate(archive.infolist()):
                 # Validate even skipped/unsupported names; no normalization changes identity.
-                validate_member_path(info.filename[:-1] if info.is_dir() else info.filename)
+                member_name = canonical_archive_entry_name(
+                    info.orig_filename, info.filename, is_directory=info.is_dir()
+                )
                 if info.is_dir():
                     continue
                 if budget.members >= budget.max_files:
@@ -56,7 +58,7 @@ def extract_archive_payloads(
                     raise ExtractionError("Archive expanded size exceeds INGEST_ARCHIVE_MAX_TOTAL_BYTES.")
                 # Charge all actual members, including unsupported formats, to one tree budget.
                 budget.expanded_bytes += info.file_size
-                if os.path.splitext(info.filename)[1].lower() not in SUPPORTED_EXTENSIONS:
+                if os.path.splitext(member_name)[1].lower() not in SUPPORTED_EXTENSIONS:
                     continue
                 with archive.open(info, "r") as file_obj:
                     inner_data = file_obj.read(remaining + 1)
@@ -65,9 +67,9 @@ def extract_archive_payloads(
                 from aquillm.ingestion.parsers import extract_text_payloads
 
                 payloads.extend(extract_text_payloads(
-                    info.filename, inner_data,
-                    content_type=guess_content_type(info.filename), depth=depth + 1,
-                    _archive_lineage=archive_lineage + (ArchiveMemberStepV1(container_digest, info.filename, ordinal),),
+                    member_name, inner_data,
+                    content_type=guess_content_type(member_name), depth=depth + 1,
+                    _archive_lineage=archive_lineage + (ArchiveMemberStepV1(container_digest, member_name, ordinal),),
                     _source_containers=containers, _archive_budget=budget,
                 ))
     except SourceContractError as exc:

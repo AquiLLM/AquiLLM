@@ -20,6 +20,7 @@ from lib.parsers.source_contracts import (
     SourceArtifactOccurrenceRefV1,
     SourceArtifactRefV1,
     SourceContractError,
+    canonical_archive_entry_name,
     occurrence_key,
     source_artifact_ref,
     validate_archive_lineage,
@@ -125,9 +126,12 @@ def _verify_archive_member(
                 if step.archive_ordinal >= len(entries):
                     raise SourceArtifactIntegrityError("source_archive_ordinal_missing")
                 entry = entries[step.archive_ordinal]
+                entry_name = canonical_archive_entry_name(
+                    entry.orig_filename, entry.filename, is_directory=entry.is_dir()
+                )
                 if (
                     entry.is_dir()
-                    or entry.filename != step.member_path
+                    or entry_name != step.member_path
                     or entry.file_size != child.size_bytes
                 ):
                     raise SourceArtifactIntegrityError("source_archive_member_mismatch")
@@ -143,7 +147,7 @@ def _verify_archive_member(
                         digest.update(chunk)
                 if size != child.size_bytes or digest.hexdigest() != child.sha256:
                     raise SourceArtifactIntegrityError("source_archive_bytes_mismatch")
-    except (zipfile.BadZipFile, RuntimeError, EOFError) as exc:
+    except (SourceContractError, zipfile.BadZipFile, RuntimeError, EOFError) as exc:
         raise SourceArtifactIntegrityError("source_archive_integrity_failed") from exc
 
 
@@ -251,9 +255,12 @@ def _validate_transient_source(payload) -> None:
                 if step.archive_ordinal >= len(entries):
                     raise SourceContractError("source_archive_ordinal_missing")
                 entry = entries[step.archive_ordinal]
+                entry_name = canonical_archive_entry_name(
+                    entry.orig_filename, entry.filename, is_directory=entry.is_dir()
+                )
                 if (
                     entry.is_dir()
-                    or entry.filename != step.member_path
+                    or entry_name != step.member_path
                     or entry.file_size != len(child_bytes)
                 ):
                     raise SourceContractError("source_archive_member_mismatch")
