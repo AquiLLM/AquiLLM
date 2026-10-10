@@ -41,6 +41,15 @@ def _buffers(torch, batch, plan):
     return mid, torch.empty_like(batch.q)
 
 
+def _stride_last(torch, tensor):
+    shape = list(tensor.shape)
+    shape[-1] *= 2
+    backing = torch.empty(shape, device=tensor.device, dtype=tensor.dtype)
+    view = backing[..., ::2]
+    view.copy_(tensor)
+    return view
+
+
 @pytest.mark.gpu
 @pytest.mark.parametrize("length,prior,strided", [
     (2, [0, 1, 37], False), (4, [2, 65], True),
@@ -121,3 +130,72 @@ def test_captured_replay_overwrites_long_to_short_split_state(runtime):
             graph.replay()
         close(output, oracle(batch), batch.q.dtype)
         assert not torch.isnan(mid).any()
+
+
+@pytest.mark.gpu
+def test_all_authoritative_strides_are_honored(runtime):
+    torch, Plan, launch, reduce, close, make, oracle = runtime
+    batch = make([1, 67], length=5, strided=True)
+    for name in ("q", "kv_cache", "block_table", "seq_lens", "raw_k", "raw_v"):
+        setattr(batch, name, _stride_last(torch, getattr(batch, name)))
+    plan = Plan(7, ())
+    mid, output = _buffers(torch, batch, plan)
+    mid, output = _stride_last(torch, mid), _stride_last(torch, output)
+    launch(batch, plan, mid)
+    reduce(batch, mid, output)
+    close(output, oracle(batch), batch.q.dtype)
+    assert not torch.isnan(mid).any()
+
+
+@pytest.mark.gpu
+@pytest.mark.parametrize("length", [2, 4, 5, 6])
+@pytest.mark.parametrize("dtype_name", ["float16", "bfloat16"])
+def test_fused_matches_pinned_single_and_split_baselines(runtime, monkeypatch,
+                                                        length, dtype_name):
+    torch, Plan, launch, reduce, close, make, oracle = runtime
+    from sndr.engines.vllm.kernels_legacy import p67_multi_query_kernel as p67
+    # Match the measured 32-token policy and use actual baseline arithmetic.
+    # No GENESIS_P67_USE_FUSED shortcut is eligible for the raw-tail baseline.
+    for name, value in (("GENESIS_P67_USE_FUSED", "0"),
+                        ("GENESIS_P67_DOT_PRECISION", "tf32x3"),
+                        ("GENESIS_P67_BLOCK_KV", "32"),
+                        ("GENESIS_P67_NUM_WARPS", "8"),
+                        ("GENESIS_P67_NUM_STAGES", "2")):
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(p67, "_CACHED_KERNEL", None)
+    monkeypatch.setattr(p67, "_CACHED_STAGE1_SPLITK", None)
+    batch = make([3, 137], length=length, dtype=getattr(torch, dtype_name))
+    plan = Plan(7, ())
+    mid, output = _buffers(torch, batch, plan)
+    launch(batch, plan, mid)
+    reduce(batch, mid, output)
+    args = (batch.q, batch.kv_cache, batch.block_table, batch.seq_lens,
+            batch.raw_k, batch.raw_v, batch.scale, batch.spec.block_size,
+            batch.spec.key_packed_size, batch.spec.value_data_bytes)
+    single = p67.call_p67_attention(*args, use_raw_tail=1)
+    split = p67.call_p67_splitk(*args, num_splits=7)
+    close(output, single, batch.q.dtype)
+    close(output, split, batch.q.dtype)
+    close(output, oracle(batch), batch.q.dtype)
+
+
+@pytest.mark.gpu
+def test_bfloat16_reduction_keeps_fp16_intermediate_rounding(runtime):
+    torch, Plan, launch, reduce, close, make, oracle = runtime
+    batch = make([0], length=2, dtype=torch.bfloat16)
+    # Logits [0, 1/512] weight the larger value just above a BF16 midpoint.
+    # FP16 first rounds back to that midpoint, whose BF16 tie rounds to 1.
+    batch.q.zero_()
+    batch.q[..., 0] = 1.0
+    batch.raw_k.zero_()
+    batch.raw_k[:, 1, :, 0] = 0.03125
+    batch.raw_v[:, 0].fill_(1.0)
+    batch.raw_v[:, 1].fill_(1.0078125)
+    plan = Plan(1, ())
+    mid, output = _buffers(torch, batch, plan)
+    launch(batch, plan, mid)
+    reduce(batch, mid, output)
+    expected = torch.tensor(1.00390625, device="cuda").half().bfloat16()
+    torch.testing.assert_close(output[:, 1], expected.expand_as(output[:, 1]),
+                               rtol=0, atol=0)
+    assert (oracle(batch)[:, 1].bfloat16() != output[:, 1]).all()
