@@ -27,12 +27,12 @@ New vectors and their receipts persist together; fallback providers and transfor
 
 **Interfaces:** Add a typed EmbeddingResult containing vector and JSON-serializable provenance. Expose get_embedding_result(query, input_type="search_query"), get_embedding_results(queries, input_type="search_query"), and get_multimodal_embedding_result(prompt, image_data_url, input_type="search_document") through the ordinary facade. Existing get_embedding/get_embeddings/get_multimodal_embedding keep their exact return types and request semantics. New result APIs must follow the same policy, contract and fallback behavior, not duplicate providers or make an extra request.
 
-- [ ] Write exact receipt schema and writer map before edits. Include schema version, actual provider and route, role, actual prepared-input digest, vector digest, raw/fitted dimensions/adaptation, separate declared and observed identity with unknown revision/precision retained. Store neither credentials, endpoint plaintext nor input text/images.
-- [ ] Add RED provider-bound tests: reordered batch response indices bind receipts to the correct prepared input; truncation is recorded for the actual sent input; Cohere fallback is attributed to Cohere; missing observed identity stays unknown; dimensions/adaptation and vector binding are exact. A model-name echo must not become verified checkpoint/precision provenance.
-- [ ] Implement response-bound results and compatibility wrappers; retain strict KG indexed APIs. Replace raw multimodal response/exception logging encountered in the touched path with fixed redacted diagnostics.
-- [ ] Add nullable embedding_provenance JSON fields with no backfill. Wire document task bulk_create, duplicate copy, image route, TextChunk.save and conversation indexing to persist matching vector/receipt together. Null/externally supplied legacy vectors remain unknown; explicit fixture writes may remain unknown but must not inherit current runtime claims. Validate/clear stale receipts when a vector is replaced through supported model paths.
-- [ ] Add RED/ GREEN Django behavior tests for known/unknown duplicate copying, new target image provenance, conversation persistence, unchanged old rows across migrations and receipt/vector integrity. Existing APIs and adjacent embedding/chunk/indexing behavior must pass.
-- [ ] Provide a bounded read-only provenance coverage/integrity audit (counts/digests only), document unknown-history limits, commit and report exact tests/concerns. Root executes live checks.
+- [x] Write exact receipt schema and writer map before edits. Include schema version, actual provider and route, role, actual prepared-input digest, vector digest, raw/fitted dimensions/adaptation, separate declared and observed identity with unknown revision/precision retained. Store neither credentials, endpoint plaintext nor input text/images.
+- [x] Add RED provider-bound tests: reordered batch response indices bind receipts to the correct prepared input; truncation is recorded for the actual sent input; Cohere fallback is attributed to Cohere; missing observed identity stays unknown; dimensions/adaptation and vector binding are exact. A model-name echo must not become verified checkpoint/precision provenance.
+- [x] Implement response-bound results and compatibility wrappers; retain strict KG indexed APIs. Replace raw multimodal response/exception logging encountered in the touched path with fixed redacted diagnostics.
+- [x] Add nullable embedding_provenance JSON fields with no backfill. Wire document task bulk_create, duplicate copy, image route, TextChunk.save and conversation indexing to persist matching vector/receipt together. Null/externally supplied legacy vectors remain unknown; explicit fixture writes may remain unknown but must not inherit current runtime claims. Validate/clear stale receipts when a vector is replaced through supported model paths.
+- [x] Add RED/ GREEN Django behavior tests for known/unknown duplicate copying, new target image provenance, conversation persistence, unchanged old rows across migrations and receipt/vector integrity. Existing APIs and adjacent embedding/chunk/indexing behavior must pass.
+- [x] Provide a bounded read-only provenance coverage/integrity audit (counts/digests only), document unknown-history limits, commit and report exact tests/concerns. Root executes live checks.
 
 ### Task 2: Bounded outage recovery (after Task 1)
 
@@ -40,12 +40,12 @@ New vectors and their receipts persist together; fallback providers and transfor
 
 **Interfaces:** Preserve Task1 result APIs, typed EmbeddingContractError and transient EmbeddingUpstreamUnavailableError, publication source/generation fences and existing lease-based recovery. Add a narrowly typed permanent failure state/reset only if necessary to stop repeated redispatch of the same malformed source.
 
-- [ ] Reproduce SDK implicit retry/timeouts, infinite chunk retry and outage batch-to-per-item amplification. Record exact current publication acknowledgment and reset behavior.
-- [ ] Write a scoped subplan with explicit finite request/attempt limits before code. Use no SDK transport retries, bounded request timeout, bounded context-shrink attempts, and finite typed-transient worker retry; do not retry arbitrary programming errors. Preserve unchanged successful payloads.
-- [ ] RED tests show one batch outage does not launch one call per chunk/window, worker invocation terminates, retained exact-source intent recovers when the provider returns, and stale task failure cannot block a newer source/generation.
-- [ ] Implement minimal bounded transport/worker behavior. Permanent contract failures fail without provider/per-item fallback and cannot create an endless publication loop. Expose an explicit safe retry/reset mechanism; content changes can legitimately create a new intent.
-- [ ] Verify conversation keyword-only availability where currently supported, terminal contract classification and finite task chain; preserve authorized search and transactional publication.
-- [ ] Run covering/adjacent Linux tests, commit and report. Root performs a synthetic outage/recovery acceptance case on disposable infrastructure, not by stopping the shared model endpoint.
+- [x] Reproduce SDK implicit retry/timeouts, infinite chunk retry and outage batch-to-per-item amplification. Record exact current publication acknowledgment and reset behavior.
+- [x] Write a scoped subplan with explicit finite request/attempt limits before code. Use no SDK transport retries, bounded request timeout, bounded context-shrink attempts, and finite typed-transient worker retry; do not retry arbitrary programming errors. Preserve unchanged successful payloads.
+- [x] RED tests show one batch outage does not launch one call per chunk/window, worker invocation terminates, retained exact-source intent recovers when the provider returns, and stale task failure cannot block a newer source/generation.
+- [x] Implement minimal bounded transport/worker behavior. Permanent contract failures fail without provider/per-item fallback and cannot create an endless publication loop. Expose an explicit safe retry/reset mechanism; content changes can legitimately create a new intent.
+- [x] Verify conversation keyword-only availability where currently supported, terminal contract classification and finite task chain; preserve authorized search and transactional publication.
+- [x] Run covering/adjacent Linux tests, commit and report. Root performs a synthetic outage/recovery acceptance case on disposable infrastructure, not by stopping the shared model endpoint.
 
 ### Task 3: Offline human-review packets (parallel with Task 1)
 
@@ -56,27 +56,36 @@ New vectors and their receipts persist together; fallback providers and transfor
     import_reviews(packet, binding_manifest, original_reports, responses) -> reviews_by_report
 CLI export accepts --observations REPORT... --output-dir PRIVATE_DIR; import accepts packet/bindings/responses/original observations and output directory. Pure offline code must not initialize Django or providers.
 
-- [ ] Write RED tests that export starts reviewer identity and every judgment null, preserves exact Unicode/question/history/answer/citations/spans, and omits explicit arm/mode/score/pass metadata from the first reading sheet.
-- [ ] Implement shuffled opaque IDs, a readable sheet plus JSON template, exact full-observation audit supplement, and private binding manifest containing packet/report digests and canonical subjects. Describe arm-metadata blinding accurately; exact answers/traces can still reveal treatments.
-- [ ] Inventory every original observation, including invalid/unreviewable subjects and safety/operational cases that need the existing separate workflow. Never silently count omitted records as complete or reviewed.
-- [ ] RED/ GREEN import tests reject changed invocation/SDK payload/span/trace/snapshot, duplicate/unknown IDs, mismatched hashes/subjects, missing reviewer/audit attestation and partial/null judgments. Preserve explicit false values; do not manufacture human identity or judgments.
-- [ ] Emit exactly the existing per-report review schema without cross-arm case-ID collisions; do not mutate observations, corpus, labels, scores or gates. Fixture observations remain ineligible after fixture responses.
-- [ ] Offline CLI roundtrip tests use synthetic observations; unchanged templates must not produce completed reviews. Document the human step and rescore commands, commit and report. Root exports a private development acceptance bundle without inventing human reviews.
+- [x] Write RED tests that export starts reviewer identity and every judgment null, preserves exact Unicode/question/history/answer/citations/spans, and omits explicit arm/mode/score/pass metadata from the first reading sheet.
+- [x] Implement shuffled opaque IDs, a readable sheet plus JSON template, exact full-observation audit supplement, and private binding manifest containing packet/report digests and canonical subjects. Describe arm-metadata blinding accurately; exact answers/traces can still reveal treatments.
+- [x] Inventory every original observation, including invalid/unreviewable subjects and safety/operational cases that need the existing separate workflow. Never silently count omitted records as complete or reviewed.
+- [x] RED/ GREEN import tests reject changed invocation/SDK payload/span/trace/snapshot, duplicate/unknown IDs, mismatched hashes/subjects, missing reviewer/audit attestation and partial/null judgments. Preserve explicit false values; do not manufacture human identity or judgments.
+- [x] Emit exactly the existing per-report review schema without cross-arm case-ID collisions; do not mutate observations, corpus, labels, scores or gates. Fixture observations remain ineligible after fixture responses.
+- [x] Offline CLI roundtrip tests use synthetic observations; unchanged templates must not produce completed reviews. Document the human step and rescore commands, commit and report. Root exports a private development acceptance bundle without inventing human reviews.
 
 ### Task 4: Development GPU maintenance (root)
 
-- [ ] Verify loaded versus installed driver/module/library versions, bootable installed modules, sudo access, Docker startup/restart policies, durable mounts and running service inventory.
-- [ ] Record reboot/service baselines in private evidence and use a controlled .254 reboot to load the installed matching driver. Do not alter model/container configuration or precision.
-- [ ] Wait for SSH recovery, verify matching nvidia-smi/kernel library and device access, all existing containers, model health, synthetic embedding/rerank checks and public readiness. Recover only the previously running intended services if restart policy requires it.
-- [ ] Capture allowlisted runtime/precision facts honestly; new hardware availability does not supply old embedding provenance or human approval.
+- [x] Verify loaded versus installed driver/module/library versions, bootable installed modules, sudo access, Docker startup/restart policies, durable mounts and running service inventory.
+- [x] Record reboot/service baselines in private evidence and use a controlled .254 reboot to load the installed matching driver. Do not alter model/container configuration or precision.
+- [x] Wait for SSH recovery, verify matching nvidia-smi/kernel library and device access, all existing containers, model health, synthetic embedding/rerank checks and public readiness. Recover only the previously running intended services if restart policy requires it.
+- [x] Capture allowlisted runtime/precision facts honestly; new hardware availability does not supply old embedding provenance or human approval.
 
 ### Task 5: Integrate and deploy (root)
 
-- [ ] Independent reviews of each code task; fix findings through implementers, then cherry-pick sequentially.
-- [ ] Isolated exact-source/image backend tests and migration lifecycle checks; preserve legacy unknowns, indexes and data. Run provider outage/recovery and review-packet acceptance fixtures.
-- [ ] Whole-branch review, exact web/KG image build, canonical/cold candidate controls.
-- [ ] Merge/push development and deploy only .254 with rollback images/environment and health gates. Run deployed cold6, controls14, exact study-question20 and metadata coverage checks.
-- [ ] Publish an honest audit, preserve private evidence and primary drafts, clean owned test resources and archive managed worktrees.
+- [x] Independent reviews of each code task; fix findings through implementers, then cherry-pick sequentially.
+- [x] Isolated exact-source/image backend tests and migration lifecycle checks; preserve legacy unknowns, indexes and data. Run provider outage/recovery and review-packet acceptance fixtures.
+- [x] Whole-branch review, exact web/KG image build, canonical/cold candidate controls.
+- [x] Merge/push development and deploy only .254 with rollback images/environment and health gates. Run deployed cold6, controls14, exact study-question20 and metadata coverage checks.
+- [x] Publish an honest audit, preserve private evidence and primary drafts, clean owned test resources and archive managed worktrees.
+
+### Task 6: Runtime gate addendum — publication backlog
+
+- [x] Reproduce old-build and candidate readiness failure and identify publication starvation.
+- [x] Separate validated audit size (maximum ten) and publication size (maximum 100 per existing flush), preserving admission, cursor and lifetime limits.
+- [x] Cover backlog reduction, duplicate admission, explicit small sizes, exhausted budgets and publisher failure. Independently review the task and its integration.
+- [x] Recover only existing due outbox work in bounded passes, capture fresh canonical references and pass candidate/deployed checks.
+
+Execution completed on development at application revision 4d780a2e7ef68bcaca3b15c495e81890c592654d. Evidence, remaining limitations and runtime maintenance are recorded in [the rollout audit](../../audits/2026-10-09-retrieval-followthrough.md).
 
 ## Dependency and scope decisions
 
