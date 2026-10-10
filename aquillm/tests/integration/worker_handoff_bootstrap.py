@@ -11,11 +11,14 @@ def main():
     import django
     from django.conf import settings
     from django.db import connection, connections
-    django.setup()
     database = os.environ["HANDOFF_DB_NAME"]
     assert database == "test_rag_test", "worker must use the isolated pytest database"
     settings.DATABASES["default"]["NAME"] = database
+    connections["default"].settings_dict["NAME"] = database
     connections.close_all()
+    assert settings.DATABASES["default"]["NAME"] == "test_rag_test"
+    assert connections["default"].settings_dict["NAME"] == "test_rag_test"
+    django.setup()
     app.loader.import_default_modules()
     required = (
         "documents.build_embedding_generation",
