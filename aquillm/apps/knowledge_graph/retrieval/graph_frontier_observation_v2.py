@@ -34,6 +34,7 @@ class GraphFrontierInvocationV2:
     query_sha256: str
     requested_subset_signature: str
     frontier_budget: FrontierBudgetObservationV2
+    request_algorithm_signature: str | None
 
 
 def capture_frontier_budget_v2(budget, *, max_depth):
@@ -53,6 +54,11 @@ def capture_frontier_budget_v2(budget, *, max_depth):
                 {
                     "version": "frontier-budget-v2/physical-reservation/raw-http-v2",
                     "acquisition_policy": POLICY,
+                    "source_query_policy": (
+                        "seed-data/seed-reauthorization/frontier-data-v2;"
+                        "returned-records/not-plan-scans;"
+                        "excludes-ready-capture/body/transaction-setup-control-sql"
+                    ),
                     "limits": limits,
                 }
             ),
@@ -68,12 +74,15 @@ def capture_frontier_budget_v2(budget, *, max_depth):
     return result
 
 
-def publish_frontier_budget_v2(observation, *, query, requested_document_ids):
+def publish_frontier_budget_v2(
+    observation, *, query, requested_document_ids, request_algorithm_signature=None
+):
     invocation = GraphFrontierInvocationV2(
         uuid4().hex,
         _digest(query),
         _digest(sorted(str(i) for i in requested_document_ids)),
         observation,
+        request_algorithm_signature,
     )
     publish("graph_frontier_budget", asdict(invocation))
     return invocation

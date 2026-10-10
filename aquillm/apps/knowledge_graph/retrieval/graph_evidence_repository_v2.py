@@ -3,6 +3,9 @@
 from hashlib import sha256
 from time import monotonic
 
+from apps.collections.services.retrieval_authorization import (
+    RetrievalAuthorizationContext,
+)
 from apps.documents.services.chunk_search_scope import current_scope
 from apps.documents.services.source_loading import (
     bounded_source_database,
@@ -29,8 +32,14 @@ def check_deadline(budget, deadline):
 
 
 def load_selection_inputs_v2(
-    *, selected, references, authorization, budget, max_rows, deadline
-):
+    *,
+    selected: SelectedGraphScopeV2,
+    references: tuple[GraphEvidenceRefV2, ...],
+    authorization: RetrievalAuthorizationContext,
+    budget: TurnBudget,
+    max_rows: int,
+    deadline: float,
+) -> tuple[GraphEvidenceSelectionInputV2, ...]:
     if type(selected) is not SelectedGraphScopeV2 or type(budget) is not TurnBudget:
         raise TypeError("exact captured selection and original budget required")
     if (
@@ -120,6 +129,7 @@ def load_selection_inputs_v2(
             chunk = chunks[0]
             if scope is not None:
                 from apps.documents.services.chunk_search_scoped_rows import fingerprint
+
                 scope.bodies.setdefault(chunk.pk, fingerprint(chunk))
             authority = groups[
                 ref.authority_group_checksum

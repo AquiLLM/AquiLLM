@@ -36,7 +36,7 @@ class QueryOntologyOutcomeV1:
 
 
 def _load_selected_artifact_rows(
-    *, selected_artifact_ids: tuple[int, ...], using: str
+    *, selected_artifact_ids: tuple[int, ...], using: str, read_budget=None
 ) -> tuple[dict[str, object], ...]:
     from apps.knowledge_graph.models import GraphArtifact
 
@@ -51,15 +51,19 @@ def _load_selected_artifact_rows(
         .order_by("id")
         .values("id", "ontology_version", "ontology_checksum")
     )
-    return tuple(rows)
+    if read_budget is None:
+        return tuple(rows)
+    from .graph_seed_reads_v2 import seed_query_rows
+
+    return seed_query_rows(rows, maximum=len(selected_artifact_ids), budget=read_budget)
 
 
 def _load_active_ontology_row(
-    *, using: str, version: str, checksum: str
+    *, using: str, version: str, checksum: str, read_budget=None
 ) -> dict[str, object] | None:
     from apps.knowledge_graph.models import OntologyVersion
 
-    rows = tuple(
+    query = (
         OntologyVersion.objects.using(using)
         .filter(
             kind=OntologyVersion.Kind.GRAPH,
@@ -70,6 +74,12 @@ def _load_active_ontology_row(
         .order_by("id")
         .values("version", "checksum", "metadata")[:2]
     )
+    if read_budget is None:
+        rows = tuple(query)
+    else:
+        from .graph_seed_reads_v2 import seed_query_rows
+
+        rows = seed_query_rows(query, maximum=2, budget=read_budget)
     return rows[0] if len(rows) == 1 else None
 
 
@@ -78,7 +88,7 @@ def _mixed(count: int) -> QueryOntologyOutcomeV1:
 
 
 def load_query_ontology(
-    *, selected_artifact_ids: tuple[int, ...], using: str
+    *, selected_artifact_ids: tuple[int, ...], using: str, read_budget=None
 ) -> QueryOntologyOutcomeV1:
     if type(selected_artifact_ids) is not tuple:
         raise TypeError("selected_artifact_ids must be an exact tuple")
@@ -92,8 +102,9 @@ def load_query_ontology(
     if type(using) is not str or not using or using != using.strip():
         raise ValueError("using must be a nonempty exact database alias")
     count = len(selected_artifact_ids)
+    optional = {} if read_budget is None else {"read_budget": read_budget}
     rows = _load_selected_artifact_rows(
-        selected_artifact_ids=selected_artifact_ids, using=using
+        selected_artifact_ids=selected_artifact_ids, using=using, **optional
     )
     if tuple(row.get("id") for row in rows) != selected_artifact_ids:
         return _mixed(count)
@@ -103,7 +114,9 @@ def load_query_ontology(
     if len(identities) != 1:
         return _mixed(count)
     version, checksum = next(iter(identities))
-    active = _load_active_ontology_row(using=using, version=version, checksum=checksum)
+    active = _load_active_ontology_row(
+        using=using, version=version, checksum=checksum, **optional
+    )
     if (
         active is None
         or active.get("version") != version

@@ -9,15 +9,34 @@ from typing import Literal
 from lib.embeddings.document_contracts import digest
 
 ChannelV2 = Literal[
-    "dense", "exact", "trigram", "full_text", "graph_direct", "graph_extended"
+    "dense",
+    "exact",
+    "trigram",
+    "full_text",
+    "graph_direct",
+    "graph_extended",
+    "graph_v2",
 ]
-CHANNELS = ("dense", "exact", "trigram", "full_text", "graph_direct", "graph_extended")
+CHANNELS = (
+    "dense",
+    "exact",
+    "trigram",
+    "full_text",
+    "graph_direct",
+    "graph_extended",
+    "graph_v2",
+)
 MAX_CANDIDATES = 626
 
 
 def integer(value, low, high):
     if type(value) is not int or not low <= value <= high:
         raise ValueError("invalid_fusion_integer")
+
+
+def validate_graph_channels(names):
+    if "graph_v2" in names and {"graph_direct", "graph_extended"}.intersection(names):
+        raise ValueError("mixed_graph_runtime_channels")
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +67,7 @@ class FusedCandidateV2:
         ):
             raise ValueError("invalid_fusion_ranks")
         names = tuple(r.channel for r in ranks)
+        validate_graph_channels(names)
         if names != tuple(c for c in CHANNELS if c in names):
             raise ValueError("noncanonical_fusion_ranks")
         if (
@@ -119,6 +139,7 @@ class FusionResultV2:
         ):
             raise ValueError("invalid_fusion_policy")
         protected = tuple(c for c in rows if c.protected_exact)
+        validate_graph_channels({r.channel for c in rows for r in c.channel_ranks})
         rest = tuple(c for c in rows if not c.protected_exact)
         if (
             len(protected) > 1
@@ -180,6 +201,7 @@ def fuse_ranked_channels_v2(channels, *, limit, scope_key, protected_exact_ids=(
     for pk in protected_exact_ids:
         integer(pk, 1, 2**63 - 1)
     memberships = {}
+    validate_graph_channels({name for name, rows in channels.items() if rows})
     for channel in CHANNELS:
         entries = channels.get(channel, ())
         if type(entries) is not tuple or len(entries) > (

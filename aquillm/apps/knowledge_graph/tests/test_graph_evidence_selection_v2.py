@@ -156,3 +156,42 @@ def test_request_group_and_query_are_exact(selection_fixture):
             select(f, envelope, invalid, "Which dataset does Atlas use?")
     with pytest.raises(ValueError):
         select(f, envelope, requests, "What supports Atlas?")
+
+
+def test_each_predicate_transition_keeps_one_shared_evidence_allowance(
+    selection_fixture,
+):
+    f = selection_fixture
+    query = "Show evidence supporting and contradicting Atlas accuracy"
+    envelope, requests = f.envelope(
+        [
+            (
+                str(i),
+                "Atlas accuracy",
+                0.8,
+                ("supports",) if i < 3 else ("contradicts", "supports"),
+                str(i),
+            )
+            for i in range(6)
+        ],
+        query,
+    )
+    result = select(f, envelope, requests, query)
+    assert sum("supports" in r.relation_types for r in result.candidates) <= 3
+    assert "evidence_budget" in result.coverage.reasons
+
+
+def test_unknown_intent_does_not_force_unrequested_opposing_classes(selection_fixture):
+    f = selection_fixture
+    query = "What details about Atlas?"
+    envelope, requests = f.envelope(
+        [
+            ("answer", "Details about Atlas", 1.0, (), "answer"),
+            ("support", "Claim succeeds", 0.8, ("supports",), "one"),
+            ("oppose", "Claim fails", 0.8, ("contradicts",), "two"),
+        ],
+        query,
+    )
+    assert select(f, envelope, requests, query, 1).candidates[0].chunk_key == key(
+        "answer"
+    )

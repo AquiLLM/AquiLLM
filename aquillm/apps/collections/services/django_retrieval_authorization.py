@@ -108,6 +108,54 @@ class DjangoCollectionRetrievalPermissionPolicy:
             )
         return tuple(sorted(rows, key=lambda row: (row[0], row[1].int)))
 
+    def current_authorized_selected_document_scope(
+        self,
+        *,
+        principal,
+        database_alias,
+        selected_collection_ids,
+        selected_document_ids,
+        read_budget,
+    ):
+        from apps.collections.models import CollectionPermission
+        from apps.documents.models.document import _get_document_types
+        from apps.knowledge_graph.retrieval.graph_seed_reads_v2 import seed_query_rows
+
+        principal_id = self._principal_id(principal)
+        if not selected_collection_ids or not selected_document_ids:
+            return ()
+        authorized = seed_query_rows(
+            CollectionPermission.objects.using(database_alias)
+            .filter(
+                user_id=principal_id,
+                collection_id__in=selected_collection_ids,
+                permission__in=("VIEW", "EDIT", "MANAGE"),
+            )
+            .order_by("collection_id")
+            .values_list("collection_id", flat=True),
+            maximum=len(selected_collection_ids),
+            budget=read_budget,
+        )
+        if not authorized:
+            return ()
+        queries = tuple(
+            model._base_manager.using(database_alias)
+            .filter(
+                collection_id__in=authorized,
+                id__in=selected_document_ids,
+            )
+            .order_by()
+            .values_list("collection_id", "id")
+            for model in _get_document_types()
+        )
+        combined = queries[0].union(*queries[1:], all=True)
+        rows = seed_query_rows(
+            combined.order_by("collection_id", "id"),
+            maximum=len(selected_document_ids) + 1,
+            budget=read_budget,
+        )
+        return tuple(sorted(rows, key=lambda row: (row[0], row[1].int)))
+
 
 def _hybrid_enabled() -> bool:
     return bool(

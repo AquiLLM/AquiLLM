@@ -51,7 +51,16 @@ def _source_failure(error):
 
 
 def _prepare_extended_branch(
-    runtime, *, query, baseline, shared, authorization, settings, deadline, with_policy
+    runtime,
+    *,
+    query,
+    baseline,
+    shared,
+    authorization,
+    settings,
+    deadline,
+    with_policy,
+    read_budget=None,
 ):
     runtime._exact_request(authorization, settings)
     scope = runtime._shared_scope(shared)
@@ -114,6 +123,7 @@ def _prepare_extended_branch(
                     authorization=authorization,
                     codec=runtime.codec,
                     max_rows=_MAX_SEED_SOURCE_ROWS_PER_PROJECTION,
+                    **({"read_budget": read_budget} if read_budget is not None else {}),
                 )
             if set(by_chunk) - {pk for pk, _ in chunks}:
                 raise ValueError("extended source returned unrelated chunks")
@@ -156,7 +166,14 @@ def _prepare_extended_branch(
 
 
 def prepare_extended_branch(
-    runtime, *, baseline, shared, authorization, settings, deadline
+    runtime,
+    *,
+    baseline,
+    shared,
+    authorization,
+    settings,
+    deadline,
+    read_budget=None,
 ):
     return _prepare_extended_branch(
         runtime,
@@ -167,6 +184,7 @@ def prepare_extended_branch(
         settings=settings,
         deadline=deadline,
         with_policy=False,
+        read_budget=read_budget,
     )
 
 

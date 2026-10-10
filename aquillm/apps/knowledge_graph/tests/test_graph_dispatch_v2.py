@@ -66,9 +66,10 @@ def test_legacy_mode_keeps_existing_early_dispatch(monkeypatch):
 def test_later_production_dispatch_reuses_original_scope_and_final_fences(
     monkeypatch, race
 ):
+    from uuid import uuid4
+
     from apps.documents.models import TextChunk
     from apps.knowledge_graph.models import CollectionGraphProjection
-    from uuid import uuid4
 
     f, runtime, settings, driver = persisted_runtime(monkeypatch)
     settings.memgraph_traversal_enabled = True
@@ -84,7 +85,12 @@ def test_later_production_dispatch_reuses_original_scope_and_final_fences(
         requested_document_ids=f.authorization.selected_document_ids,
     )
     snapshot = replace(
-        selected_snapshot(baseline=()), documents=tuple(f.documents.values())
+        selected_snapshot(baseline=()),
+        documents=tuple(f.documents.values()),
+        baseline_candidates=(),
+        vector_results=(),
+        vector_chunk_ids=(),
+        graph_seeds=(),
     )
     calls = []
     run = runtime.run_v2
@@ -125,3 +131,117 @@ def test_later_production_dispatch_reuses_original_scope_and_final_fences(
         assert diagnostics["graph_coverage_v2"]["exhaustive"] is False
         assert budget.sources_used == 2
         assert budget.text_used["materialized"] == 2
+
+
+@pytest.mark.parametrize("narrow", [False, True])
+@pytest.mark.parametrize("rrf", [False, True])
+def test_actual_seed_extractor_runs_once_after_baseline_under_original_deadline(
+    monkeypatch,
+    narrow,
+    rrf,
+):
+    from time import perf_counter
+    from types import SimpleNamespace
+
+    from lib.knowledge_graph.query_extractor.contracts import (
+        QueryEntitySpanV1,
+        QueryExtractionResponseV1,
+    )
+    from lib.knowledge_graph.tests.test_query_extractor_contracts import _provenance
+
+    monkeypatch.setattr(
+        "apps.documents.services.chunk_search_rank_policy.controls",
+        lambda: {"rrf": rrf, "protected_exact": rrf, "full_text": False},
+    )
+
+    f, runtime, settings, driver = persisted_runtime(monkeypatch)
+    incoming = f.authorization
+    if narrow:
+        from apps.collections.services.retrieval_authorization import (
+            freeze_retrieval_authorization_context,
+        )
+
+        incoming = freeze_retrieval_authorization_context(
+            principal=f.authorization.reauthorization_capability._principal,
+            database_alias="default",
+            policy=f.policy,
+            selected_collection_ids=(f.documents["A"].collection_id,),
+            selected_document_ids=(f.documents["A"].id,),
+            reauthorization_capability=f.authorization.reauthorization_capability,
+        )
+        runtime.authorization = incoming
+    settings.memgraph_traversal_enabled = True
+    settings.graph_overall_timeout_ms = 4500
+    del runtime._direct_seeds
+    attempts = []
+
+    def extractor(**kwargs):
+        def extract(**call):
+            attempts.append(call)
+            return QueryExtractionResponseV1(
+                replace(_provenance(), ontology_checksum=kwargs["ontology"].checksum),
+                1,
+                1,
+                (QueryEntitySpanV1("model", 0, 1, 0.99),),
+            )
+
+        return SimpleNamespace(extract=extract)
+
+    runtime.extractor_factory = extractor
+    dispatched = []
+    original_run = type(runtime).run_v2
+
+    def run(self, **kwargs):
+        dispatched.append(kwargs)
+        return original_run(self, **kwargs)
+
+    monkeypatch.setattr(type(runtime), "run_v2", run)
+    budget = TurnBudget(TurnLimits())
+    source = SourceRuntime(budget, f.authorization)
+    scope = FrozenRetrievalScope(
+        f.snapshot,
+        None,
+        None,
+        f.authorization,
+        "default",
+        source,
+        requested_document_ids=frozenset({f.documents["A"].id}),
+    )
+    snapshot = replace(
+        selected_snapshot(baseline=()),
+        documents=(f.documents["A"],),
+        baseline_candidates=(),
+        vector_results=(),
+        vector_chunk_ids=(),
+        graph_seeds=(),
+    )
+    deps = HybridGraphRetrievalDependencies(runtime, settings, runtime.materialize)
+    token = bind_search_scope(scope, "A", graph_enabled=True)
+    started = perf_counter()
+    try:
+        with source_runtime_scope(source):
+            from apps.documents.models import TextChunk
+            from apps.documents.services.source_loading import source_query_rows
+
+            assert source_query_rows(TextChunk.objects.filter(pk=f.chunks["A"].pk))
+            assert budget.sources_used == 1
+            handle = start_graph("A", incoming, deps, True)
+            assert not attempts
+            rows, diagnostics = hybrid_graph_candidate_pool(
+                snapshot, "A", incoming, deps, handle=handle
+            )
+    finally:
+        reset_search_scope(token)
+    assert len(attempts) == 1
+    assert len(dispatched) == 1 and dispatched[0]["budget"] is budget
+    assert attempts[0]["deadline"] <= dispatched[0]["deadline"] <= budget._deadline
+    assert perf_counter() - started < 4.5
+    assert rows and {r.doc_id for r in rows} == {f.documents["A"].id}
+    assert diagnostics["frontier_budget"]["queries_used"] > len(driver.calls)
+    assert diagnostics["frontier_budget"]["accounting_complete"]
+    assert budget.sources_used == 1
+    if rrf:
+        assert len(scope.fusion_v2.candidates) == 1
+        ranks = scope.fusion_v2.candidates[0].channel_ranks
+        assert tuple((r.channel, r.rank) for r in ranks) == (("graph_v2", 1),)
+        assert scope.fusion_v2.candidates[0].rrf_score == 1 / 61

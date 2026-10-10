@@ -1,8 +1,15 @@
 """Whole opt-in graph runtime: one capture, frontier, hydration and selector."""
 
+from __future__ import annotations
+
 from dataclasses import replace
 from math import isfinite
+from typing import TYPE_CHECKING
 
+from apps.collections.services.retrieval_authorization import (
+    RetrievalAuthorizationContext,
+)
+from apps.documents.services.representation_contracts import RepresentationSnapshotV1
 from apps.documents.services.source_deadline import source_preparation_scope
 from apps.documents.services.source_loading import (
     bounded_source_database,
@@ -16,6 +23,9 @@ from .graph_runtime_contracts_v2 import (
 from .production_runtime_support import topology_caps
 from .topology.contracts import HybridBranchKind
 from .topology.frontier_contracts_v2 import FrontierBudgetV2
+
+if TYPE_CHECKING:
+    from .production_runtime import ProductionHybridBranchRuntime
 
 
 def _caps(settings):
@@ -47,16 +57,16 @@ def _caps(settings):
 
 def run_graph_v2(
     *,
-    query,
-    runtime,
-    authorization,
-    representation_snapshot,
-    budget,
+    query: str,
+    runtime: ProductionHybridBranchRuntime,
+    authorization: RetrievalAuthorizationContext,
+    representation_snapshot: RepresentationSnapshotV1,
+    budget: TurnBudget,
     settings,
-    deadline,
+    deadline: float,
     baseline=None,
     requested_document_ids=None,
-):
+) -> GraphRuntimeEnvelopeV2:
     if getattr(settings, "graph_remediation_mode", "legacy") != "v2":
         raise ValueError("whole V2 runtime requires explicit v2 mode")
     if (
@@ -94,6 +104,7 @@ def run_graph_v2(
     )
     from .graph_runtime_execution_v2 import execute_graph_v2
 
+    handoff = None
     try:
         selected, handoff = execute_graph_v2(
             query=query,
@@ -113,6 +124,9 @@ def run_graph_v2(
         invocation = publish_frontier_budget_v2(
             observation,
             query=query,
+            request_algorithm_signature=(
+                handoff.algorithm_signature if handoff else None
+            ),
             requested_document_ids=(
                 authorization.selected_document_ids
                 if requested_document_ids is None

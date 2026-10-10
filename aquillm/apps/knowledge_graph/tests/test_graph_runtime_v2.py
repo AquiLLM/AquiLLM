@@ -27,6 +27,12 @@ def module():
 
 
 def setup_runtime(monkeypatch, *, query_cap=64):
+    from contextlib import nullcontext
+
+    monkeypatch.setattr(
+        "apps.collections.services.bounded_retrieval_authorization.bounded_reauthorization_reads",
+        lambda *args: nullcontext(),
+    )
     m = module()
     execution = import_module(
         "apps.knowledge_graph.retrieval.graph_runtime_execution_v2"

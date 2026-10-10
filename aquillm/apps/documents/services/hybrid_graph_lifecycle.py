@@ -16,6 +16,8 @@ def start_graph(query, authorization, dependencies, enabled):
     ):
         return None
     settings = dependencies.settings
+    if getattr(settings, "graph_remediation_mode", "legacy") != "legacy":
+        return None
     if getattr(settings, "memgraph_traversal_enabled", None) is not True:
         return None
     timeout = getattr(settings, "graph_overall_timeout_ms", None)

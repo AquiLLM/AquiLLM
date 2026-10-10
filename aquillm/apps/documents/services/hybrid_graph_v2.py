@@ -20,6 +20,14 @@ from .hybrid_graph_authorization import reauthorized_baseline
 from .source_deadline import check_source_deadline, source_preparation_scope
 
 
+def bounded_pool_v2(ordered, baseline):
+    from .candidate_rank_fusion import MAX_CANDIDATES
+
+    if len(baseline) > MAX_CANDIDATES or len({r.pk for r in baseline}) != len(baseline):
+        raise ValueError("captured baseline exceeds original pool contract")
+    return tuple(ordered[:MAX_CANDIDATES])
+
+
 def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies):
     started = perf_counter()
     scope, settings = current_scope(), dependencies.settings
@@ -59,7 +67,7 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
                     for r in validate_rows(rows, scope=scope)
                     if r.doc_id in scope.requested_document_ids
                 )
-            return rows, diagnostics("error")
+            return bounded_pool_v2(rows, rows), diagnostics("error")
         except Exception:
             return (), diagnostics("error")
 
@@ -139,6 +147,7 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
                     "graph_v2": tuple((r.pk, rank) for rank, r in enumerate(rows, 1))
                 },
             )
+            ordered = bounded_pool_v2(ordered, baseline)
             validate_captured_selection(
                 selected=selected,
                 authorization=scope.authorization,
@@ -151,7 +160,7 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
             check_source_deadline()
             if not budget.can_publish():
                 raise TimeoutError("V2 handoff deadline")
-            added = len({r.pk for r in rows} - baseline_ids)
+            added = len({r.pk for r in final} - baseline_ids)
             return final, diagnostics("hit" if added else "miss", added)
     except Exception:
         return fallback()

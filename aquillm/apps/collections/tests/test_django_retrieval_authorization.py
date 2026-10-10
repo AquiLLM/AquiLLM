@@ -39,7 +39,7 @@ def test_production_context_is_default_off_and_ignores_unselected_documents(
     rows = [(3, _DOC)]
     monkeypatch.setattr(
         DjangoCollectionRetrievalPermissionPolicy,
-        "current_authorized_document_scope",
+        "current_authorized_selected_document_scope",
         lambda self, **_kwargs: tuple(rows),
     )
 
@@ -72,7 +72,7 @@ def test_production_context_reauthorization_observes_permission_revocation(
     rows = [(3, _DOC)]
     monkeypatch.setattr(
         DjangoCollectionRetrievalPermissionPolicy,
-        "current_authorized_document_scope",
+        "current_authorized_selected_document_scope",
         lambda self, **_kwargs: tuple(rows),
     )
     context = build_production_retrieval_authorization_context(
@@ -100,7 +100,7 @@ def test_adaptive_only_uses_current_selected_scope_without_graph(monkeypatch, se
     rows = [(3, _DOC)]
     monkeypatch.setattr(
         DjangoCollectionRetrievalPermissionPolicy,
-        "current_authorized_document_scope",
+        "current_authorized_selected_document_scope",
         lambda self, **kw: tuple(rows),
     )
     docs = (

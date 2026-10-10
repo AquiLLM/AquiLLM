@@ -73,8 +73,10 @@ async def test_direct_source_route_keeps_five_passages_and_tail(monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.django_db(transaction=True)
 async def test_missing_ledger_source_route_is_handled_limited_not_fallback(monkeypatch):
     from apps.chat.services import rag_pipeline
+    from lib.llm.turn_context import TurnContext, bind_turn
 
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
@@ -84,6 +86,7 @@ async def test_missing_ledger_source_route_is_handled_limited_not_fallback(monke
     )
     consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
     llm = SimpleNamespace(complete=AsyncMock())
-    assert await rag_pipeline.run_direct_rag_turn(consumer, llm, convo) == "handled"
-    assert "limits" in consumer.convo[-1].content
+    with bind_turn(TurnContext(TurnBudget(TurnLimits()))):
+        assert await rag_pipeline.run_direct_rag_turn(consumer, llm, convo) == "handled"
+    assert consumer.convo[-1].content == rag_pipeline.LIMITED_MESSAGE
     llm.complete.assert_not_called()

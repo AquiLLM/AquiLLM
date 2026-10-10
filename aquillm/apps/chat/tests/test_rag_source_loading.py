@@ -152,7 +152,7 @@ def test_independent_authorization_builder_preserves_old_graph_gate(
     settings.KG_OVERLAY_ENABLED = False
     monkeypatch.setattr(
         auth.DjangoCollectionRetrievalPermissionPolicy,
-        "current_authorized_document_scope",
+        "current_authorized_selected_document_scope",
         lambda *a, **kw: ((1, DOC),),
     )
     kwargs = dict(

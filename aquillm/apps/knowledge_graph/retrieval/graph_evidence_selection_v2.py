@@ -87,14 +87,14 @@ def _tokens(text):
 
 def select_graph_evidence_v2(
     *,
-    query,
-    requests,
-    envelope,
-    identity_scores,
-    max_candidates,
-    max_mentions_per_identity,
-    max_evidence_per_transition,
-):
+    query: str,
+    requests: tuple[GraphGroupRelationRequestV2, ...],
+    envelope: GraphEvidenceSelectionEnvelopeV2,
+    identity_scores: tuple[tuple[str, float], ...],
+    max_candidates: int,
+    max_mentions_per_identity: int,
+    max_evidence_per_transition: int,
+) -> GraphHandoffV2:
     if type(envelope) is not GraphEvidenceSelectionEnvelopeV2:
         raise TypeError("selection envelope must be exact")
     for value, name, limit in (
@@ -146,14 +146,29 @@ def select_graph_evidence_v2(
         value = float(relevance + 0.01 * mass + 0.001 * ref.confidence)
         ranked.append((value, row))
     ranked.sort(key=lambda pair: (-pair[0], pair[1].ref.chunk_key))
-    # Only extracted classes establish disagreement. No text sentiment inference.
+    # Query cues request comparison; only same-scope extracted classes establish
+    # disagreement. Neither lexical source text nor unrelated claims do so.
     preferred = []
-    classes = {t for _, row in ranked for t in row.ref.relation_types}
-    if {"supports", "contradicts"} <= classes:
-        for relation in ("supports", "contradicts"):
-            preferred.append(
-                next(pair for pair in ranked if relation in pair[1].ref.relation_types)
+    normalized = _normalized_query(query)
+    conflict = bool(
+        re.search(r"\b(?:conflict\w*|oppos\w*|disagree\w*)\b", normalized)
+    ) or (
+        bool(re.search(r"\bsupport\w*\b", normalized))
+        and bool(re.search(r"\bcontradict\w*\b", normalized))
+    )
+    if conflict:
+        claims = {}
+        for pair in ranked:
+            ref = pair[1].ref
+            classes = claims.setdefault(
+                (ref.authority_group_checksum, ref.identity_keys), {}
             )
+            for relation in ("supports", "contradicts"):
+                if relation in ref.relation_types:
+                    classes.setdefault(relation, pair)
+        for classes in claims.values():
+            if {"supports", "contradicts"} <= set(classes):
+                preferred.extend(classes[r] for r in ("supports", "contradicts"))
     mentions, transitions, documents = Counter(), Counter(), Counter()
     retained, clipped = {}, False
     for value, row in preferred + ranked:
@@ -161,10 +176,9 @@ def select_graph_evidence_v2(
         if ref.chunk_key in retained:
             continue
         identities = tuple((ref.authority_group_checksum, i) for i in ref.identity_keys)
-        transition = (
-            ref.authority_group_checksum,
-            ref.identity_keys,
-            ref.relation_types,
+        transition_keys = tuple(
+            (ref.authority_group_checksum, ref.identity_keys, relation)
+            for relation in ref.relation_types
         )
         exceeds = (
             len(retained) >= max_candidates
@@ -175,7 +189,10 @@ def select_graph_evidence_v2(
             )
             or (
                 bool(ref.relation_types)
-                and transitions[transition] >= max_evidence_per_transition
+                and any(
+                    transitions[t] >= max_evidence_per_transition
+                    for t in transition_keys
+                )
             )
         )
         if exceeds:
@@ -193,7 +210,7 @@ def select_graph_evidence_v2(
         )
         documents[row.document_key] += 1
         if ref.relation_types:
-            transitions[transition] += 1
+            transitions.update(transition_keys)
         else:
             mentions.update(identities)
     coverage = partial_coverage(envelope.coverage) if clipped else envelope.coverage

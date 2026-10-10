@@ -152,8 +152,10 @@ class ProductionHybridBranchRuntime:
         )
         return QueryExtractorClient(client_settings)
 
-    def _direct_seeds(self, *, query, scope, deadline):
-        return prepare_direct_seeds(self, query=query, scope=scope, deadline=deadline)
+    def _direct_seeds(self, *, query, scope, deadline, read_budget=None):
+        return prepare_direct_seeds(
+            self, query=query, scope=scope, deadline=deadline, read_budget=read_budget
+        )
 
     def run_direct(self, *, query, shared, authorization, settings, deadline):
         self._exact_request(authorization, settings)

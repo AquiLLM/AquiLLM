@@ -188,3 +188,40 @@ def test_body_budget_clipping_reports_partial_without_larger_allowance(monkeypat
     assert "evidence_budget" in result.handoff.coverage.reasons
     assert budget.text_used["materialized"] == 0
     assert budget.limits.materialized_codepoints == 0
+
+
+def test_runtime_envelope_rejects_substituted_ready_and_group_bindings(monkeypatch):
+    from dataclasses import replace
+
+    f, runtime, settings, _ = persisted_runtime(monkeypatch)
+    budget = TurnBudget(TurnLimits())
+    with source_runtime_scope(SourceRuntime(budget, f.authorization)):
+        result = runtime.run_v2(
+            query="A",
+            authorization=f.authorization,
+            representation_snapshot=f.snapshot,
+            budget=budget,
+            settings=settings,
+            deadline=monotonic() + 5,
+        )
+    candidate = result.handoff.candidates[0]
+    other = next(
+        g
+        for g in result.selection.groups
+        if g.group_checksum != candidate.authority_group_checksum
+    )
+    for change in (
+        {"ready_bundle_checksum": "0" * 64},
+        {"graph_generation_key": "0" * 64},
+        {
+            "authority_group_checksum": other.group_checksum,
+            "ready_bundle_checksum": other.scope.ready.bundle_checksum,
+        },
+    ):
+        with pytest.raises(ValueError):
+            replace(
+                result,
+                handoff=replace(
+                    result.handoff, candidates=(replace(candidate, **change),)
+                ),
+            )

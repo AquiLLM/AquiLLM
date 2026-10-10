@@ -12,7 +12,8 @@ from .graph_query_contracts import GraphGroupRelationRequestV2
 from .graph_runtime_contracts_v2 import (
     graph_algorithm_signature_v2,
 )
-from .graph_runtime_seeds_v2 import group_request, group_seeds
+from .graph_runtime_seeds_v2 import group_request
+from .graph_seed_allocation_v2 import allocate_group_seeds_v2
 from .projected_relation_ranking_v2 import rank_relations_v2
 from .ready_scope_repository_v2 import select_ready_scope_v2
 from .topology.factory import create_canonical_frontier_loader_v2
@@ -53,13 +54,28 @@ def execute_graph_v2(
         requests.append(
             GraphGroupRelationRequestV2(
                 g.group_checksum,
-                group_request(query=query, group=g, authorization=authorization),
+                group_request(
+                    query=query,
+                    group=g,
+                    authorization=authorization,
+                    read_budget=frontier,
+                ),
             )
         )
         frontier.check_active()
     requests = tuple(requests)
+    configs = {
+        g.group_checksum: frontier_config(
+            caps, g.scope.ready.selected_generations[0].resolver_version
+        )
+        for g in selected.groups
+    }
     signature = graph_algorithm_signature_v2(
-        selected=selected, requests=requests, caps=caps, budget=frontier
+        selected=selected,
+        requests=requests,
+        caps=caps,
+        budget=frontier,
+        configs=configs,
     )
     loader = (
         create_canonical_frontier_loader_v2(
@@ -71,20 +87,30 @@ def execute_graph_v2(
         else None
     )
     references, scores, reasons = [], {}, set(selected.coverage.reasons)
+    try:
+        allocations, seed_reasons = allocate_group_seeds_v2(
+            groups=selected.groups,
+            runtime=runtime,
+            query=query,
+            baseline=baseline,
+            authorization=authorization,
+            settings=settings,
+            caps=caps,
+            deadline=deadline,
+            frontier=frontier,
+        )
+    except (FrontierBudgetExceeded, TimeoutError) as exc:
+        reason = (
+            "frontier_budget" if isinstance(exc, FrontierBudgetExceeded) else "deadline"
+        )
+        seed_reasons = {reason}
+        allocations = {g.group_checksum: ((), 0.0, {reason}) for g in selected.groups}
+    reasons.update(seed_reasons)
     available = 0
     for group, bound in zip(selected.groups, requests, strict=True):
         try:
             frontier.check_active()
-            seeds, seed_reasons = group_seeds(
-                runtime=runtime,
-                group=group,
-                query=query,
-                baseline=baseline,
-                authorization=authorization,
-                settings=settings,
-                caps=caps,
-                deadline=deadline,
-            )
+            seeds, group_mass, seed_reasons = allocations[group.group_checksum]
             reasons.update(seed_reasons)
             if not seeds:
                 if not seed_reasons:
@@ -104,23 +130,23 @@ def execute_graph_v2(
             available += result.coverage.ready_documents
             reasons.update(result.coverage.reasons)
             if any(s.identity_key not in result.snapshot.identity_keys for s in seeds):
-                reasons.add("frontier_budget" if "frontier_budget" in
-                    result.coverage.reasons else "not_ready")
+                reasons.add(
+                    "frontier_budget"
+                    if "frontier_budget" in result.coverage.reasons
+                    else "not_ready"
+                )
                 continue
             if result.snapshot.identity_keys and seeds:
-                config = frontier_config(
-                    caps, group.scope.ready.selected_generations[0].resolver_version
-                )
                 ranked = rank_relations_v2(
                     snapshot=result.snapshot,
                     seeds=seeds,
                     request=bound.request,
-                    config=config,
+                    config=configs[group.group_checksum],
                     frontier_context=context,
                     deadline_check=frontier.check_active,
                 )
                 for key, mass in ranked.scores:
-                    scores[key] = max(mass, scores.get(key, 0.0))
+                    scores[key] = max(mass * group_mass, scores.get(key, 0.0))
                 references.extend(result.evidence_candidates)
         except FrontierUnavailableV2 as exc:
             reasons.update(exc.coverage.reasons)

@@ -39,7 +39,7 @@ def _local(reason, error):
     raise LocalBranchSchedulerFailure(HybridBranchKind.DIRECT, reason) from error
 
 
-def _prepare_direct(runtime, *, query, scope, deadline, with_policy):
+def _prepare_direct(runtime, *, query, scope, deadline, with_policy, read_budget=None):
     from apps.knowledge_graph.retrieval.query_ontology import load_query_ontology
 
     if runtime.clock() >= deadline:
@@ -50,6 +50,7 @@ def _prepare_direct(runtime, *, query, scope, deadline, with_policy):
             ontology_outcome = load_query_ontology(
                 selected_artifact_ids=artifact_ids,
                 using=runtime.authorization.database_alias,
+                **({"read_budget": read_budget} if read_budget is not None else {}),
             )
     except Exception as error:
         _local(DirectBranchFailureReason.DIRECT_SEED_INVALID, error)
@@ -123,6 +124,7 @@ def _prepare_direct(runtime, *, query, scope, deadline, with_policy):
                 deadline=deadline,
                 clock=runtime.clock,
                 using=runtime.authorization.database_alias,
+                **({"read_budget": read_budget} if read_budget is not None else {}),
             )
             outcome = resolve_direct_seed_components(
                 spans=response.spans,
@@ -155,9 +157,14 @@ def _prepare_direct(runtime, *, query, scope, deadline, with_policy):
     )
 
 
-def prepare_direct_seeds(runtime, *, query, scope, deadline):
+def prepare_direct_seeds(runtime, *, query, scope, deadline, read_budget=None):
     return _prepare_direct(
-        runtime, query=query, scope=scope, deadline=deadline, with_policy=False
+        runtime,
+        query=query,
+        scope=scope,
+        deadline=deadline,
+        with_policy=False,
+        read_budget=read_budget,
     )
 
 

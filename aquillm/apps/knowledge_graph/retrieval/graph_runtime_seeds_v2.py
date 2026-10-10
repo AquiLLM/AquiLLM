@@ -3,24 +3,32 @@
 from copy import copy
 from math import fsum
 
-from apps.documents.services.chunk_search_candidates import HybridCandidateSnapshot
-from apps.documents.services.chunk_search_scope import current_scope
-from apps.documents.services.chunk_search_scoped_rows import validate_rows
-
 from .production_extended import prepare_extended_branch
 from .production_runtime_support import ProductionSharedScopeV1
 from .query_ontology import load_query_ontology
 from .relation_request import parse_relation_request_v2
 from .scheduler_support import LocalBranchSchedulerFailure
 from .topology.contracts import ProjectedSeedV1
+from .topology.frontier_contracts_v2 import FrontierBudgetExceeded
 
 
-def group_request(*, query, group, authorization):
+def failure_reason(error):
+    while error is not None:
+        if isinstance(error, FrontierBudgetExceeded):
+            return "frontier_budget"
+        if isinstance(error, TimeoutError):
+            return "deadline"
+        error = error.__cause__
+    return "not_ready"
+
+
+def group_request(*, query, group, authorization, read_budget=None):
     outcome = load_query_ontology(
         selected_artifact_ids=tuple(
             sorted({p.artifact_id for p in group.scope.projections})
         ),
         using=authorization.database_alias,
+        **({"read_budget": read_budget} if read_budget is not None else {}),
     )
     ontology = outcome.ontology
     if ontology is None or ontology.checksum != group.ontology_checksum:
@@ -33,15 +41,28 @@ def group_request(*, query, group, authorization):
 
 
 def group_seeds(
-    *, runtime, group, query, baseline, authorization, settings, caps, deadline
+    *,
+    runtime,
+    group,
+    query,
+    baseline,
+    authorization,
+    settings,
+    caps,
+    deadline,
+    frontier,
 ):
     values, reasons = [], set()
     if settings.graph_direct_enabled:
         try:
             direct = runtime._direct_seeds(
-                query=query, scope=group.scope, deadline=deadline
+                query=query,
+                scope=group.scope,
+                deadline=deadline,
+                read_budget=frontier,
             )
-        except LocalBranchSchedulerFailure:
+        except LocalBranchSchedulerFailure as error:
+            reasons.add(failure_reason(error))
             direct = None
         if type(direct) is tuple:
             values.extend(direct)
@@ -50,19 +71,7 @@ def group_seeds(
         else:
             reasons.add("not_ready")
     if settings.graph_extended_enabled:
-        scope = current_scope()
-        valid = (
-            type(baseline) is HybridCandidateSnapshot
-            and scope is not None
-            and scope.authorization == authorization
-            and {d.id for d in baseline.documents} == set(scope.requested_document_ids)
-        )
-        if valid:
-            rows = validate_rows(baseline.baseline_candidates, scope=scope)
-            valid = rows == baseline.baseline_candidates and all(
-                r.doc_id in scope.requested_document_ids for r in rows
-            )
-        if valid:
+        if baseline is not None:
             local = copy(runtime)
             local._shared = ProductionSharedScopeV1(group.scope)
             try:
@@ -73,15 +82,17 @@ def group_seeds(
                     authorization=authorization,
                     settings=settings,
                     deadline=deadline,
+                    read_budget=frontier,
                 )
-            except LocalBranchSchedulerFailure:
+            except LocalBranchSchedulerFailure as error:
+                reasons.add(failure_reason(error))
                 extended = None
             if type(extended) is tuple:
                 values.extend(extended)
             elif extended is not None and "timeout" in str(extended).lower():
                 reasons.add("deadline")
-        elif baseline is not None:
-            reasons.add("not_ready")
+            else:
+                reasons.add("not_ready")
     masses = {}
     for seed in values:
         if type(seed) is not ProjectedSeedV1:

@@ -38,6 +38,9 @@ def persisted_runtime(monkeypatch, *, dataset=False):
     from apps.knowledge_graph.services.ontology import load_ontology_yaml
 
     f = ScopeFixture(monkeypatch)
+    f.policy.current_authorized_selected_document_scope = lambda **kwargs: tuple(
+        r for r in f.policy.rows if r[1] in kwargs["selected_document_ids"]
+    )
     if dataset:
         from .graph_dataset_fixture_v2 import prepare_dataset_document
 
@@ -70,6 +73,7 @@ def persisted_runtime(monkeypatch, *, dataset=False):
                     **kwargs,
                     "ontology_checksum": ontology.checksum,
                     "ontology_version": ontology.version,
+                    "orchestration_version": 1,
                 }
             )
 
@@ -98,6 +102,7 @@ def persisted_runtime(monkeypatch, *, dataset=False):
         setattr(settings, name, value)
     settings.graph_remediation_mode = "v2"
     settings.graph_direct_enabled = True
+    settings.graph_overall_timeout_ms = 4500
     settings.graph_direct_timeout_ms = 4500
     driver = FrontierIndexFixtureDriver(tuple(bundles))
     runtime = ProductionHybridBranchRuntime(

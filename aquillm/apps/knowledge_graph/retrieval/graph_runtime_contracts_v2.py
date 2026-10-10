@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 
 from .graph_frontier_observation_v2 import GraphFrontierInvocationV2
-
 from .graph_handoff import GraphHandoffV2, validate_graph_handoff_v2
 from .ready_scope_v2 import SelectedGraphScopeV2, _digest, graph_selection_digest_v2
 from .relation_request import relation_request_digest
@@ -26,6 +25,11 @@ class GraphRuntimeEnvelopeV2:
         if type(self.frontier_invocation) is not GraphFrontierInvocationV2:
             raise TypeError("runtime requires its final frontier observation")
         validate_graph_handoff_v2(self.handoff)
+        if (
+            self.frontier_invocation.request_algorithm_signature
+            != self.handoff.algorithm_signature
+        ):
+            raise ValueError("observation replaced the executed request algorithm")
         groups = {g.group_checksum: g for g in self.selection.groups}
         if (
             self.handoff.coverage.selected_documents
@@ -48,11 +52,14 @@ class GraphRuntimeEnvelopeV2:
                 raise ValueError("handoff representation is outside captured group")
 
 
-def graph_algorithm_signature_v2(*, selected, requests, caps, budget):
+def graph_algorithm_signature_v2(*, selected, requests, caps, budget, configs):
+    from .projected_relation_ranking_v2 import relation_algorithm_signature_v2
+
     groups = {g.group_checksum for g in selected.groups}
     if (
         len(requests) != len(groups)
         or {r.authority_group_checksum for r in requests} != groups
+        or set(configs) != groups
     ):
         raise ValueError("algorithm requires every original group request")
     return _digest(
@@ -66,6 +73,10 @@ def graph_algorithm_signature_v2(*, selected, requests, caps, budget):
                 }
             ),
             "selection_digest": graph_selection_digest_v2(selected),
+            "relation_kernels": sorted(
+                (group, relation_algorithm_signature_v2(config))
+                for group, config in configs.items()
+            ),
             "group_requests": sorted(
                 (r.authority_group_checksum, relation_request_digest(r.request))
                 for r in requests
@@ -74,8 +85,10 @@ def graph_algorithm_signature_v2(*, selected, requests, caps, budget):
                 "canonical-frontier-v2/global-priority-quality-keyset-v2/"
                 "nonexhaustive/authorized-transit"
             ),
-            "seed_policy": "global-prefix/group-equal-mass/global-cap-v2",
-            "selection_policy": "query-lexical-predicate-reliability-conflicts-v2",
+            "seed_policy": "global-prefix/group-equal-mass/global-round-robin-cap-v2",
+            "selection_policy": (
+                "query-lexical-predicate-reliability/requested-same-claim-conflicts-v2"
+            ),
             "evidence_caps": {
                 "mentions_per_identity": 2,
                 "evidence_per_transition": 3,

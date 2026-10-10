@@ -9,6 +9,7 @@ from apps.knowledge_graph.retrieval.direct_seed_contracts import DirectResolutio
 
 from .direct_seed_sql import bounded_seed_read
 from .direct_seed_types import DirectSeedCandidateRow, DirectSeedScopeV1
+from .graph_seed_reads_v2 import seed_query_rows
 
 
 # fmt: off
@@ -16,7 +17,10 @@ def _load_membership_states(**options: object) -> tuple[dict[str, object], ...]:
     from apps.knowledge_graph.models import CollectionGraphMembershipState
     fields = ("collection_id", "active_artifact_id", "registry_epoch", "membership_checksum", "resolver_version", "resolution_config_checksum")
     with bounded_seed_read(using=options["using"], deadline=options.get("deadline"), clock=options.get("clock", monotonic)):
-        return tuple(CollectionGraphMembershipState.objects.using(options["using"]).filter(collection_id__in=options["collection_ids"]).order_by("collection_id").values(*fields))
+        query = CollectionGraphMembershipState.objects.using(options["using"]).filter(collection_id__in=options["collection_ids"]).order_by("collection_id").values(*fields)
+        if options.get("read_budget") is None:
+            return tuple(query)
+        return seed_query_rows(query, maximum=len(options["collection_ids"]), budget=options["read_budget"])
 
 
 def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...]:
@@ -91,7 +95,8 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
             query = query.filter(**{str(options["lookup_field"]): options["lookup"]})
         query = query.annotate(similarity=Value(1.0, output_field=FloatField()))
     with bounded_seed_read(using=options["using"], deadline=options.get("deadline"), alias=tier is DirectResolutionTier.ALIAS, clock=options.get("clock", monotonic)):
-        rows = tuple(query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_canonical_entity_id", "automatic_link_count", "similarity")[: int(options["limit"]) + 1])
+        bounded = query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_canonical_entity_id", "automatic_link_count", "similarity")[: int(options["limit"]) + 1]
+        rows = seed_query_rows(bounded, maximum=int(options["limit"]) + 1, budget=options.get("read_budget"))
     if len(rows) > int(options["limit"]):
         raise ValueError("candidate result exceeds its hard cap")
     if any((row["automatic_link_count"] or 0) > 1 for row in rows):
