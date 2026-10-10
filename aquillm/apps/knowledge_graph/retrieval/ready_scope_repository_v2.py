@@ -70,6 +70,8 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
     )
 
     using = authorization.database_alias
+    from apps.knowledge_graph.resolution.vocabulary_capture import capture_retrieval_vocabulary, validate_artifact
+    vocabulary = capture_retrieval_vocabulary(authorization)
     selected = {s.document.id: s for s in representation_snapshot.selections}
     rows = tuple(
         CollectionGraphProjection.objects.using(using)
@@ -128,6 +130,7 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
         ):
             mismatch()
         validate_present_metadata(projection=row, membership=state, artifact=artifact)
+        validate_artifact(artifact, vocabulary, collection_id=row.collection_id)
         if (
             GraphArtifact.objects.using(using)
             .filter(
@@ -185,6 +188,7 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
             ):
                 mismatch()
             documents.append((item.document_id, item.document_artifact_id))
+            validate_artifact(da, vocabulary, collection_id=row.collection_id)
             validate_artifact_selection(da, selected[item.document_id], using=using)
         if len({d for d, _ in documents}) != len(documents):
             mismatch()

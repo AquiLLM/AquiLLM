@@ -31,6 +31,7 @@ from .canonical_validation import (
     _positive_int,
 )
 from .identity_policy import IdentityEndpointV2, decide_identity_v2
+from .vocabulary_policy import bind_digest, component_veto
 
 CANONICAL_RESOLVER_VERSION = "canonical-resolution-v1"
 
@@ -184,8 +185,11 @@ class CanonicalEntityInput:
     version_signature: str = ""
     aliases: tuple[CanonicalAliasEvidence, ...] = ()
     acronym_expansions: tuple[CanonicalAcronymExpansion, ...] = ()
+    vocabulary_terms: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        from .vocabulary_terms import validate_terms
+        validate_terms(self.vocabulary_terms)
         _positive_int(self.entity_id, "entity_id")
         _positive_int(self.collection_id, "collection_id")
         _positive_int(self.artifact_id, "artifact_id")
@@ -642,9 +646,13 @@ def _pair_conflict(
 
 
 def _component_conflict(
-    entity_ids: Sequence[int], by_id: Mapping[int, CanonicalEntityInput]
+    entity_ids: Sequence[int], by_id: Mapping[int, CanonicalEntityInput], vocabulary=None,
 ) -> str | None:
     members = tuple(by_id[value] for value in entity_ids)
+    from .vocabulary_terms import endpoint_labels
+    if component_veto(vocabulary, ((item.collection_id, label) for item in members
+                                   for label in endpoint_labels(item))):
+        return "component_vocabulary_veto"
     collection_ids = [item.collection_id for item in members]
     if len(collection_ids) != len(set(collection_ids)):
         return "component_same_collection_conflict"
@@ -759,6 +767,7 @@ def resolve_canonical_entities(
     embedding_candidates: tuple[CanonicalEmbeddingCandidate, ...] = (),
     resolver_version: str | None = None,
     identity_policy: str = "legacy",
+    vocabulary=None,
 ) -> CanonicalResolutionResult:
     """Resolve exact evidence into deterministic components and audit decisions."""
 
@@ -990,7 +999,7 @@ def resolve_canonical_entities(
         member_ids = sorted(
             {value for edge in edges for value in (edge.left, edge.right)}
         )
-        conflict = _component_conflict(member_ids, by_id)
+        conflict = _component_conflict(member_ids, by_id, vocabulary)
         if conflict:
             for edge in edges:
                 rejected_decisions[_pair(edge.left, edge.right)] = _rejected(
@@ -1048,7 +1057,7 @@ def resolve_canonical_entities(
                 for value in root_to_members.get(root, (root,))
             )
         )
-        conflict = _component_conflict(member_ids, by_id)
+        conflict = _component_conflict(member_ids, by_id, vocabulary)
         if conflict:
             for original in original_edges:
                 pair = _pair(original.left, original.right)
@@ -1193,7 +1202,7 @@ def resolve_canonical_entities(
         resolver_version=resolver_version,
         components=ordered_components,
         decisions=ordered_decisions,
-        checksum=checksum,
+        checksum=bind_digest(checksum, vocabulary),
     )
 
 
@@ -1809,6 +1818,7 @@ def _load_locked_canonical_inputs(
     entity_rows: tuple[object, ...],
     active_artifact_ids: tuple[int, ...],
     using: str,
+    vocabulary=None,
 ) -> tuple[CanonicalEntityInput, ...]:
     """Lock and adapt exact Task-8/9 provenance for the active C snapshot."""
 
@@ -2045,7 +2055,7 @@ def _load_locked_canonical_inputs(
     memberships = tuple(
         CanonicalSourceMembership(*key) for key in sorted(membership_keys)
     )
-    return build_canonical_inputs_from_provenance(
+    inputs = build_canonical_inputs_from_provenance(
         entity_rows,
         tuple(
             sorted(
@@ -2060,6 +2070,8 @@ def _load_locked_canonical_inputs(
         ),
         memberships,
     )
+    from .vocabulary_terms import decorate_canonical
+    return decorate_canonical(inputs, mention_rows, source_entity_by_document_entity, vocabulary)
 
 
 def _lock_canonical_registry(*, using: str) -> None:

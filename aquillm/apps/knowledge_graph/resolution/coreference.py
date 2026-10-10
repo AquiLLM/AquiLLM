@@ -8,7 +8,7 @@ import unicodedata
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 from itertools import combinations, islice
 
@@ -44,6 +44,7 @@ from .coreference_validation import (
     _validated_span,
 )
 from .identity_policy import IdentityEndpointV2, decide_identity_v2
+from .vocabulary_policy import bind_digest, component_veto, endpoint_terms
 from .normalization import normalize_entity_label, parse_stable_identifier
 
 MAX_DOCUMENT_MENTIONS = 65_536
@@ -96,6 +97,7 @@ _HARD_CANNOT_LINK_METHODS = frozenset(
         "source_mismatch",
         "undefined_acronym",
         "version_mismatch",
+        "vocabulary_veto",
     )
 )
 
@@ -1336,6 +1338,7 @@ def _decide_pair(
 def _constrain_component_merges(
     mentions: tuple[_MentionView, ...],
     decisions: tuple[PairDecision, ...],
+    vocabulary=None, collection_id=None,
 ) -> tuple[tuple[PairDecision, ...], tuple[PairDecision, ...]]:
     """Accept candidate edges only when their complete components are compatible."""
 
@@ -1375,6 +1378,10 @@ def _constrain_component_merges(
     component_members: dict[int, set[int]] = {
         index: {index} for index in range(len(mentions))
     }
+    vocabulary_members = {
+        i: endpoint_terms(vocabulary, ((collection_id, m.raw_text),))
+        for i, m in enumerate(mentions)
+    }
     merge_edges: list[PairDecision] = []
     for candidate in candidates:
         left_root = disjoint_set.find(indexes[candidate.left_mention_id])
@@ -1390,6 +1397,9 @@ def _constrain_component_merges(
             for left_index, decision in hard_conflicts[right_index].items()
             if left_index in left_members
         ]
+        combined_vocabulary = vocabulary_members[left_root] | vocabulary_members[right_root]
+        if component_veto(vocabulary, combined_vocabulary):
+            blockers.append(replace(candidate, method="vocabulary_veto"))
         if blockers:
             blocker = min(
                 blockers,
@@ -1438,6 +1448,9 @@ def _constrain_component_merges(
         component_forbidden.pop(right_root)
         component_members[new_root] = left_members
         component_forbidden[new_root] = left_forbidden
+        vocabulary_members.pop(left_root)
+        vocabulary_members.pop(right_root)
+        vocabulary_members[new_root] = combined_vocabulary
         merge_edges.append(candidate)
     return tuple(constrained), tuple(merge_edges)
 
@@ -1640,6 +1653,7 @@ def resolve_document_mentions(
     ontology: object,
     *,
     identity_policy: str = "legacy",
+    vocabulary=None, collection_id=None,
 ) -> ResolutionResult:
     """Partition one bounded document's mentions using deterministic exact rules."""
 
@@ -1651,7 +1665,7 @@ def resolve_document_mentions(
     if len(bounded) > MAX_DOCUMENT_MENTIONS:
         raise ValueError(f"document mention cap exceeded ({MAX_DOCUMENT_MENTIONS})")
     sources = _prepare_source_contexts(bounded)
-    input_fingerprint = _resolution_input_fingerprint(bounded, sources)
+    input_fingerprint = bind_digest(_resolution_input_fingerprint(bounded, sources), vocabulary)
     type_index, ontology_checksum = _ontology_type_index(ontology)
     adapted = tuple(
         sorted(
@@ -1698,7 +1712,11 @@ def resolve_document_mentions(
             )
             for original in candidate_decisions
         )
-    decisions, merge_edges = _constrain_component_merges(adapted, candidate_decisions)
+    from .vocabulary_resolution import document_veto_decisions
+    candidate_decisions = document_veto_decisions(
+        adapted, candidate_decisions, vocabulary, collection_id)
+    decisions, merge_edges = _constrain_component_merges(
+        adapted, candidate_decisions, vocabulary, collection_id)
     clusters = _build_clusters(
         adapted,
         merge_edges,

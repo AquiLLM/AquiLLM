@@ -31,6 +31,9 @@ def graph_effective_controls():
             key: getattr(settings, "KG_" + key.upper()) for key in RUNTIME_FIELDS
         },
     )
+    from apps.knowledge_graph.resolution.vocabulary_capture import enabled, effective_observation
+    if enabled():
+        result["scoped_vocabulary"] = effective_observation()
     result["runtime_sha256"] = digest(result)
     return result
 

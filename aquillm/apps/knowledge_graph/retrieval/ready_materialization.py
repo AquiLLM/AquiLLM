@@ -93,6 +93,8 @@ def materialize_selected_ready_chunks(
 ):
     if type(scope) is not SelectedReadyScopeV1:
         raise TypeError("scope must be exact")
+    from apps.knowledge_graph.resolution.vocabulary_authority import validate_ready
+    validate_ready(scope, authorization)
     if (
         type(chunk_keys) is not tuple
         or not chunk_keys
@@ -145,6 +147,7 @@ def materialize_selected_ready_chunks(
                 materialized[row.chunk_key] = row
     if set(materialized) != set(raw_keys):
         raise ValueError("materialized graph coverage is incomplete")
+    validate_ready(scope, authorization)
     return tuple(materialized[key] for key in raw_keys)
 
 

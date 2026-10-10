@@ -845,6 +845,7 @@ def _load_storage_scope(
                 "rebuild_request_id",
                 "status",
                 "evaluation_only",
+                "metadata",
                 *_EVALUATION_IDENTITY_FIELDS,
             ),
             maximum=state.config.max_scope_collections,
@@ -884,6 +885,7 @@ def _load_storage_scope(
         "document_artifact__extractor_version",
         "document_artifact__resolver_version",
         "document_artifact__resolution_config_checksum",
+        "document_artifact__metadata",
         "document_artifact__filter_policy_version",
         "document_artifact__filter_policy_checksum",
         "document_artifact__embedding_model_signature",
@@ -982,6 +984,8 @@ def _load_storage_scope(
             ):
                 raise _SnapshotMiss
 
+    from apps.knowledge_graph.resolution.vocabulary_authority import bind_legacy
+    bind_legacy(request, collection_artifacts, manifest_rows)
     seed_ids = tuple(seed.chunk_id for seed in request.seeds)
     seed_chunks = _bounded_values(
         TextChunk.objects.using(state.using).filter(

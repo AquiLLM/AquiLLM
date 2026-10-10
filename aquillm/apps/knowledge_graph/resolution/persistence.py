@@ -356,7 +356,10 @@ def _validate_source_snapshot(artifact, result, mention_records) -> str:
             "resolution result input fingerprint must be an exact lowercase "
             "SHA-256 digest"
         )
-    if resolution_input_fingerprint(accepted) != result.input_fingerprint:
+    from .vocabulary_builds import document_artifact_policy
+    from .vocabulary_policy import bind_digest
+    vocabulary = document_artifact_policy(artifact, using=artifact._state.db or "default")
+    if bind_digest(resolution_input_fingerprint(accepted), vocabulary) != result.input_fingerprint:
         raise ResolutionPersistenceError(
             "resolution result does not match current mention source context"
         )

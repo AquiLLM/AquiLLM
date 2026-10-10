@@ -282,6 +282,8 @@ def validate_build_identity(
         raise ValueError("destination artifact source hash does not match")
     if artifact.ontology_version != ontology_version:
         raise ValueError("destination artifact ontology does not match")
+    from apps.knowledge_graph.resolution.vocabulary_builds import document_artifact_policy
+    document_artifact_policy(artifact, using=getattr(getattr(artifact, "_state", None), "db", None) or "default")
     if (
         run.assembly_version != artifact.assembly_version
         or run.assembly_config_checksum != artifact.assembly_config_checksum
@@ -767,6 +769,7 @@ def document_artifact_identity_values(
     *,
     settings,
     identity_policy: str = "legacy",
+    vocabulary=None,
 ) -> dict[str, object]:
     from apps.knowledge_graph.models import (
         ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
@@ -777,6 +780,7 @@ def document_artifact_identity_values(
     from apps.knowledge_graph.resolution import resolver_version_for_policy
 
     resolver_version = resolver_version_for_policy("document", identity_policy)
+    from apps.knowledge_graph.resolution.vocabulary_policy import bind_digest
 
     return {
         "scope_type": GraphArtifact.ScopeType.DOCUMENT,
@@ -790,9 +794,9 @@ def document_artifact_identity_values(
         "filter_policy_checksum": graph_identity_checksum(
             "document-filter-policy", "pending-v1"
         ),
-        "resolution_config_checksum": graph_identity_checksum(
+        "resolution_config_checksum": bind_digest(graph_identity_checksum(
             "document-resolver", resolver_version
-        ),
+        ), vocabulary),
         "assembly_version": ASSEMBLY_NOT_APPLICABLE_VERSION,
         "assembly_config_checksum": ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
     }
@@ -816,12 +820,17 @@ def _create_build_destination(
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
     from apps.knowledge_graph.services.builds import _lock_document_scope
 
+    from apps.knowledge_graph.resolution.vocabulary_builds import document_capsule
+    from apps.knowledge_graph.resolution.vocabulary_capture import metadata
+    from apps.knowledge_graph.models import graph_identity_checksum
+    vocabulary = document_capsule(document_id)
     identity = _artifact_identity_values(
         document_id,
         expected_source_hash,
         ontology_version,
         ontology_checksum,
         settings=settings,
+        vocabulary=vocabulary.policy if vocabulary else None,
     )
     with transaction.atomic():
         _lock_document_scope(document_id)
@@ -854,7 +863,8 @@ def _create_build_destination(
         artifact = GraphArtifact.objects.create(
             status=GraphArtifact.Status.BUILDING,
             build_generation=build_generation,
-            metadata={"stage": "raw_extraction"},
+            metadata={"stage": "raw_extraction", **metadata(vocabulary,
+                graph_identity_checksum("document-resolver", identity["resolver_version"]))},
             **identity,
         )
         run = GraphBuildRun.objects.create(
@@ -1227,12 +1237,15 @@ def extract_document_mentions(
     _validate_source(document, expected_source_hash)
     settings = load_extraction_settings()
     ontology = _resolve_ontology_definition(ontology_version)
+    from apps.knowledge_graph.resolution.vocabulary_builds import document_capsule, document_artifact_policy
+    vocabulary = document_capsule(document_id)
     identity = _artifact_identity_values(
         document_id,
         expected_source_hash,
         ontology_version,
         ontology.checksum,
         settings=settings,
+        vocabulary=vocabulary.policy if vocabulary else None,
     )
     artifact = (
         GraphArtifact.objects.filter(**identity)
@@ -1240,6 +1253,7 @@ def extract_document_mentions(
         .first()
     )
     if artifact is not None:
+        document_artifact_policy(artifact)
         committed_run = _find_committed_extraction_run(artifact)
         if committed_run is not None:
             return committed_run
