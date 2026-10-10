@@ -1,0 +1,332 @@
+"""Member bytes, paths and occurrence lineage must survive archive fan-out."""
+
+import io
+import warnings
+import zipfile
+from hashlib import sha256
+
+import pytest
+from pypdf import PdfReader, PdfWriter
+
+from aquillm.ingestion.parsers import extract_text_payloads
+from aquillm.ingestion.types import ExtractionError
+
+
+def pdf_bytes(width):
+    writer = PdfWriter()
+    writer.add_blank_page(width=width, height=100)
+    output = io.BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def zip_bytes(members):
+    output = io.BytesIO()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for name, data in members:
+                archive.writestr(name, data)
+    return output.getvalue()
+
+
+@pytest.fixture
+def fake_pdf(monkeypatch):
+    monkeypatch.setattr(
+        "aquillm.ingestion.parsers.extract_pdf_text",
+        lambda data: f"PDF {PdfReader(io.BytesIO(data)).pages[0].mediabox.width}",
+    )
+    monkeypatch.setattr(
+        "aquillm.ingestion.parsers.extract_figure_payloads_for_format",
+        lambda *_args: None,
+    )
+
+
+def test_distinct_pdf_members_keep_exact_bytes(fake_pdf):
+    first, second = pdf_bytes(100), pdf_bytes(200)
+    archive = zip_bytes([("a/paper.pdf", first), ("b/paper.pdf", second)])
+    payloads = extract_text_payloads("papers.zip", archive)
+    assert len(payloads) == 2
+    for payload, member, path in zip(
+        payloads, (first, second), ("a/paper.pdf", "b/paper.pdf")
+    ):
+        assert payload.source_bytes == member
+        assert len(PdfReader(io.BytesIO(payload.source_bytes)).pages) == 1
+        assert payload.source_artifact.sha256 == sha256(member).hexdigest()
+        assert payload.source_artifact.member_path == path
+        assert payload.source_artifact.container_sha256 == sha256(archive).hexdigest()
+        assert payload.source_artifact.sha256 != sha256(archive).hexdigest()
+
+
+def test_same_path_same_bytes_have_distinct_ordinals(fake_pdf):
+    member = pdf_bytes(100)
+    archive = zip_bytes(
+        [("paper.pdf", member), ("paper.pdf", member), ("paper.pdf", pdf_bytes(200))]
+    )
+    payloads = extract_text_payloads("duplicate.zip", archive)
+    assert len(payloads) == 3
+    assert [p.archive_lineage[-1].archive_ordinal for p in payloads] == [0, 1, 2]
+    assert payloads[0].source_artifact.sha256 == payloads[1].source_artifact.sha256
+    assert payloads[1].source_artifact.sha256 != payloads[2].source_artifact.sha256
+
+
+def test_nested_archive_retains_root_to_leaf_lineage(fake_pdf):
+    member = pdf_bytes(100)
+    inner = zip_bytes([("leaf.pdf", member)])
+    outer = zip_bytes([("folder/inner.zip", inner), ("notes.csv", b"a,b\n1,2\n")])
+    payloads = extract_text_payloads("outer.zip", outer)
+    assert [p.normalized_type for p in payloads] == ["pdf", "tabular"]
+    assert [
+        (s.container_sha256, s.member_path, s.archive_ordinal)
+        for s in payloads[0].archive_lineage
+    ] == [
+        (sha256(outer).hexdigest(), "folder/inner.zip", 0),
+        (sha256(inner).hexdigest(), "leaf.pdf", 0),
+    ]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../paper.pdf",
+        "/paper.pdf",
+        "C:/paper.pdf",
+        "folder/../../paper.pdf",
+        "folder\\..\\paper.pdf",
+    ],
+)
+def test_unsafe_archive_member_paths_are_rejected(name, fake_pdf):
+    with pytest.raises(ExtractionError):
+        extract_text_payloads("unsafe.zip", zip_bytes([(name, pdf_bytes(100))]))
+
+
+def test_member_limit_counts_members_not_derived_figures(monkeypatch, fake_pdf):
+    from aquillm.ingestion.types import ExtractedTextPayload
+
+    monkeypatch.setenv("INGEST_ARCHIVE_MAX_FILES", "2")
+    monkeypatch.setattr(
+        "aquillm.ingestion.parsers.extract_figure_payloads_for_format",
+        lambda _name, _data, _format, outputs: outputs.extend(
+            [
+                ExtractedTextPayload(
+                    title="figure",
+                    normalized_type="document_figure",
+                    full_text="figure",
+                )
+                for _ in range(3)
+            ]
+        ),
+    )
+    payloads = extract_text_payloads(
+        "many.zip", zip_bytes([("paper.pdf", pdf_bytes(100)), ("notes.txt", b"notes")])
+    )
+    assert len(payloads) == 5
+    assert payloads[-1].full_text == "notes"
+
+
+def test_nested_archives_share_expanded_size_limit(monkeypatch):
+    inner = zip_bytes([("notes.txt", b"x" * 500)])
+    monkeypatch.setenv("INGEST_ARCHIVE_MAX_TOTAL_BYTES", str(len(inner) + 499))
+    with pytest.raises(ExtractionError):
+        extract_text_payloads("outer.zip", zip_bytes([("inner.zip", inner)]))
+
+
+def test_corrupt_member_bytes_fail_crc_validation():
+    original = io.BytesIO()
+    with zipfile.ZipFile(original, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("notes.txt", b"original member")
+    corrupt = original.getvalue().replace(b"original member", b"corrupt! member")
+    with pytest.raises(ExtractionError):
+        extract_text_payloads("corrupt.zip", corrupt)
+
+
+def test_top_level_image_keeps_source_and_media_identity(monkeypatch):
+    monkeypatch.setattr(
+        "aquillm.ingestion.parsers.extract_text_from_image",
+        lambda *_args, **_kwargs: {
+            "extracted_text": "image",
+            "provider": "fake",
+            "model": "ocr",
+        },
+    )
+    payload = extract_text_payloads("photo.png", b"image bytes")[0]
+    assert payload.source_artifact.sha256 == sha256(b"image bytes").hexdigest()
+    assert payload.archive_lineage == ()
+    assert payload.source_artifact.member_path is None
+    assert (payload.provider, payload.model) == ("fake", "ocr")
+
+
+def test_figure_artifact_digest_is_independent_of_containing_member(
+    monkeypatch, fake_pdf
+):
+    from aquillm.ingestion.types import ExtractedTextPayload
+
+    member = pdf_bytes(100)
+    monkeypatch.setattr(
+        "aquillm.ingestion.parsers.extract_figure_payloads_for_format",
+        lambda _name, _data, _format, outputs: outputs.append(
+            ExtractedTextPayload(
+                title="figure",
+                normalized_type="document_figure",
+                full_text="caption",
+                modality="image",
+                media_bytes=b"extracted image",
+                provider="fake",
+                model="ocr",
+            )
+        ),
+    )
+    figure = extract_text_payloads("archive.zip", zip_bytes([("paper.pdf", member)]))[1]
+    assert figure.source_artifact.sha256 == sha256(member).hexdigest()
+    assert figure.media_artifact.sha256 == sha256(b"extracted image").hexdigest()
+    assert figure.media_artifact.sha256 != figure.source_artifact.sha256
+    assert (figure.provider, figure.model) == ("fake", "ocr")
+
+
+@pytest.mark.django_db
+def test_worker_persists_member_pdfs_and_separate_user_authorization(
+    fake_pdf, monkeypatch, settings, tmp_path
+):
+    from django.contrib.auth.models import User
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    from apps.ingestion.models import SourceArtifact
+    from aquillm.models import (
+        Collection,
+        CollectionPermission,
+        IngestionBatch,
+        IngestionBatchItem,
+        PDFDocument,
+    )
+    from aquillm.task_ingest_uploaded import run_ingest_uploaded_file
+
+    settings.STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+            "OPTIONS": {"location": str(tmp_path)},
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
+        },
+    }
+    monkeypatch.setattr(
+        "aquillm.models.create_chunks.delay", lambda *_args, **_kwargs: None
+    )
+    members = [pdf_bytes(100), pdf_bytes(200)]
+    archive = zip_bytes([("a/paper.pdf", members[0]), ("b/paper.pdf", members[1])])
+    owners = [User.objects.create_user(username=f"member-owner-{i}") for i in range(2)]
+    collections = [Collection.objects.create(name=f"owner-{i}") for i in range(2)]
+    for owner, collection in zip(owners, collections):
+        CollectionPermission.objects.create(
+            user=owner, collection=collection, permission="MANAGE"
+        )
+        item = IngestionBatchItem.objects.create(
+            batch=IngestionBatch.objects.create(user=owner, collection=collection),
+            source_file=SimpleUploadedFile("papers.zip", archive),
+            original_filename="papers.zip",
+            content_type="application/zip",
+        )
+        run_ingest_uploaded_file(item.id)
+        item.refresh_from_db()
+        assert item.status == IngestionBatchItem.Status.SUCCESS, item.error_message
+        docs = list(
+            PDFDocument.objects.filter(collection=collection).order_by("full_text")
+        )
+        assert len(docs) == 2
+        for document, member in zip(docs, members):
+            with document.pdf_file.open("rb") as file_obj:
+                stored = file_obj.read()
+            assert stored == member
+            assert len(PdfReader(io.BytesIO(stored)).pages) == 1
+            assert document.pdf_file.name.rsplit("/", 1)[-1].startswith("paper")
+            assert document.pdf_file.name.endswith(".pdf")
+        outputs = item.parser_metadata["outputs"]
+        assert all(
+            o["source_occurrence_id"] and o["source_artifact_sha256"] for o in outputs
+        )
+    assert (
+        SourceArtifact.objects.filter(
+            sha256__in=[sha256(m).hexdigest() for m in members]
+        ).count()
+        == 2
+    )
+    assert collections[0].user_can_view(owners[0])
+    assert not collections[1].user_can_view(owners[0])
+    assert collections[1].user_can_view(owners[1])
+
+
+@pytest.mark.django_db
+def test_same_title_figure_cannot_acquire_other_members_parent(
+    monkeypatch, settings, tmp_path
+):
+    from django.contrib.auth.models import User
+    from django.core.files.uploadedfile import SimpleUploadedFile
+
+    from aquillm.ingestion.types import ExtractedTextPayload
+    from aquillm.models import (
+        Collection,
+        DocumentFigure,
+        IngestionBatch,
+        IngestionBatchItem,
+        PDFDocument,
+    )
+    from aquillm.task_ingest_uploaded import run_ingest_uploaded_file
+
+    settings.STORAGES = {
+        "default": {
+            "BACKEND": "django.core.files.storage.FileSystemStorage",
+            "OPTIONS": {"location": str(tmp_path)},
+        },
+        "staticfiles": {
+            "BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"
+        },
+    }
+    monkeypatch.setattr(
+        "aquillm.models.create_chunks.delay", lambda *_args, **_kwargs: None
+    )
+    first, second = pdf_bytes(100), pdf_bytes(200)
+    monkeypatch.setattr(
+        "aquillm.ingestion.parsers.extract_pdf_text",
+        lambda data: "first text" if data == first else "",
+    )
+
+    def figures(_filename, data, _format, outputs):
+        outputs.append(
+            ExtractedTextPayload(
+                title="paper - Figure 1",
+                normalized_type="document_figure",
+                full_text="first caption" if data == first else "second caption",
+                modality="image",
+                media_bytes=b"first image" if data == first else b"second image",
+                media_filename="figure.png",
+                metadata={
+                    "source_document_title": "paper",
+                    "source_format": "pdf",
+                    "figure_index": 0,
+                },
+            )
+        )
+
+    monkeypatch.setattr(
+        "aquillm.ingestion.parsers.extract_figure_payloads_for_format", figures
+    )
+    owner = User.objects.create_user(username="figure-occurrence-owner")
+    collection = Collection.objects.create(name="figure occurrences")
+    archive = zip_bytes([("a/paper.pdf", first), ("b/paper.pdf", second)])
+    item = IngestionBatchItem.objects.create(
+        batch=IngestionBatch.objects.create(user=owner, collection=collection),
+        source_file=SimpleUploadedFile("archive.zip", archive),
+        original_filename="archive.zip",
+        content_type="application/zip",
+    )
+    run_ingest_uploaded_file(item.id)
+    item.refresh_from_db()
+    assert item.status == IngestionBatchItem.Status.SUCCESS, item.error_message
+    source = PDFDocument.objects.get(collection=collection)
+    assert (
+        DocumentFigure.objects.get(full_text="first caption").parent_object_id
+        == source.id
+    )
+    assert (
+        DocumentFigure.objects.get(full_text="second caption").parent_object_id is None
+    )

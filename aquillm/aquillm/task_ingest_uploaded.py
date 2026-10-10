@@ -5,6 +5,9 @@ from django.core.files.base import ContentFile
 from django.db import IntegrityError
 from django.utils import timezone
 
+from apps.ingestion.services.source_artifacts import bind_payload_source, SourceArtifactIntegrityError
+from lib.parsers.source_contracts import source_artifact_ref
+
 from .task_ingest_helpers import (
     fallback_media_text,
     get_or_create_figures_subcollection,
@@ -45,8 +48,23 @@ def run_ingest_uploaded_file(item_id: int) -> None:
         parser_types: list[str] = []
         outputs: list[dict[str, object]] = []
         source_docs_by_key: dict[str, object] = {}
+        source_docs_by_occurrence: dict[str, object] = {}
         figure_collections_by_key: dict[str, object] = {}
         for index, payload in enumerate(payloads):
+            had_source_binding = payload.source_artifact is not None
+            if payload.source_artifact is None:
+                # Transition-only producers may omit bindings for top-level files.
+                # An archived PDF can never acquire its ZIP upload as PDF bytes.
+                member_path = payload.metadata.get("member_path") if isinstance(payload.metadata, dict) else None
+                if payload.archive_lineage or member_path or (
+                    payload.normalized_type == "pdf" and item.original_filename.lower().endswith(".zip")
+                ):
+                    raise SourceArtifactIntegrityError("source_artifact_required")
+                payload.source_artifact = source_artifact_ref(data, member_path=None, container_sha256=None)
+                payload.source_bytes = data
+                payload.source_filename = item.original_filename
+                payload.source_content_type = item.content_type or "application/octet-stream"
+            occurrence = bind_payload_source(payload, using=item._state.db or "default")
             full_text = sanitize_db_text((payload.full_text or "")).strip()
             modality = (payload.modality or "text").strip().lower()
             payload_metadata = payload.metadata if isinstance(payload.metadata, dict) else {}
@@ -72,24 +90,20 @@ def run_ingest_uploaded_file(item_id: int) -> None:
             source_doc = None
             source_key = ""
             if is_document_figure:
+                source_key = occurrence.occurrence_key
+                source_doc = source_docs_by_occurrence.get(source_key)
                 source_title_candidates = [
                     str(payload_metadata.get("source_document_title") or ""),
                     infer_source_title_from_figure_title(payload.title or ""),
                     infer_source_title_from_figure_title(safe_title),
                 ]
-                for candidate in source_title_candidates:
-                    candidate_key = normalize_source_key(candidate)
-                    if not candidate_key:
-                        continue
-                    source_doc = source_docs_by_key.get(candidate_key)
-                    if source_doc is not None:
-                        source_key = candidate_key
-                        break
-                if not source_key:
+                # Transition-only producers can still resolve title metadata.
+                # Bound members never acquire a same-title member's parent.
+                if source_doc is None and not had_source_binding:
                     for candidate in source_title_candidates:
                         candidate_key = normalize_source_key(candidate)
-                        if candidate_key:
-                            source_key = candidate_key
+                        source_doc = source_docs_by_key.get(candidate_key)
+                        if source_doc is not None:
                             break
 
             if modality == "image":
@@ -162,8 +176,8 @@ def run_ingest_uploaded_file(item_id: int) -> None:
                     collection=item.batch.collection,
                     ingested_by=item.batch.user,
                 )
-                pdf_filename = item.original_filename or f"document-{item.id}.pdf"
-                doc.pdf_file.save(pdf_filename, ContentFile(data), save=False)
+                pdf_filename = payload.source_filename.rsplit("/", 1)[-1]
+                doc.pdf_file.save(pdf_filename, ContentFile(payload.source_bytes), save=False)
                 raw_media_saved = True
             else:
                 doc = RawTextDocument(
@@ -196,6 +210,7 @@ def run_ingest_uploaded_file(item_id: int) -> None:
                     raise
 
             if not is_document_figure:
+                source_docs_by_occurrence[occurrence.occurrence_key] = doc
                 source_keys = {
                     normalize_source_key(payload.title or ""),
                     normalize_source_key(safe_title),
@@ -217,6 +232,10 @@ def run_ingest_uploaded_file(item_id: int) -> None:
                     "model": model_name,
                     "raw_media_saved": raw_media_saved,
                     "text_extracted": bool(full_text),
+                    "source_artifact_sha256": occurrence.artifact.sha256,
+                    "source_occurrence_id": occurrence.occurrence_id,
+                    "source_occurrence_key": occurrence.occurrence_key,
+                    "media_artifact_sha256": payload.media_artifact.sha256 if payload.media_artifact else None,
                 }
             )
 

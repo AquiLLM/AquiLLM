@@ -3,12 +3,13 @@
 Artifact digests identify bytes. Occurrences identify an ordered archive location;
 neither grants access to a document or to its output.
 """
+
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
-from hashlib import sha256
 import json
 import re
+from dataclasses import asdict, dataclass
+from hashlib import sha256
 from typing import Literal
 
 
@@ -123,23 +124,35 @@ def source_artifact_ref(
     if not isinstance(data, bytes):
         raise SourceContractError("source_bytes_required")
     digest = sha256(data).hexdigest()
-    ref = SourceArtifactRefV1(digest, len(data), artifact_storage_key(digest), member_path, container_sha256)
+    ref = SourceArtifactRefV1(
+        digest, len(data), artifact_storage_key(digest), member_path, container_sha256
+    )
     validate_artifact_ref(ref)
     return ref
 
 
-def validate_artifact_ref(ref: SourceArtifactRefV1, *, data: bytes | None = None) -> None:
+def validate_artifact_ref(
+    ref: SourceArtifactRefV1, *, data: bytes | None = None
+) -> None:
     if not isinstance(ref, SourceArtifactRefV1):
         raise SourceContractError("source_artifact_required")
     _validate_digest(ref.sha256)
-    if type(ref.size_bytes) is not int or ref.size_bytes < 0 or ref.storage_key != artifact_storage_key(ref.sha256):
+    if (
+        type(ref.size_bytes) is not int
+        or ref.size_bytes < 0
+        or ref.storage_key != artifact_storage_key(ref.sha256)
+    ):
         raise SourceContractError("invalid_source_artifact")
     if (ref.member_path is None) != (ref.container_sha256 is None):
         raise SourceContractError("source_container_member_mismatch")
     if ref.member_path is not None:
         validate_member_path(ref.member_path)
         _validate_digest(ref.container_sha256)
-    if data is not None and (not isinstance(data, bytes) or len(data) != ref.size_bytes or sha256(data).hexdigest() != ref.sha256):
+    if data is not None and (
+        not isinstance(data, bytes)
+        or len(data) != ref.size_bytes
+        or sha256(data).hexdigest() != ref.sha256
+    ):
         raise SourceContractError("source_bytes_digest_mismatch")
 
 
@@ -158,14 +171,20 @@ def validate_archive_lineage(
             raise SourceContractError("invalid_archive_ordinal")
     if archive_lineage:
         leaf = archive_lineage[-1]
-        if leaf.container_sha256 != artifact.container_sha256 or leaf.member_path != artifact.member_path:
+        if (
+            leaf.container_sha256 != artifact.container_sha256
+            or leaf.member_path != artifact.member_path
+        ):
             raise SourceContractError("source_lineage_mismatch")
     elif artifact.member_path is not None or artifact.container_sha256 is not None:
         raise SourceContractError("source_lineage_mismatch")
 
 
 def occurrence_key(
-    artifact: SourceArtifactRefV1, *, original_filename: str, content_type: str,
+    artifact: SourceArtifactRefV1,
+    *,
+    original_filename: str,
+    content_type: str,
     archive_lineage: tuple[ArchiveMemberStepV1, ...],
 ) -> str:
     """SHA256 of canonical JSON v1; duplicate ordinals remain distinct."""
@@ -173,17 +192,27 @@ def occurrence_key(
     for value in (original_filename, content_type):
         if not isinstance(value, str) or "\x00" in value:
             raise SourceContractError("invalid_source_name_or_content_type")
+        try:
+            value.encode("utf-8")
+        except UnicodeError as exc:
+            raise SourceContractError("invalid_source_name_or_content_type") from exc
     if not original_filename:
         raise SourceContractError("original_filename_required")
     manifest = {
-        "contract_version": 1,
+        "version": "source-occurrence-v1",
         "artifact_sha256": artifact.sha256,
         "archive_lineage": [asdict(step) for step in archive_lineage],
         "original_filename": original_filename,
         "content_type": content_type,
     }
     try:
-        wire = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        wire = json.dumps(
+            manifest,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+            allow_nan=False,
+        ).encode("utf-8")
     except UnicodeError as exc:
         raise SourceContractError("invalid_source_name_or_content_type") from exc
     return sha256(wire).hexdigest()

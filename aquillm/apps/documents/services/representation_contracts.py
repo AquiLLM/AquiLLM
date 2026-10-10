@@ -1,4 +1,5 @@
 """Immutable representation scope values shared by ingestion and retrieval."""
+
 from dataclasses import dataclass
 from uuid import UUID
 

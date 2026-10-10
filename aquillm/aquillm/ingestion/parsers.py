@@ -13,9 +13,10 @@ from aquillm.ocr_utils import extract_text_from_image
 from aquillm.vtt import coalesce_captions, parse as parse_vtt, to_text as vtt_to_text
 
 from .media import transcribe_media_bytes
-from .parser_archive import extract_archive_payloads
+from .parser_archive import ArchiveBudget, extract_archive_payloads
 from .parser_figures import extract_figure_payloads_for_format
 from .types import ExtractedTextPayload, ExtractionError, UnsupportedFileTypeError
+from lib.parsers.source_contracts import ArchiveMemberStepV1, source_artifact_ref
 
 # Import from lib/parsers
 from lib.parsers import (
@@ -191,7 +192,39 @@ def _extract_media_transcript(filename: str, data: bytes, normalized_type: str) 
     )
 
 
-def extract_text_payloads(filename: str, data: bytes, content_type: str | None = None, depth: int = 0) -> list[ExtractedTextPayload]:
+def extract_text_payloads(
+    filename: str, data: bytes, content_type: str | None = None, depth: int = 0, *,
+    _archive_lineage: tuple[ArchiveMemberStepV1, ...] = (),
+    _source_containers: tuple[tuple[str, bytes, str], ...] = (),
+    _archive_budget: ArchiveBudget | None = None,
+) -> list[ExtractedTextPayload]:
+    if depth > 2:
+        raise ExtractionError("Nested archive depth exceeded.")
+    if detect_ingest_type(filename, content_type) == "archive":
+        return extract_archive_payloads(
+            filename, data, depth, archive_lineage=_archive_lineage,
+            source_containers=_source_containers, budget=_archive_budget,
+            content_type=content_type,
+        )
+    payloads = _extract_unbound_text_payloads(filename, data, content_type, depth)
+    leaf = _archive_lineage[-1] if _archive_lineage else None
+    artifact = source_artifact_ref(
+        data, member_path=leaf.member_path if leaf else None,
+        container_sha256=leaf.container_sha256 if leaf else None,
+    )
+    for payload in payloads:
+        payload.source_artifact = artifact
+        payload.source_bytes = data
+        payload.source_filename = filename
+        payload.source_content_type = content_type or _guess_content_type(filename)
+        payload.archive_lineage = _archive_lineage
+        payload.source_containers = _source_containers
+        if payload.media_bytes is not None:
+            payload.media_artifact = source_artifact_ref(payload.media_bytes, member_path=None, container_sha256=None)
+    return payloads
+
+
+def _extract_unbound_text_payloads(filename: str, data: bytes, content_type: str | None = None, depth: int = 0) -> list[ExtractedTextPayload]:
     if depth > 2:
         raise ExtractionError("Nested archive depth exceeded.")
 
