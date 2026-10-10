@@ -20,7 +20,10 @@ from apps.documents.services.chunk_rerank import (
     rerank_chunks_scored,
 )
 from apps.documents.services.chunk_rerank_results import RerankScoreSet
-from apps.documents.services.chunk_search_authorization import authorized_search_rows
+from apps.documents.services.chunk_search_authorization import (
+    authorized_search_rows,
+    finalize_search_rows,
+)
 from apps.documents.services.chunk_search_candidates import (
     _exact_term_query as _candidate_exact_term_query,
 )
@@ -70,7 +73,7 @@ from lib.replay_observation import retrieval_stages
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 from .chunk_search_lifetime import enter_search, graph_preflight
-from .chunk_search_scoped_rows import ranked_rows, validated_dense_rows
+from .chunk_search_scoped_rows import ranked_rows
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
@@ -413,6 +416,10 @@ def text_chunk_search(
                     ranking.graph_candidates
                 )
         reranked_results = list(authorized_rows(ranking.ranked_results))
+        snapshot, final_rows = finalize_search_rows(
+            snapshot, reranked_results, authorize=authorized_rows
+        )
+        reranked_results = final_rows[2]
         score_set = (
             score_set_for_authorized_rows(ranking.score_set, tuple(reranked_results))
             if ranking.score_set is not None
@@ -444,12 +451,7 @@ def text_chunk_search(
                 graph_config is not None and graph_preflight_status is None
             ),
         )
-        return (
-            authorized_rows(validated_dense_rows(snapshot.vector_results)),
-            authorized_rows(snapshot.trigram_results),
-            list(authorized_rows(reranked_results)),
-            diagnostics,
-        )
+        return (*final_rows, diagnostics)
     except Exception as error:
         log_search_failure(logger, error)
         raise

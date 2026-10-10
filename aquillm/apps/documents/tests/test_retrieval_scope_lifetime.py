@@ -49,6 +49,7 @@ def test_default_graph_disabled_authorization_and_dense_positive(legacy, transpo
             TextChunk, "unrelated", 2, [doc], authorization_context=auth
         )
         assert result[0][0].pk == TextChunk.objects.get().pk
+        assert result[3]["vector_error"] is None
         permission.delete()
         with pytest.raises(SourceScopeUnavailable):
             text_chunk_search(

@@ -218,13 +218,11 @@ def test_vector_error_captured_in_diagnostics(
 
 @override_settings(RAG_CACHE_ENABLED=False)
 @patch("apps.documents.services.chunk_search.apps.get_app_config")
-@patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_no_vector_error_when_embed_succeeds(mock_embed, mock_rerank, mock_app_cfg):
-    """vector_error is None when embedding succeeds."""
+def test_raw_embedding_success_does_not_claim_compatibility(mock_embed, mock_app_cfg):
+    """A successful historical raw-vector path provides no observed compatibility."""
     mock_embed.return_value = [0.1] * 16
     chunks = [MagicMock(pk=i, content=f"chunk{i}") for i in range(3)]
-    mock_rerank.return_value = chunks
     mock_app_cfg.return_value = _make_cfg()
 
     mc = _ModelCls
@@ -234,7 +232,9 @@ def test_no_vector_error_when_embed_succeeds(mock_embed, mock_rerank, mock_app_c
         mc, "query with results", 3, [MagicMock()]
     )
 
-    assert diagnostics["vector_error"] is None
+    assert diagnostics["vector_error"] == "embedding_unavailable"
+    assert tuple(_vec) == ()
+    mock_embed.assert_not_called()
 
 
 @override_settings(RAG_CACHE_ENABLED=False)
