@@ -330,3 +330,25 @@ Capture any requested document subset before seed, topology and evidence admissi
 V2's joint direct/extended handoff contributes one `graph_v2` ranking channel and one original-rank RRF vote. It cannot coexist with nonempty legacy direct/extended channels in the same fusion. Its rank and count cap stays 20 and the total candidate ceiling stays unchanged. The legacy path retains its existing ordering and identity when V2 is absent. Early graph dispatch recognizes the legacy mode explicitly; V2 waits for its frozen baseline and runs once.
 
 Apply the original raw-seed prefix before partitioning incompatible groups and enforce one final seed cap across all groups. Local PPR normalization is rescaled by the group's admitted global seed mass before evidence selection. The policy signature records this rule. Seed database reads and frontier discovery share one cumulative physical-work ledger and original deadline. Explicit known query cardinality and sentinels reserve allowance before dispatch; actual returned records are charged even when late or invalid. These source-row counters do not claim to measure internal database plan tuple scans. Uncertain completion blocks further work and adoption evidence. The cost is truthful partial coverage under pressure; there is no new per-group allowance.
+
+### D18 graph study originals and mode observations
+
+Retain and validate the original effective controls for both graph arms, including exact value types, production bounds and cross-field constraints. Recompute their identities and budget bindings. Treatment declarations name exactly the allowed changed values; they cannot excuse model, extractor, cap, deadline or iteration drift. Every execution must fit its own captured effective limits, including stricter operator values.
+
+A labeled question remains one statistical observation while retaining separate paired executions for baseline, selection, preservation and combined answer modes. Run all quality, uncertainty, safety, completion and latency gates independently for each mode and require all four to pass. A 150-question study therefore needs 600 mode pairs, not 600 independent questions. Each actual invocation has a unique identity; copying one event into four modes is invalid. Current answer-evaluation subjects bind their exact mode, query and execution digest.
+
+The graph event additionally captures the actual request algorithm signature. It is distinct from the static effective configuration signature and binds the kernels and grouped acquisition used by that request. Missing or mismatched observations remain inconclusive. The independent D17 trust source still governs activation; synthetic passing fixtures establish only validation behavior.
+
+### D15 bounded seed reauthorization and allocation
+
+The built-in permission policy reauthorizes the original selected document IDs through a bounded permission query and one union across the supported concrete document models. Preserve duplicate rows so ambiguous identities fail validation. Reserve each query's known returned-row ceiling, including its sentinel, against the same seed/frontier ledger before dispatch. Unsupported policies without the bounded capability return unavailable without invoking an unbounded callback. No fresh authorization or representation context is captured.
+
+The accounting scope covers seed data, seed reauthorization and frontier reads. Database control statements, ready capture and final body validation retain their separate existing bounded contracts; these counters do not claim to measure every database operation. Context-local propagation is limited to the original seed invocation and cleared on exit. A large scope that cannot fit the remaining allowance is unavailable rather than silently narrowed.
+
+Within the unchanged original raw-seed prefix, admit one best seed per nonempty authority group before additional seeds, up to the one global cap. Omitted groups retain partial coverage. The request identity includes this allocation policy and the actual per-group ranking configurations.
+
+### D19 deletion bounds and primary text partitions
+
+Disable Django fast deletion for retained representation history and its cascading chunk/embedding children inside the bounded lifecycle collector. Count distinct collected rows against the unchanged global deletion limit before mutation, including history that the ordinary fast path would omit. Deferred guards allow a real owner deletion in the same transaction while refusing standalone history deletion.
+
+Figure elements may overlay the primary canonical text partition. Lexical section publication selects the single covering non-figure element for a text chunk, while validating and retaining the complete extraction and its figure bindings. An overlay must neither make valid text ambiguous nor grant authority to image bytes.
