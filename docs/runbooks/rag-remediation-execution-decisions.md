@@ -158,3 +158,7 @@ I2 supplies `persist_extraction_revision(occurrence, extraction, *, using: str) 
 ### D6 clarification: default retrieval publication
 
 Valid default-mode direct, manual and document-tool answers receive the same app-owned publication binding around their current selected packet, exact user/scope/source, and existing R1 TurnContext. This does not enable preservation, SourceRuntime or planning. Historical/unbound evidence cannot mint a receipt. Bounded metadata checks may compute SHA-256 in PostgreSQL without returning source bodies; a current hash alone never proves that arbitrary delivered text came from that source. Delivered slices and media require captured exact provenance.
+
+### D7 clarification: bounded nonmonotone token fitting
+
+Binary prefix/suffix probing may find a checked valid fit, but cannot prove no fit exists for a BPE tokenizer. I2 adds exhaustive fallback only when the heuristic finds no nonempty fit. Across one chunk_extraction call, fallback is bounded to 4096 tokenizer calls and 1,000,000 full-input codepoints (context plus slice). These are offline chunker-work limits, not retrieval allowances. Exhaustion raises SourceContractError('chunker_work_limit'); only a completed no-fit search may report unrepresentable_source_element. Fitting policy and both limits are part of the chunker fingerprint. The function returns no partial tuple on failure. I5 must retain immutable input and mark the staged generation failed/limited without activating partial chunks; a capacity failure does not mean source text is impossible to represent.
