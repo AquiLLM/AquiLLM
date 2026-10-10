@@ -78,6 +78,32 @@ class ProductionHybridBranchRuntime:
         if authorization is not self.authorization or settings is not self.settings:
             raise ValueError("runtime request binding changed")
 
+    def run_v2(
+        self,
+        *,
+        query,
+        authorization,
+        representation_snapshot,
+        budget,
+        settings,
+        deadline,
+        baseline=None,
+        requested_document_ids=None,
+    ):
+        from .graph_runtime_v2 import run_bound_graph_v2
+
+        return run_bound_graph_v2(
+            query=query,
+            runtime=self,
+            authorization=authorization,
+            representation_snapshot=representation_snapshot,
+            budget=budget,
+            settings=settings,
+            deadline=deadline,
+            baseline=baseline,
+            requested_document_ids=requested_document_ids,
+        )
+
     def prepare_shared(self, *, authorization, settings, deadline):
         self._exact_request(authorization, settings)
         if self.clock() >= deadline:

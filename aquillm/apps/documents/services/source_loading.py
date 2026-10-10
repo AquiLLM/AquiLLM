@@ -111,7 +111,12 @@ def source_query_rows(queryset, *, runtime=None, refresh=False):
             queryset.annotate(
                 _source_length=Length("content"), _source_revision=MD5("content")
             ).values(
-                "pk", "doc_id", "chunk_number", "_source_length", "_source_revision"
+                "pk",
+                "doc_id",
+                "chunk_number",
+                "representation_generation",
+                "_source_length",
+                "_source_revision",
             )[:45]
         )
         rows = []
@@ -120,7 +125,13 @@ def source_query_rows(queryset, *, runtime=None, refresh=False):
             if meta["doc_id"] not in allowed or not runtime.budget.can_publish():
                 continue
             identity = (meta["pk"], meta["_source_revision"])
-            cache_key = (queryset.db, *identity, meta["doc_id"], meta["chunk_number"])
+            cache_key = (
+                queryset.db,
+                *identity,
+                meta["doc_id"],
+                meta["chunk_number"],
+                meta["representation_generation"],
+            )
             cached = runtime.cache.get(cache_key)
             if cached is not None and not refresh:
                 rows.append(copy(cached))
@@ -141,6 +152,7 @@ def source_query_rows(queryset, *, runtime=None, refresh=False):
                     pk=meta["pk"],
                     doc_id=meta["doc_id"],
                     chunk_number=meta["chunk_number"],
+                    representation_generation=meta["representation_generation"],
                     _source_length=size,
                     _source_revision=meta["_source_revision"],
                 )

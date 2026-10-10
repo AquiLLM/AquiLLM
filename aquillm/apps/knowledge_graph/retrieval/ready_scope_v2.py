@@ -3,6 +3,7 @@
 import json
 from dataclasses import asdict, dataclass
 from hashlib import sha256
+from uuid import UUID
 
 from apps.documents.services.representation_contracts import RepresentationSnapshotV1
 from apps.documents.services.representation_store import representation_snapshot_digest
@@ -106,6 +107,7 @@ class SelectedGraphScopeV2:
     authorization_context_signature: str
     representation_snapshot: RepresentationSnapshotV1
     coverage: GraphCoverageV2
+    requested_document_ids: frozenset[UUID] | None = None
 
     def __post_init__(self):
         if type(self.groups) is not tuple or any(
@@ -139,6 +141,19 @@ class SelectedGraphScopeV2:
                 g.generation_key for g in scope.ready.selected_generations
             )
         selected = {s.document.id for s in self.representation_snapshot.selections}
+        if self.requested_document_ids is not None:
+            requested = self.requested_document_ids
+            if type(requested) is not frozenset or any(
+                type(d) is not UUID for d in requested
+            ):
+                raise TypeError(
+                    "requested graph documents must be exact UUID frozenset"
+                )
+            if not requested <= selected:
+                raise ValueError(
+                    "requested graph documents widen captured representation"
+                )
+            selected = requested
         if (
             len(set(documents)) != len(documents)
             or len(set(generations)) != len(generations)
@@ -161,7 +176,33 @@ def graph_selection_digest_v2(selected: SelectedGraphScopeV2) -> str:
             ),
             "group_checksums": [g.group_checksum for g in selected.groups],
             "coverage": asdict(selected.coverage),
+            **(
+                {
+                    "requested_document_ids": sorted(
+                        str(d) for d in selected.requested_document_ids
+                    )
+                }
+                if selected.requested_document_ids is not None
+                else {}
+            ),
         }
+    )
+
+
+def requested_authorities_v2(authorities, representation_snapshot, requested):
+    """A view of already validated authority; no new permission or pointer capture."""
+    from dataclasses import replace
+
+    if requested is None:
+        return authorities
+    if type(requested) is not frozenset or any(type(d) is not UUID for d in requested):
+        raise TypeError("requested graph documents must be exact UUID frozenset")
+    if not requested <= {s.document.id for s in representation_snapshot.selections}:
+        raise ValueError("requested graph documents widen captured representation")
+    return tuple(
+        replace(a, documents=documents)
+        for a in authorities
+        if (documents := tuple(row for row in a.documents if row[0] in requested))
     )
 
 

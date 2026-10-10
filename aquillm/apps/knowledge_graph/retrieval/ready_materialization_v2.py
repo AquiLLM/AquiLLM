@@ -16,7 +16,7 @@ from apps.knowledge_graph.projection.runtime import (
 from .graph_handoff import GraphCandidateRefV2
 from .ready_provenance_v2 import provenance_for_chunk
 from .ready_scope_repository_v2 import load_authorities_v2, validate_original_scope
-from .ready_scope_v2 import SelectedGraphScopeV2
+from .ready_scope_v2 import SelectedGraphScopeV2, requested_authorities_v2
 
 
 def validate_captured_selection(*, selected, authorization, settings, codec):
@@ -41,11 +41,35 @@ def validate_captured_selection(*, selected, authorization, settings, codec):
         representation_snapshot=selected.representation_snapshot,
         codec=codec,
     )
+    current = requested_authorities_v2(
+        current, selected.representation_snapshot, selected.requested_document_ids
+    )
     if current != captured:
         raise ValueError("captured authority changed")
 
 
 def materialize_graph_candidates_v2(*, selected, refs, authorization):
+    from apps.documents.services.source_deadline import check_source_deadline
+    from apps.documents.services.source_loading import (
+        bounded_source_database,
+        current_source_runtime,
+    )
+
+    runtime = current_source_runtime()
+    if runtime is None:
+        return _materialize(selected=selected, refs=refs, authorization=authorization)
+    if runtime.authorization != authorization:
+        raise ValueError("materialization replaced original source authorization")
+    with bounded_source_database(runtime, authorization.database_alias):
+        check_source_deadline()
+        if not runtime.budget.can_publish():
+            return ()
+        rows = _materialize(selected=selected, refs=refs, authorization=authorization)
+        check_source_deadline()
+        return rows if runtime.budget.can_publish() else ()
+
+
+def _materialize(*, selected, refs, authorization):
     from apps.documents.models import TextChunk
     from apps.knowledge_graph.models import ProjectionChunkReference
 
@@ -97,7 +121,9 @@ def materialize_graph_candidates_v2(*, selected, refs, authorization):
             def load_chunk_objects(
                 self, *, chunk_predicates, authorized_document_ids, database_alias
             ):
-                return tuple(
+                from apps.documents.services.source_loading import source_query_rows
+
+                return source_query_rows(
                     active_chunk_scope(
                         TextChunk.objects.using(database_alias).filter(
                             pk__in=tuple(row[0] for row in chunk_predicates),

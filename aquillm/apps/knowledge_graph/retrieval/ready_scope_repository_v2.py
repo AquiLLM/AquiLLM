@@ -32,6 +32,7 @@ from .ready_scope_v2 import (
     SelectedGraphScopeV2,
     assemble_group_v2,
     compatible_signature,
+    requested_authorities_v2,
 )
 
 
@@ -218,7 +219,7 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
 
 
 def select_ready_scope_v2(
-    *, authorization, settings, representation_snapshot
+    *, authorization, settings, representation_snapshot, requested_document_ids=None
 ) -> SelectedGraphScopeV2:
     from django.core.exceptions import ValidationError
 
@@ -234,6 +235,9 @@ def select_ready_scope_v2(
             settings=settings,
             representation_snapshot=representation_snapshot,
             codec=codec,
+        )
+        authorities = requested_authorities_v2(
+            authorities, representation_snapshot, requested_document_ids
         )
     except (SourceScopeUnavailable, ValidationError, TypeError, ValueError) as exc:
         if isinstance(exc, ReadyScopeError):
@@ -258,7 +262,11 @@ def select_ready_scope_v2(
             )
         )
         count = sum(len(g.scope.selected_document_ids) for g in groups)
-        total = len(authorization.selected_document_ids)
+        total = len(
+            authorization.selected_document_ids
+            if requested_document_ids is None
+            else requested_document_ids
+        )
         coverage = GraphCoverageV2(
             total,
             count,
@@ -271,6 +279,7 @@ def select_ready_scope_v2(
             authorization.authorization_context_signature,
             representation_snapshot,
             coverage,
+            requested_document_ids,
         )
     except (TypeError, ValueError):
         mismatch()
