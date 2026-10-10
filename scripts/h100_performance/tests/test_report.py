@@ -29,7 +29,7 @@ def rows(role, factor=1.0, blocks=3, context=512, digest="a" * 64):
                                input_sha256=digest, repeat=repeat, warmup=False,
                                ttft_seconds=ttft, total_seconds=ttft + 255 * decode,
                                aggregate_decode_seconds_per_token=decode,
-                               output_sha256="same", captured_at=f"2026-10-10T00:{block * 2 + (role == 'candidate'):02d}:{repeat:02d}+00:00"))
+                               output_sha256="f" * 64, captured_at=f"2026-10-10T00:{block * 2 + (role == 'candidate'):02d}:{repeat:02d}+00:00"))
     return result
 
 
@@ -259,3 +259,64 @@ def test_candidate_only_strict_quality_rows_remain_missing_evidence():
     result = module().build_report(rows("baseline"), rows("candidate", 0.9), bootstrap_samples=10,
                                    candidate_quality=candidate)
     assert result["gates"]["quality_oracle"]["status"] == "missing"
+
+
+def qualified_report(baseline, candidate, **evidence):
+    for row in baseline + candidate:
+        row.update(complete=True, error=None, stream_done=True, finish_reason="length",
+                   usage={"completion_tokens": 256})
+    base_quality, new_quality = quality("baseline"), quality("candidate")
+    for row in base_quality + new_quality:
+        row.update(oracle="exact-v1", complete=True, error=None, finish_reason="stop",
+                   input_sha256="d" * 64, case_sha256="e" * 64)
+    return module().build_report(baseline, candidate, bootstrap_samples=10, target_contexts=[512],
+        baseline_metrics=[metrics(f"baseline-block{i}", 80) for i in range(1, 4)],
+        candidate_metrics=[metrics(f"candidate-block{i}", 80) for i in range(1, 4)],
+        baseline_quality=base_quality, candidate_quality=new_quality,
+        evidence=dict(target_kernel_median_reduction_percent=10, activation_verified=True,
+                      runtime_identity_frozen=True, numerical_graph_checks_passed=True,
+                      memory_gate_passed=True, application_replay_passed=True, **evidence))
+
+
+def test_both_missing_output_hashes_cannot_pass_even_with_other_qualified_evidence():
+    baseline, candidate = rows("baseline"), rows("candidate", 0.9)
+    for row in baseline + candidate:
+        row.pop("output_sha256")
+    result = qualified_report(baseline, candidate, greedy_changes_reviewed=True)
+    assert result["status"] == "incomplete"
+    assert result["gates"]["greedy_output_review"]["status"] == "missing"
+    assert result["gates"]["greedy_evidence"]["status"] == "missing"
+
+
+@pytest.mark.parametrize("invalid", [None, "same", "a" * 63, "g" * 64, 42])
+def test_malformed_provided_output_hash_is_invalid(invalid):
+    baseline, candidate = rows("baseline"), rows("candidate", 0.9)
+    for row in baseline + candidate:
+        row["output_sha256"] = "f" * 64
+    candidate[0]["output_sha256"] = invalid
+    with pytest.raises(ValueError, match="output_sha256"):
+        qualified_report(baseline, candidate)
+
+
+def test_different_valid_greedy_hashes_require_explicit_review():
+    baseline, candidate = rows("baseline"), rows("candidate", 0.9)
+    for row in baseline:
+        row["output_sha256"] = "a" * 64
+    for row in candidate:
+        row["output_sha256"] = "b" * 64
+    result = qualified_report(baseline, candidate)
+    assert result["gates"]["greedy_evidence"]["status"] == "pass"
+    assert result["gates"]["greedy_output_review"]["status"] == "missing"
+    assert result["groups"][0]["changed_greedy_output_pairs"] == 30
+    assert qualified_report(baseline, candidate, greedy_changes_reviewed=True)["status"] == "pass"
+
+
+def test_cli_malformed_output_hash_emits_invalid_report(tmp_path):
+    source, output = tmp_path / "rows.jsonl", tmp_path / "report.json"
+    capture = rows("baseline")
+    capture[0]["output_sha256"] = "not-a-digest"
+    source.write_text("\n".join(json.dumps(row) for row in capture))
+    result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / "report.py"),
+        "--baseline", str(source), "--output", str(output)], capture_output=True, text=True)
+    assert result.returncode == 2
+    assert json.loads(output.read_text())["status"] == "invalid"

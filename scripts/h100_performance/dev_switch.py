@@ -50,7 +50,7 @@ def canonical_hash(state, raw_config, process_env):
 
 
 def environment(current):
-    return dict(item.split("=", 1) for item in current["Config"]["Env"] if "=" in item)
+    return dict(item.split("=", 1) for item in current["Config"].get("Env") or [] if "=" in item)
 
 
 def protected_environment(values):
@@ -164,6 +164,8 @@ def main():
     image_info = json.loads(run(["docker", "image", "inspect", image]))[0]
     image_id = image_info["Id"]
     baseline_info = json.loads(run(["docker", "image", "inspect", state["image"]]))[0]
+    if protected_environment(environment(image_info)) != protected_environment(environment(baseline_info)):
+        raise SystemExit("Image protected environment key/value defaults changed; refusing before container replacement")
     keys = ("Cmd", "Entrypoint", "User", "WorkingDir", "Healthcheck", "ExposedPorts", "Volumes", "StopSignal", "Shell")
     if any(image_info["Config"].get(key) != baseline_info["Config"].get(key) for key in keys):
         raise SystemExit("Image runtime defaults changed; refusing an invalid image-only comparison")

@@ -84,6 +84,9 @@ def _capture(rows, expected_repeats):
         if repeat in groups[key][block]:
             raise ValueError(f"duplicate repeat {repeat} in block {block}")
         if not _failed(row):
+            if "output_sha256" in row and (not isinstance(row["output_sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", row["output_sha256"])):
+                raise ValueError("invalid output_sha256: expected lowercase SHA256 digest")
             ttft = _number(row, "ttft_seconds", positive=True)
             total = _number(row, "total_seconds", positive=True)
             decode = _number(row, "aggregate_decode_seconds_per_token", positive=True)
@@ -278,8 +281,10 @@ def build_report(baseline_rows, candidate_rows, *, expected_repeats=10, bootstra
                 "decode_p95_regression_percent": (new["decode_ms_per_token"]["p95"] / base["decode_ms_per_token"]["p95"] - 1) * 100
                     if base["requests"] and new["requests"] else None,
                 "changed_greedy_output_pairs": sum(
-                    row.get("output_sha256") != candidate[key][block][repeat].get("output_sha256")
-                    for block, repeats in baseline[key].items() for repeat, row in repeats.items())})
+                    row["output_sha256"] != candidate[key][block][repeat]["output_sha256"]
+                    for block, repeats in baseline[key].items() for repeat, row in repeats.items()
+                    if not _failed(row) and not _failed(candidate[key][block][repeat])
+                    and "output_sha256" in row and "output_sha256" in candidate[key][block][repeat])})
     supported = bool(groups) and all(group["paired_blocks"] >= 3 and all(count >= 10 for count in group["paired_completed_repeats_by_block"].values()) for group in groups)
     gates = {"sample_support": _gate("pass" if supported else "missing", "requires three alternating AB pairs and >=10 repeats/shape/block")}
     targets = [group for group in groups if group["prompt_tokens"] in (target_contexts or [])]
@@ -315,8 +320,13 @@ def build_report(baseline_rows, candidate_rows, *, expected_repeats=10, bootstra
         explicit_errors.append(sum(_failed(row) for row in measured) if measured and all("complete" in row and "error" in row for row in measured) else None)
     errors = [evidence.get(name, explicit_errors[index]) for index, name in enumerate(("baseline_errors", "candidate_errors"))]
     gates["errors"] = _gate("missing" if any(type(value) is not int or value < 0 for value in errors) else "pass" if errors[1] <= errors[0] else "fail", "no increased errors; completed-request JSONL alone does not count failed attempts")
+    greedy_rows = [[row for row in source if row.get("warmup") is False and not _failed(row)]
+                   for source in (baseline_rows, candidate_rows)]
+    greedy_complete = all(rows and all("output_sha256" in row for row in rows) for rows in greedy_rows)
+    gates["greedy_evidence"] = _gate("pass" if greedy_complete else "missing",
+        "valid output SHA256 required for every completed latency row in both captures")
     changed = quality.get("changed_outputs") or any(group["changed_greedy_output_pairs"] for group in groups)
-    gates["greedy_output_review"] = _gate("missing" if changed and evidence.get("greedy_changes_reviewed") is not True else "pass", "changed greedy outputs require inspection, not bitwise equality")
+    gates["greedy_output_review"] = _gate("missing" if not greedy_complete or changed and evidence.get("greedy_changes_reviewed") is not True else "pass", "complete greedy evidence and inspection of changed outputs required")
     status = "fail" if any(gate["status"] == "fail" for gate in gates.values()) else "incomplete" if any(gate["status"] == "missing" for gate in gates.values()) else "pass"
     return {"status": status, "groups": groups, "gates": gates, "speculation": speculation, "quality": quality,
             "baseline_errors": explicit_errors[0], "candidate_errors": explicit_errors[1],

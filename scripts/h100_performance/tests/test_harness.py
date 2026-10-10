@@ -168,7 +168,7 @@ class SwitchTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             dev_switch.make_override(state, current, state['image'], rollback=True)
 
-    def main_probe(self, state, current, resolved, action='rollback'):
+    def main_probe(self, state, current, resolved, action='rollback', candidate_env=None, baseline_env=None):
         calls = []
         restored = json.loads(json.dumps(self.current))
         def docker(args, env=None, input=None):
@@ -176,7 +176,9 @@ class SwitchTests(unittest.TestCase):
             if args[:2] == ['docker', 'inspect']:
                 return json.dumps([restored if any('up' in c for c in calls) else current])
             if args[:3] == ['docker', 'image', 'inspect']:
-                return json.dumps([{'Id': 'sha256:original', 'Config': {}}])
+                values = candidate_env if args[3] == 'candidate' else baseline_env
+                image_config = {'Env': values} if values is not None else {}
+                return json.dumps([{'Id': 'sha256:original', 'Config': image_config}])
             if 'config' in args:
                 if '--hash' in args:
                     return 'vllm verified\n'
@@ -187,7 +189,8 @@ class SwitchTests(unittest.TestCase):
             config = home / '.config/aquillm/h100-performance'
             config.mkdir(parents=True)
             (config / 'baseline.json').write_text(json.dumps(state))
-            with patch.object(dev_switch.Path, 'home', return_value=home), patch.object(dev_switch.socket, 'gethostname', return_value='aquillm-dev2'), patch.object(dev_switch, 'run', side_effect=docker), patch.object(sys, 'argv', ['dev_switch.py', action]), patch('builtins.print'):
+            argv = ['dev_switch.py', action] + (['--image', 'candidate'] if action == 'switch' else [])
+            with patch.object(dev_switch.Path, 'home', return_value=home), patch.object(dev_switch.socket, 'gethostname', return_value='aquillm-dev2'), patch.object(dev_switch, 'run', side_effect=docker), patch.object(sys, 'argv', argv), patch('builtins.print'):
                 try:
                     dev_switch.main()
                 except SystemExit as exc:
@@ -215,6 +218,19 @@ class SwitchTests(unittest.TestCase):
     def test_main_legacy_rollback_rejected_before_up(self):
         calls, error, _ = self.main_probe(self.legacy, self.current, self.service)
         self.assertIn('migrated', error)
+        self.assertFalse(any('up' in call for call in calls))
+
+    def test_candidate_image_new_protected_env_rejected_before_up(self):
+        for env in (['VLLM_REVISION=new-revision'], ['AQUILLM_H100_UNKNOWN_FLAG=new']):
+            calls, error, _ = self.main_probe(self.prepare(), self.current, self.service,
+                                             action='switch', candidate_env=env)
+            self.assertIsNotNone(error)
+            self.assertFalse(any('up' in call for call in calls))
+
+    def test_candidate_image_changed_protected_env_value_rejected_before_up(self):
+        calls, error, _ = self.main_probe(self.prepare(), self.current, self.service,
+            action='switch', candidate_env=['VLLM_REVISION=changed'], baseline_env=['VLLM_REVISION=original'])
+        self.assertIn('Image protected environment', error)
         self.assertFalse(any('up' in call for call in calls))
 
     def test_canonical_hash_resolves_env_file_without_writing_credentials(self):
