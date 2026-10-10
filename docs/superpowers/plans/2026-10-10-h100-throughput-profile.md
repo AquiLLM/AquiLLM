@@ -62,24 +62,42 @@ assert json.loads(shlex.split(candidate)[-1]) == {'method': 'mtp', 'num_speculat
 **Files:** Add focused concurrent probe under `scripts/h100_performance/`; archive orchestrator and results under `docs/audits/2026-10-10-h100-performance/throughput/`.
 
 - [x] Reuse validated direct API stream and quality probes; freeze exact prompt IDs and generated-token budgets across arms.
-- [ ] Check strict answers, tools/structured output, long continuation and concurrent request isolation; reject incomplete/short/error responses.
-- [ ] Test baseline 1 then 2 and 4 only after startup and correctness pass. Use C1/C2/C4 clients, same request counts/work across limits, homogeneous short/long generation and mixed contexts. Poll request-running metrics to establish actual overlap rather than merely client concurrency.
-- [ ] Record TTFT, whole-request latency, aggregate decode time/token, total output tokens/wall time, MTP accepted/drafted counts, preemptions and sampled memory. Preserve raw per-request results.
-- [ ] Always restore exact baseline in `finally`, retaining diagnostics before replacement and checking unrelated service IDs.
-- [ ] Treat a small screen as provisional; repeat paired fresh boots before a promotion claim. Do not infer quality from equal token counts or healthy startup.
+- [x] Check strict answers, tools/structured output, long continuation and concurrent request isolation; reject incomplete/short/error responses. Baseline and first candidate both passed all 38 API cases; candidate passed the bounded cancellation/survivor/recovery probe. This does not prove physical state-slot reuse.
+- [x] Test baseline max-seqs1 and candidate max-seqs4 after the B2/B4 GPU gate. Use C1/C2/C4 clients with equal short and mixed-context work. Sampled running requests reached 1/2/4 respectively on the candidate. A separate max-seqs2 configuration was not needed for this bounded screen.
+- [x] Record TTFT, whole-request latency, aggregate decode time/token, total output tokens/wall time, MTP accepted/drafted counts, preemptions and sampled memory. Preserve raw per-request results.
+- [x] Always restore exact baseline in `finally`, retaining diagnostics before replacement and checking unrelated service IDs. First candidate recovered the original image and configuration healthy, with unrelated services unchanged.
+- [x] Treat a small screen as provisional. A fresh baseline C1 repeat and a second candidate boot did not reproduce the initial single-user gain. No promotion claim is made; broader paired boots and representative latency checks remain prerequisites for rollout.
 
 ## Task 4: Bounded whole-path profile and next optimization
 
-- [ ] Use max-num-seqs1 and exact baseline image. Warm up first, then collect separate short decode and prefill traces with CPU/CUDA activities and existing custom scopes.
-- [ ] Exclude profiler runs from benchmark claims. Inspect worker trace for target forward, draft, logits/sampling, memory operations, graph replay and host gaps; distinguish summed kernel time from wall time and overlapped ranges.
-- [ ] Rank demonstrated bottlenecks. Select the next patch only from those findings; an unsuccessful configuration screen is not a reason to relax correctness or drop plugins.
-- [ ] Commit/push reproducible helpers and evidence, pull exact commits to development, and report measured benefits and remaining work accurately.
+- [x] Use max-num-seqs1 and exact baseline image. Warm up first, then collect the short decode trace with CPU/CUDA activities and existing custom scopes. Separate prefill profiling is deferred: this pass targets decode and concurrency, retaining the previously measured prefill optimization.
+- [x] Exclude profiler runs from benchmark claims. Inspect worker trace for target forward, draft, logits/sampling, memory operations, graph replay and host gaps; distinguish summed kernel time from wall time and overlapped ranges.
+- [x] Rank demonstrated bottlenecks. Matrix multiplication dominates; the full-precision head already approaches its simple bandwidth roofline. No speculative single-user kernel rewrite is justified by this trace. Test correct batching and explicit concurrent graph coverage next.
+- [x] Commit/push reproducible helpers, pull exact implementation commits to development, and report measured benefits and remaining work accurately. Source-bound runtime candidate was built from d337f5cd; final graph controls ran at f899e019. Raw archives and reproducible analysis are retained with this plan.
 
 ## Task 5: Explicit MTP graph sizes after the initial batching screen
 
 The pinned default sizing and Genesis P66 filtering predict captures `[5,40]` at max-num-seqs4. The live startup captured two PIECEWISE graphs and one FULL graph, matching that prediction. FULL5 preserves single-user MTP, while concurrent B2/B3/B4 require10/15/20 tokens and may otherwise fall back to PIECEWISE. Confirm with the captured installed config/dispatcher and curated runtime configuration before testing.
 
-- [ ] Add opt-in `switch --graph-policy mtp` with bounded exact capture arrays: seq2 `[5,10,20]`, seq4 `[5,10,15,20,40]`. Preserve existing small and largest capture sizes, add request-count-specific MTP graphs, retain four drafts and all other settings.
-- [ ] Verify the pinned accepted CLI representation. Reject collisions/unknown original compilation settings instead of merging arbitrary configuration. Allow only approved candidate images, reject profiler combinations, and leave baseline policy unchanged.
-- [ ] Add failing regression tests for exact arrays, argument normalization, malformed/duplicate controls, policy/sequence/image mismatches, and exact original rollback. Review and pass existing helper tests before remote use.
-- [ ] Complete the first candidate screen before selecting this second arm. Run the same quality, lifecycle, equal-work performance probes; record active graph sizes, memory and preemption. Restore the exact baseline in all cases. Attribute any benefit only after an unprofiled comparison.
+- [x] Add opt-in `switch --graph-policy mtp` with bounded exact capture arrays: seq2 `[5,10,20]`, seq4 `[5,10,15,20,40]`. Preserve existing small and largest capture sizes, add request-count-specific MTP graphs, retain four drafts and all other settings.
+- [x] Verify the pinned accepted CLI representation. Reject collisions/unknown original compilation settings instead of merging arbitrary configuration. Allow only approved candidate images, reject profiler combinations, and leave baseline policy unchanged. Reject abbreviated `-c` and opaque `--config` files as well.
+- [x] Add failing regression tests for exact arrays, argument normalization, malformed/duplicate controls, policy/sequence/image mismatches, and exact original rollback. Root verified 280 helper/related tests; independent review verified all 151 throughput-switch tests after both guard fixes.
+- [x] Complete the first candidate screen before selecting this second arm. Both arms passed 38 quality checks, one concurrent cancellation/survivor round with six recovery checks, and all six equal-work performance conditions. The graph arm used two measured repeats per condition; its configured sizes and four FULL/five PIECEWISE startup captures were recorded. Per-request graph replay was not measured. Both runs restored the exact baseline healthy with unrelated services unchanged.
+
+## Outcome and remaining qualification
+
+At four clients, explicit graphs measured 568.92 aggregate output tokens/s on
+short prompts versus 180.62 on the original baseline (3.15x); mixed contexts
+measured 54.18 versus 41.51 (+30.5%). These are small fixed-work screens, not
+general capacity guarantees. Fresh C1 comparisons were -2.35% short and -0.81%
+mixed; no single-user decode speedup is established. Mixed C4 median request
+completion increased from 9.21 to 18.84 seconds despite higher aggregate
+throughput. Generated text and MTP acceptance differed across arms.
+
+Development remains on the original prefill baseline. This pass provides a
+guarded candidate and evidence for concurrency improvements; it does not meet
+the combined single-user and mixed-traffic latency objective for promotion.
+Next work should qualify scheduling fairness for mixed short/long traffic and
+measure actual Marlin operand shapes before testing existing tile alternatives.
+The single-user audit records why no available precision-preserving tuning flag
+or unqualified dense-fusion toggle is justified by the current evidence.

@@ -5,7 +5,8 @@ from the original full token order. This is a correctness blocker for promoting
 `max-num-seqs=2` or `4` on the unchanged pinned stack. The local plugin candidate
 backports the upstream gate gather without changing recurrence kernels,
 dependencies, TurboQuant, prefill dispatch, MTP configuration, or deployment
-defaults. GPU recurrence/state isolation and serving qualification are pending.
+defaults. The root-operated real GDN GPU gate passed 43 cases. Serving
+qualification remains pending.
 
 This audit targets Qwen3.6-27B with FP16 activations, TurboQuant k8v4, four MTP
 drafts (five verification tokens), H100 80GB, vLLM
@@ -151,6 +152,52 @@ These are source-boundary correctness tests. Stubbed recurrence/conv/chunk
 functions do not establish numerical tolerances, GPU state isolation, CUDA
 graph behavior, model quality, or throughput.
 
+## Root-operated real GDN GPU evidence
+
+Root tested source commit `d337f5cd` in immutable candidate image
+`sha256:6c6005ebae4f46c98ace93c78df10420eb3a39370bc9da7173c501017595eee0`.
+The fresh-child run passed **43/43 in 5.91 seconds** on the H100. Root reported
+that the production baseline container remained unchanged and healthy before
+and after the gate. The sanitized result, successful log tail and first-run
+failure excerpt are archived under `reproduction/` as
+`gdn-mixed-gpu-result.json`, `gdn-mixed-2-gpu-tail.txt` and
+`gdn-mixed-1-gpu-failure.txt`. The JSON records full original-log hashes and
+distinguishes locally extracted log facts from root-reported container checks.
+
+These tests invoke the actual installed corrected `_forward_core`, saving the
+original method for independent per-request execution. Both sides use real
+convolution, QKV rearrangement, recurrent update and chunk kernels; only the
+forward-context lookup is injected. Coverage includes mixed B2/B4 partitions,
+one/three/ten-token non-spec rows, five-token MTP rows, gate strides 48/96,
+accepted counts 1/3/5, two successive calls with changed acceptance, disjoint
+state slots, untouched pool/output sentinels, pure-spec control and an original
+mixed-method negative control. Output limits remain `atol=1e-4, rtol=0.002`;
+state limits remain `atol=1e-5, rtol=0.002`. No tolerances were widened.
+
+The first harness run failed before numerical comparison:
+`TypeError: causal_conv1d_fn() got an unexpected keyword argument
+'num_accepted_tokens'`. It registered Genesis and ran pytest in the same
+process. P60b rewrote the convolution wrapper's signature on disk after earlier
+registration steps could import it; text patching does not reload cached Python
+callables. The harness also omitted the verified model identity, so bootstrap
+logged an inactive adapter route. The retry supplied the verified public model
+and MTP arguments, performed registration in a preparation process, then
+registered and tested in a fresh child. That child asserted the actual
+convolution signature contains `num_accepted_tokens`, recorded the wrapper
+file SHA256 `70afe94cdad489486ed98a963f9843ee3adbfd587cf4b715e1ef61a3d99d7bd5`,
+and verified the installed GDN marker. All 43 cases then passed. This was a
+harness import-order failure; no production convolution argument or speculative
+semantics were changed to obtain the pass.
+
+The isolated double-registration harness logged `gdn_mixed=true` but
+`prefill=false`, with reason `post-Genesis prefill method fingerprint mismatch`.
+The direct GDN tests exercise the selected real chunk kernel but do not
+exercise or qualify the separate H100 prefill adapter installation. This result
+does not qualify model startup, CUDA graph capture, serving quality, request
+lifecycle behavior, TurboQuant batch routing, throughput or larger batch sizes.
+The serving runner separately requires both `prefill=true` and
+`gdn_mixed=true` in the installed startup result before candidate quality tests.
+
 ## Other batch compatibility findings and bounded qualification
 
 No fixed B=1 restriction was found in the actual P67b/PN521 request grids or
@@ -179,19 +226,21 @@ The bundled multiconcurrency preset describes INT4, TP2 on A5000, and three
 drafts; its older measurements do not validate this FP16/H100/four-draft
 stack. Copying it would also change unrelated scheduling/stream settings.
 
-Promotion remains gated on root-operated tests, preserving all existing
-numerical limits and every dependency/plugin/configuration except the tested
-batch ceiling:
+Root-operated bounded screens preserve existing numerical limits and every
+dependency/plugin. The first candidate changes the batch ceiling; the second
+also adds explicit MTP graph capture sizes. These are serving screens, not
+general production qualification:
 
 | Gate | Bounded coverage |
 | --- | --- |
-| Actual GPU forward | Corrected mixed B2/B4 versus isolated original per-request forwards, real conv/recurrence/chunk, two successive calls, differing accepted counts, noncontiguous state slots, untouched-padding sentinels. |
-| Startup and memory | Fresh max-seqs=2, then 4; package/plugin identity, capture/warmup diagnostics, cache capacity, actual B1..max routes. |
-| Functional serving | Existing strict32 and long6 checks with independent per-request nonces, concurrent clients, shared prefixes with private suffixes. |
-| Lifecycle | Arrival during decode, chunk-prefill tail plus MTP, short finish/long continuation, cancellation/replacement, reordered request slots, zero/fewer draft tokens, B1→B2→B4→B2→B1 transitions. |
-| Performance | Identical warmed C1/C2/C4 inputs; aggregate/per-request throughput, TTFT/TPOT, queue delay, acceptance, errors and completion flags. Single-client throughput may regress with a larger batch ceiling. |
+| Actual GPU forward — passed | 43 corrected mixed B2/B4 cases versus isolated original per-request forwards, real conv/recurrence/chunk, two successive calls, differing accepted counts, noncontiguous state slots, untouched-padding sentinels. Scope and harness limits are recorded above. |
+| Startup and memory — passed within scope | Two fresh max-seqs4 candidate boots, default and explicit graph policies. Both prefill and GDN adapters installed; 265 package versions, three plugins and image defaults preserved. C1/C2/C4 traffic exercised; coarse whole-device memory samples retained. No separate max-seqs2 server configuration was measured. |
+| Functional serving — passed | All 32 strict/tool/multiturn/reasoning and six long-context checks passed on the original baseline and each candidate boot. |
+| Lifecycle — passed within scope | Each candidate passed one overlap/cancellation/survivor round and six subsequent recovery oracles. Sampled overlap and socket close are demonstrated; server-side abort and physical state-slot reuse are not directly observed. This is narrower than exhaustive scheduler-transition coverage. |
+| Performance — screen completed | Identical warmed C1/C2/C4 input payloads and token budgets, with raw timings, completion flags, sampled active requests, and acceptance counters. All complete, no recorded performance preemptions. Generated text/MTP differences, boot variation and mixed-request latency regressions prevent a blanket single-user or promotion claim. |
 
 Root alone owns SSH, GPU execution, immutable candidate builds, serving changes,
-and rollback. At this report's completion no GPU or serving numerical result
-has been claimed for the gate-alignment candidate, and production defaults
-have not been changed by this task.
+and rollback. The real GDN GPU gate and bounded serving checks have passed.
+See [the batching evidence](batching-screen-evidence.md) for measured benefits,
+latency tradeoffs, raw archives and recovery records. Production defaults have
+not been changed by this task.
