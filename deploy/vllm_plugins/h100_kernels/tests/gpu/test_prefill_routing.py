@@ -11,6 +11,18 @@ from reference import assert_close, make_verify_batch, reference_attention, unpa
 pytestmark = [pytest.mark.gpu, pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA runtime required")]
 
 
+@pytest.fixture(autouse=True)
+def fa2_runtime():
+    """Configure the actual helper lookup, as in the deployed FA2 runtime."""
+    from vllm.config import VllmConfig, set_current_vllm_config
+    from vllm.v1.attention.backends.fa_utils import get_flash_attn_version
+    config = VllmConfig()
+    config.attention_config.flash_attn_version = 2
+    with set_current_vllm_config(config):
+        assert get_flash_attn_version(head_size=256) == 2
+        yield
+
+
 def caller(monkeypatch, profile):
     from vllm.v1.attention.backends.turboquant_attn import TurboQuantAttentionImpl
     from aquillm_vllm_h100.prefill_adapter import _make_route, rewrite_prefill_method
