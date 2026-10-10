@@ -9,10 +9,11 @@ from lib.llm.types.response import LLMResponse
 
 
 @pytest.mark.parametrize("historical_citation", [False, True])
+@pytest.mark.parametrize("stream_setting", ["0", "1"])
 async def test_ordinary_tool_after_document_history_remains_ordinary(
-    monkeypatch, historical_citation
+    monkeypatch, historical_citation, stream_setting
 ):
-    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
+    monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", stream_setting)
     answer = "The weather service reports clear skies."
     if historical_citation:
         answer = "An old document finding [doc:old chunk:1]."

@@ -529,14 +529,9 @@ async def complete_conversation_turn(
     source_allowlist = set(citation_allowlist)
     if rag_answer and not source_allowlist:
         source_allowlist = current_source_refs
-    selecting_document_tool = isinstance(last_message, UserMessage) and any(
-        is_retrieval_tool(tool.name) for tool in (last_message.tools or ())
-    )
-    defer_stream_until_final = callable(stream_func) and (
-        is_post_tool_result_turn
-        or selecting_document_tool
-        or final_stream.final_answer_streaming_enabled()
-    )
+    # Any answer can introduce document markup, even with no document history.
+    # Classify the complete answer before releasing any of its provider tokens.
+    defer_stream_until_final = callable(stream_func)
     use_live_citation_stream = bool(
         source_allowlist
         and callable(stream_func)
@@ -1029,14 +1024,13 @@ async def complete_conversation_turn(
         **response_tool_call,
     )
     if (
-        is_post_tool_result_turn
-        and not new_msg.tool_call_id
+        not new_msg.tool_call_id
         and (
             citations.find_invalid_citations(new_msg.content, set())
             or "/aquillm/document_image/" in new_msg.content
         )
     ):
-        # Ordinary tool turns cannot revive historical document authority.
+        # No newly generated answer can revive historical document authority.
         rag_answer = True
     if rag_answer and not new_msg.tool_call_id:
         from lib.llm.answer_publication import LIMITED_ANSWER, bind_answer

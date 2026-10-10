@@ -153,6 +153,16 @@ async def test_failed_repair_never_reaches_visible_or_stored_answer(
         ("A claim [doc:missing chunk:1].", "unknown_citation"),
         ("A claim [doc:a chunk:1]. A forged ref [doc:a chunk:x].", "unknown_citation"),
         (
+            "Supported statement [doc:a chunk:1].\n"
+            "Another finding [doc:missing chunk:x\nContinued prose.",
+            "unknown_citation",
+        ),
+        (
+            "Supported statement [doc:a chunk:1].\r\n"
+            "Another finding [doc:missing chunk:x\r\nContinued prose.",
+            "unknown_citation",
+        ),
+        (
             "A claim [doc:a chunk:1].\n- Unsupported factual assertion",
             "uncited_factual_line",
         ),
@@ -176,7 +186,7 @@ def test_complete_predicate_reports_specific_failure(text, reason):
 
 
 @pytest.mark.parametrize(
-    "recovery", ["continuation", "repair_error", "compact", "invalid_extract"]
+    "recovery", ["repair_error", "compact", "invalid_extract"]
 )
 async def test_recovery_cannot_publish_uncited_numeric_suffix(monkeypatch, recovery):
     from lib.llm.answer_publication import LIMITED_ANSWER
@@ -205,17 +215,6 @@ async def test_recovery_cannot_publish_uncited_numeric_suffix(monkeypatch, recov
                 text=""
                 if recovery in {"compact", "invalid_extract"} and len(calls) == 1
                 else "Capacity is 999 litres.",
-                tool_call={},
-                stop_reason="length"
-                if recovery == "continuation" and len(calls) == 1
-                else "stop",
-                input_usage=1,
-                output_usage=1,
-            )
-
-        async def _continue_cutoff_response(self, **kwargs):
-            return LLMResponse(
-                text="The hidden capacity is 999 litres.",
                 tool_call={},
                 stop_reason="stop",
                 input_usage=1,

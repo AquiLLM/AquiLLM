@@ -32,7 +32,7 @@ from .rag_citation_extracts import (
 )
 
 _CITATION_RE = re.compile(r"\[doc:[^\]\s]+\s+chunk:\d+\]")
-_CITATION_LIKE_RE = re.compile(r"\[doc:[^\]\r\n]*(?:\]|$)")
+_CITATION_LIKE_RE = re.compile(r"\[doc:[^\]\r\n]*(?:\]|(?=[\r\n]|$))")
 _BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*]\s+|\s*\d+\.\s+)")
 
 
