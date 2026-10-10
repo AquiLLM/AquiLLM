@@ -20,6 +20,7 @@ from .document_types import (
 from .chunks import TextChunk, TextChunkQuerySet
 from .exceptions import DuplicateDocumentError
 from .chunk_publication import ChunkPublication
+from .embedding_index import EmbeddingSpace, DocumentEmbeddingState, EmbeddingGeneration, ChunkEmbedding
 
 
 def document_modality(doc) -> str:
@@ -71,6 +72,10 @@ __all__ = [
     'TextChunk',
     'TextChunkQuerySet',
     'ChunkPublication',
+    'EmbeddingSpace',
+    'DocumentEmbeddingState',
+    'EmbeddingGeneration',
+    'ChunkEmbedding',
     # Constants
     'IMAGE_UPLOAD_EXTENSIONS',
     'MEDIA_UPLOAD_EXTENSIONS',

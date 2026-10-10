@@ -66,6 +66,7 @@ class TextChunk(models.Model):
     metadata = models.JSONField(default=dict, blank=True)
     embedding = VectorField(dimensions=1024, blank=True, null=True)
     embedding_provenance = models.JSONField(blank=True, null=True)
+    representation_generation = models.UUIDField(null=True, db_column='representation_generation_id')
 
     doc_id = models.UUIDField(editable=False, validators=[doc_id_validator])
 
