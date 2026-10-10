@@ -305,3 +305,36 @@ The existing `kernels/prefix.py` exposes `prefix_attention(q, kv_cache, block_ta
 The final page16 audit reports 183 GPU checks with zero skips, a focused sanitizer pass, and 240 measured serving streams with no request errors. It also reports failed performance gates: 32768-token decode p95 regressed 8.84%, and MTP acceptance dropped 4.215 percentage points. The user accepted that development rollout with limitations. Those tests covered one sequence, not the approved 4/8 simultaneous 262144-token workloads, and not tiered storage. Five-second whole-GPU samples showed at least 14504 MiB candidate headroom; this is not a guaranteed allocation budget or a transient peak measurement. Process GPU usage likewise is not measured model-weight allocation.
 
 Proceed locally with the source-build recipe, fail-closed runtime manifest checks, byte-layout fixtures and draft PR. Defer target GPU execution as requested. The first later H100 gate should capture effective hybrid geometry under the actual candidate settings, prove packed attention and Mamba-state round trips through CPU and bounded SSD, and confirm the retained prefill/MTP routes. Only then attempt active-pager capacity and correctness tests. No current evidence justifies advertising active offloaded decode or relaxing the recorded runtime guards.
+
+## Local validation of the preparation branch
+
+The corrected branch at `13477bd4` passed 399 capacity, storage, benchmark,
+launcher and image regression tests in 102.47 seconds, without warnings. The
+subsequent build-only header correction at `e16a275f` passed all 54 storage tests
+in 8.72 seconds. Final code review findings were corrected and re-reviewed.
+Repository-wide file-length checks still report 36 unrelated, pre-existing
+violations; no changed source/test path appears among them.
+
+The local Genesis image is
+`sha256:3c283f768e73b4b7f04d8f4a14492f72748153bae3a286c7991d8af7e18fcb32`.
+The pinned Mooncake SDK compiled and installed successfully; the SDK diagnostic
+image is `sha256:e18146db7275be30d1b34ecff71503ac31ee48d3358be1b24c9a0dbd03a93e0f`.
+The master binary's `ldd` output resolves all dependencies without GPU injection.
+The build retains the upstream RDMA control-frame compiler warning; that path has
+not been runtime-qualified here.
+
+Real compilation exposed three packaging issues now corrected: build-time
+`-lcuda` resolution, a stale upstream proto include directory, and PyTorch's
+CUDA component headers residing under the installed `nvidia/cu13/include` tree.
+A bounded 2-CPU/4-GiB, network-disabled NVCC probe reproduced the missing
+`cusparse.h` failure and succeeded with build-only CPATH, producing a 13,992-byte
+object. The installed transfer engine RPATH was read back as
+`/usr/local/cuda/lib64`, with the driver-stub directory removed. No CUDA/PyTorch
+package upgrade or runtime stub search path was introduced.
+
+Docker repeatedly missed the completed SDK cache. Local validation therefore
+continues the unchanged remainder of `Dockerfile.kv-storage` from the verified
+SDK diagnostic image. This is staged validation, not a completed single-shot
+final image build. The LMCache wheel build is in progress; final image/native
+import and packed-kernel results remain pending. No model checkpoint was loaded,
+and the development H100 was not contacted.

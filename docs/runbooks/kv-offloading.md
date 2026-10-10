@@ -291,11 +291,22 @@ rtk proxy python -m pytest -c pyproject.toml aquillm/tests/integration/test_kv_o
 
 The standalone local commands use `pyproject.toml` and run without the repository's
 Django-specific pytest configuration or its unrelated warning.
-Task 2 configuration/preflight/Compose checks passed locally; the earlier native
-build failed CUDA SDK linkage, followed by a successful bounded allocator-only
-link/load and synthetic 256-byte local RTX 3090 copy. That was not an LMCache
-packed transfer or hybrid registration. The latest SDK build succeeded; the
-candidate image build is still in progress and native/kernel results remain
-pending separate confirmation at this writing. No serving, H100,
+The combined capacity, storage, benchmark, launcher and image regression selection
+passed **399 tests** without warnings after the PowerShell BOM fix. A subsequent
+build-only CUDA header correction passed all **54 storage tests**, plus a bounded
+NVCC compile probe against the pinned image; no dependency versions changed.
+The global file-length checker still reports 36 pre-existing violations in files
+untouched by this branch.
+
+The Mooncake SDK built successfully. Its master resolves all libraries without a
+GPU driver. Build-only CUDA linking, unused include-path filtering, and removal
+of the installed transfer engine's stub RPATH have been exercised. A prior
+allocator-only 256-byte local RTX 3090 copy also passed; that was not an LMCache
+packed transfer or hybrid registration. To avoid repeated Docker cache misses,
+the candidate validation continues the unchanged Dockerfile tail from that
+verified SDK image. A single-shot final image build is not claimed. The LMCache
+wheel is currently compiling; full native imports and packed-kernel results
+remain pending. See the runtime audit's local-validation addendum for provenance.
+No serving, H100,
 SSD round trip, numerical equivalence, sustained 55–75/user target, full 4/8-user
 256K context, or active paging success is claimed.
