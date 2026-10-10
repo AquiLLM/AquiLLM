@@ -120,7 +120,8 @@ def legacy_figure(item):
     return parent, child, figure
 
 
-@pytest.mark.parametrize('mutation', ['none', 'move_child', 'move_parent', 'revoke_parent', 'delete_parent', 'unrelated_child'])
+@pytest.mark.parametrize('mutation', ['none', 'rename_parent', 'rename_child', 'move_child',
+    'move_parent', 'revoke_parent', 'delete_parent', 'wrong_parent', 'ambiguous_figure', 'ambiguous_parent'])
 def test_legacy_figure_status_requires_exact_current_parent_and_child(upload, mutation):
     item = upload()
     parent, child, figure = legacy_figure(item)
@@ -139,15 +140,35 @@ def test_legacy_figure_status_requires_exact_current_parent_and_child(upload, mu
         CollectionPermission.objects.create(user=item.batch.user, collection=child, permission='VIEW')
     elif mutation == 'delete_parent':
         parent.delete()
-    elif mutation == 'unrelated_child':
-        child.name = 'Unrelated'
+    elif mutation == 'rename_parent':
+        parent.title = 'Renamed parent'
+        parent.save(update_fields=['title'])
+    elif mutation == 'rename_child':
+        child.name = 'Renamed child'
         child.save(update_fields=['name'])
+    elif mutation == 'wrong_parent':
+        other_parent = RawTextDocument.objects.create(title='Other parent', full_text='other source',
+            collection=item.batch.collection, ingested_by=item.batch.user)
+        figure = DocumentFigure(title='Other figure', full_text='other caption', collection=child,
+            ingested_by=item.batch.user, source_format='pdf', figure_index=1)
+        figure.parent_document = other_parent
+        figure.save()
+        item.document_ids = [str(parent.id), str(figure.id)]
+        item.parser_metadata = {'outputs': [{'document_id': identity} for identity in item.document_ids]}
+        item.save(update_fields=['document_ids', 'parser_metadata'])
+    elif mutation == 'ambiguous_figure':
+        RawTextDocument.objects.create(id=figure.id, title='Ambiguous figure', full_text='unrelated figure UUID',
+            collection=elsewhere, ingested_by=item.batch.user)
+    elif mutation == 'ambiguous_parent':
+        from apps.documents.models import ImageUploadDocument
+        ImageUploadDocument.objects.create(id=parent.id, title='Ambiguous parent', full_text='unrelated parent UUID',
+            collection=elsewhere, ingested_by=item.batch.user)
     response = ingest_uploads_status(request_for(item.batch.user), item.batch_id)
     if mutation == 'revoke_parent':
         assert response.status_code == 403
         return
     result = json.loads(response.content)['items'][0]
-    if mutation == 'none':
+    if mutation in ('none', 'rename_parent', 'rename_child'):
         assert result['document_ids'] == [str(parent.id), str(figure.id)]
         assert [r['document_id'] for r in result['parser_metadata']['outputs']] == result['document_ids']
         assert result['status'] == 'success'

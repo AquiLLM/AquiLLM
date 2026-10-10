@@ -82,7 +82,6 @@ def checkpoint_item(item, *, using):
 def legacy_authorized_ids(item, user, *, using):
     from uuid import UUID
     from apps.documents.models import DESCENDED_FROM_DOCUMENT, DocumentFigure
-    from aquillm.task_ingest_helpers import figures_subcollection_name
     resolved = {}
     for identity in item.document_ids:
         try:
@@ -103,8 +102,7 @@ def legacy_authorized_ids(item, user, *, using):
         if (parent is not None and str(parent.id) in allowed and type(captured) is type(parent)
                 and captured.pkid == parent.pkid and parent.collection_id == item.batch.collection_id
                 and parent.collection.user_can_view(user)
-                and document.collection.parent_id == item.batch.collection_id
-                and document.collection.name == figures_subcollection_name(parent.title)):
+                and document.collection.parent_id == item.batch.collection_id):
             allowed.add(identity)
     return [identity for identity in item.document_ids if str(identity) in allowed]
 
