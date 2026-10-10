@@ -303,10 +303,15 @@ GPU driver. Build-only CUDA linking, unused include-path filtering, and removal
 of the installed transfer engine's stub RPATH have been exercised. A prior
 allocator-only 256-byte local RTX 3090 copy also passed; that was not an LMCache
 packed transfer or hybrid registration. To avoid repeated Docker cache misses,
-the candidate validation continues the unchanged Dockerfile tail from that
-verified SDK image. A single-shot final image build is not claimed. The LMCache
-wheel is currently compiling; full native imports and packed-kernel results
-remain pending. See the runtime audit's local-validation addendum for provenance.
-No serving, H100,
+the candidate validation used the unchanged Dockerfile tail from that verified
+SDK image, then incrementally rebuilt the wheel after preserving the verified
+upstream release tag for correct 0.5.5 package metadata. All 21 focused packaging
+and preflight tests passed. A single-shot final image build is not claimed.
+Native imports and exact packed CUDA D2H/H2D copies passed locally for both
+388-byte and padded 400-byte slots, using less than 2 MiB of PyTorch tensors on
+the RTX 3090. Both base and corrected images retain the same pre-existing
+`pygobject`/missing `pycairo` dependency-check failure. See the runtime audit's
+local-validation addendum for image/wheel identities and the reproducible fixture.
+No MP IPC, mixed-group registration, serving, H100,
 SSD round trip, numerical equivalence, sustained 55–75/user target, full 4/8-user
 256K context, or active paging success is claimed.

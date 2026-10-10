@@ -333,8 +333,51 @@ object. The installed transfer engine RPATH was read back as
 package upgrade or runtime stub search path was introduced.
 
 Docker repeatedly missed the completed SDK cache. Local validation therefore
-continues the unchanged remainder of `Dockerfile.kv-storage` from the verified
-SDK diagnostic image. This is staged validation, not a completed single-shot
-final image build. The LMCache wheel build is in progress; final image/native
-import and packed-kernel results remain pending. No model checkpoint was loaded,
-and the development H100 was not contacted.
+continued the unchanged remainder of `Dockerfile.kv-storage` from the verified
+SDK diagnostic image. The complete LMCache native compile/link succeeded, but
+preflight correctly rejected version `0.1.dev1`: fetching only a commit omitted
+the release tag needed by upstream setuptools_scm. Commit `eec373d7` fetches the
+real upstream `v0.5.5` tag and requires its peeled commit to equal the immutable
+source pin. All 21 focused tests passed, including real Git fixtures for matching,
+moved and missing tags; scoped review found no remaining issue.
+
+An incremental wheel rebuild reused those compiled objects after fetching the
+verified tag; it changed neither source commit nor dependency versions. The
+installed wheel is `lmcache-0.5.5-cp312-cp312-linux_x86_64.whl`, SHA-256
+`e7c8eb17d19f68042ffc7bab289f53ef57490fc1081366302eff19e6362cbb31`.
+The corrected local image is
+`sha256:7beffefe9491617585b7593e33fc6878991e33f5de5c3a7b659b6fe3b160f1fa`.
+This is staged validation with an incremental packaging correction, not a
+completed single-shot final image build.
+
+Driver-backed `kv_storage_preflight.py --native` passed with LMCache 0.5.5,
+Python 3.12.13, torch 2.11.0+cu130, CXX11 ABI true, CUDA image 13.0.2,
+transformers 5.12.1, huggingface-hub 1.21.0, and the pinned vLLM/Genesis tuple.
+Both Genesis and corrected images report the identical pre-existing `pip check`
+failure: `pygobject 3.42.1 requires pycairo, which is not installed`.
+
+The preserved [packed-copy fixture](2026-10-10-kv-offloading/packed_roundtrip.py)
+imports the pinned upstream MP kernel test directly, avoiding its unrelated large
+autouse fixture. It exercises real CUDA D2H/H2D transfers of contiguous uint8
+NHD content slots with two layers, four heads, 16-token blocks, randomized block
+IDs and two 32-token pinned CPU objects. Widths 388 and 400 both passed exact
+restored-byte comparisons plus independent CPU-object comparisons; the extra
+12 bytes in width 400 were poisoned with `0xA5`. Peak PyTorch tensor allocations
+were 1,739,776 and 1,792,000 bytes respectively, excluding the CUDA context.
+The container exposed only the local RTX 3090, with no network, private IPC,
+64 MiB shared memory, 4 GiB RAM and two CPUs.
+
+To reproduce on the same local GPU with the verified image already present:
+
+```powershell
+$image = 'sha256:7beffefe9491617585b7593e33fc6878991e33f5de5c3a7b659b6fe3b160f1fa'
+rtk proxy docker --context desktop-linux run --rm --pull never --network none --gpus device=0 --entrypoint python3 $image /opt/kv-storage/kv_storage_preflight.py --native
+$fixture = (Resolve-Path docs/audits/2026-10-10-kv-offloading/packed_roundtrip.py).Path
+rtk proxy docker --context desktop-linux run --rm --pull never --network none --gpus device=0 --ipc private --shm-size 64m --memory 4g --cpus 2 --workdir /opt/LMCache --mount "type=bind,source=$fixture,target=/tmp/packed_roundtrip.py,readonly" --entrypoint python3 $image /tmp/packed_roundtrip.py
+```
+
+These checks validate raw packed-copy kernels only. MP IPC, Mooncake/SSD storage,
+mixed attention/GDN registration, model continuation and active paging remain
+unvalidated; the serving guards remain enabled. No model checkpoint was loaded,
+and the development H100 was not contacted. Draft PR:
+[AquiLLM/AquiLLM#241](https://github.com/AquiLLM/AquiLLM/pull/241).
