@@ -20,7 +20,7 @@ const fonts = [
 test.describe('User Settings (Theme + Font) Page', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/user-settings/');
-    await expect(page.locator('#user-settings-root h2')).toHaveText('Select Your Theme');
+    await expect(page.getByRole('heading', { name: 'Select Your Theme', exact: true })).toBeVisible();
   });
 
   for (const theme of themes) {

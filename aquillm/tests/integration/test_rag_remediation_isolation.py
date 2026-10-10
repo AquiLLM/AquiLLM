@@ -6,6 +6,9 @@ from pathlib import Path
 import unittest
 import tempfile
 import sys
+import json
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 from contextlib import redirect_stderr
 from io import StringIO
 from unittest.mock import patch
@@ -214,6 +217,23 @@ class IsolationTests(unittest.TestCase):
             self.skipTest("frontend assertion requires the owned browser build volume")
         from django.contrib.staticfiles import finders
         self.assertEqual(finders.find("js/dist/main.js"), "/frontend-build/main.js")
+
+    def test_owned_fake_providers_are_deterministic_and_match_dimensions(self):
+        if os.environ.get("RAG_REMEDIATION_TEST") != "1":
+            self.skipTest("HTTP contract requires the owned fake-model service")
+        def post(path, body):
+            request = Request("http://fake-models:8000" + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
+            with urlopen(request, timeout=3) as response:
+                return json.load(response)
+        first = post("/v1/embeddings", {"input": ["synthetic source"], "dimensions": 1024})
+        second = post("/v1/embeddings", {"input": ["synthetic source"], "dimensions": 1024})
+        self.assertEqual(first, second)
+        self.assertEqual(len(first["data"][0]["embedding"]), 1024)
+        scores = post("/v1/rerank", {"query": "synthetic source", "documents": ["synthetic source", "other"]})
+        self.assertGreater(scores["results"][0]["relevance_score"], scores["results"][1]["relevance_score"])
+        with self.assertRaises(HTTPError) as error:
+            post("/unsupported", {})
+        self.assertEqual(error.exception.code, 501)
 
 
 if __name__ == "__main__":

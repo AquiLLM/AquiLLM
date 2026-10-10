@@ -28,7 +28,11 @@ class Handler(BaseHTTPRequestHandler):
             inputs = data.get("input", [])
             if isinstance(inputs, str):
                 inputs = [inputs]
-            rows = [{"index": i, "object": "embedding", "embedding": [float(x) / 255 for x in hashlib.sha256(str(value).encode()).digest()] * 128} for i, value in enumerate(inputs)]
+            dimensions = data.get("dimensions", 1024)
+            if type(dimensions) is not int or not 1 <= dimensions <= 4096:
+                self.reply(400, {"error": "unsupported synthetic dimensions"})
+                return
+            rows = [{"index": i, "object": "embedding", "embedding": ([float(x) / 255 for x in hashlib.sha256(str(value).encode()).digest()] * 128)[:dimensions]} for i, value in enumerate(inputs)]
             self.reply(200, {"object": "list", "model": "synthetic-rag-model", "data": rows, "usage": {"prompt_tokens": 0, "total_tokens": 0}})
         elif self.path in ("/v1/rerank", "/rerank", "/score", "/v1/score"):
             query = set(str(data.get("query", "")).lower().split())
