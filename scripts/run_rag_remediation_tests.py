@@ -240,6 +240,40 @@ def run_recorded(command, artifact, project):
     return result
 
 
+def refresh_frontend_assets(project):
+    """Publish only the fixed current image build into the inspected owned volume."""
+    containers, _, _ = inspect_project(project)
+    frontends = [c for c in containers if c['Config']['Labels']['com.docker.compose.service'] == 'frontend']
+    if len(frontends) != 1 or frontends[0]['Config']['WorkingDir'] != '/app/react':
+        raise IsolationError('owned frontend identity/workdir unavailable')
+    frontend = frontends[0]
+    if not any(m.get('Type') == 'volume' and m.get('Name') == project + '_frontend-build'
+               and m.get('Destination') == '/frontend-build' and m.get('RW') is True for m in frontend.get('Mounts', [])):
+        raise IsolationError('owned frontend build volume unavailable')
+    script = """
+const fs = require('node:fs'), crypto = require('node:crypto');
+const source = '/app/aquillm/aquillm/static/js/dist', target = '/frontend-build';
+const digest = value => crypto.createHash('sha256').update(value).digest('hex');
+const hash = path => digest(fs.readFileSync(path));
+(async () => {
+  const image = hash(source + '/main.js');
+  const before = fs.existsSync(target + '/main.js') ? hash(target + '/main.js') : null;
+  fs.cpSync(source, target, { recursive: true });
+  const after = hash(target + '/main.js');
+  const response = await fetch('http://app:8000/static/js/dist/main.js', { signal: AbortSignal.timeout(10000) });
+  if (!response.ok) throw new Error('owned app asset unavailable');
+  const served = digest(Buffer.from(await response.arrayBuffer()));
+  if (image !== after || image !== served) throw new Error('owned app build mismatch');
+  console.log(JSON.stringify({ before, image, after, served }));
+})().catch(() => { process.exitCode = 1; });
+"""
+    receipt = json.loads(docker('exec', frontend['Id'], 'node', '-e', script, capture=True))
+    if (not isinstance(receipt, dict) or not re.fullmatch(r'[0-9a-f]{64}', str(receipt.get('image')))
+            or receipt.get('image') != receipt.get('after') or receipt.get('image') != receipt.get('served')):
+        raise IsolationError('invalid owned frontend build receipt')
+    return receipt
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", required=True)
@@ -292,10 +326,15 @@ def main(argv=None):
             docker("cp", str(provenance / ".git"), app["Id"] + ":/app/")
             print("Source snapshot against Git revision: " + revision, flush=True)
             docker(*compose, "exec", "-T", "app", "python", "scripts/rag_remediation_provision.py")
+            artifact = ROOT / ".superpowers/sdd/rag-harness" / args.project / ("run-" + str(uuid.uuid4()))
+            artifact.mkdir(parents=True, exist_ok=False)
             if spec:
                 docker(*compose, "--profile", "browser", "up", "--build", "-d", "frontend")
                 inspect_project(args.project)
                 docker(*compose, "exec", "-T", "app", "python", "scripts/rag_remediation_seed_browser.py", state)
+                receipt = refresh_frontend_assets(args.project)
+                (artifact / 'frontend-assets.json').write_text(json.dumps(receipt), encoding='utf-8')
+                print('Owned frontend build hashes: ' + json.dumps(receipt), flush=True)
                 command = ["docker", *compose, "exec", "-T", "-e", "RAG_PLAYWRIGHT_BASE_URL=" + args.base_url, "-e", "RAG_PLAYWRIGHT_STORAGE_STATE=" + state, "frontend", "npm", "run", "test:e2e", "--", "--config=playwright.rag-remediation.config.ts", spec]
             elif args.manage:
                 command = ["docker", *compose, "exec", "-T", "app", "python", "aquillm/manage.py", *args.manage]
@@ -304,8 +343,6 @@ def main(argv=None):
                 if tests[:1] == ["--"]:
                     tests = tests[1:]
                 command = ["docker", *compose, "exec", "-T", "app", "python", "-m", "pytest", *tests]
-            artifact = ROOT / ".superpowers/sdd/rag-harness" / args.project / ("run-" + str(uuid.uuid4()))
-            artifact.mkdir(parents=True, exist_ok=False)
             return run_recorded(command, artifact, args.project)
     except IsolationError as error:
         print(f"Isolation refused: {error}", file=sys.stderr)

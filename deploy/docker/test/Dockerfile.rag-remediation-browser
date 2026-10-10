@@ -4,5 +4,6 @@ COPY react/package.json react/package-lock.json ./
 RUN npm ci
 COPY react ./
 COPY aquillm/aquillm/static /app/aquillm/aquillm/static
+COPY aquillm/templates /app/aquillm/templates
 RUN npm run build && mkdir -p /frontend-build && cp -a /app/aquillm/aquillm/static/js/dist/. /frontend-build/
 CMD ["sleep", "infinity"]
