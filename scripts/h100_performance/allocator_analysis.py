@@ -17,6 +17,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from report import percentile, _metrics_delta
 
+# Captured frozen payload identities for this experiment, not a generic
+# tokenizer/server validation. serve_bench hashes its remote-tokenized payload.
+FROZEN_INPUTS = {
+    512: "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+    8192: "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+    32768: "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+    36864: "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+}
+
 
 def read_jsonl(path):
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -117,7 +126,12 @@ def process_memory(value, *, expected_allocator=None):
             role = record["role"]
             if record.get("configured_allocator") != expected_allocator:
                 reasons.append(role + "_configured_allocator_mismatch")
-            if not isinstance(record.get("libraries"), list) or library_mapped != (expected_allocator == "mimalloc"):
+            libraries = record.get("libraries")
+            valid_libraries = (libraries == [] if expected_allocator == "system" else
+                isinstance(libraries, list) and bool(libraries) and all(isinstance(path, str) and
+                    re.fullmatch(r"/opt/mimalloc/(?:[A-Za-z0-9_-]+/)*libmimalloc\.so(?:\.[0-9]+)*", path)
+                    for path in libraries))
+            if not valid_libraries:
                 reasons.append(role + "_library_mapping_mismatch")
             reliable = record.get("process_environment_reliable")
             if role == "api" and reliable is not True:
@@ -127,6 +141,9 @@ def process_memory(value, *, expected_allocator=None):
                     reasons.append(role + "_environment_mismatch")
             elif reliable is False:
                 unreliable_engines += 1
+                if (record.get("observed_env_allocator") not in (None, expected_allocator)
+                        or record.get("observed_env_pythonmalloc") not in (None, "default")):
+                    reasons.append("engine_environment_mismatch")
             else:
                 reasons.append("engine_environment_reliability_missing")
     activation = dict(status=("failed" if reasons else "verified_for_captured_roles") if expected_allocator else "missing_expected_allocator",
@@ -152,6 +169,29 @@ def build(directory, expected_repeats=10):
                 errors.append(dict(role=role, block=block, reason="missing_serving_file"))
                 continue
             all_rows = read_jsonl(path)
+            expected_shapes = {(digest, length, 256) for length, digest in FROZEN_INPUTS.items()}
+            coverage = defaultdict(list)
+            if len(all_rows) != len(expected_shapes) * (expected_repeats + 1):
+                errors.append(dict(role=role, block=block, reason="unexpected_total_row_count"))
+            for row in all_rows:
+                key = shape(row)
+                if (type(row.get("prompt_tokens")) is not int
+                        or type(row.get("requested_output_tokens")) is not int or key not in expected_shapes):
+                    errors.append(dict(role=role, block=block, reason="unexpected_frozen_input_shape"))
+                    continue
+                repeat = row.get("repeat")
+                if type(repeat) is not int or row.get("warmup") is not (repeat < 0):
+                    errors.append(dict(role=role, block=block, reason="invalid_repeat_or_warmup_marker"))
+                else:
+                    coverage[key].append(repeat)
+                if row.get("label") != f"{role}-block{block}":
+                    errors.append(dict(role=role, block=block, reason="unexpected_arm_block_label"))
+                if row.get("warmup") is True and not valid(row):
+                    errors.append(dict(role=role, block=block, reason="incomplete_or_invalid_warmup"))
+            for key in sorted(expected_shapes, key=lambda item: item[1]):
+                if sorted(coverage[key]) != [-1, *range(expected_repeats)]:
+                    errors.append(dict(role=role, block=block, prompt_tokens=key[1],
+                        reason="missing_or_duplicate_frozen_shape_warmup_repeats"))
             measured = [row for row in all_rows if row.get("warmup") is not True and type(row.get("repeat")) is int and row["repeat"] >= 0]
             by_shape = defaultdict(list)
             labels = {row.get("label") for row in all_rows}
