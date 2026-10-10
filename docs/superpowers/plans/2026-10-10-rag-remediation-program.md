@@ -12,6 +12,8 @@
 
 **Baseline:** `origin/development` and reviewed HEAD `6e756e252999ee6ccf604f88ea5326f49ddaa6d4`, checked 2026-10-10. This plan is a planning deliverable; implementation checkboxes remain open. Refresh the baseline before execution and review intervening changes.
 
+**Execution update:** The follow-up user request authorizes implementation and a review PR. Apply the [execution decisions](../../runbooks/rag-remediation-execution-decisions.md), which settle preflight contract gaps; task completion still requires recorded evidence.
+
 ## Read this program with the four lane plans
 
 | Lane | Plan | Responsibility |
