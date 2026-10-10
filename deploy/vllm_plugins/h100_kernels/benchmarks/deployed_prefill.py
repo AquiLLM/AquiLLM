@@ -187,7 +187,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--prefixes", default="8192,32768,65536", help="committed prefix lengths, not total sequence lengths")
     parser.add_argument("--chunks", default="128,1024,4096")
-    parser.add_argument("--block-size", type=int, default=2128, help="actual hybrid-cache LCM page size")
+    parser.add_argument("--block-size", type=int, default=16, help="actual TurboQuant cache page size")
     parser.add_argument("--kv-splits", type=int, default=32, help="deployed attention_config.tq_max_kv_splits_for_cuda_graph")
     parser.add_argument("--block-q", type=int, choices=(32,64), default=32)
     parser.add_argument("--warps", type=int, choices=(4,8), default=4)

@@ -1,8 +1,9 @@
 """Bundled development-only crossover, experimental pending serving evidence.
 
-The complete post-Genesis/P38 microbenchmark measured wins in the long-prefix
-region. An opt-in activates this region only; no production/default promotion
-or runtime measurement is inferred from selecting the profile.
+The coordinator owns complete post-Genesis/P38 microbenchmark and serving
+qualification for the actual page16 cache. An opt-in targets the bounded
+long-prefix region only; selecting this experimental profile does not imply
+production/default promotion or that serving qualification has passed.
 """
 import hashlib
 import json
@@ -16,7 +17,7 @@ _IDENTITY = {
     "packages": PACKAGES, "genesis": GENESIS_COMMIT, "model": MODEL,
     "model_revision": MODEL_REVISION, "gpu": "H100 80GB", "sm": [9, 0], "sm_count": 132,
     "dtype": "float16", "flash_attn_version": 2, "kv_dtype": "turboquant_k8v4", "hq": 24, "hkv": 4,
-    "head_dim": 256, "page_size": 2128, "key_bytes": 256, "value_bytes": 128,
+    "head_dim": 256, "page_size": 16, "key_bytes": 256, "value_bytes": 128,
 }
 RUNTIME_KEY = hashlib.sha256(json.dumps(_IDENTITY, sort_keys=True).encode()).hexdigest()
 _PROFILE = PrefillProfile(
@@ -37,7 +38,7 @@ def matches_runtime(spec, dtype, properties):
     return (
         spec.dtype == "turboquant_k8v4" and spec.head_dim == 256
         and spec.num_q_heads == 24 and spec.num_kv_heads == 4
-        and spec.block_size == 2128 and spec.key_packed_size == 256 and spec.value_data_bytes == 128
+        and spec.block_size == 16 and spec.key_packed_size == 256 and spec.value_data_bytes == 128
         and str(dtype) == "torch.float16"
         and getattr(properties, "major", None) == 9 and getattr(properties, "minor", None) == 0
         and getattr(properties, "multi_processor_count", None) == 132

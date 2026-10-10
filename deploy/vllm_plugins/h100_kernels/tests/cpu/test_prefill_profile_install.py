@@ -17,7 +17,7 @@ def test_bundled_profile_only_covers_measured_long_prefix_region():
     from aquillm_vllm_h100.contracts import KVSpec
     from aquillm_vllm_h100.prefill import PrefillRequest, select_prefill_route
     profile = profiles().development_profile(None)
-    spec = KVSpec("turboquant_k8v4", 256, 24, 4, 2128, 256, 128)
+    spec = KVSpec("turboquant_k8v4", 256, 24, 4, 16, 256, 128)
     for prefix, query, want in ((32768, 1024, True), (65536, 4096, True),
                                 (8192, 4096, False), (32767, 4096, False),
                                 (65537, 1024, False), (65536, 1023, False),
@@ -151,7 +151,7 @@ def test_adaptive_remains_blocked_when_prefill_is_selected(monkeypatch):
 def test_profile_runtime_geometry_rejects_unmeasured_device_dtype_and_page(change):
     from aquillm_vllm_h100.contracts import KVSpec
     fields = dict(dtype="turboquant_k8v4", head_dim=256, num_q_heads=24, num_kv_heads=4,
-                  block_size=2128, key_packed_size=256, value_data_bytes=128)
+                  block_size=16, key_packed_size=256, value_data_bytes=128)
     props = SimpleNamespace(major=9, minor=0, multi_processor_count=132, name="NVIDIA H100 80GB HBM3")
     dtype = "torch.float16"
     if change == "dtype":
@@ -163,7 +163,7 @@ def test_profile_runtime_geometry_rejects_unmeasured_device_dtype_and_page(chang
     elif change == "gpu_name":
         props.name = "NVIDIA A100 80GB"
     elif change == "page":
-        fields["block_size"] = 32
+        fields["block_size"] = 2128  # Startup hybrid LCM is not the actual TQ cache page.
     elif change == "heads":
         fields.update(num_q_heads=48, num_kv_heads=8)
     elif change == "dimension":
@@ -201,9 +201,9 @@ def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatc
             sliding_window=None, soft_cap=0., alibi=False, kv_sharing=False, unknown_overlays=False))
     q, k, v = Tensor((1024, 24, 256), "torch.float16"), Tensor((1024, 4, 256), "torch.float16"), Tensor((1024, 4, 256), "torch.float16")
     destination = Tensor(q.shape, q.dtype)
-    cache = Tensor((17, 2128, 4, 388), "torch.uint8")
+    cache = Tensor((2112, 16, 4, 388), "torch.uint8")
     metadata = SimpleNamespace(is_prefill=True, query_start_loc_cpu=[0, 1024], seq_lens_cpu=[33792],
-                               block_table=Tensor((1, 17), "torch.int32"))
+                               block_table=Tensor((1, 2112), "torch.int32"))
     if change == "dtype":
         q.dtype = k.dtype = v.dtype = destination.dtype = "torch.bfloat16"
     elif change == "gpu_name":
@@ -211,7 +211,7 @@ def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatc
     elif change == "sm_count":
         properties.multi_processor_count = 114
     elif change == "page":
-        cache.shape = (17, 32, 4, 388)
+        cache.shape = (2112, 2128, 4, 388)
     elif change == "heads":
         q.shape, k.shape, v.shape = (1024, 48, 256), (1024, 8, 256), (1024, 8, 256)
     elif change == "destination_shape":
@@ -245,7 +245,7 @@ def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatc
         fake_torch.empty_like = lambda tensor, dtype: Tensor(tensor.shape, dtype)
         fake_torch.empty = lambda shape, dtype, device: Tensor(shape, dtype)
         def prefix(q, cache, table, prior, scale, spec, state):
-            assert prior == 32768 and spec.block_size == 2128
+            assert prior == 32768 and spec.block_size == 16
             state.output.value = 12
         def chunk(q, k, v, scale, *, fa_version=None):
             assert fa_version == 2, "worker forward must use captured FA2 without a current config"
@@ -281,7 +281,7 @@ def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatc
                 assert f"device=('{properties.name}',9,0,{properties.multi_processor_count})" in message
                 assert f"block_size={cache.shape[1]}" in message
                 assert f"num_q_heads={q.shape[1]}" in message
-                assert "expected=(H10080GB,SM90,132SM,float16,k8v4,Q24,Hkv4,D256,page2128,key256,value128)" in message
+                assert "expected=(H10080GB,SM90,132SM,float16,k8v4,Q24,Hkv4,D256,page16,key256,value128)" in message
             else:
                 assert caplog.records[0].message == prefix
 

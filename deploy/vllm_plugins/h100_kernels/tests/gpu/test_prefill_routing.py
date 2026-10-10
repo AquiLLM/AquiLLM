@@ -66,7 +66,7 @@ def test_eligible_real_caller_bypasses_old_routes_with_long_and_reused_pages(mon
     from aquillm_vllm_h100.prefill import PrefillProfile, PrefillRegion
     profile = PrefillProfile("gpu-unit-runtime", (PrefillRegion(prior, prior, 129, 129),), "synthetic_correctness_case_only")
     impl, patched = caller(monkeypatch, profile)
-    batch = make_verify_batch([prior], length=129, strided=True, block_size=2128)
+    batch = make_verify_batch([prior], length=129, strided=True, block_size=16)
     q, k, v = batch.q[0], batch.raw_k[0], batch.raw_v[0]
     # Simulate a reused physical page: the current logical block table is authoritative.
     batch.block_table[0, 0] = batch.block_table[0, -1]
@@ -84,7 +84,7 @@ def test_pn401_fresh512_shorter_continuation_actual_caller(monkeypatch, fa2_runt
     from aquillm_vllm_h100.prefill import PrefillProfile, PrefillRegion
     profile = PrefillProfile("gpu-unit-runtime", (PrefillRegion(4096, 4096, 129, 129),), "synthetic_correctness_case_only")
     impl, patched = caller(monkeypatch, profile)
-    batch = make_verify_batch([0, 4096], length=512, block_size=2128)
+    batch = make_verify_batch([0, 4096], length=512, block_size=16)
     q = torch.cat((batch.q[0], batch.q[1, :129]))
     k = torch.cat((batch.raw_k[0], batch.raw_k[1, :129]))
     v = torch.cat((batch.raw_v[0], batch.raw_v[1, :129]))
@@ -101,7 +101,7 @@ def test_unsupported_real_caller_uses_original_continuation(monkeypatch, reason,
     from aquillm_vllm_h100.prefill import PrefillProfile, PrefillRegion
     profile = PrefillProfile("gpu-unit-runtime", (PrefillRegion(4096, 4096, 129, 129),), "synthetic_correctness_case_only")
     impl, patched = caller(monkeypatch, profile)
-    batch = make_verify_batch([4096], length=129, block_size=2128)
+    batch = make_verify_batch([4096], length=129, block_size=16)
     metadata = meta([0, 129], [4225], batch.block_table, mirrors=reason != "missing_mirrors")
     if reason == "verification":
         metadata.is_verification = True
@@ -151,7 +151,7 @@ def test_bundled_profile_installed_constructor_routes_fa2_after_config_context_e
                                                       device=kw["device"], dtype=kw["dtype"])))
     monkeypatch.setitem(sys.modules, "sndr.engines.vllm.kernels_legacy.dequant_buffer", pool)
     prior, length = 32768, 1024
-    batch = make_verify_batch([prior], length=length, block_size=2128)
+    batch = make_verify_batch([prior], length=length, block_size=16)
     q, k, v = batch.q[0], batch.raw_k[0], batch.raw_v[0]
     actual = impl._prefill_attention(q, k, v, batch.kv_cache,
                                     meta([0, length], [prior + length], batch.block_table), None, None)

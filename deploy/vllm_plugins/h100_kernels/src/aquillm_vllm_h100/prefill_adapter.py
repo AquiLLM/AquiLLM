@@ -166,7 +166,7 @@ def _make_route(profile, runtime_key):
         if not matches_runtime(spec, q.dtype, properties):
             return fallback("runtime_geometry",
                 " actual_spec=%r actual_dtype=%s device=(%r,%s,%s,%s) "
-                "expected=(H10080GB,SM90,132SM,float16,k8v4,Q24,Hkv4,D256,page2128,key256,value128)" %
+                "expected=(H10080GB,SM90,132SM,float16,k8v4,Q24,Hkv4,D256,page16,key256,value128)" %
                 (spec, q.dtype, properties.name, properties.major, properties.minor, properties.multi_processor_count))
         raw_valid = (k.ndim == 3 and v.shape == k.shape and k.shape == (q.shape[0], spec.num_kv_heads, spec.head_dim)
                      and q.dtype in (torch.float16, torch.bfloat16) and k.dtype == q.dtype and v.dtype == q.dtype
