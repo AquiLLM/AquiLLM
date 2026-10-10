@@ -1,0 +1,97 @@
+"""Relation-sensitive transitions with capped credit per directed endpoint pair."""
+
+from __future__ import annotations
+
+from collections.abc import Callable
+from hashlib import sha256
+
+from .graph_query_contracts import GraphRelationRequestV2
+from .ppr import PPRAlgorithmConfig, canonical_algorithm_json
+from .ppr_kernel import WeightedEdge, run_ppr_kernel
+from .projected_ppr import _replay_groups, prepare_projected_ppr_inputs
+from .projected_ppr_result import ProjectedPPRResultV1, _trace_bytes
+from .projected_types import ProjectedAuthorizedGraphSnapshotV1
+from .topology.contracts import ProjectedSeedV1
+
+ALGORITHM_VERSION = "ppr_projected_relation_v2"
+_POLICY = b"relation-request-v2\0directed-pair-maximum-v2\0exact-provenance-v2\0"
+
+
+def relation_algorithm_signature_v2(config: PPRAlgorithmConfig) -> str:
+    if type(config) is not PPRAlgorithmConfig:
+        raise TypeError("config must be an exact PPRAlgorithmConfig")
+    return sha256(
+        ALGORITHM_VERSION.encode() + b"\0" + _POLICY + canonical_algorithm_json(config)
+    ).hexdigest()
+
+
+def _weighted_pairs(groups, predicate_weights, deadline_check):
+    pairs = {}
+    observations = {}
+    for group in groups:
+        deadline_check()
+        # Provenance is scoped to its predicate/direction evidence class. Separate
+        # support and contradiction labels survive in the immutable snapshot.
+        semantic = (
+            group.source_identity_key,
+            group.relation_type,
+            group.target_identity_key,
+            group.direction,
+        )
+        for evidence in group.evidence:
+            provenance = (*semantic, evidence.provenance_key)
+            previous = observations.setdefault(provenance, evidence)
+            if previous != evidence:
+                raise ValueError("conflicting exact evidence provenance")
+        pair = (group.source_identity_key, group.target_identity_key)
+        # raw_weight already contains the frozen confidence/support/utility and
+        # direction treatment. Never introduce a second reverse multiplier.
+        contribution = group.raw_weight * predicate_weights[group.relation_type]
+        pairs[pair] = max(pairs.get(pair, 0.0), contribution)
+    return tuple(
+        WeightedEdge(source, target, weight)
+        for (source, target), weight in sorted(pairs.items())
+    )
+
+
+def rank_relations_v2(
+    *,
+    snapshot: ProjectedAuthorizedGraphSnapshotV1,
+    seeds: tuple[ProjectedSeedV1, ...],
+    request: GraphRelationRequestV2,
+    config: PPRAlgorithmConfig,
+    deadline_check: Callable[[], None],
+) -> ProjectedPPRResultV1:
+    """Use the closed V1 mathematical input without claiming its V1 signature."""
+    if not callable(deadline_check):
+        raise TypeError("deadline_check must be callable")
+    deadline_check()
+    if type(request) is not GraphRelationRequestV2:
+        raise TypeError("request must be an exact GraphRelationRequestV2")
+    # Reuse the exact original caps, algorithm and admitted-seed validation.
+    prepare_projected_ppr_inputs(snapshot=snapshot, seeds=seeds, config=config)
+    if {row.ontology_checksum for row in snapshot.artifact_provenance} != {
+        request.ontology_checksum
+    }:
+        raise ValueError("relation request ontology does not match the entire snapshot")
+    predicate_weights = dict(request.predicate_weights)
+    if any(g.relation_type not in predicate_weights for g in snapshot.relation_groups):
+        raise ValueError("snapshot predicate is not approved by relation request")
+    edges = _weighted_pairs(
+        _replay_groups(snapshot, seeds, config), predicate_weights, deadline_check
+    )
+    kernel = run_ppr_kernel(
+        nodes=snapshot.identity_keys,
+        edges=edges,
+        seeds={seed.identity_key: seed.mass for seed in seeds},
+        config=config,
+        order_key=lambda key: key,
+        deadline_check=deadline_check,
+    )
+    deadline_check()
+    scores = tuple(kernel.scores)
+    ranked = tuple(key for key, _ in sorted(scores, key=lambda row: (-row[1], row[0])))
+    return ProjectedPPRResultV1(scores, ranked, _trace_bytes(scores, ranked))
+
+
+__all__ = ["rank_relations_v2", "relation_algorithm_signature_v2"]

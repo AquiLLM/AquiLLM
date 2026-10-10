@@ -33,6 +33,30 @@ class ProductionSharedScopeV1:
     scope: SelectedReadyScopeV1
 
 
+def relation_cache_identity_v2(
+    *, snapshot_checksum, seed_checksum, request, algorithm_signature
+) -> str:
+    """Bind each private cache identity to topology, seeds and relation treatment."""
+    from ._graph_v2_validation import checksum, digest
+    from .relation_request import relation_request_digest
+
+    for name, value in (
+        ("snapshot_checksum", snapshot_checksum),
+        ("seed_checksum", seed_checksum),
+        ("algorithm_signature", algorithm_signature),
+    ):
+        checksum(value, name)
+    return digest(
+        "graph-relation-cache-v2",
+        (
+            snapshot_checksum,
+            seed_checksum,
+            relation_request_digest(request),
+            algorithm_signature,
+        ),
+    )
+
+
 def topology_caps(settings, kind: HybridBranchKind) -> TopologyCapsV1:
     prefix = "graph_direct" if kind is HybridBranchKind.DIRECT else "graph_extended"
     return TopologyCapsV1(
@@ -185,6 +209,7 @@ def success_envelope(
 
 __all__ = [
     "ProductionSharedScopeV1",
+    "relation_cache_identity_v2",
     "graph_candidates",
     "ppr_failure_envelope",
     "ppr_config",

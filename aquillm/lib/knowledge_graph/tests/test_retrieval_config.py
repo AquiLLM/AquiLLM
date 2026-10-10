@@ -67,6 +67,7 @@ DEFAULTS: dict[str, object] = {
     "direct_min_similarity": 0.80,
     "direct_winner_margin": 0.05,
     "graph_eval_parity_backend": "postgres", "ppr_restart_mode": "fixed",
+    "graph_remediation_mode": "legacy",
 }
 INT_LIMITS = {
     "KG_PROJECTION_BATCH_SIZE": (1, 5000),
