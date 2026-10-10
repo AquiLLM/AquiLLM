@@ -2,7 +2,7 @@
 
 This workflow targets development host `149.165.150.254` (`aquillm-dev2`). Production is outside this rollout. Features are opt-in; checked-in deployment defaults remain unchanged.
 
-**Current disposition:** the [2026-10-10 experiment](../audits/2026-10-10-h100-performance/results.md) failed serving qualification despite a 35.63% long-prompt TTFT improvement. All experimental controls remain off. The original image was restored, verified healthy, and passed a fresh model smoke. The commands below are experimental procedures, not an approved rollout recipe.
+**Current disposition:** the user authorized a development-only deployment with bounded prefill enabled after reviewing the [2026-10-10 experiment](../audits/2026-10-10-h100-performance/results.md). Its failed serving gates remain recorded. Generic defaults remain off; fused MTP, adaptive splits and GDN remain off on development as well. Follow the explicit image/flag selection and verification in the [rollout record](../audits/2026-10-10-h100-performance/development-rollout.md).
 
 ## Runtime contract
 
@@ -32,7 +32,7 @@ The PN522 startup warmup reports a worker-level block size of 2128. Live route d
 |---|---|---|
 | `AQUILLM_H100_MTP_KERNEL` | `baseline` | `fused`; experimental, first serving sweep regressed short-context generation |
 | `AQUILLM_H100_SPLIT_POLICY` | `baseline` | Adaptive remains inactive without a qualifying profile |
-| `AQUILLM_H100_PREFILL` | `0` | Measured long-prefix path; serving qualification failed, retain off |
+| `AQUILLM_H100_PREFILL` | `0` | Explicitly enabled on development under the documented user decision; original qualification failed |
 | `AQUILLM_H100_GDN` | `baseline` | No enabled replacement on this pinned FP16 runtime |
 
 The installed FlashInfer sampler was already enabled. The inspected GDN decode candidate rounds intermediate query/key and output values through BF16, so it does not preserve the captured FP16 behavior.

@@ -1,5 +1,7 @@
 # H100 TurboQuant development results — 2026-10-10
 
+Subsequent decision: the user authorized merging and enabling bounded prefill on development after reviewing these results. See the [development rollout record](development-rollout.md). The original qualification result below is preserved.
+
 **Decision: retain the patches as experiments, disabled by default.** The bounded continuation-prefill path reduced median first-token latency from **11.594 to 7.463 seconds (35.63%)** for the measured 36864-token prompt. The complete serving comparison nevertheless failed the protected decode-p95 and MTP-acceptance gates. It does not qualify for rollout.
 
 All server work targeted development `149.165.150.254`. The original image was restored, became healthy, and answered a fresh exact-answer smoke correctly at `2026-10-10T15:48:54Z`; see [final runtime state](serving/h100-final-state.json). Production was not modified. The embedding and reranking sidecars remained running.

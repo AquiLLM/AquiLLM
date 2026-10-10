@@ -2,7 +2,7 @@
 
 This work targets development `149.165.150.254` only. The user authorized implementation, commits, pulling to that host, and testing. The production host and checked-in feature defaults were not changed. Source work was parallel; the coordinator serialized GPU tests, measurements, and container replacement.
 
-Final disposition: **experimental and disabled by default**. The [serving results](results.md) show a 35.63% target TTFT improvement, but protected decode p95 and MTP acceptance failed qualification. The original image was restored and passed a fresh exact-answer smoke after becoming healthy.
+Benchmark disposition: **experimental and disabled by default**. The [serving results](results.md) show a 35.63% target TTFT improvement, but protected decode p95 and MTP acceptance failed qualification. The original image was restored and passed a fresh exact-answer smoke after becoming healthy. The user subsequently authorized explicitly enabling bounded prefill on development; see the [rollout record](development-rollout.md).
 
 ## Implemented tracks
 
