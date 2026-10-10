@@ -98,26 +98,25 @@ def test_retry_case_insensitive():
 # ---------------------------------------------------------------------------
 
 
-def test_pronoun_it_prepends_recent_document_title():
+def test_pronoun_it_does_not_guess_retrieved_title():
     msgs = _search_turn("dark matter", doc_titles=["Doc A"])
     convo = _make_convo(*msgs)
     result = build_retrieval_query(convo, "explain the math in it")
-    assert "Doc A" in result
-    assert "explain the math in it" in result
+    assert result == "explain the math in it"
 
 
-def test_pronoun_this_prepends_recent_document_title():
+def test_pronoun_this_does_not_guess_retrieved_title():
     msgs = _search_turn("calibration", doc_titles=["Calibration Paper"])
     convo = _make_convo(*msgs)
     result = build_retrieval_query(convo, "summarize this for me")
-    assert "Calibration Paper" in result
+    assert result == "summarize this for me"
 
 
-def test_pronoun_they_prepends_recent_document_title():
+def test_pronoun_they_does_not_guess_retrieved_title():
     msgs = _search_turn("quasars", doc_titles=["Quasar Survey"])
     convo = _make_convo(*msgs)
     result = build_retrieval_query(convo, "how do they form?")
-    assert "Quasar Survey" in result
+    assert result == "how do they form?"
 
 
 def test_pronoun_without_prior_retrieval_returns_text_as_is():

@@ -14,12 +14,12 @@ _UUID = re.compile(
     r"(?<![\w-])[0-9a-fA-F]{8}-(?:[0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}(?![\w-])"
 )
 _ORDINAL = re.compile(
-    r"\b(first|second|third|1st|2nd|3rd)\s+(?:\w+\s+){0,2}?(paper|report|document|source)\b",
+    r"\b(first|second|third|1st|2nd|3rd)\s+(?:\w+\s+){0,2}?(paper|report|document|source|one)\b",
     re.I,
 )
 _PLURAL = re.compile(r"\b(both|their|them|these|those)\b", re.I)
 _SINGULAR = re.compile(
-    r"\b(it|its|this|that|the paper|the report|the document)\b", re.I
+    r"\b((?:this|that|the)\s+(?:paper|report|document|source)|it|its|this|that)\b", re.I
 )
 _GENERIC_TITLES = frozenset({"paper", "report", "document", "source"})
 
@@ -100,6 +100,31 @@ def _overlaps(start, end, spans):
     )
 
 
+def _source_pronoun(question, match):
+    """Recognize source followup grammar, not every grammatical pronoun.
+
+    Explicit source nouns need no history. Bare pronouns require an elliptical
+    request about an antecedent; local noun possessives and complementizer
+    'that' do not establish a source constraint.
+    """
+    cue = match.group(0).casefold()
+    if " " in cue:
+        return True
+    before, after = question[:match.start()], question[match.end():]
+    if re.match(r"\s+(?:papers|reports|documents|sources)\b", after, re.I):
+        return True
+    if cue in {"this", "that"} and not re.fullmatch(
+        r"\s*(?:for me|again|in more detail|please)?[.!?]*\s*", after, re.I
+    ):
+        return False
+    return bool(re.search(
+        r"(?:\b(?:compare|contrast|explain|summarize|describe|review|check|evaluate)"
+        r"|\b(?:in|from|between|about|of|with)"
+        r"|\b(?:what|how)\s+(?:are|were|do|did|does|is))\s+$",
+        before, re.I,
+    ) or (not before.strip() and cue in {"both", "these", "those"}))
+
+
 def _reference_events(question, titles):
     """Explicit spans take precedence; remaining cues keep question text order."""
     events = []
@@ -131,6 +156,8 @@ def _reference_events(question, titles):
         (_SINGULAR, "singular"),
     ):
         for match in pattern.finditer(question):
+            if kind != "ordinal" and not _source_pronoun(question, match):
+                continue
             if not _overlaps(*match.span(), occupied):
                 events.append((match.start(), match.end(), kind, match.group(0)))
                 occupied.append(match.span())

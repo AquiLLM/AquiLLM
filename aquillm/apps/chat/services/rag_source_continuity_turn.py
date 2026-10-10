@@ -38,6 +38,12 @@ def requires_clarification(notice):
     return getattr(notice, "kind", None) == "ambiguous"
 
 
+def unresolved_source_notice(convo, question):
+    if resolve_source_anchors(question, convo).unresolved_references:
+        return ContinuityNotice(_AMBIGUOUS, kind="ambiguous")
+    return None
+
+
 async def continuity_candidates(convo, question, *, user, selected_scope, enabled):
     """Return (current public candidate result, user notice), without a new ledger."""
     if not enabled:

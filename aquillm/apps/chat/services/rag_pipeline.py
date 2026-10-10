@@ -159,6 +159,13 @@ async def _run_direct_rag_turn(consumer, llm_if, convo, *, stream_func=None):
         return "skipped"
 
     preservation = rag_preservation_config()
+    if not preservation.followup_evidence_enabled:
+        from .rag_source_continuity_turn import unresolved_source_notice
+
+        notice = unresolved_source_notice(convo, user_message.content or "")
+        if notice:
+            consumer.convo = convo + [AssistantMessage(content=notice, stop_reason="end_turn")]
+            return "handled"
     if preservation.error or (
         preservation.evidence_text_mode == "source" and current_source_runtime() is None
     ):

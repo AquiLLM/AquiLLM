@@ -5,37 +5,15 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from apps.chat.services.rag_config import query_rewrite_enabled, rag_preservation_config
+from apps.chat.services.rag_config import query_rewrite_enabled
 
 _RETRY_RE = re.compile(
     r"^\s*(?:try again|retry|please retry|run it again|do that again)\s*[.!?]*\s*$",
     flags=re.IGNORECASE,
 )
 
-_PRONOUN_CUES = frozenset(
-    {
-        "it",
-        "its",
-        "itself",
-        "they",
-        "them",
-        "their",
-        "theirs",
-        "this",
-        "that",
-        "these",
-        "those",
-    }
-)
-
-
 def _is_retry(text: str) -> bool:
     return bool(_RETRY_RE.match(text))
-
-
-def _has_pronoun_reference(text: str) -> bool:
-    words = set(re.findall(r"\b\w+\b", text.lower()))
-    return bool(words & _PRONOUN_CUES)
 
 
 def _last_vector_search_query(conversation: Any) -> str | None:
@@ -47,18 +25,6 @@ def _last_vector_search_query(conversation: Any) -> str | None:
             query = msg.tool_call_input.get("search_string")
             if query:
                 return str(query)
-    return None
-
-
-def _last_retrieved_document_title(conversation: Any) -> str | None:
-    """Return the first title from the most recent vector_search tool result."""
-    for msg in reversed(conversation.messages):
-        if getattr(msg, "tool_name", None) == "vector_search" and isinstance(
-            getattr(msg, "result_dict", None), dict
-        ):
-            titles = msg.result_dict.get("retrieved_documents")
-            if titles:
-                return str(titles[0])
     return None
 
 
@@ -77,9 +43,8 @@ def build_retrieval_query(conversation: Any, latest_user_text: str) -> str:
 
     Resolution order:
     1. Retry phrases → reuse last ``vector_search`` query from history.
-    2. Pronoun follow-ups → prepend the most recently retrieved document title.
-    3. ``RAG_QUERY_REWRITE_ENABLED=1`` → call ``_llm_rewrite_query`` (mockable).
-    4. Otherwise → return ``latest_user_text`` trimmed.
+    Source references are resolved separately from validated displayed evidence.
+    Retrieved-title ordering never establishes an antecedent.
     """
     text = (latest_user_text or "").strip()
 
@@ -88,14 +53,6 @@ def build_retrieval_query(conversation: Any, latest_user_text: str) -> str:
         if prior:
             return prior
         return text
-
-    if (
-        _has_pronoun_reference(text)
-        and not rag_preservation_config().followup_evidence_enabled
-    ):
-        title = _last_retrieved_document_title(conversation)
-        if title:
-            return f"{title}: {text}"
 
     if query_rewrite_enabled():
         return _llm_rewrite_query(text, conversation)
