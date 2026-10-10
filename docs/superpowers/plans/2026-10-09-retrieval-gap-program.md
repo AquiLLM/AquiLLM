@@ -34,10 +34,10 @@
 
 **Interface:** Deliver a redacted report distinguishing declared runtime identity, observed vector behavior and unknown historical identity; provide a bounded read-only command for coordinator execution. Do not synthesize provenance for old vectors.
 
-- [ ] Reproduce input-type propagation, dimension fitting, zero/nonfinite vectors and provider-fallback behavior using existing call paths.
-- [ ] Identify concrete defects and write an exact scoped subplan with the production API and behavioral tests before changing it.
-- [ ] Implement demonstrated contract/audit fixes with red/green tests; keep compatibility-changing request formatting behind an explicit experiment control.
-- [ ] Run adjacent embedding/chunk tests and lint; commit only owned files and report concerns.
+- [x] Reproduce input-type propagation, dimension fitting, zero/nonfinite vectors and provider-fallback behavior using existing call paths.
+- [x] Identify concrete defects and write an exact scoped subplan with the production API and behavioral tests before changing it.
+- [x] Implement demonstrated contract/audit fixes with red/green tests; keep compatibility-changing request formatting behind an explicit experiment control.
+- [x] Run adjacent embedding/chunk tests and lint; commit only owned files and report concerns.
 
 ```powershell
 rtk rg -n "input_type|fit_embedding|fallback|get_embedding" aquillm/lib/embeddings aquillm/apps/documents/services/chunk_embeddings.py aquillm/aquillm/utils.py
@@ -50,10 +50,10 @@ rtk python -m pytest aquillm/apps/documents/tests/test_chunk_embeddings.py -q
 
 **Interface:** Use existing replay/activation schemas. Reports distinguish pool, rerank, packet, exact support, complete observation and human-review eligibility. Human labels and frozen cases remain unchanged.
 
-- [ ] Audit the runbook against actual runtime/CLI integration; reproduce any mechanical blocker with real existing paths.
-- [ ] Write the exact fix/test subplan; implement bounded evaluator or capability integration fixes with red/green tests.
-- [ ] Prepare a concrete isolated live-experiment recipe and reviewable evidence bundle, preserving budgets and one-change comparisons.
-- [ ] Run relevant quality/capability/operational tests; commit owned code and report what still requires human review or verified runtime identities.
+- [x] Audit the runbook against actual runtime/CLI integration; reproduce any mechanical blocker with real existing paths.
+- [x] Write the exact fix/test subplan; implement bounded evaluator or capability integration fixes with red/green tests.
+- [x] Prepare a concrete isolated live-experiment recipe and reviewable evidence bundle, preserving budgets and one-change comparisons.
+- [x] Run relevant quality/capability/operational tests; commit owned code and report what still requires human review or verified runtime identities.
 
 ```powershell
 rtk rg -n "attestation|eligible|activation-v2|human|runtime_digest" docs/runbooks/evidence-preservation.md aquillm/apps/chat/evals aquillm/apps/documents/services/chunk_rerank_pair_capability.py
@@ -66,10 +66,10 @@ rtk python -m pytest aquillm/apps/chat/tests/test_evidence_quality_gates.py aqui
 
 **Interface:** Preserve complete supported partitions, cannot-link/provenance rules, canonical results and hard caps. A production-only unresolved incident remains explicitly unresolved unless its actual cause is reproduced.
 
-- [ ] Reproduce candidate-audit exhaustion using deterministic synthetic patterns and trace its actual algorithmic cause.
-- [ ] Determine whether equivalent bounded enumeration can remove redundant candidates; compare complete supported outputs and fail-closed limits before implementing.
-- [ ] Investigate topology-invalid classification/diagnostics and close any demonstrated development gap without weakening validation.
-- [ ] Implement bounded fixes with behavioral regressions, run coreference/capacity/topology tests and commit owned files.
+- [x] Reproduce candidate-audit exhaustion using deterministic synthetic patterns and trace its actual algorithmic cause.
+- [x] Determine whether equivalent bounded enumeration can remove redundant candidates; compare complete supported outputs and fail-closed limits before implementing.
+- [x] Investigate topology-invalid classification/diagnostics and close any demonstrated development gap without weakening validation.
+- [x] Implement bounded fixes with behavioral regressions, run coreference/capacity/topology tests and commit owned files.
 
 ```powershell
 rtk python -m pytest -p no:django aquillm/apps/knowledge_graph/tests/test_coreference.py aquillm/apps/knowledge_graph/tests/test_coreference_capacity.py aquillm/apps/knowledge_graph/tests/test_coreference_sparse_partition.py -q
@@ -78,27 +78,27 @@ rtk rg -n "candidate audit cap|MAX_DOCUMENT_DECISIONS|topology_invalid" aquillm/
 
 ### Task 4: Coordinator development measurements
 
-- [ ] Capture only allowlisted model/runtime settings, service revisions, GPU capacity and queue/readiness state; never print secrets.
-- [ ] Execute lane A/B/C bounded diagnostic commands one at a time where shared model/DB load affects measurements.
-- [ ] Replay exact private study questions using the maintained harness and authorized source/span fingerprints; retain raw results outside git.
-- [ ] Record confirmed fixes, failed hypotheses and remaining human/corpus-dependent gaps separately.
+- [x] Capture only allowlisted model/runtime settings, service revisions, GPU capacity and queue/readiness state; never print secrets.
+- [x] Execute lane A/B/C bounded diagnostic commands one at a time where shared model/DB load affects measurements.
+- [x] Replay the ten exact private study questions in both authorized scopes using the maintained harness; retain raw results outside git. No verified target/span mapping was available, so these 20 turns establish operational behavior only.
+- [x] Record confirmed fixes, failed hypotheses and remaining human/corpus-dependent gaps separately.
 
 ### Task 5: Follow-on retrieval/ingestion experiments
 
-- [ ] From Tasks 1–4, select the earliest demonstrated loss stage and write its exact testable subplan before implementation.
+- [x] From Tasks 1–4, select the earliest demonstrated loss stage and write its exact testable subplan before implementation.
 - [ ] Evaluate bounded rewrite/alias/search/reranker or structural parsing/reference handling against a dedicated development copy. Preserve original questions and identifiers; never tune against heldout answers.
-- [ ] Keep unsuccessful changes out of deployment; retain counterexamples and measured limits. Shared indexes and gated modes remain unchanged until their acceptance requirements pass.
+- [x] Keep unsuccessful changes out of deployment; retain counterexamples and measured limits. Shared indexes and gated modes remain unchanged until their acceptance requirements pass.
 
 ### Task 6: Independent validation debt
 
-- [ ] Re-run the recorded frontend typecheck and migration/model consistency checks on the current baseline.
-- [ ] Assign a separate free agent to bounded confirmed fixes; preserve historical migration integrity and unrelated drafts.
-- [ ] Review and test those fixes independently before integration.
+- [x] Re-run the recorded frontend typecheck and migration/model consistency checks on the current baseline.
+- [x] Assign a separate free agent to bounded confirmed fixes; preserve historical migration integrity and unrelated drafts.
+- [x] Review and test those fixes independently before integration.
 
 ### Task 7: Review, integration and development rollout
 
-- [ ] Independent task reviews for each implemented lane; route findings back to the implementer.
-- [ ] Cherry-pick reviewed commits into the integration branch sequentially; resolve shared interfaces explicitly.
+- [x] Independent task reviews for each implemented lane; route findings back to the implementer.
+- [x] Cherry-pick reviewed commits into the integration branch sequentially; resolve shared interfaces explicitly.
 - [ ] Run appropriate combined regression tests in isolated backends and exact release images; repeat cold combined, parent and graph-off controls.
 - [ ] Perform whole-branch review, then merge/push development and deploy only .254 with rollback material and health gates.
 - [ ] Publish an honest rollout audit, preserve private evidence, clean owned test resources and archive worktrees after integration.
@@ -106,3 +106,14 @@ rtk rg -n "candidate audit cap|MAX_DOCUMENT_DECISIONS|topology_invalid" aquillm/
 ## Preflight decisions
 
 The preceding gap inventory supplies scope, but not evidence that every proposed research technique helps. First-wave agents therefore reproduce before choosing fixes and write exact subsystem subplans before behavioral implementation. Expert labels, historical precision and production incident reproduction cannot be fabricated. The explicit parallel request supersedes the single-implementer default; separate worktrees and exclusive runtime ownership prevent shared-state races.
+
+
+## Measured follow-on decision
+
+Task 5A selected the demonstrated cross-provider embedding-space risk first; its exact subplan is 2026-10-09-embedding-policy.md. Development application services now explicitly require the local provider. No precision, request-format, model, stored-vector, or index conversion is included. The outage tradeoff is explicit vector unavailability, with existing scoped lexical/error behavior; transient ingestion retries can still backlog.
+
+The rewrite/alias/stronger-reranker/structural-parser experiment remains deferred. The synthetic vector audit and bounded 20-document sample are not historical provenance or whole-corpus compatibility proof. Exact study-question replays lack verified gold target mapping and independent human labels. Evidence activation still requires the frozen four-arm evaluation, operational bundle, runtime attestation, and independent review. Host GPU driver/library mismatch additionally prevents a verified fresh GPU runtime experiment; serving model containers were left running.
+
+The graph capacity fix reproduces an initialism-collision pattern and preserves meaningful partitions, audits and hard caps. Historical production topology_invalid and the specific failed production document remain unreproduced. Resolver identity is versioned for the changed audit; no bulk rebuild is scheduled.
+
+Task 6 includes an evidence-driven extension restoring inherited document metadata and correcting transfer-migration state. Both new migrations emit no schema/DML SQL; fresh migration and reverse/reapply preserve all physical index/constraint identities. The global model consistency check now detects no changes.
