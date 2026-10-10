@@ -616,6 +616,8 @@ def test_mtp_graph_policy_rejects_sequence_profile_or_policy_mismatch(limit, pro
 
 @pytest.mark.parametrize('control', [
     '--compilation-config {}', '--compilation-config={}', '-cc {}', '-cc={}',
+    '-c {}', '-c={}', '-c.cudagraph_capture_sizes [5,10,20]',
+    '--config model.yaml', '--config=model.yaml',
     '--compilation_config {}', '--compilation-config.cudagraph_capture_sizes [5,10,20]',
     '--compilation {}', '--cudagraph-capture-sizes 5 10 20', '--cudagraph_capture_sizes 5 10 20',
     '--max-cudagraph-capture-size 20', '--max-cudagraph 20', '--cuda-graph-sizes 5 10 20',

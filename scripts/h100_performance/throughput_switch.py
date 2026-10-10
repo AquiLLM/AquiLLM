@@ -160,12 +160,13 @@ def _tokens(text):
 
 def _has_graph_control(tokens):
     # Pinned EngineArgs accepts -cc, JSON dotted keys, and top-level sizing
-    # overrides. Refuse every spelling/prefix rather than merge unknown config.
+    # overrides. A YAML --config can also carry compilation options. Refuse
+    # every spelling/prefix rather than merge unknown configuration.
     controls = ('--compilation-config', '--cudagraph-capture-sizes',
-                '--max-cudagraph-capture-size', '--cuda-graph-sizes')
+                '--max-cudagraph-capture-size', '--cuda-graph-sizes', '--config')
     for token in tokens:
         option = token.split('=', 1)[0].replace('_', '-')
-        if option == '-cc' or option.startswith('-cc.'):
+        if option in ('-c', '-cc') or option.startswith(('-c.', '-cc.')):
             return True
         if option.startswith('--') and any(
                 target.startswith(option) or option.startswith(target + '.') for target in controls):
