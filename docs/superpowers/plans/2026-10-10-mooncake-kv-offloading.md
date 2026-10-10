@@ -19,7 +19,7 @@
 - Preserve existing default serving behavior and strict sidecar isolation. New capacity/storage configuration is opt-in.
 - A reusable prefix store alone does not complete active paging. Reject unsupported execution modes explicitly; never turn an inert setting or CPU simulation into a GPU support claim.
 - Do not silently change pinned vLLM/PyTorch/CUDA/Genesis dependencies, quantization, MTP, hybrid correctness, or existing user files.
-- All shell commands start with `rtk`. Work only in the managed worktree on `codex/mooncake-kv-offloading`. No deployment, merge, push, or service restart is part of this execution.
+- All shell commands start with `rtk`. Work only in the managed worktree on `codex/mooncake-kv-offloading`. The user subsequently authorized a draft PR: push this feature branch and target `development`, but do not merge, deploy, or restart services. The development H100 is occupied and must not be contacted for this work; GPU validation is deferred by the user.
 
 ## File and interface ownership
 
