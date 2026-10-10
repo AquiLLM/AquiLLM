@@ -14,6 +14,7 @@ from aquillm_vllm_h100.prefill import (
 from aquillm_vllm_h100.prefill_profiles import MODEL_REVISION, matches_runtime
 
 log = logging.getLogger("aquillm.h100")
+_constructor_diagnostics_logged = False
 
 
 @functools.lru_cache(maxsize=8)
@@ -67,6 +68,7 @@ def _capture_constructor(original):
 
     @functools.wraps(original)
     def initialize(self, *args, **kwargs):
+        global _constructor_diagnostics_logged
         bound = signature.bind(self, *args, **kwargs)
         bound.apply_defaults()
         original(self, *args, **kwargs)
@@ -76,11 +78,10 @@ def _capture_constructor(original):
         try:
             from vllm.config import get_current_vllm_config
             current_config = get_current_vllm_config()
-            resolved_revision = current_config.model_config.hf_config._commit_hash
-            flash_attn_version = getattr(current_config.attention_config, "flash_attn_version", None)
         except (ImportError, AttributeError, RuntimeError, AssertionError, ValueError):
-            resolved_revision = None
-            flash_attn_version = None
+            current_config = None
+        resolved_revision = getattr(getattr(getattr(current_config, "model_config", None), "hf_config", None), "_commit_hash", None)
+        flash_attn_version = getattr(getattr(current_config, "attention_config", None), "flash_attn_version", None)
         attn_type = getattr(values["attn_type"], "value", values["attn_type"])
         self._aquillm_h100_semantics = {
             "alibi": values["alibi_slopes"] is not None,
@@ -92,48 +93,78 @@ def _capture_constructor(original):
             "model_revision": resolved_revision,
             "flash_attn_version": flash_attn_version,
         }
+        if not _constructor_diagnostics_logged:
+            _constructor_diagnostics_logged = True
+            backend_version = getattr(self, "fa_version", None)
+            # Identity comparisons, backend version numbers, semantic booleans,
+            # and argument names only. No model hashes or argument values.
+            log.warning("AQUILLM_H100 prefill_constructor revision_present=%s revision_match=%s configured_fa=%s "
+                        "backend_fa=%s kwargs_keys=%s causal=%s sliding_window=%s soft_cap=%s",
+                        resolved_revision is not None, resolved_revision == MODEL_REVISION,
+                        flash_attn_version if type(flash_attn_version) is int else None,
+                        backend_version if type(backend_version) is int else None,
+                        tuple(sorted(values["kwargs"])), self._aquillm_h100_semantics["causal"],
+                        values["sliding_window"] is not None, bool(values["logits_soft_cap"]))
     return initialize
 
 
 def _make_route(profile, runtime_key):
     """Unsupported requests return None before allocating scratch or launching."""
     exercised = False
+    diagnosed = set()
     def route(impl, layer, q, k, v, cache, metadata, index, total_tokens, destination):
         nonlocal exercised
-        semantics = getattr(impl, "_aquillm_h100_semantics", None)
-        if semantics is None or not getattr(metadata, "is_prefill", False):
-            return None
-        if semantics.get("model_revision") != MODEL_REVISION:
-            return None
-        if semantics.get("flash_attn_version") != 2:
-            return None
-        if getattr(q, "ndim", None) != 3:
+        if not getattr(metadata, "is_prefill", False):
             return None
         lengths = validated_request_lengths(getattr(metadata, "query_start_loc_cpu", None),
                                             getattr(metadata, "seq_lens_cpu", None), index, total_tokens)
-        if lengths is None or lengths[0] != q.shape[0]:
+        diagnostic_region = (lengths is not None and isinstance(profile, PrefillProfile) and
+                             any(region.prefix_min <= lengths[1] <= region.prefix_max and
+                                 region.query_min <= lengths[0] <= region.query_max for region in profile.regions))
+
+        def fallback(reason):
+            # CPU mirrors only: no additional CUDA properties, copies, or sync.
+            # One record per reason per worker route, rather than per layer.
+            if diagnostic_region and reason not in diagnosed:
+                diagnosed.add(reason)
+                log.warning("AQUILLM_H100 prefill_fallback reason=%s cached_len=%s query_len=%s",
+                            reason, lengths[1], lengths[0])
             return None
+
+        semantics = getattr(impl, "_aquillm_h100_semantics", None)
+        if semantics is None:
+            return fallback("missing_semantics")
+        if semantics.get("model_revision") != MODEL_REVISION:
+            return fallback("model_revision_missing" if semantics.get("model_revision") is None else "model_revision_mismatch")
+        if semantics.get("flash_attn_version") != 2:
+            return fallback("flash_attn_version_missing" if semantics.get("flash_attn_version") is None else "flash_attn_version_mismatch")
+        if getattr(q, "ndim", None) != 3:
+            return fallback("query_rank")
+        if lengths is None or lengths[0] != q.shape[0]:
+            return fallback("invalid_lengths")
         import torch
         tensors = (q, k, v, cache, destination)
         if not all(isinstance(tensor, torch.Tensor) for tensor in tensors):
-            return None
-        if q.ndim != 3 or not q.is_cuda or torch.cuda.is_current_stream_capturing():
-            return None
+            return fallback("non_tensor_input")
+        if not q.is_cuda:
+            return fallback("non_cuda_input")
+        if torch.cuda.is_current_stream_capturing():
+            return fallback("cuda_graph_capture")
         if cache is None or cache.ndim != 4 or cache.dtype != torch.uint8:
-            return None
+            return fallback("cache_layout")
         cfg = getattr(impl, "tq_config", None)
         if not getattr(cfg, "key_fp8", False) or getattr(cfg, "effective_value_quant_bits", None) != 4:
-            return None
+            return fallback("unsupported_quantization")
         # Normalize only metadata. Launch errors after eligibility propagate;
         # falling back after a potentially failed CUDA launch is unsafe.
         try:
             spec = KVSpec(impl.kv_cache_dtype, q.shape[2], q.shape[1], k.shape[1],
                           cache.shape[1], cfg.key_packed_size, impl._val_data_bytes)
         except (ValueError, TypeError, AttributeError, IndexError):
-            return None
+            return fallback("invalid_cache_spec")
         properties = _worker_properties(q.device)
         if not matches_runtime(spec, q.dtype, properties):
-            return None
+            return fallback("runtime_geometry")
         raw_valid = (k.ndim == 3 and v.shape == k.shape and k.shape == (q.shape[0], spec.num_kv_heads, spec.head_dim)
                      and q.dtype in (torch.float16, torch.bfloat16) and k.dtype == q.dtype and v.dtype == q.dtype
                      and k.device == q.device and v.device == q.device)
@@ -149,20 +180,21 @@ def _make_route(profile, runtime_key):
                                 kv_sharing=semantics["kv_sharing"], unknown_overlays=semantics["unknown_overlays"],
                                 sinks=getattr(impl, "sinks", None) is not None or getattr(metadata, "sinks", None) is not None,
                                 multimodal_prefix_mask=masked)
-        if not select_prefill_route(request, enabled=True, profile=profile, runtime_key=runtime_key).eligible:
-            return None
+        decision = select_prefill_route(request, enabled=True, profile=profile, runtime_key=runtime_key)
+        if not decision.eligible:
+            return fallback(decision.reason)
         if (cache.device != q.device or destination.device != q.device
                 or destination.shape != q.shape or destination.dtype != q.dtype
                 or not all(all(stride > 0 for stride in tensor.stride()) for tensor in tensors)):
-            return None
+            return fallback("destination_layout")
         table = getattr(metadata, "block_table", None)
         if (not isinstance(table, torch.Tensor) or table.ndim != 2 or table.device != q.device
                 or not 0 <= index < table.shape[0] or any(stride <= 0 for stride in table.stride())):
-            return None
+            return fallback("block_table_layout")
         if table.dtype not in (torch.int32, torch.int64) or table.shape[1] < (lengths[1] + spec.block_size - 1) // spec.block_size:
-            return None
+            return fallback("block_table_capacity")
         if cache.shape[2] != spec.num_kv_heads or cache.shape[3] < spec.key_packed_size + spec.value_data_bytes + 4:
-            return None
+            return fallback("cache_storage_geometry")
         from aquillm_vllm_h100.kernels.prefix import prefix_attention
         from aquillm_vllm_h100.kernels.merge import merge_attention_states
         from aquillm_vllm_h100.prefill import raw_chunk_attention

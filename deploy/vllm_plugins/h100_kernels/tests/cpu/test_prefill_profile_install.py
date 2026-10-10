@@ -81,6 +81,7 @@ def constructor():
                      sliding_window=None, kv_cache_dtype="auto", logits_soft_cap=None,
                      attn_type="decoder", kv_sharing_target_layer_name=None, **kwargs):
             self.initialized = (num_heads, head_size, scale)
+            self.fa_version = 2
     return Impl
 
 
@@ -170,7 +171,7 @@ def test_profile_runtime_geometry_rejects_unmeasured_device_dtype_and_page(chang
     assert profiles().matches_runtime(KVSpec(**fields), dtype, props) is (change is None)
 
 
-@pytest.mark.parametrize("change", [None, "dtype", "gpu_name", "sm_count", "page", "heads", "destination_shape", "destination_dtype", "device", "zero_stride", "outside_region", "capture"])
+@pytest.mark.parametrize("change", [None, "dtype", "gpu_name", "sm_count", "page", "heads", "destination_shape", "destination_dtype", "device", "zero_stride", "outside_region", "capture", "unknown_overlays", "verification"])
 def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatch, caplog, change):
     import aquillm_vllm_h100.prefill_adapter as adapter
     device = SimpleNamespace(type="cuda", index=0)
@@ -223,6 +224,10 @@ def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatc
         destination.strides = (0, 1, 1)
     elif change == "outside_region":
         metadata.seq_lens_cpu = [9216]
+    elif change == "unknown_overlays":
+        impl._aquillm_h100_semantics["unknown_overlays"] = True
+    elif change == "verification":
+        metadata.is_verification = True
     route = adapter._make_route(profile, profile.runtime_key)
     if change is None:
         active_config = [SimpleNamespace(
@@ -256,6 +261,66 @@ def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatc
             assert destination.value == 35
         assert sum("route_exercised prefill" in record.message for record in caplog.records) == 1
     else:
-        assert route(impl, None, q, k, v, cache, metadata, 0, 1024, destination) is None
+        for _ in range(2):
+            assert route(impl, None, q, k, v, cache, metadata, 0, 1024, destination) is None
         assert destination.value == "untouched"
-        assert not caplog.records
+        if change == "outside_region":
+            assert not caplog.records
+        else:
+            reason = ("cuda_graph_capture" if change == "capture" else
+                      "unknown_overlays" if change == "unknown_overlays" else
+                      "verification_request" if change == "verification" else
+                      "destination_layout" if change in ("destination_shape", "destination_dtype", "device", "zero_stride") else
+                      "runtime_geometry")
+            assert [record.message for record in caplog.records] == [
+                f"AQUILLM_H100 prefill_fallback reason={reason} cached_len=32768 query_len=1024"]
+
+
+@pytest.mark.parametrize("reason", ["missing_semantics", "model_revision_missing", "model_revision_mismatch",
+                                  "flash_attn_version_missing", "flash_attn_version_mismatch"])
+def test_long_region_early_fallback_diagnostic_once_without_tensor_access(caplog, reason):
+    from aquillm_vllm_h100.prefill_adapter import _make_route
+    semantics = dict(model_revision=profiles().MODEL_REVISION, flash_attn_version=2)
+    if reason.startswith("model_revision"):
+        semantics["model_revision"] = None if reason.endswith("missing") else "private-revision-never-log"
+    elif reason.startswith("flash_attn_version"):
+        semantics["flash_attn_version"] = None if reason.endswith("missing") else 3
+    impl = SimpleNamespace(_aquillm_h100_semantics=None if reason == "missing_semantics" else semantics)
+    class Query:
+        @property
+        def ndim(self):
+            pytest.fail("diagnostic crossed tensor boundary")
+    metadata = SimpleNamespace(is_prefill=True, query_start_loc_cpu=[0, 1024], seq_lens_cpu=[33792])
+    profile = profiles().development_profile()
+    route = _make_route(profile, profile.runtime_key)
+    for _ in range(3):
+        assert route(impl, None, Query(), None, None, None, metadata, 0, 1024, None) is None
+    assert [record.message for record in caplog.records] == [
+        f"AQUILLM_H100 prefill_fallback reason={reason} cached_len=32768 query_len=1024"]
+
+
+def test_constructor_diagnostic_once_logs_only_safe_identity_flags_and_kwarg_keys(monkeypatch, caplog):
+    import aquillm_vllm_h100.prefill_adapter as adapter
+    monkeypatch.setattr(adapter, "_constructor_diagnostics_logged", False, raising=False)
+    config = SimpleNamespace(model_config=SimpleNamespace(hf_config=SimpleNamespace(_commit_hash="PRIVATE_REVISION")),
+                             attention_config=SimpleNamespace(flash_attn_version=None))
+    monkeypatch.setitem(sys.modules, "vllm.config", SimpleNamespace(get_current_vllm_config=lambda: config))
+    Impl = constructor()
+    Impl.__init__ = adapter._capture_constructor(Impl.__init__)
+    for _ in range(2):
+        Impl(24, 256, .0625, 4, sliding_window=128, logits_soft_cap=1., sinks="PRIVATE_VALUE")
+    assert [record.message for record in caplog.records] == [
+        "AQUILLM_H100 prefill_constructor revision_present=True revision_match=False configured_fa=None "
+        "backend_fa=2 kwargs_keys=('sinks',) causal=True sliding_window=True soft_cap=True"]
+
+
+def test_missing_resolved_hash_does_not_hide_configured_fa_in_snapshot(monkeypatch):
+    from aquillm_vllm_h100.prefill_adapter import _capture_constructor
+    config = SimpleNamespace(model_config=SimpleNamespace(hf_config=SimpleNamespace()),
+                             attention_config=SimpleNamespace(flash_attn_version=2))
+    monkeypatch.setitem(sys.modules, "vllm.config", SimpleNamespace(get_current_vllm_config=lambda: config))
+    Impl = constructor()
+    Impl.__init__ = _capture_constructor(Impl.__init__)
+    impl = Impl(24, 256, .0625, 4)
+    assert impl._aquillm_h100_semantics["model_revision"] is None
+    assert impl._aquillm_h100_semantics["flash_attn_version"] == 2

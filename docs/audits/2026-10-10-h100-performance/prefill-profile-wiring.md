@@ -35,9 +35,16 @@ The successful worker route emits `AQUILLM_H100 route_exercised prefill` once,
 after prefix/raw-chunk/merge execution and outside capture. An enabled but
 inactive canary must not qualify; require that marker in external monitoring.
 There is no per-layer fallback log flood.
+Constructor diagnostics emit once per worker with revision presence/match,
+configured/backend FA version numbers, extra argument names, and semantic
+booleans. Long requests inside the profile region emit at most one fallback
+record per reason per worker route. These records contain only the reason and
+CPU-mirror lengths; they add no CUDA reads, synchronization, or allocations.
+Missing model hashes retain the configured FA snapshot for diagnosis while
+still failing the required model revision guard.
 
 CPU verification: `rtk python -m pytest -q
-deploy/vllm_plugins/h100_kernels/tests/cpu` passed 265 tests. New tests exercise
+deploy/vllm_plugins/h100_kernels/tests/cpu` passed 274 tests. New tests exercise
 opt-in/default-off behavior, independent controls, model and FA2 snapshots,
 geometry rejection before allocation, untouched fallback destinations, capture
 fallback, and the successful route marker. GPU allocation/launch boundaries are
