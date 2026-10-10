@@ -99,9 +99,9 @@ rtk rg -n "candidate audit cap|MAX_DOCUMENT_DECISIONS|topology_invalid" aquillm/
 
 - [x] Independent task reviews for each implemented lane; route findings back to the implementer.
 - [x] Cherry-pick reviewed commits into the integration branch sequentially; resolve shared interfaces explicitly.
-- [ ] Run appropriate combined regression tests in isolated backends and exact release images; repeat cold combined, parent and graph-off controls.
-- [ ] Perform whole-branch review, then merge/push development and deploy only .254 with rollback material and health gates.
-- [ ] Publish an honest rollout audit, preserve private evidence, clean owned test resources and archive worktrees after integration.
+- [x] Run appropriate combined regression tests in isolated backends and exact release images; repeat cold combined, parent and graph-off controls.
+- [x] Perform whole-branch review, then merge/push development and deploy only .254 with rollback material and health gates.
+- [x] Publish an honest rollout audit, preserve private evidence, clean owned test resources and archive worktrees after integration.
 
 ## Preflight decisions
 
@@ -117,3 +117,5 @@ The rewrite/alias/stronger-reranker/structural-parser experiment remains deferre
 The graph capacity fix reproduces an initialism-collision pattern and preserves meaningful partitions, audits and hard caps. Historical production topology_invalid and the specific failed production document remain unreproduced. Resolver identity is versioned for the changed audit; no bulk rebuild is scheduled.
 
 Task 6 includes an evidence-driven extension restoring inherited document metadata and correcting transfer-migration state. Both new migrations emit no schema/DML SQL; fresh migration and reverse/reapply preserve all physical index/constraint identities. The global model consistency check now detects no changes.
+
+Rollout completed at source revision 6b2fa6fb98e0e693d2cf021e5bceb540afe71c9c. See docs/audits/2026-10-09-development-retrieval-gaps.md for exact verification counts, known gaps and operational tradeoffs. Task 5 quality experiments remain explicitly deferred; they are not implied complete by this rollout.
