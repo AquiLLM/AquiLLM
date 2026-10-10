@@ -109,12 +109,19 @@ class PairCapabilityController:
         self.thread = self.budget = self.task = None
         self.generation = 0
         self.stopping = False
+        self.protocol_binding = None
 
     def invalidate(self):
         self.generation += 1
         if self.budget:
             self.budget.close("worker_invalidated")
         invalidate_pair_capability()
+        if self.protocol_binding is not None:
+            from .rerank_transport_policy import revoke_rerank_protocol
+
+            base, binding = self.protocol_binding
+            revoke_rerank_protocol(base, binding)
+            self.protocol_binding = None
 
     async def attempt(self):
         self.invalidate()
@@ -155,6 +162,28 @@ class PairCapabilityController:
                             min(counter.expires, monotonic() + max(0, expiry - time())),
                         )
                         result.append(counter)
+                        provider = args.get("provider")
+                        if provider is not None and counter.expires > monotonic():
+                            from .rerank_transport_policy import (
+                                RerankProtocolV1,
+                                register_rerank_protocol,
+                            )
+
+                            now = time()
+                            binding = RerankProtocolV1(
+                                provider.endpoint,
+                                provider.shape,
+                                provider.model_name,
+                                now,
+                                min(expiry, now + counter.expires - monotonic()),
+                            )
+                            base = config.rerank_base_url()
+
+                            def bind_protocol():
+                                register_rerank_protocol(base, binding)
+                                self.protocol_binding = (base, binding)
+
+                            budget.publish(bind_protocol)
             except Exception:
                 # Unknown capability is the specified outcome of warm failure.
                 pass
@@ -230,6 +259,7 @@ class PairCapabilityController:
 class PairCapabilityLifespan:
     def __init__(self, app):
         self.app, self.controller = app, None
+        self.protocol_controller = None
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "lifespan":
@@ -237,11 +267,18 @@ class PairCapabilityLifespan:
         while True:
             message = await receive()
             if message["type"] == "lifespan.startup":
+                if protocol_warm_enabled() and self.protocol_controller is None:
+                    self.protocol_controller = RerankProtocolController()
+                    self.protocol_controller.task = asyncio.create_task(
+                        self.protocol_controller.run()
+                    )
                 if enabled() and self.controller is None:
                     self.controller = PairCapabilityController()
                     self.controller.task = asyncio.create_task(self.controller.run())
                 await send({"type": "lifespan.startup.complete"})
             elif message["type"] == "lifespan.shutdown":
+                if self.protocol_controller:
+                    await self.protocol_controller.stop()
                 if self.controller:
                     await self.controller.stop()
                 await send({"type": "lifespan.shutdown.complete"})
@@ -251,3 +288,116 @@ class PairCapabilityLifespan:
 def verified_canonical_provider(deadline):
     provider = canonical_provider(deadline=deadline)
     return provider if registered_pair_counter(provider) is not None else None
+
+
+def protocol_warm_enabled():
+    return os.getenv(
+        "RAG_RERANK_PROTOCOL_WARM_ENABLED", "0"
+    ) == "1" and config.rerank_provider() in ("auto", "local", "vllm")
+
+
+class RerankProtocolController:
+    """One startup/renewal slot; three attempts/15s, no serving-driven discovery."""
+
+    def __init__(self):
+        self.thread = self.task = self.budget = self.binding = None
+        self.stopping = False
+        self.base = self.model = None
+
+    async def attempt(self):
+        from .rerank_transport_policy import (
+            discover_rerank_protocol,
+            resolve_rerank_protocol,
+        )
+
+        if self.stopping or (self.thread and self.thread.is_alive()):
+            return None
+        try:
+            timeout = min(
+                15,
+                max(
+                    0.001,
+                    float(os.getenv("RAG_RERANK_PROTOCOL_WARM_TIMEOUT_SECONDS", "15")),
+                ),
+            )
+            attempts = min(
+                3, max(1, int(os.getenv("RAG_RERANK_PROTOCOL_WARM_ATTEMPTS", "3")))
+            )
+        except ValueError:
+            timeout, attempts = 15, 3
+        self.base, self.model = config.rerank_base_url(), config.rerank_model()
+        cached = resolve_rerank_protocol(self.base, self.model)
+        if cached is not None and cached.expires_at - time() > 60:
+            self.binding = cached
+            return cached
+        self.budget = budget = TurnBudget(
+            TurnLimits(
+                acquisition_pairs=attempts,
+                final_pairs=0,
+                in_flight_pairs=1,
+                retrieval_ms=max(1, int(timeout * 1000)),
+                final_scoring_ms=0,
+            )
+        )
+        deadline = monotonic() + timeout
+        results, done = [], threading.Event()
+
+        def work():
+            try:
+                binding = discover_rerank_protocol(
+                    self.base,
+                    self.model,
+                    deadline=deadline,
+                    max_attempts=attempts,
+                    headers=config.rerank_headers(),
+                    budget=budget,
+                )
+                if binding and budget.can_publish():
+                    results.append(binding)
+            finally:
+                done.set()
+
+        self.thread = threading.Thread(
+            target=work, daemon=True, name="rerank-protocol-warm"
+        )
+        self.thread.start()
+        try:
+            while not done.is_set() and monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            if not done.is_set() or self.stopping:
+                budget.close("warm_deadline")
+                return None
+            self.binding = results[0] if results else None
+            return self.binding
+        except asyncio.CancelledError:
+            budget.close("warm_cancelled")
+            raise
+
+    async def run(self):
+        # Per-worker jitter avoids simultaneous fleet renewal bursts; all actual
+        # probes still share the process-wide weighted admission mechanism.
+        import random
+
+        try:
+            while not self.stopping and protocol_warm_enabled():
+                binding = await self.attempt()
+                delay = max(30, binding.expires_at - time() - 60) if binding else 30
+                await asyncio.sleep(delay + random.uniform(0, 5))
+        finally:
+            self.revoke()
+
+    def revoke(self):
+        from .rerank_transport_policy import revoke_rerank_protocol
+
+        if self.budget:
+            self.budget.close("worker_stopped")
+        if self.binding:
+            revoke_rerank_protocol(self.base, self.binding)
+        self.binding = None
+
+    async def stop(self):
+        self.stopping = True
+        self.revoke()
+        if self.task:
+            self.task.cancel()
+            await asyncio.gather(self.task, return_exceptions=True)

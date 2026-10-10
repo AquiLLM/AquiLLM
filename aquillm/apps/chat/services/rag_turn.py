@@ -20,7 +20,7 @@ from apps.documents.services.source_loading import (
     current_source_runtime,
     source_runtime_scope,
 )
-from lib.llm.turn_context import TurnContext, bind_turn
+from lib.llm.turn_context import TurnContext, bind_turn, current_turn
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
@@ -49,15 +49,13 @@ def create_runtime(consumer, budget):
 async def preservation_turn(consumer, *, max_func_calls):
     from lib.evidence_observation import publish
 
-    if not rag_preservation_config().active:
-        try:
-            yield None
-        finally:
-            publish("turn_complete", {})
-        return
-    from apps.chat.services.rag_preservation_turn import normal_source_handoff
-
     parent = current_source_runtime()
+    parent_turn = current_turn()
+    if parent_turn is not None:
+        # Nested direct/manual/tool calls inherit the owner's lifetime and latch.
+        yield parent
+        return
+    active = rag_preservation_config().active
     budget = (
         parent.budget
         if parent
@@ -66,9 +64,23 @@ async def preservation_turn(consumer, *, max_func_calls):
         )
     )
     task = asyncio.current_task()
+    owns_budget = parent is None
     # A cancellation handle only: scope/runtime are request-local, not reusable state.
     consumer._active_evidence_turn = (task, budget)
     try:
+        if not active:
+            # Acquisition fencing is independent of preservation/planner/synthesis.
+            with bind_turn(
+                TurnContext(
+                    budget,
+                    max_func_calls=max_func_calls,
+                    worker_cleanup=connections.close_all,
+                )
+            ):
+                yield None
+            return
+        from apps.chat.services.rag_preservation_turn import normal_source_handoff
+
         runtime = parent or await asyncio.wait_for(
             database_sync_to_async(create_runtime, thread_sensitive=False)(
                 consumer, budget
@@ -86,9 +98,15 @@ async def preservation_turn(consumer, *, max_func_calls):
                 from lib.llm.types.messages import AssistantMessage
 
                 budget.check_active()
-                return convo + [
-                    AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
-                ], "changed"
+                return (
+                    convo
+                    + [
+                        AssistantMessage(
+                            content=LIMITED_MESSAGE, stop_reason="end_turn"
+                        )
+                    ],
+                    "changed",
+                )
 
         with (
             source_runtime_scope(runtime),
@@ -106,7 +124,8 @@ async def preservation_turn(consumer, *, max_func_calls):
         budget.close("cancelled")
         raise
     finally:
-        budget.close("finished")
+        if owns_budget:
+            budget.close("finished")
         publish(
             "turn_complete",
             {

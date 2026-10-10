@@ -10,9 +10,20 @@ from django.test import override_settings
 
 from apps.documents.services import rag_cache
 from apps.documents.services.chunk_rerank_local_vllm import rerank_via_local_vllm
+from apps.documents.services.rerank_transport_policy import RerankProtocolV1
 
 
-def test_window_retry_charges_both_transports_and_disallows_silent_truncation():
+def _verified_single(model):
+    return RerankProtocolV1(
+        "http://reranker/score",
+        "score_single_text_pair",
+        model,
+        time.time() - 1,
+        time.time() + 300,
+    ).as_cache_entry()
+
+
+def test_window_overflow_charges_one_transport_and_disallows_retry_or_truncation():
     from time import monotonic
 
     from apps.documents.services.chunk_rerank_selection_provider import (
@@ -41,8 +52,10 @@ def test_window_retry_charges_both_transports_and_disallows_silent_truncation():
         scored = scorer.score_budgeted_pair(
             ("whole question", "abcd" * 100), 2, budget=budget, phase="acquisition"
         )
-    assert scored == (0.7, ("whole question", "abcd" * 50))
-    assert budget.pairs_used["acquisition"] == 2
+    assert scored is None
+    assert budget.pairs_used["acquisition"] == 1
+    assert post.call_count == 1
+    assert post.call_args.kwargs["json"]["text_2"] == "abcd" * 100
     assert all(
         "truncate_prompt_tokens" not in c.kwargs["json"] for c in post.call_args_list
     )
@@ -127,7 +140,7 @@ def test_verified_window_rejects_server_usage_that_hides_truncation():
         deadline=monotonic() + 3,
     )
     scorer.verified_pair_counter = lambda q, d: 100
-    response = MagicMock(status_code=200)
+    response = MagicMock(status_code=200, url=scorer.endpoint)
     response.json.return_value = {"score": 0.8, "usage": {"prompt_tokens": 50}}
     budget = TurnBudget(TurnLimits())
     with patch(
@@ -153,16 +166,30 @@ def test_rerank_result_cache_second_call_skips_http(
     mock_model,
     mock_vl,
     mock_post,
+    monkeypatch,
 ):
     mock_vl.return_value = False
     mock_base_url.return_value = "http://test/v1"
     mock_model.return_value = "m1"
     mock_parse.return_value = [7, 3, 1]
 
-    resp = MagicMock()
-    resp.status_code = 200
-    resp.json.return_value = {"ok": True}
-    mock_post.return_value = resp
+    binding = RerankProtocolV1(
+        "http://test/score",
+        "score_single_text_pair",
+        "m1",
+        time.time() - 1,
+        time.time() + 300,
+    )
+    monkeypatch.setattr(
+        rag_cache,
+        "get_cached_rerank_capability",
+        lambda *args, **kwargs: binding.as_cache_entry(),
+    )
+    mock_post.side_effect = lambda endpoint, **kwargs: MagicMock(
+        status_code=200,
+        url=endpoint,
+        json=lambda: {"score": float(kwargs["json"]["text_2"][1:])},
+    )
 
     chunks = [MagicMock(pk=i, content=f"t{i}") for i in (1, 2, 3, 4, 5, 6, 7)]
 
@@ -178,6 +205,7 @@ def test_rerank_result_cache_second_call_skips_http(
         posts_after_first = mock_post.call_count
         rerank_via_local_vllm(MC, "same query", chunks, 3)
     assert mock_post.call_count == posts_after_first
+    assert posts_after_first == len(chunks)
 
 
 @override_settings(RAG_CACHE_ENABLED=True)
@@ -290,7 +318,8 @@ def test_cached_single_score_capability_skips_batch_and_scores_concurrently(
     mock_model.return_value = "Qwen/Qwen3-VL-Reranker-2B"
     mock_vl.return_value = True
     rows = [
-        MagicMock(pk=index, content=f"document evidence {index}") for index in range(12)
+        MagicMock(pk=index, content=f"document evidence {index}")
+        for index in range(1, 13)
     ]
     mock_ordered.side_effect = lambda _model, identifiers: tuple(identifiers)
     monkeypatch.setattr(
@@ -301,10 +330,7 @@ def test_cached_single_score_capability_skips_batch_and_scores_concurrently(
     monkeypatch.setattr(
         rag_cache,
         "get_cached_rerank_capability",
-        lambda *_args: {
-            "endpoint": "http://reranker/score",
-            "shape": "score_single_text_pair",
-        },
+        lambda *_args, **_kwargs: _verified_single(mock_model.return_value),
     )
     monkeypatch.setattr(rag_cache, "set_cached_rerank_result", lambda *_args: None)
     monkeypatch.setattr(rag_cache, "set_cached_rerank_capability", lambda *_args: None)
@@ -346,7 +372,7 @@ def test_cached_single_score_capability_skips_batch_and_scores_concurrently(
 
     ranked = rerank_via_local_vllm(object, "attensity", rows, 4)
 
-    assert ranked == (11, 10, 9, 8)
+    assert ranked == (12, 11, 10, 9)
     assert len(payloads) == len(rows)
     assert 1 < peak <= 6
 
@@ -355,7 +381,7 @@ def test_cached_single_score_capability_skips_batch_and_scores_concurrently(
 @patch("apps.documents.services.chunk_rerank_local_vllm.rerank_model_is_qwen3_vl")
 @patch("apps.documents.services.chunk_rerank_local_vllm.rerank_model")
 @patch("apps.documents.services.chunk_rerank_local_vllm.rerank_base_url")
-def test_cold_qwen_vl_path_avoids_known_invalid_batch_payload(
+def test_cold_qwen_vl_path_returns_rank_without_protocol_probe(
     mock_base_url,
     mock_model,
     mock_vl,
@@ -365,10 +391,12 @@ def test_cold_qwen_vl_path_avoids_known_invalid_batch_payload(
     mock_base_url.return_value = "http://reranker/v1"
     mock_model.return_value = "Qwen/Qwen3-VL-Reranker-2B"
     mock_vl.return_value = True
-    rows = [MagicMock(pk=index, content=f"evidence {index}") for index in range(4)]
+    rows = [MagicMock(pk=index, content=f"evidence {index}") for index in range(1, 5)]
     mock_ordered.side_effect = lambda _model, identifiers: tuple(identifiers)
     monkeypatch.setattr(rag_cache, "get_cached_rerank_result", lambda *_args: None)
-    monkeypatch.setattr(rag_cache, "get_cached_rerank_capability", lambda *_args: None)
+    monkeypatch.setattr(
+        rag_cache, "get_cached_rerank_capability", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(rag_cache, "set_cached_rerank_result", lambda *_args: None)
     monkeypatch.setattr(rag_cache, "set_cached_rerank_capability", lambda *_args: None)
 
@@ -399,8 +427,8 @@ def test_cold_qwen_vl_path_avoids_known_invalid_batch_payload(
 
     ranked = rerank_via_local_vllm(object, "attensity", rows, 2)
 
-    assert ranked == (3, 2)
-    assert len(payloads) == len(rows)
+    assert ranked == (1, 2)
+    assert payloads == []
 
 
 @patch("apps.documents.services.chunk_rerank_local_vllm.rerank_model_is_qwen3_vl")
@@ -415,7 +443,7 @@ def test_incomplete_or_nonfinite_single_scores_do_not_populate_result_cache(
     mock_base_url.return_value = "http://reranker/v1"
     mock_model.return_value = "Qwen/Qwen3-VL-Reranker-2B"
     mock_vl.return_value = True
-    rows = [MagicMock(pk=index, content=f"evidence {index}") for index in range(2)]
+    rows = [MagicMock(pk=index, content=f"evidence {index}") for index in range(1, 3)]
 
     class Model:
         objects = MagicMock()
@@ -425,10 +453,7 @@ def test_incomplete_or_nonfinite_single_scores_do_not_populate_result_cache(
     monkeypatch.setattr(
         rag_cache,
         "get_cached_rerank_capability",
-        lambda *_args: {
-            "endpoint": "http://reranker/score",
-            "shape": "score_single_text_pair",
-        },
+        lambda *_args, **_kwargs: _verified_single(mock_model.return_value),
     )
     monkeypatch.setattr(
         rag_cache,
@@ -438,8 +463,10 @@ def test_incomplete_or_nonfinite_single_scores_do_not_populate_result_cache(
         ),
     )
     monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_vllm._score_documents_concurrently",
-        lambda **_kwargs: [(0, 0.9), (1, float("nan"))],
+        "apps.documents.services.chunk_rerank_local_vllm.requests.post",
+        lambda endpoint, **kwargs: MagicMock(
+            status_code=200, url=endpoint, json=lambda: {"score": float("nan")}
+        ),
     )
 
     rerank_via_local_vllm(Model, "attensity", rows, 2)

@@ -226,7 +226,7 @@ def get_cached_rerank_capability(
         }
     ):
         _log_hit_miss(_MET_RERANK_CAP, True)
-        return {"endpoint": val["endpoint"], "shape": val["shape"]}
+        return dict(val)
     if isinstance(val, str) and val:
         # Read legacy endpoint-only records during rolling deployments.
         _log_hit_miss(_MET_RERANK_CAP, True)
@@ -251,7 +251,7 @@ def set_cached_rerank_capability(
         return
     cache_set(
         key,
-        {"endpoint": endpoint, "shape": shape},
+        dict(capability),
         rerank_capability_ttl(),
     )
 

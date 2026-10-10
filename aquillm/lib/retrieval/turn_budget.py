@@ -15,6 +15,11 @@ from time import monotonic
 from .budget_observation import observed_budget
 from .evidence import SourceIdentity
 
+# Actual transports share this weighted, non-waiting admission across all turns.
+# Fleet capacity is worker process count times six until service admission exists.
+_PROCESS_PAIR_LOCK = RLock()
+_PROCESS_PAIRS = 0
+
 _PILOT_MAX = {
     "actions": 3,
     "unique_sources": 45,
@@ -255,21 +260,38 @@ class TurnBudget:
 
     def start_pair(self, *, phase: str) -> bool:
         """Atomically charge an actual transport and lease a per-turn slot."""
-        with self._lock:
+        return self.start_pairs(1, phase=phase)
+
+    def start_pairs(self, count: int, *, phase: str) -> bool:
+        """A batch leases its actual pair weight before dispatch; never queue."""
+        global _PROCESS_PAIRS
+        if type(count) is not int or count <= 0:
+            raise ValueError("invalid pair weight")
+        with self._lock, _PROCESS_PAIR_LOCK:
             if self.scoring_remaining_ms(phase) <= 0:
                 return False
-            if self._inflight >= self.limits.in_flight_pairs:
+            if (
+                self._inflight + count > self.limits.in_flight_pairs
+                or _PROCESS_PAIRS + count > _PILOT_MAX["in_flight_pairs"]
+            ):
                 return False
-            if not self.reserve_pairs(1, phase=phase):
+            if not self.reserve_pairs(count, phase=phase):
                 return False
-            self._inflight += 1
+            self._inflight += count
+            _PROCESS_PAIRS += count
             return True
 
     def finish_pair(self) -> None:
-        with self._lock:
-            if self._inflight <= 0:
+        self.finish_pairs(1)
+
+    def finish_pairs(self, count: int) -> None:
+        """Release only on actual I/O completion, including cancelled callers."""
+        global _PROCESS_PAIRS
+        with self._lock, _PROCESS_PAIR_LOCK:
+            if type(count) is not int or count <= 0 or self._inflight < count:
                 raise ValueError("no active pair lease")
-            self._inflight -= 1
+            self._inflight -= count
+            _PROCESS_PAIRS -= count
 
     def scoring_remaining_ms(self, phase: str) -> int:
         """The once-only final allowance is nested inside the original deadline."""

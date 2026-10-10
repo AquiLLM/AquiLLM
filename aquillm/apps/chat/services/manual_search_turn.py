@@ -5,7 +5,6 @@ from __future__ import annotations
 from uuid import uuid4
 
 import structlog
-from channels.db import database_sync_to_async
 
 from apps.chat.services.manual_search_commands import (
     ManualSearchError,
@@ -85,6 +84,21 @@ def _reply(consumer, convo, text):
 
 
 async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
+    from lib.llm.turn_context import current_turn
+
+    if current_turn() is None:
+        from .rag_turn import preservation_turn
+
+        async with preservation_turn(consumer, max_func_calls=3):
+            return await _run_manual_search_turn(
+                consumer, llm_if, convo, stream_func=stream_func
+            )
+    return await _run_manual_search_turn(
+        consumer, llm_if, convo, stream_func=stream_func
+    )
+
+
+async def _run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
     """Handle explicit commands even on errors or when automatic RAG is disabled."""
     if not convo.messages or not isinstance(convo[-1], UserMessage):
         return "skipped"
@@ -107,10 +121,23 @@ async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
     correlation_id = new_correlation_id()
     try:
         query = resolve_search_query(command, convo.messages[:-1])
-        name, scope, arguments, raw = await database_sync_to_async(
-            _retrieve,
-            thread_sensitive=False,
-        )(consumer, command, query, convo.messages[:-1])
+        # Use to_thread: cancellation returns immediately; DB cleanup runs in the
+        # actual worker finally block, after a non-cooperative call completes.
+        import asyncio
+
+        from django.db import connections
+
+        from lib.llm.turn_context import bounded_retrieval, current_turn
+
+        def retrieve_worker():
+            try:
+                return _retrieve(consumer, command, query, convo.messages[:-1])
+            finally:
+                connections.close_all()
+
+        name, scope, arguments, raw = await bounded_retrieval(
+            asyncio.to_thread(retrieve_worker), current_turn().budget
+        )
         working_convo = convo + [
             AssistantMessage(
                 content="",

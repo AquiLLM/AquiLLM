@@ -8,7 +8,7 @@ from time import monotonic
 
 import requests
 
-from apps.documents.services import rag_cache
+from apps.documents.services import rag_cache as rag_cache
 from apps.documents.services.chunk_rerank_budget import trim_rerank_pair
 from apps.documents.services.chunk_rerank_config import (
     rerank_api_key,
@@ -67,6 +67,8 @@ class LocalSelectionScorer:
         deadline: float,
         clock: Callable[[], float] = monotonic,
         headers: dict[str, str] | None = None,
+        turn_budget=None,
+        protocol_binding=None,
     ) -> None:
         if shape not in (
             "score_single_text_pair",
@@ -84,6 +86,21 @@ class LocalSelectionScorer:
         self.deadline = deadline
         self.clock = clock
         self.headers = headers or {"Content-Type": "application/json"}
+        # Serving factories retain the immutable proof through actual I/O.
+        # Unbound construction is also used by independently attested warm probes.
+        self.protocol_binding = protocol_binding
+        from lib.llm.turn_context import current_turn
+        from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+
+        from .rerank_request_lifetime import rerank_state_for
+
+        turn = current_turn()
+        budget = (
+            turn_budget
+            or (turn.budget if turn else None)
+            or TurnBudget(TurnLimits(), clock=clock)
+        )
+        self.rerank_state = rerank_state_for(budget)
         self.scoring_kind = "listwise" if shape == "rerank_documents" else "pointwise"
         self.scorer_fingerprint = local_scorer_fingerprint(
             endpoint=endpoint,
@@ -114,19 +131,52 @@ class LocalSelectionScorer:
             self, pair, timeout_seconds, budget=budget, phase=phase, post=requests.post
         )
 
+    def can_score_protocol(self):
+        binding = self.protocol_binding
+        return binding is None or (
+            binding.endpoint == self.endpoint
+            and binding.payload_kind == self.shape
+            and binding.live(self.model_name)
+        )
+
     def _post(self, payload: dict, budget: float):
         remaining = min(self.timeout, budget, self.deadline - self.clock())
-        if remaining <= 0:
+        if remaining <= 0 or not self.can_score_protocol():
             return None
-        try:
-            return requests.post(
+        from .rerank_transport_policy import finite_protocol_scores
+
+        count = len(payload["documents"]) if "documents" in payload else 1
+
+        def send(timeout):
+            if not self.can_score_protocol():
+                return None
+            response = requests.post(
                 self.endpoint,
                 headers=self.headers,
                 json=payload,
-                timeout=remaining,
+                timeout=min(timeout, remaining),
+                allow_redirects=False,
             )
-        except requests.RequestException:
-            return None
+            if (
+                response.status_code != 200
+                or self.clock() >= self.deadline
+                or getattr(response, "url", self.endpoint) != self.endpoint
+                or not self.can_score_protocol()
+            ):
+                return None
+            if (
+                finite_protocol_scores(
+                    response.json(),
+                    payload_kind=self.shape,
+                    count=count,
+                    model_key=self.model_name,
+                )
+                is None
+            ):
+                return None
+            return response
+
+        return self.rerank_state.run(count, send, phase="final", timeout=remaining)
 
     def score_pair(self, pair: Pair, timeout_seconds: float):
         if self.scoring_kind != "pointwise":
@@ -147,19 +197,6 @@ class LocalSelectionScorer:
 
         response = self._post(payload(pair), timeout_seconds)
         successful = pair
-        if response is not None and response.status_code == 400 and pair[1]:
-            adaptive = min(
-                max(0, self.pair_limit - 2),
-                max(self.reserve + 256, self.pair_limit // 2),
-            )
-            stricter = min(
-                max(0, self.pair_limit - 2),
-                max(adaptive + 256, (self.pair_limit * 3) // 4),
-            )
-            retry_pair = trim_rerank_pair(pair[0], pair[1], self.pair_limit, stricter)
-            if retry_pair != pair and self.clock() < self.deadline:
-                response = self._post(payload(retry_pair), timeout_seconds)
-                successful = retry_pair
         if response is None or response.status_code >= 400:
             return None
         try:
@@ -196,14 +233,23 @@ class LocalSelectionScorer:
             "documents": documents,
             "top_n": len(pairs),
         }
-        response = self._post(payload, timeout_seconds)
-        if response is not None and response.status_code == 400:
-            payload["documents"] = [{"text": document} for document in documents]
-            response = self._post(payload, timeout_seconds)
+        width = min(6, self.rerank_state.budget.limits.in_flight_pairs)
+        if width <= 0:
+            return None
+        all_indexed = []
+        for start in range(0, len(pairs), width):
+            payload["documents"] = documents[start : start + width]
+            payload["top_n"] = len(payload["documents"])
+            response = self._post(dict(payload), timeout_seconds)
+            if response is None:
+                return None
+            all_indexed.extend(
+                (start + i, value) for i, value in parse_score_results(response.json())
+            )
         if response is None or response.status_code >= 400:
             return None
         try:
-            indexed = parse_score_results(response.json())
+            indexed = all_indexed
         except (TypeError, ValueError, requests.RequestException):
             return None
         if len(indexed) != len(pairs) or {index for index, _ in indexed} != set(
@@ -221,13 +267,13 @@ def _legacy_selection_scorer(
     if rerank_provider() not in ("auto", "local", "vllm"):
         return None
     base_v1, model_name = rerank_base_url(), rerank_model()
-    capability = rag_cache.get_cached_rerank_capability(
-        base_v1, model_name, **({"budget": turn_budget} if turn_budget else {})
-    )
-    if not capability:
+    from .rerank_transport_policy import resolve_rerank_protocol
+
+    binding = resolve_rerank_protocol(base_v1, model_name, budget=turn_budget)
+    if not binding:
         return None
     root = base_v1[:-3] if base_v1.endswith("/v1") else base_v1
-    shape, endpoint = capability["shape"], capability["endpoint"]
+    shape, endpoint = binding.payload_kind, binding.endpoint
     allowed = (
         {f"{root}/rerank", f"{root}/v2/rerank", f"{base_v1}/rerank"}
         if shape == "rerank_documents"
@@ -251,6 +297,8 @@ def _legacy_selection_scorer(
         deadline=deadline,
         clock=clock,
         headers=headers,
+        turn_budget=turn_budget,
+        protocol_binding=binding,
     )
 
 

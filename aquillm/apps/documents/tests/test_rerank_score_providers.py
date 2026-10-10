@@ -5,11 +5,39 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import UUID
+from time import time
+from apps.documents.services.rerank_transport_policy import RerankProtocolV1
 
 from django.test import override_settings
 
 DOC_A = UUID("00000000-0000-0000-0000-000000000001")
 DOC_B = UUID("00000000-0000-0000-0000-000000000002")
+
+
+def _configure_verified(monkeypatch, *, shape="score_single_text_pair", endpoint=None):
+    from apps.documents.services import chunk_rerank_local_scored as local, rag_cache
+
+    monkeypatch.setattr(local, "rerank_base_url", lambda: "http://test/v1")
+    monkeypatch.setattr(local, "rerank_model", lambda: "synthetic")
+    monkeypatch.setattr(
+        rag_cache,
+        "get_cached_rerank_capability",
+        lambda *args, **kwargs: RerankProtocolV1(
+            (
+                endpoint[0]
+                if endpoint
+                else (
+                    "http://test/rerank"
+                    if shape == "rerank_documents"
+                    else "http://test/score"
+                )
+            ),
+            shape,
+            "synthetic",
+            time() - 1,
+            time() + 300,
+        ).as_cache_entry(),
+    )
 
 
 def _row(pk, content, doc_id=DOC_A):
@@ -23,7 +51,7 @@ def _row(pk, content, doc_id=DOC_A):
     )
 
 
-def test_local_single_score_keeps_successful_retry_pair(monkeypatch):
+def test_local_single_score_overflow_stops_without_retry(monkeypatch):
     from apps.documents.services.chunk_rerank_local_scored_http import (
         _score_one_document,
     )
@@ -50,10 +78,8 @@ def test_local_single_score_keeps_successful_retry_pair(monkeypatch):
         pair_token_limit=128,
         reserve_tokens=16,
     )
-    assert len(payloads) == 2
-    assert result[0:2] == (0, 0.8)
-    assert result[2] == (payloads[1]["text_1"], payloads[1]["text_2"])
-    assert result[2] != (payloads[0]["text_1"], payloads[0]["text_2"])
+    assert len(payloads) == 1
+    assert result is None
 
 
 def test_scored_local_rerank_captures_scores_without_extra_inference(monkeypatch):
@@ -64,20 +90,12 @@ def test_scored_local_rerank_captures_scores_without_extra_inference(monkeypatch
     monkeypatch.setattr(
         "apps.documents.services.chunk_rerank.rerank_provider", lambda: "local"
     )
-    monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.rerank_model_is_qwen3_vl",
-        lambda: True,
-    )
-    monkeypatch.setattr(
-        rag_cache,
-        "get_cached_rerank_capability",
-        lambda *_: {"endpoint": "http://test/score", "shape": "score_single_text_pair"},
-    )
+    _configure_verified(monkeypatch)
     payloads = []
 
     def post(_endpoint, *, json, **_kwargs):
         payloads.append(json)
-        response = MagicMock(status_code=200)
+        response = MagicMock(status_code=200, url=_endpoint)
         response.json.return_value = {"score": 0.9 if json["text_2"] == "beta" else 0.7}
         return response
 
@@ -149,7 +167,7 @@ def test_scored_cohere_requests_full_pool_when_top_k_is_smaller(monkeypatch):
     assert len(result.score_set.scores) == 2
 
 
-def test_cohere_without_scores_keeps_top_k_ranking(monkeypatch):
+def test_cohere_without_scores_keeps_authorized_input_rank(monkeypatch):
     from apps.documents.services.chunk_rerank import rerank_chunks_scored
 
     monkeypatch.setattr(
@@ -161,14 +179,23 @@ def test_cohere_without_scores_keeps_top_k_ranking(monkeypatch):
             SimpleNamespace(document=SimpleNamespace(id=10)),
         ]
     )
-    client = SimpleNamespace(rerank=lambda **_kwargs: response)
+    calls = []
+
+    def rerank(**kwargs):
+        calls.append(kwargs)
+        return response
+
+    client = SimpleNamespace(rerank=rerank)
     monkeypatch.setattr(
         "apps.documents.services.chunk_rerank.apps.get_app_config",
         lambda _name: SimpleNamespace(cohere_client=client),
     )
     result = rerank_chunks_scored(object, "question", [_row(10, "a"), _row(20, "b")], 1)
-    assert result.ranked_ids == (20,)
+    assert result.ranked_ids == (10,)
     assert result.score_set.status == "unavailable"
+    assert result.score_set.scores == ()
+    assert len(calls) == 1
+    assert len(calls[0]["documents"]) == 2
 
 
 def test_local_rerank_scores_stably_break_ties_and_missing_scores_are_unavailable(
@@ -180,16 +207,12 @@ def test_local_rerank_scores_stably_break_ties_and_missing_scores_are_unavailabl
     monkeypatch.setattr(
         "apps.documents.services.chunk_rerank.rerank_provider", lambda: "local"
     )
-    monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.rerank_model_is_qwen3_vl",
-        lambda: False,
-    )
-    monkeypatch.setattr(rag_cache, "get_cached_rerank_capability", lambda *_: None)
+    _configure_verified(monkeypatch, shape="rerank_documents")
     rows = [_row(10, "alpha"), _row(20, "beta", DOC_B)]
     scored = True
 
     def post(_endpoint, *, json, **_kwargs):
-        response = MagicMock(status_code=200)
+        response = MagicMock(status_code=200, url=_endpoint)
         response.json.return_value = {
             "results": [
                 {"index": 1, **({"relevance_score": 0.7} if scored else {})},
@@ -206,7 +229,7 @@ def test_local_rerank_scores_stably_break_ties_and_missing_scores_are_unavailabl
     assert result.score_set.status == "complete"
     scored = False
     result = rerank_chunks_scored(object, "another question", rows, 2)
-    assert result.ranked_ids == (20, 10)
+    assert result.ranked_ids == (10, 20)
     assert result.score_set.status == "unavailable"
     assert result.score_set.scores == ()
 
@@ -218,16 +241,12 @@ def test_scored_local_rerank_requests_full_pool_when_top_k_is_smaller(monkeypatc
     monkeypatch.setattr(
         "apps.documents.services.chunk_rerank.rerank_provider", lambda: "local"
     )
-    monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.rerank_model_is_qwen3_vl",
-        lambda: False,
-    )
-    monkeypatch.setattr(rag_cache, "get_cached_rerank_capability", lambda *_: None)
+    _configure_verified(monkeypatch, shape="rerank_documents")
     top_ns = []
 
     def post(_endpoint, *, json, **_kwargs):
         top_ns.append(json["top_n"])
-        response = MagicMock(status_code=200)
+        response = MagicMock(status_code=200, url=_endpoint)
         response.json.return_value = {
             "results": [
                 {"index": 1, "relevance_score": 0.9},
@@ -257,24 +276,16 @@ def test_scored_cache_rebinds_when_capability_endpoint_changes(monkeypatch):
         "apps.documents.services.chunk_rerank.rerank_provider", lambda: "local"
     )
     monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.rerank_model_is_qwen3_vl",
-        lambda: True,
-    )
-    monkeypatch.setattr(
         "apps.documents.services.chunk_rerank_local_scored.rerank_model_revision",
         lambda: "pinned-revision",
     )
-    endpoint = ["http://test/score-a"]
-    monkeypatch.setattr(
-        rag_cache,
-        "get_cached_rerank_capability",
-        lambda *_: {"endpoint": endpoint[0], "shape": "score_single_text_pair"},
-    )
+    endpoint = ["http://test/score"]
+    _configure_verified(monkeypatch, endpoint=endpoint)
     posts = []
 
     def post(url, *, json, **_kwargs):
         posts.append(url)
-        response = MagicMock(status_code=200)
+        response = MagicMock(status_code=200, url=url)
         response.json.return_value = {"score": 0.8}
         return response
 
@@ -283,7 +294,7 @@ def test_scored_cache_rebinds_when_capability_endpoint_changes(monkeypatch):
     )
     rows = [_row(101, "one")]
     first = rerank_chunks_scored(object, "endpoint-sensitive", rows, 1)
-    endpoint[0] = "http://test/score-b"
+    endpoint[0] = "http://test/v1/score"
     second = rerank_chunks_scored(object, "endpoint-sensitive", rows, 1)
-    assert posts == ["http://test/score-a", "http://test/score-b"]
+    assert posts == ["http://test/score", "http://test/v1/score"]
     assert first.score_set.scorer_fingerprint != second.score_set.scorer_fingerprint

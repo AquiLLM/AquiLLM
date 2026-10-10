@@ -7,7 +7,6 @@ import time
 from typing import Any, Literal
 
 import structlog
-from channels.db import database_sync_to_async
 
 from apps.chat.services.manual_search_turn import run_manual_search_turn
 from apps.chat.services.rag_config import (
@@ -89,6 +88,19 @@ async def run_direct_rag_turn(
     *,
     stream_func: Any = None,
 ) -> DirectRagOutcome:
+    from lib.llm.turn_context import current_turn
+
+    if current_turn() is None:
+        from .rag_turn import preservation_turn
+
+        async with preservation_turn(consumer, max_func_calls=3):
+            return await _run_direct_rag_turn(
+                consumer, llm_if, convo, stream_func=stream_func
+            )
+    return await _run_direct_rag_turn(consumer, llm_if, convo, stream_func=stream_func)
+
+
+async def _run_direct_rag_turn(consumer, llm_if, convo, *, stream_func=None):
     """Handle an obvious document question through the deterministic RAG pipeline.
 
     Returns ``"handled"`` when the turn was fully answered here (caller must skip
@@ -183,16 +195,25 @@ async def run_direct_rag_turn(
         prepared_queries(queries, top_k, candidate_top_k)
 
         t_retrieval_start = time.perf_counter()
-        search_async = database_sync_to_async(
-            _run_vector_search,
-            thread_sensitive=False,
-        )
-        search_outcomes = await asyncio.gather(
-            *(
-                search_async(consumer, search_query, candidate_top_k)
-                for search_query in queries
+        from django.db import connections
+
+        from lib.llm.turn_context import bounded_retrieval, current_turn
+
+        def search_worker(search_query):
+            try:
+                return _run_vector_search(consumer, search_query, candidate_top_k)
+            finally:
+                connections.close_all()
+
+        search_outcomes = await bounded_retrieval(
+            asyncio.gather(
+                *(
+                    asyncio.to_thread(search_worker, search_query)
+                    for search_query in queries
+                ),
+                return_exceptions=True,
             ),
-            return_exceptions=True,
+            current_turn().budget,
         )
         observe_search_outcomes(queries, search_outcomes)
         search_results = successful_search_results(search_outcomes, logger)
