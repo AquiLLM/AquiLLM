@@ -72,9 +72,18 @@ def build_embedding_generation(
         check_embedding_deadline(budget)
         with embedding_build_transaction(budget, using=using):
             retry = fail_embedding_delivery(lease, kind="upstream", using=using)
+            if retry:
+                deliveries = (
+                    EmbeddingGeneration.objects.using(using)
+                    .values_list("deliveries", flat=True)
+                    .get(pk=lease.generation_key)
+                )
+                # Fresh explicit-resume messages reset Celery's retry counter,
+                # but must retain the persisted generation's 30/60-second fence.
+                retry_delay = 30 * 2 ** max(0, deliveries - 1)
         if retry:
             check_embedding_deadline(budget)
-            raise self.retry(countdown=30 * 2**self.request.retries)
+            raise self.retry(countdown=retry_delay)
         return "failed"
     except Exception as exc:
         # Expiry never acquires a new bookkeeping allowance or enqueues recovery.
