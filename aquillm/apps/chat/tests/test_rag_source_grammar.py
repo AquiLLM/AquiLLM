@@ -73,15 +73,21 @@ async def test_fresh_conversation_grammar_reaches_retrieval(question, followup, 
 
 
 @pytest.mark.asyncio
-async def test_default_mode_missing_source_antecedent_asks_focused_clarification(monkeypatch):
+@pytest.mark.parametrize("followup", [False, True])
+@pytest.mark.parametrize("question", [
+    "Compare that paper with the second one",
+    "Summarize the paper Red and that paper",
+    "Compare the paper Red with the second one",
+])
+async def test_missing_source_antecedent_asks_focused_clarification(question, followup, monkeypatch):
     from apps.chat.refs import CollectionsRef
     from apps.chat.services import rag_pipeline
 
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
-    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "legacy")
-    monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "0")
+    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source" if followup else "legacy")
+    monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", str(int(followup)))
     convo = Conversation(system="sys", messages=[
-        UserMessage(content="Compare that paper with the second one")
+        UserMessage(content=question)
     ])
     runtime = SourceRuntime(TurnBudget(TurnLimits()), _authorization(Policy()))
     consumer = SimpleNamespace(user=runtime.authorization.reauthorization_capability._principal,

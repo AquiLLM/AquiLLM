@@ -24,8 +24,9 @@ _SINGULAR = re.compile(
 _GENERIC_TITLES = frozenset({"paper", "report", "document", "source"})
 _NAMED_SOURCE = re.compile(
     r'\s+(?:(?i:titled|named|called)\s+)?(?P<title>"[^"\n]+"|“[^”\n]+”|'
-    r"[A-Z][\w’'-]*(?:\s+(?:[A-Z][\w’'-]*|of|the|and|in|on|for|to|a|an))*)"
+    r"[A-Z][\w’'-]*(?:\s+[\w’'-]+)*)"
 )
+_KNOWN_NAMED_SOURCE = re.compile(_NAMED_SOURCE.pattern, re.I)
 
 
 @dataclass(frozen=True, slots=True)
@@ -160,10 +161,20 @@ def _reference_events(question, titles):
             continue
         known = next((event for event in events if event[2] == "title"
             and event[0] >= cue.end() and not question[cue.end():event[0]].strip()), None)
-        named = _NAMED_SOURCE.match(question, cue.end())
+        # A known prefix is only a name cue; identity needs the complete span.
+        pattern = _KNOWN_NAMED_SOURCE if known is not None else _NAMED_SOURCE
+        named = pattern.match(question, cue.end())
         if named is not None:
             start, end = named.span("title")
-            literal = named.group("title").strip('"“”').casefold()
+            if question[start] not in '"“':
+                following = [m.start() for p in (_ORDINAL, _PLURAL, _SINGULAR)
+                    for m in p.finditer(question, start + 1, end)
+                    if p is _ORDINAL or _source_pronoun(question, m)]
+                if following:
+                    end = start + len(re.sub(
+                        r"\s+(?:and|with|versus|vs)(?:\s+the)?\s*$", "",
+                        question[start:min(following)], flags=re.I).rstrip())
+            literal = question[start:end].strip('"“”').casefold()
             partial = {event[:2] for event in events if event[2] == "title"
                 and _overlaps(start, end, (event[:2],)) and event[3] != literal}
             events = [event for event in events if event[:2] not in partial]
@@ -173,7 +184,7 @@ def _reference_events(question, titles):
             if exact:
                 occupied.append((cue.start(), end))
             elif not _overlaps(start, end, occupied):
-                events.append((start, end, "named_source", named.group("title")))
+                events.append((start, end, "named_source", question[start:end]))
                 occupied.append((cue.start(), end))
         elif known is not None:
             occupied.append((cue.start(), known[1]))

@@ -111,8 +111,9 @@ async def test_prepared_named_source_constraints_reach_actual_acquisition(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("followup", [False, True])
 @pytest.mark.parametrize("historical_title", ["Red", "Red Giants"])
+@pytest.mark.parametrize("requested_title", ["Red Giants", "red giants", "Red giants"])
 async def test_explicit_longer_title_does_not_borrow_partial_historical_identity(
-    followup, historical_title, monkeypatch,
+    followup, historical_title, requested_title, monkeypatch,
 ):
     actor, collection, auth = await database_sync_to_async(setup_scope)()
     doc_id = next(iter(auth.selected_document_ids))
@@ -120,8 +121,8 @@ async def test_explicit_longer_title_does_not_borrow_partial_historical_identity
         TextChunk(doc_id=doc_id, chunk_number=0, content="A different paper.",
                   start_position=0, end_position=18)]))[0]
     citation = f"[doc:{doc_id} chunk:{chunk.pk}]"
-    question = "Summarize the paper Red Giants"
-    rewrite = "Explain the paper Red Giants"
+    question = f"Summarize the paper {requested_title}"
+    rewrite = f"Explain the paper {requested_title}"
     convo = Conversation(system="sys", messages=[
         ToolMessage(tool_name="vector_search", for_whom="assistant", content="{}",
             result_dict={"result": [{"doc_id": str(doc_id), "chunk_id": chunk.pk,
