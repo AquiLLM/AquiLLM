@@ -69,7 +69,9 @@ def test_protected_answer_survives_actual_dense_collection_and_score_failure(
         }
 
 
-@override_settings(RAG_FULL_TEXT_ENABLED=True, RAG_TRIGRAM_SIMILARITY_MIN=1)
+@override_settings(
+    RAG_FULL_TEXT_ENABLED=True, RAG_RRF_ENABLED=True, RAG_TRIGRAM_SIMILARITY_MIN=1
+)
 def test_title_change_at_final_rerank_rejects_fts_only_row_and_cache(
     legacy, monkeypatch
 ):
@@ -78,6 +80,13 @@ def test_title_change_at_final_rerank_rejects_fts_only_row_and_cache(
     publish(legacy)
     original = chunk_search._fallback_rerank
     keys = []
+    final = []
+    original_diagnostics = chunk_search.completed_search_diagnostics
+
+    def diagnostics(*args, **kwargs):
+        final.append(args[2])
+        assert args[2].fusion_v2 == current_scope().fusion_v2
+        return original_diagnostics(*args, **kwargs)
 
     def change_title(model, rows, count):
         keys.append(current_scope().cache_key())
@@ -87,6 +96,7 @@ def test_title_change_at_final_rerank_rejects_fts_only_row_and_cache(
 
     runtime, _ = runtime_for(legacy)
     monkeypatch.setattr(chunk_search, "_fallback_rerank", change_title)
+    monkeypatch.setattr(chunk_search, "completed_search_diagnostics", diagnostics)
     with source_runtime_scope(runtime):
         result = chunk_search.text_chunk_search(
             TextChunk,
@@ -97,6 +107,10 @@ def test_title_change_at_final_rerank_rejects_fts_only_row_and_cache(
         )
     assert keys[0] is not None
     assert result[2] == []
+    assert result[3]["full_text_coverage"]["status"] == "incomplete"
+    assert result[3]["full_text_coverage"]["indexed_count"] == 0
+    assert final[0].full_text_chunk_ids == ()
+    assert final[0].fusion_v2.candidates == ()
 
 
 @override_settings(RAG_FULL_TEXT_ENABLED=True)

@@ -4,7 +4,7 @@ from django.conf import settings
 
 from lib.embeddings.document_contracts import digest
 
-from .candidate_rank_fusion import fuse_channel_ids, fuse_channel_ranks_v2
+from .candidate_rank_fusion import fuse_ranked_channels_v2
 from .lexical_candidates import strong_exact_ids
 from .lexical_projection import POLICY
 
@@ -71,35 +71,49 @@ def ordered_candidates(
     scope,
     graph_authority="graph-disabled-v1",
     graph_policy="graph-disabled-v1",
+    preserved_ranks=None,
 ):
     if not controls()["rrf"]:
         return tuple(rows), None
     by_id = {row.pk: row for row in rows}
-    channels = {
-        name: tuple(pk for pk in ids if pk in by_id) for name, ids in channels.items()
+    ranks = {
+        name: tuple(
+            (pk, rank) for rank, pk in enumerate(dict.fromkeys(ids), 1) if pk in by_id
+        )
+        for name, ids in channels.items()
     }
+    for name, entries in (preserved_ranks or {}).items():
+        ranks[name] = tuple((pk, rank) for pk, rank in entries if pk in by_id)
+    if scope is not None:
+        ranks["full_text"] = tuple(
+            (pk, rank)
+            for pk, rank in ranks.get("full_text", ())
+            if pk not in scope.fts_invalid_ids
+        )
     protected = (
         strong_exact_ids(tuple(row for row in exact_rows if row.pk in by_id), query)
         if controls()["protected_exact"]
         else ()
     )
     limit = min(626, len(by_id))
-    if scope is None:
-        # Non-ORM adapters can order IDs but cannot mint a scope-bound record.
-        ids = fuse_channel_ids(channels, limit=limit, protected_exact_ids=protected)
-        return tuple(by_id[pk] for pk in ids), None
-    if not scope.query_digest:
+    if scope is not None and not scope.query_digest:
         scope.query_digest = digest({"version": "unprepared-query-v1", "query": query})
-    result = fuse_channel_ranks_v2(
-        channels,
+    result = fuse_ranked_channels_v2(
+        ranks,
         limit=limit,
         scope_key=fusion_scope_key(
             scope, graph_authority=graph_authority, graph_policy=graph_policy
-        ),
+        )
+        if scope is not None
+        else "0" * 64,
         protected_exact_ids=protected,
     )
-    scope.fusion_v2 = result
-    return tuple(by_id[row.chunk_id] for row in result.candidates), result
+    if scope is not None:
+        scope.fusion_v2 = result
+    # Non-ORM adapters order rows without minting a scope-bound record.
+    return tuple(
+        by_id[row.chunk_id] for row in result.candidates
+    ), result if scope else None
 
 
 def snapshot_channels(snapshot):
@@ -116,6 +130,7 @@ def fuse_validated_graph(snapshot, fused, query, ready_checksum):
     from .chunk_search_scope import current_scope
 
     channels = snapshot_channels(snapshot)
+    preserved = {}
     for channel, attribute in (
         ("graph_direct", "direct_rank"),
         ("graph_extended", "extended_rank"),
@@ -124,7 +139,9 @@ def fuse_validated_graph(snapshot, fused, query, ready_checksum):
             (row for row in fused.candidates if getattr(row, attribute) is not None),
             key=lambda row: getattr(row, attribute),
         )
-        channels[channel] = tuple(row.integer_chunk_pk for row in candidates)
+        preserved[channel] = tuple(
+            (row.integer_chunk_pk, getattr(row, attribute)) for row in candidates
+        )
     rows, _ = ordered_candidates(
         fused.rerank_candidates,
         channels,
@@ -138,5 +155,6 @@ def fuse_validated_graph(snapshot, fused, query, ready_checksum):
             }
         ),
         graph_policy="validated-legacy-graph-rrf60-v1",
+        preserved_ranks=preserved,
     )
     return rows

@@ -37,7 +37,12 @@ def scoped_rows(queryset, scope, *, lexical=False):
                 scope.fts_rows.setdefault(row.pk, row.search_vector_binding)
             elif lexical:
                 scope.lexical_ids.add(row.pk)
-        return validate_rows(rows, scope=scope)
+        validated = validate_rows(rows, scope=scope)
+        if lexical == "full_text":
+            return tuple(
+                row for row in validated if row.pk not in scope.fts_invalid_ids
+            )
+        return validated
 
 
 def dense_rows(model_cls, observation, scope, limit):
@@ -89,6 +94,9 @@ def validate_rows(rows, *, scope=None, dense_only=False):
         from .lexical_readiness import valid_full_text_ids
 
         valid_fts = valid_full_text_ids(scope, rows)
+        from .chunk_search_revalidation import withdraw_full_text
+
+        withdraw_full_text(scope, rows, valid_fts)
         metadata = (
             scope.queryset(
                 TextChunk.objects.using(scope.using).filter(

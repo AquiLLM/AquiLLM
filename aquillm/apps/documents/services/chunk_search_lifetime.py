@@ -67,6 +67,7 @@ def enter_search(model_cls, documents, authorization, query, graph_enabled):
             dense_rows={},
             lexical_ids=set(),
             fts_rows={},
+            fts_invalid_ids=set(),
             fusion_v2=None,
         )
         token = bind_search_scope(scope, query, graph_enabled=graph_enabled)

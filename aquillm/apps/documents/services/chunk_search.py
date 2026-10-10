@@ -22,7 +22,7 @@ from apps.documents.services.chunk_rerank import (
 from apps.documents.services.chunk_rerank_results import RerankScoreSet
 from apps.documents.services.chunk_search_authorization import (
     authorized_search_rows,
-    finalize_search_rows,
+    finalize_ranking,
 )
 from apps.documents.services.chunk_search_candidates import (
     _exact_term_query as _candidate_exact_term_query,
@@ -37,9 +37,6 @@ from apps.documents.services.chunk_search_candidates import (
 from apps.documents.services.chunk_search_logging import (
     completed_search_diagnostics,
     log_search_failure,
-)
-from apps.documents.services.chunk_search_score_handoff import (
-    score_set_for_authorized_rows,
 )
 from apps.documents.services.chunk_search_validation import (
     candidate_identifier as _candidate_identifier,
@@ -73,6 +70,7 @@ from lib.replay_observation import retrieval_stages
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 from .chunk_search_lifetime import enter_search, graph_preflight
+from .chunk_search_revalidation import ranking_status, reconcile_candidate_order
 from .chunk_search_scoped_rows import ranked_rows
 
 if TYPE_CHECKING:
@@ -97,6 +95,7 @@ class CandidateRankingResult:
     materialization_ms: float
     rerank_ms: float
     score_set: RerankScoreSet | None = None
+    rerank_status: str = "unknown"
 
 
 def materialize_and_rerank_candidates(
@@ -160,7 +159,7 @@ def materialize_and_rerank_candidates(
         )
         inaccessible += rejected
 
-    combined = (*baseline_candidates, *graph_rows)
+    combined = reconcile_candidate_order((*baseline_candidates, *graph_rows))
     materialization_ms = (perf_counter() - materialization_started) * 1_000
     rerank_started = perf_counter()
     score_set = None
@@ -197,6 +196,7 @@ def materialize_and_rerank_candidates(
             score_set = scored.score_set
     else:
         reranked = rerank_chunks(model_cls, query, combined, top_k)
+    status = ranking_status(reranked, score_set)
     ranked_results = ranked_rows(reranked)
     rerank_ms = (perf_counter() - rerank_started) * 1_000
     combined_identities = set(_candidate_identity(row) for row in combined)
@@ -218,6 +218,7 @@ def materialize_and_rerank_candidates(
         materialization_ms=materialization_ms,
         rerank_ms=rerank_ms,
         score_set=score_set,
+        rerank_status=status,
     )
 
 
@@ -415,16 +416,14 @@ def text_chunk_search(
                 graph_diagnostics["graph_candidate_count"] = len(
                     ranking.graph_candidates
                 )
-        reranked_results = list(authorized_rows(ranking.ranked_results))
-        snapshot, final_rows = finalize_search_rows(
-            snapshot, reranked_results, authorize=authorized_rows
+        snapshot, final_rows, score_set = finalize_ranking(
+            snapshot,
+            ranking,
+            authorize=authorized_rows,
+            query=query,
+            top_k=top_k,
         )
         reranked_results = final_rows[2]
-        score_set = (
-            score_set_for_authorized_rows(ranking.score_set, tuple(reranked_results))
-            if ranking.score_set is not None
-            else None
-        )
 
         total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
         diagnostics = completed_search_diagnostics(

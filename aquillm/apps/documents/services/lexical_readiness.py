@@ -100,4 +100,36 @@ def valid_full_text_ids(scope, rows):
         .filter(current_projection_predicate(scope))
         .values_list("pk", "search_vector_binding")
     )
-    return {pk for pk, binding in current if binding == scope.fts_rows[pk]}
+    return {
+        pk
+        for pk, binding in current
+        if binding == scope.fts_rows[pk] and pk not in scope.fts_invalid_ids
+    }
+
+
+def current_full_text_coverage(scope):
+    """Refresh counts, without acquiring candidates or replacing captured bindings."""
+    from apps.documents.models import TextChunk
+
+    with scope.database():
+        rows = scope.queryset(TextChunk.objects.using(scope.using).all())
+        unsupported = rows.exclude(modality=TextChunk.Modality.TEXT).count()
+        text = rows.filter(modality=TextChunk.Modality.TEXT)
+        count = text.count()
+        if unsupported:
+            return FullTextCoverage(
+                "unsupported_modality", text_count=count, unsupported_count=unsupported
+            )
+        if not index_ready(scope.using):
+            return FullTextCoverage("index_unavailable", text_count=count)
+        indexed = (
+            text.filter(current_projection_predicate(scope))
+            .exclude(pk__in=scope.fts_invalid_ids)
+            .count()
+        )
+        scope.validate()
+        return FullTextCoverage(
+            "ready" if indexed == count else "incomplete",
+            text_count=count,
+            indexed_count=indexed,
+        )

@@ -17,7 +17,7 @@ from apps.documents.services.chunk_rerank_local_vllm import (
 )
 from apps.documents.services.chunk_rerank_parse import (
     fallback_rerank,
-    ordered_queryset_from_ids,
+    queryset_from_scored_result,
 )
 from apps.documents.services.chunk_rerank_payload import rerank_document_payload
 from apps.documents.services.chunk_rerank_results import (
@@ -134,7 +134,7 @@ def rerank_chunks(
     result = rerank_chunks_scored(
         model_cls, query, chunks_list, top_k, turn_budget=turn_budget
     )
-    return ordered_queryset_from_ids(model_cls, result.ranked_ids)
+    return queryset_from_scored_result(model_cls, result)
 
 
 def rerank_chunks_scored(

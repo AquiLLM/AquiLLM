@@ -145,6 +145,31 @@ def fuse_channel_ranks_v2(
     scope_key: str,
     protected_exact_ids: tuple[int, ...] = (),
 ) -> FusionResultV2:
+    ranked = {}
+    if not isinstance(channels, Mapping):
+        raise ValueError("invalid_fusion_channels")
+    for channel, ids in channels.items():
+        if type(channel) is not str or channel not in CHANNELS:
+            raise ValueError("invalid_fusion_channels")
+        if type(ids) is not tuple or len(ids) > (
+            20 if channel.startswith("graph_") else 606
+        ):
+            raise ValueError("invalid_channel_candidates")
+        for pk in ids:
+            integer(pk, 1, 2**63 - 1)
+        ranked[channel] = tuple(
+            (pk, rank) for rank, pk in enumerate(dict.fromkeys(ids), 1)
+        )
+    return fuse_ranked_channels_v2(
+        ranked,
+        limit=limit,
+        scope_key=scope_key,
+        protected_exact_ids=protected_exact_ids,
+    )
+
+
+def fuse_ranked_channels_v2(channels, *, limit, scope_key, protected_exact_ids=()):
+    """Pure rank-preserving projection; input is data, never graph authority."""
     integer(limit, 0, MAX_CANDIDATES)
     if not isinstance(channels, Mapping) or any(
         type(c) is not str or c not in CHANNELS for c in channels
@@ -156,18 +181,24 @@ def fuse_channel_ranks_v2(
         integer(pk, 1, 2**63 - 1)
     memberships = {}
     for channel in CHANNELS:
-        ids = channels.get(channel, ())
-        if type(ids) is not tuple or len(ids) > (
+        entries = channels.get(channel, ())
+        if type(entries) is not tuple or len(entries) > (
             20 if channel.startswith("graph_") else 606
         ):
             raise ValueError("invalid_channel_candidates")
-        unique = {}
-        for pk in ids:
+        unique, ranks = set(), set()
+        for entry in entries:
+            if type(entry) is not tuple or len(entry) != 2:
+                raise ValueError("invalid_channel_candidates")
+            pk, rank = entry
             integer(pk, 1, 2**63 - 1)
-            unique.setdefault(pk, len(unique) + 1)
-        for pk, rank in unique.items():
+            if pk in unique or rank in ranks:
+                raise ValueError("duplicate_channel_rank")
+            unique.add(pk)
+            ranks.add(rank)
             memberships.setdefault(pk, []).append(ChannelRankV2(channel, rank))
-    if any(pk not in channels.get("exact", ()) for pk in protected_exact_ids):
+    exact_ids = {pk for pk, _rank in channels.get("exact", ())}
+    if any(pk not in exact_ids for pk in protected_exact_ids):
         raise ValueError("invalid_exact_protection")
     rows = [
         FusedCandidateV2(

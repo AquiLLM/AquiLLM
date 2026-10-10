@@ -151,6 +151,7 @@ def collect_hybrid_candidate_snapshot(
             dense_rows={},
             lexical_ids=set(),
             fts_rows={},
+            fts_invalid_ids=set(),
             fusion_v2=None,
             query_digest=digest({"version": "unprepared-query-v1", "query": query}),
         )

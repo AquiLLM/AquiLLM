@@ -61,6 +61,7 @@ class FrozenRetrievalScope:
     dense_rows: dict = field(default_factory=dict)
     lexical_ids: set = field(default_factory=set)
     fts_rows: dict = field(default_factory=dict)
+    fts_invalid_ids: set = field(default_factory=set)
     fusion_v2: object | None = None
     query_digest: str = ""
     query_compatibility: str | None = None

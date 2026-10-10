@@ -17,7 +17,12 @@ from .chunk_rerank_config import (
 )
 from .chunk_rerank_config import rerank_model_is_qwen3_vl as rerank_model_is_qwen3_vl
 from .chunk_rerank_local_scored import rerank_via_local_vllm_scored
-from .chunk_rerank_parse import ordered_queryset_from_ids, parse_single_score
+from .chunk_rerank_parse import (
+    mark_rerank_status,
+    ordered_queryset_from_ids,
+    parse_single_score,
+    queryset_from_scored_result,
+)
 from .chunk_rerank_parse import parse_rerank_results as parse_rerank_results
 from .chunk_rerank_payload import rerank_document_payload as rerank_document_payload
 from .rag_cache_rerank import get_scoped_rerank_result, set_scoped_rerank_result
@@ -77,7 +82,9 @@ def rerank_via_local_vllm(
                     reason=RetrievalLogReason.COMPLETED, count=0, elapsed_ms=0.0
                 ),
             )
-            return ordered_queryset_from_ids(model_cls, cached)
+            return mark_rerank_status(
+                ordered_queryset_from_ids(model_cls, cached), "complete"
+            )
     result = rerank_via_local_vllm_scored(
         model_cls,
         query,
@@ -102,4 +109,6 @@ def rerank_via_local_vllm(
                 signature, candidate_ids, top_k, model_name, list(result.ranked_ids)
             )
         )
-    return ordered_queryset_from_ids(model_cls, result.ranked_ids)
+    return queryset_from_scored_result(
+        model_cls, result, orderer=ordered_queryset_from_ids
+    )
