@@ -12,6 +12,7 @@ from django.contrib.postgres.indexes import GinIndex
 from django.core.exceptions import ValidationError
 from django.db import models
 from pgvector.django import HnswIndex, VectorField
+from lib.embeddings.persistence import EmbeddingQuerySet, prepare_embedding_save
 
 if TYPE_CHECKING:
     from django.db.models.query import QuerySet
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
 logger = structlog.stdlib.get_logger(__name__)
 
 
-class TextChunkQuerySet(models.QuerySet):
+class TextChunkQuerySet(EmbeddingQuerySet):
     """Custom QuerySet for TextChunk with document filtering."""
 
     def filter_by_documents(self, docs_or_ids):
@@ -64,6 +65,7 @@ class TextChunk(models.Model):
     )
     metadata = models.JSONField(default=dict, blank=True)
     embedding = VectorField(dimensions=1024, blank=True, null=True)
+    embedding_provenance = models.JSONField(blank=True, null=True)
 
     doc_id = models.UUIDField(editable=False, validators=[doc_id_validator])
 
@@ -117,18 +119,18 @@ class TextChunk(models.Model):
     def save(self, *args, **kwargs):
         if self.start_position >= self.end_position:
             raise ValueError("end_position must be greater than start_position")
-        if not self.embedding:
+        fields = kwargs.get("update_fields")
+        writes_embedding = fields is None or "embedding" in fields
+        if writes_embedding and (self.embedding is None or len(self.embedding) == 0):
             try:
                 self.get_chunk_embedding()
-            except Exception as exc:
+            except Exception:
                 logger.warning(
                     "obs.documents.chunk_embed_failed",
-                    doc_id=self.doc_id,
-                    chunk_number=self.chunk_number,
-                    error=str(exc),
-                    error_type=type(exc).__name__,
+                    reason="upstream_unavailable",
                 )
 
+        prepare_embedding_save(self, kwargs)
         super().save(*args, **kwargs)
 
     def get_chunk_embedding(self, callback: Optional[Callable[[], None]] = None):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from lib.embeddings.provenance import EmbeddingResult
 from django.db import connection
 
 from ._chunk_graph_lifecycle_support import (
@@ -119,7 +120,7 @@ def test_empty_duplicate_donor_falls_back_to_normal_chunk_generation(monkeypatch
 
     def embed(texts, input_type=None):
         embedded_texts.append(list(texts))
-        return [[3.0] * 1024 for _text in texts]
+        return [EmbeddingResult([3.0] * 1024, {}) for _text in texts]
 
     monkeypatch.setattr(chunking, "get_embeddings", embed)
     publications = []

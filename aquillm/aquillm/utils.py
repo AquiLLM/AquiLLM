@@ -32,6 +32,17 @@ from lib.embeddings.config import (
 from lib.embeddings.utils import EmbeddingContractError, validate_embedding
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
+from lib.embeddings.provenance import EmbeddingResult, fit_result
+from lib.embeddings.local import (
+    get_embedding_result_via_local_openai,
+    get_embedding_results_via_local_openai,
+)
+from lib.embeddings.cohere import (
+    get_embedding_result_via_cohere,
+    get_embedding_results_via_cohere,
+)
+from lib.embeddings.multimodal import get_multimodal_embedding_result_via_vllm_pooling
+
 logger = structlog.stdlib.get_logger(__name__)
 
 
@@ -78,11 +89,13 @@ def _strict_embedding_endpoint_digest(base_url: str) -> str:
     return sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def get_multimodal_embedding(
+def _get_multimodal_embedding(
     prompt: str,
     image_data_url: str,
     input_type: str = "search_document",
-) -> list[float]:
+    *,
+    with_provenance: bool = False,
+):
     """
     Get an embedding for multimodal (text + image) input.
 
@@ -107,7 +120,13 @@ def get_multimodal_embedding(
         raise ValueError(f"bad input type to embedding call: {input_type}")
 
     try:
-        embedding = get_multimodal_embedding_via_vllm_pooling(prompt, image_data_url)
+        embedding = (
+            get_multimodal_embedding_result_via_vllm_pooling(
+                prompt, image_data_url, input_type
+            )
+            if with_provenance
+            else get_multimodal_embedding_via_vllm_pooling(prompt, image_data_url)
+        )
         if embedding:
             logger.info(
                 "obs.core.multimodal_embedding_generated",
@@ -117,7 +136,11 @@ def get_multimodal_embedding(
                     elapsed_ms=0.0,
                 ),
             )
-            return fit_embedding_dims(embedding)
+            return (
+                fit_result(embedding)
+                if with_provenance
+                else fit_embedding_dims(embedding)
+            )
     except EmbeddingContractError:
         raise
     except Exception:
@@ -138,11 +161,24 @@ def get_multimodal_embedding(
             elapsed_ms=0.0,
         ),
     )
-    return get_embedding(prompt, input_type=input_type)
+    return _get_embedding(
+        prompt, input_type=input_type, with_provenance=with_provenance
+    )
 
 
-def get_embedding(query: Any, input_type: str = "search_query"):
+def _get_embedding(
+    query: Any, input_type: str = "search_query", *, with_provenance: bool = False
+):
     """Get a local embedding, with cross-provider fallback only under legacy policy."""
+    fit = fit_result if with_provenance else fit_embedding_dims
+    local_embed = (
+        get_embedding_result_via_local_openai
+        if with_provenance
+        else get_embedding_via_local_openai
+    )
+    cohere_embed = (
+        get_embedding_result_via_cohere if with_provenance else get_embedding_via_cohere
+    )
     fallback_policy = get_embed_fallback_policy()
     if input_type not in (
         "search_document",
@@ -153,9 +189,7 @@ def get_embedding(query: Any, input_type: str = "search_query"):
         raise ValueError(f"bad input type to embedding call: {input_type}")
 
     try:
-        return fit_embedding_dims(
-            get_embedding_via_local_openai(query, input_type=input_type)
-        )
+        return fit(local_embed(query, input_type=input_type))
     except EmbeddingContractError:
         raise
     except Exception:
@@ -180,19 +214,31 @@ def get_embedding(query: Any, input_type: str = "search_query"):
         )
     try:
         cohere_client = apps.get_app_config("aquillm").cohere_client
-        return fit_embedding_dims(
-            get_embedding_via_cohere(cohere_client, query, input_type)
-        )
+        return fit(cohere_embed(cohere_client, query, input_type))
     except EmbeddingContractError:
         raise
     except Exception as exc:
         raise RuntimeError("All embedding providers failed") from exc
 
 
-def get_embeddings(
-    queries: list[Any], input_type: str = "search_query"
+def _get_embeddings(
+    queries: list[Any],
+    input_type: str = "search_query",
+    *,
+    with_provenance: bool = False,
 ) -> list[list[float]]:
     """Get local embeddings, with cross-provider fallback only under legacy policy."""
+    fit = fit_result if with_provenance else fit_embedding_dims
+    local_embed = (
+        get_embedding_results_via_local_openai
+        if with_provenance
+        else get_embeddings_via_local_openai
+    )
+    cohere_embed = (
+        get_embedding_results_via_cohere
+        if with_provenance
+        else get_embeddings_via_cohere
+    )
     fallback_policy = get_embed_fallback_policy()
     if input_type not in (
         "search_document",
@@ -204,10 +250,7 @@ def get_embeddings(
     if not queries:
         return []
     try:
-        return [
-            fit_embedding_dims(emb)
-            for emb in get_embeddings_via_local_openai(queries, input_type=input_type)
-        ]
+        return [fit(emb) for emb in local_embed(queries, input_type=input_type)]
     except EmbeddingContractError:
         raise
     except Exception:
@@ -233,15 +276,48 @@ def get_embeddings(
         cohere_client = apps.get_app_config("aquillm").cohere_client
         text_queries: list[str] = [q for q in queries if isinstance(q, str)]
         return [
-            fit_embedding_dims(emb)
-            for emb in get_embeddings_via_cohere(
-                cohere_client, text_queries, input_type
-            )
+            fit(emb) for emb in cohere_embed(cohere_client, text_queries, input_type)
         ]
     except EmbeddingContractError:
         raise
     except Exception as exc:
         raise RuntimeError("All embedding providers failed") from exc
+
+
+def get_embedding(query: Any, input_type: str = "search_query") -> list[float]:
+    return _get_embedding(query, input_type)
+
+
+def get_embedding_result(
+    query: Any, input_type: str = "search_query"
+) -> EmbeddingResult:
+    return _get_embedding(query, input_type, with_provenance=True)
+
+
+def get_embeddings(
+    queries: list[Any], input_type: str = "search_query"
+) -> list[list[float]]:
+    return _get_embeddings(queries, input_type)
+
+
+def get_embedding_results(
+    queries: list[Any], input_type: str = "search_query"
+) -> list[EmbeddingResult]:
+    return _get_embeddings(queries, input_type, with_provenance=True)
+
+
+def get_multimodal_embedding(
+    prompt: str, image_data_url: str, input_type: str = "search_document"
+) -> list[float]:
+    return _get_multimodal_embedding(prompt, image_data_url, input_type)
+
+
+def get_multimodal_embedding_result(
+    prompt: str, image_data_url: str, input_type: str = "search_document"
+) -> EmbeddingResult:
+    return _get_multimodal_embedding(
+        prompt, image_data_url, input_type, with_provenance=True
+    )
 
 
 def strict_index_embedding_signature() -> str:
@@ -325,6 +401,10 @@ def get_strict_index_embeddings(
 
 
 __all__ = [
+    "EmbeddingResult",
+    "get_embedding_result",
+    "get_embedding_results",
+    "get_multimodal_embedding_result",
     "get_embedding",
     "get_embeddings",
     "get_strict_index_embeddings",

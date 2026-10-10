@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from unittest.mock import patch
+from lib.embeddings.provenance import EmbeddingResult
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase
@@ -20,7 +21,7 @@ _ZERO_VEC = [0.0] * 1024
 
 
 def _fake_get_embeddings(texts, input_type="search_document"):
-    return [list(_ZERO_VEC) for _ in texts]
+    return [EmbeddingResult(list(_ZERO_VEC), {}) for _ in texts]
 
 
 def _fake_get_embedding(query, input_type="search_query"):

@@ -69,21 +69,23 @@ def image_embedding_payloads(chunk: TextChunk) -> list[Any]:
     retry=retry_if_not_exception_type(EmbeddingContractError),
 )
 def get_chunk_embedding(chunk: TextChunk, callback: Callable[[], None] | None = None):
-    from aquillm.utils import get_embedding, get_multimodal_embedding
+    from aquillm.utils import get_embedding_result, get_multimodal_embedding_result
 
     if chunk.modality == chunk.Modality.IMAGE:
         img_url = image_data_url(chunk)
         caption = multimodal_caption(chunk)
         if img_url:
-            chunk.embedding = get_multimodal_embedding(
+            result = get_multimodal_embedding_result(
                 prompt=caption,
                 image_data_url=img_url,
                 input_type="search_document",
             )
         else:
-            chunk.embedding = get_embedding(caption, input_type="search_document")
+            result = get_embedding_result(caption, input_type="search_document")
     else:
-        chunk.embedding = get_embedding(chunk.content, input_type="search_document")
+        result = get_embedding_result(chunk.content, input_type="search_document")
+    chunk.embedding = result.vector
+    chunk.embedding_provenance = result.provenance
     if callback:
         callback()
 

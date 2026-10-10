@@ -1,4 +1,5 @@
 import pytest
+from lib.embeddings.provenance import EmbeddingResult
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 
@@ -40,11 +41,11 @@ def test_create_chunks_avoids_text_image_position_collision(
     )
     monkeypatch.setattr(
         "apps.documents.tasks.chunking.get_embeddings",
-        lambda texts, input_type=None: [[0.0] * 1024 for _ in texts],
+        lambda texts, input_type=None: [EmbeddingResult([0.0] * 1024, {}) for _ in texts],
     )
     monkeypatch.setattr(
-        "aquillm.utils.get_multimodal_embedding",
-        lambda **_kwargs: [0.0] * 1024,
+        "aquillm.utils.get_multimodal_embedding_result",
+        lambda **_kwargs: EmbeddingResult([0.0] * 1024, {}),
     )
     monkeypatch.setenv("APP_RAG_ENABLE_IMAGE_CHUNKS", "1")
 

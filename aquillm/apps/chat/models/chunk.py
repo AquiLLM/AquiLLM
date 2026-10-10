@@ -12,6 +12,7 @@ import structlog
 from django.contrib.postgres.indexes import GinIndex
 from django.db import models
 from pgvector.django import HnswIndex, VectorField
+from lib.embeddings.persistence import EmbeddingQuerySet, prepare_embedding_save
 
 from .conversation import WSConversation
 
@@ -43,7 +44,14 @@ class ConversationChunk(models.Model):
     )
     metadata = models.JSONField(default=dict, blank=True)
     embedding = VectorField(dimensions=1024, blank=True, null=True)
+    embedding_provenance = models.JSONField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
+
+    objects = EmbeddingQuerySet.as_manager()
+
+    def save(self, *args, **kwargs):
+        prepare_embedding_save(self, kwargs)
+        super().save(*args, **kwargs)
 
     class Meta:
         app_label = "apps_chat"

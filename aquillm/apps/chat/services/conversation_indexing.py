@@ -13,7 +13,7 @@ import structlog
 from django.apps import apps as django_apps
 from django.db import transaction
 
-from aquillm.utils import get_embedding, get_embeddings
+from aquillm.utils import get_embedding_result as get_embedding, get_embedding_results as get_embeddings
 from apps.chat.models import ConversationChunk, Message, WSConversation
 from lib.conversations.chunking import TranscriptMessage, build_turn_windows
 
@@ -143,7 +143,8 @@ def index_conversation(conversation_id: int, *, force: bool = False) -> int:
             end_sequence=w.end_sequence,
             modality=ConversationChunk.Modality.TEXT,
             metadata=w.metadata,
-            embedding=embeddings[i],
+            embedding=embeddings[i].vector if embeddings[i] is not None else None,
+            embedding_provenance=embeddings[i].provenance if embeddings[i] is not None else None,
         )
         for i, w in enumerate(windows)
     ]

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import SimpleTestCase
+from lib.embeddings.provenance import EmbeddingResult
 
 from apps.documents.services.chunk_embeddings import (
     get_chunk_embedding,
@@ -24,8 +25,8 @@ class ChunkEmbeddingTests(SimpleTestCase):
         )
 
     @patch("apps.documents.services.image_payloads.doc_image_data_url")
-    @patch("aquillm.utils.get_multimodal_embedding")
-    @patch("aquillm.utils.get_embedding")
+    @patch("aquillm.utils.get_multimodal_embedding_result")
+    @patch("aquillm.utils.get_embedding_result")
     def test_image_chunk_uses_multimodal_embedding_when_image_bytes_exist(
         self,
         get_embedding,
@@ -33,7 +34,7 @@ class ChunkEmbeddingTests(SimpleTestCase):
         doc_image_data_url,
     ):
         doc_image_data_url.return_value = "data:image/png;base64,AAAA"
-        get_multimodal_embedding.return_value = [0.5] * 1024
+        get_multimodal_embedding.return_value = EmbeddingResult([0.5] * 1024, {})
         chunk = self._chunk(modality="image", content="Figure 2 caption", document=object())
 
         get_chunk_embedding(chunk)
@@ -47,8 +48,8 @@ class ChunkEmbeddingTests(SimpleTestCase):
         get_embedding.assert_not_called()
 
     @patch("apps.documents.services.image_payloads.doc_image_data_url")
-    @patch("aquillm.utils.get_multimodal_embedding")
-    @patch("aquillm.utils.get_embedding")
+    @patch("aquillm.utils.get_multimodal_embedding_result")
+    @patch("aquillm.utils.get_embedding_result")
     def test_image_chunk_falls_back_to_caption_embedding_when_image_missing(
         self,
         get_embedding,
@@ -56,7 +57,7 @@ class ChunkEmbeddingTests(SimpleTestCase):
         doc_image_data_url,
     ):
         doc_image_data_url.return_value = None
-        get_embedding.return_value = [0.25] * 1024
+        get_embedding.return_value = EmbeddingResult([0.25] * 1024, {})
         chunk = self._chunk(modality="image", content="Figure 3 caption", document=object())
 
         get_chunk_embedding(chunk)
@@ -65,9 +66,9 @@ class ChunkEmbeddingTests(SimpleTestCase):
         get_embedding.assert_called_once_with("Figure 3 caption", input_type="search_document")
         get_multimodal_embedding.assert_not_called()
 
-    @patch("aquillm.utils.get_embedding")
+    @patch("aquillm.utils.get_embedding_result")
     def test_text_chunk_uses_text_embedding(self, get_embedding):
-        get_embedding.return_value = [0.75] * 1024
+        get_embedding.return_value = EmbeddingResult([0.75] * 1024, {})
         chunk = self._chunk(modality="text", content="plain document text")
 
         get_chunk_embedding(chunk)

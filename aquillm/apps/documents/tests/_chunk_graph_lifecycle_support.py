@@ -5,6 +5,7 @@ import socket
 import uuid
 
 import pytest
+from lib.embeddings.provenance import EmbeddingResult
 from django.conf import settings
 
 
@@ -40,12 +41,12 @@ def configure_chunking_runtime(monkeypatch):
     monkeypatch.setattr(
         chunking,
         "get_embeddings",
-        lambda texts, input_type=None: [EMBEDDING[:] for _text in texts],
+        lambda texts, input_type=None: [EmbeddingResult(EMBEDDING[:], {}) for _text in texts],
     )
     monkeypatch.setattr(
         chunking,
         "get_embedding",
-        lambda _text, input_type=None: EMBEDDING[:],
+        lambda _text, input_type=None: EmbeddingResult(EMBEDDING[:], {}),
     )
     monkeypatch.setattr(
         chunking,

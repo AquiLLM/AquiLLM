@@ -14,7 +14,8 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, transaction
 
 from aquillm.celery import app
-from aquillm.utils import get_embedding, get_embeddings
+from aquillm.utils import get_embedding_result as get_embedding, get_embedding_results as get_embeddings
+from lib.embeddings.provenance import valid_provenance
 from apps.documents.models import DESCENDED_FROM_DOCUMENT, Document, TextChunk
 from apps.documents.services.chunk_progress import (
     notify_ingest_monitor_complete,
@@ -136,6 +137,7 @@ def _duplicate_chunks(document, *, using: str) -> list[TextChunk] | None:
             modality=chunk.modality,
             metadata=dict(chunk.metadata) if type(chunk.metadata) is dict else {},
             embedding=chunk.embedding,
+            embedding_provenance=valid_provenance(chunk.embedding, chunk.embedding_provenance),
         )
         for chunk in TextChunk.objects.using(using)
         .filter(doc_id=duplicate.id, modality=TextChunk.Modality.TEXT)
@@ -228,7 +230,8 @@ def _embed_chunks(
                     f"Embedding batch mismatch: expected {len(chunks)}, got {len(embeddings)}"
                 )
             for chunk, embedding in zip(chunks, embeddings):
-                chunk.embedding = embedding
+                chunk.embedding = embedding.vector
+                chunk.embedding_provenance = embedding.provenance
                 done += 1
                 send_progress()
         except Exception as exc:
@@ -254,10 +257,12 @@ def _embed_chunks(
                 document_id=str(document.id),
                 error_type=type(exc).__name__,
             )
-            image_chunk.embedding = get_embedding(
+            result = get_embedding(
                 image_chunk.content,
                 input_type="search_document",
             )
+            image_chunk.embedding = result.vector
+            image_chunk.embedding_provenance = result.provenance
         chunks.append(image_chunk)
         done += 1
         send_progress()

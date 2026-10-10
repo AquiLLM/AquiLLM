@@ -7,6 +7,8 @@ import structlog
 import requests
 
 from .config import get_local_embed_config
+from .provenance import EmbeddingResult, make_result
+from .utils import EmbeddingContractError
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -14,9 +16,9 @@ logger = structlog.stdlib.get_logger(__name__)
 def _format_qwen_vl_embed_prompt(instruction: str, text: str, has_image: bool) -> str:
     """
     Format a prompt using Qwen3-VL-Embedding's expected chat template.
-    
+
     Based on: https://github.com/QwenLM/Qwen3-VL-Embedding/blob/main/examples/embedding_vllm.ipynb
-    
+
     The format is:
     <|im_start|>system
     {instruction}<|im_end|>
@@ -25,13 +27,15 @@ def _format_qwen_vl_embed_prompt(instruction: str, text: str, has_image: bool) -
     <|im_start|>assistant
     """
     if not instruction:
-        instruction = "Represent the given image with the following caption for retrieval."
-    
+        instruction = (
+            "Represent the given image with the following caption for retrieval."
+        )
+
     if has_image:
         user_content = f"<|vision_start|><|image_pad|><|vision_end|>{text}"
     else:
         user_content = text
-    
+
     prompt = (
         f"<|im_start|>system\n{instruction}<|im_end|>\n"
         f"<|im_start|>user\n{user_content}<|im_end|>\n"
@@ -40,33 +44,34 @@ def _format_qwen_vl_embed_prompt(instruction: str, text: str, has_image: bool) -
     return prompt
 
 
-def get_multimodal_embedding_via_vllm_pooling(
+def get_multimodal_embedding_result_via_vllm_pooling(
     prompt: str,
     image_data_url: str,
-) -> list[float] | None:
+    input_type: str = "search_document",
+) -> EmbeddingResult | None:
     """
     Attempt to get a multimodal embedding via vLLM's native pooling API.
-    
+
     Uses Qwen3-VL-Embedding format as documented in:
     https://github.com/QwenLM/Qwen3-VL-Embedding/blob/main/examples/embedding_vllm.ipynb
-    
+
     Returns None if multimodal embedding is not supported or fails.
     """
     base_url, api_key, model = get_local_embed_config()
     vllm_base = base_url.rstrip("/")
     if vllm_base.endswith("/v1"):
         vllm_base = vllm_base[:-3]
-    
+
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
-    
+
     formatted_prompt = _format_qwen_vl_embed_prompt(
         instruction="Represent the given image with the following caption for retrieval.",
         text=prompt,
         has_image=True,
     )
-    
+
     # Try /v1/embeddings with multi_modal_data format (vLLM native)
     try:
         payload = {
@@ -76,7 +81,11 @@ def get_multimodal_embedding_via_vllm_pooling(
                 "image": image_data_url,
             },
         }
-        logger.debug("obs.embed.multimodal_attempt", format="multi_modal_data", prompt_length=len(formatted_prompt))
+        logger.debug(
+            "obs.embed.multimodal_attempt",
+            format="multi_modal_data",
+            prompt_length=len(formatted_prompt),
+        )
         response = requests.post(
             f"{vllm_base}/v1/embeddings",
             headers=headers,
@@ -88,13 +97,36 @@ def get_multimodal_embedding_via_vllm_pooling(
             if "data" in data and len(data["data"]) > 0:
                 embedding = data["data"][0].get("embedding")
                 if embedding:
-                    logger.info("obs.embed.multimodal_succeeded", format="multi_modal_data")
-                    return embedding
+                    logger.info(
+                        "obs.embed.multimodal_succeeded", format="multi_modal_data"
+                    )
+                    return make_result(
+                        embedding,
+                        provider="local-openai",
+                        route="vllm-multi-modal-data",
+                        role=input_type,
+                        prepared_input={
+                            "input": formatted_prompt,
+                            "multi_modal_data": payload["multi_modal_data"],
+                        },
+                        original_input={
+                            "input": formatted_prompt,
+                            "multi_modal_data": payload["multi_modal_data"],
+                        },
+                        model=model,
+                        response_model=data.get("model"),
+                    )
         else:
-            logger.debug("obs.embed.multimodal_non_200", format="multi_modal_data", status_code=response.status_code, body=response.text[:500])
-    except Exception as exc:
-        logger.debug("obs.embed.multimodal_request_failed", format="multi_modal_data", error=str(exc), error_type=type(exc).__name__)
-    
+            logger.debug(
+                "obs.embed.multimodal_non_200",
+                format="multi_modal_data",
+                status_code=response.status_code,
+            )
+    except EmbeddingContractError:
+        raise
+    except Exception:
+        logger.debug("obs.embed.multimodal_request_failed", format="multi_modal_data")
+
     # Try /v1/embeddings with OpenAI-style content blocks (alternative format)
     try:
         content_payload = {
@@ -116,18 +148,42 @@ def get_multimodal_embedding_via_vllm_pooling(
             if "data" in data and len(data["data"]) > 0:
                 embedding = data["data"][0].get("embedding")
                 if embedding:
-                    logger.info("obs.embed.multimodal_succeeded", format="openai_content")
-                    return embedding
+                    logger.info(
+                        "obs.embed.multimodal_succeeded", format="openai_content"
+                    )
+                    return make_result(
+                        embedding,
+                        provider="local-openai",
+                        route="vllm-openai-content",
+                        role=input_type,
+                        prepared_input=content_payload["input"],
+                        original_input=content_payload["input"],
+                        model=model,
+                        response_model=data.get("model"),
+                    )
         else:
-            logger.debug("obs.embed.multimodal_non_200", format="openai_content", status_code=response.status_code, body=response.text[:500])
-    except Exception as exc:
-        logger.debug("obs.embed.multimodal_request_failed", format="openai_content", error=str(exc), error_type=type(exc).__name__)
+            logger.debug(
+                "obs.embed.multimodal_non_200",
+                format="openai_content",
+                status_code=response.status_code,
+            )
+    except EmbeddingContractError:
+        raise
+    except Exception:
+        logger.debug("obs.embed.multimodal_request_failed", format="openai_content")
 
     logger.debug("obs.embed.multimodal_unsupported")
-    
+
     return None
 
 
 __all__ = [
-    'get_multimodal_embedding_via_vllm_pooling',
+    "get_multimodal_embedding_via_vllm_pooling",
 ]
+
+
+def get_multimodal_embedding_via_vllm_pooling(
+    prompt: str, image_data_url: str
+) -> list[float] | None:
+    result = get_multimodal_embedding_result_via_vllm_pooling(prompt, image_data_url)
+    return result.vector if result is not None else None
