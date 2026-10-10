@@ -71,6 +71,13 @@ def build_document(output, *, using):
         # outlive revocation. The parent collection lock serializes creation.
         collection, _ = Collection.objects.using(using).get_or_create(
             parent_id=item.batch.collection_id, name=figures_subcollection_name(parent.title))
+        # FOR UPDATE also fences FK grant inserts/repoints through commit. An
+        # existing direct grant is an independent reader boundary, not inherited
+        # source permission; leave it intact and refuse this destination.
+        collection = Collection.objects.using(using).select_for_update().get(pk=collection.pk)
+        if (collection.parent_id != item.batch.collection_id
+                or CollectionPermission.objects.using(using).filter(collection=collection).exists()):
+            raise PermissionDenied('source_scope_unavailable')
         common['collection_id'] = collection.pk
         doc = DocumentFigure(**common, source_format=payload['source_format'], figure_index=payload['figure_index'],
             extracted_caption=payload['extracted_caption'], location_metadata=payload['location_metadata'])

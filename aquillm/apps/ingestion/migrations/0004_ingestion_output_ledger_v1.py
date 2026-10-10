@@ -75,7 +75,29 @@ BEGIN
  IF OLD.manifest_complete AND NOT NEW.manifest_complete THEN
   RAISE EXCEPTION 'Completed ingestion manifests are immutable';
  END IF;
- IF OLD.attempts>0 AND ROW(NEW.batch_id, NEW.source_file, NEW.original_filename, NEW.content_type)
+ IF OLD.manifest_complete AND ROW(NEW.generation, NEW.attempts)
+   IS DISTINCT FROM ROW(OLD.generation, OLD.attempts) THEN
+  RAISE EXCEPTION 'Completed ingestion lease identity is immutable';
+ END IF;
+ IF NEW.attempts<OLD.attempts OR NEW.attempts>OLD.attempts+1 THEN
+  RAISE EXCEPTION 'Ingestion attempts cannot regress or skip claims';
+ END IF;
+ IF NEW.attempts<>OLD.attempts AND (OLD.manifest_complete OR NEW.manifest_complete
+   OR NEW.status<>'processing' OR OLD.status NOT IN ('queued', 'processing')
+   OR NEW.generation<>OLD.generation
+   OR (OLD.status='processing' AND OLD.next_attempt_at>CURRENT_TIMESTAMP)) THEN
+  RAISE EXCEPTION 'Ingestion attempt requires a current parser claim';
+ END IF;
+ IF NOT OLD.manifest_complete AND NEW.status='processing' AND OLD.status<>'processing'
+   AND NEW.attempts<>OLD.attempts+1 THEN
+  RAISE EXCEPTION 'Ingestion parser claim must advance its attempt';
+ END IF;
+ IF NEW.generation<>OLD.generation AND NOT (NOT OLD.manifest_complete
+   AND OLD.status='processing' AND NEW.status='queued' AND NEW.attempts=OLD.attempts
+   AND OLD.next_attempt_at<=CURRENT_TIMESTAMP) THEN
+  RAISE EXCEPTION 'Ingestion generation rotation requires expired parser recovery';
+ END IF;
+ IF (OLD.attempts>0 OR OLD.manifest_complete) AND ROW(NEW.batch_id, NEW.source_file, NEW.original_filename, NEW.content_type)
    IS DISTINCT FROM ROW(OLD.batch_id, OLD.source_file, OLD.original_filename, OLD.content_type) THEN
   RAISE EXCEPTION 'Claimed ingestion source is immutable';
  END IF;

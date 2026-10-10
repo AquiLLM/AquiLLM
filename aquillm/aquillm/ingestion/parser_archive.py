@@ -75,9 +75,13 @@ def extract_archive_payloads(
                     'unsupported_member' if os.path.splitext(member_name)[1].lower() not in SUPPORTED_EXTENSIONS else '')
                 if not failure:
                     try:
-                        payloads.extend(extract_text_payloads(member_name, inner_data,
+                        member_outputs = extract_text_payloads(member_name, inner_data,
                             content_type=member_type, depth=depth + 1, _archive_lineage=lineage,
-                            _source_containers=containers, _archive_budget=budget))
+                            _source_containers=containers, _archive_budget=budget)
+                        if member_outputs:
+                            payloads.extend(member_outputs)
+                        else:
+                            failure = 'empty_extraction'
                     except SourceContractError:
                         raise
                     except Exception as exc:

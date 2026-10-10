@@ -81,8 +81,9 @@ def checkpoint_item(item, *, using):
 
 def legacy_authorized_ids(item, user, *, using):
     from uuid import UUID
-    from apps.documents.models import DESCENDED_FROM_DOCUMENT
-    found = []
+    from apps.documents.models import DESCENDED_FROM_DOCUMENT, DocumentFigure
+    from aquillm.task_ingest_helpers import figures_subcollection_name
+    resolved = {}
     for identity in item.document_ids:
         try:
             UUID(str(identity))
@@ -90,9 +91,22 @@ def legacy_authorized_ids(item, user, *, using):
             continue
         matches = [document for model in DESCENDED_FROM_DOCUMENT for document in
                    model.objects.using(using).filter(id=identity)]
-        if len(matches) == 1 and matches[0].collection_id == item.batch.collection_id and matches[0].collection.user_can_view(user):
-            found.append(identity)
-    return found
+        if len(matches) == 1 and matches[0].collection.user_can_view(user):
+            resolved[str(identity)] = matches[0]
+    allowed = {identity for identity, doc in resolved.items() if not isinstance(doc, DocumentFigure)
+               and doc.collection_id == item.batch.collection_id}
+    for identity, document in resolved.items():
+        if not isinstance(document, DocumentFigure):
+            continue
+        parent = document.parent_document
+        captured = resolved.get(str(parent.id)) if parent else None
+        if (parent is not None and str(parent.id) in allowed and type(captured) is type(parent)
+                and captured.pkid == parent.pkid and parent.collection_id == item.batch.collection_id
+                and parent.collection.user_can_view(user)
+                and document.collection.parent_id == item.batch.collection_id
+                and document.collection.name == figures_subcollection_name(parent.title)):
+            allowed.add(identity)
+    return [identity for identity in item.document_ids if str(identity) in allowed]
 
 
 def legacy_metadata(item, authorized_ids):

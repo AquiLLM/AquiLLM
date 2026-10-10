@@ -29,3 +29,25 @@ def test_archive_cap_emits_one_bounded_remainder_failure(upload, monkeypatch):
     assert item.status == 'partial'
     assert len(item.parser_metadata['outputs']) == 2
     assert item.parser_metadata['outputs'][1]['error_code'] == 'archive_member_limit'
+
+
+@pytest.mark.parametrize('directory_only', [False, True])
+def test_nonzero_empty_nested_archive_is_member_bound_failure(upload, directory_only):
+    import io
+    import zipfile
+    from hashlib import sha256
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, 'w') as archive:
+        if directory_only:
+            archive.writestr('folder/', b'')
+    data = stream.getvalue()
+    item = upload((('good.txt', b'good'), ('empty.zip', data)))
+    run_ingest_uploaded_file(item.pk)
+    item.refresh_from_db()
+    assert item.status == 'partial'
+    failed = item.outputs.get(status='error')
+    assert failed.error_code == 'empty_extraction'
+    assert failed.source_occurrence.artifact.sha256 == sha256(data).hexdigest()
+    assert failed.source_occurrence.archive_lineage[-1]['archive_ordinal'] == 1
+    assert failed.source_occurrence.archive_lineage[-1]['member_path'] == 'empty.zip'
+    assert item.outputs.count() == 2
