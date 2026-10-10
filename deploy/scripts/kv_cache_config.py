@@ -23,6 +23,10 @@ SETTINGS = (
 )
 PROFILE_FLAGS = {"--max-num-seqs", "--max-model-len", "--kv-cache-dtype", "--kv-cache-memory-bytes"}
 WEIGHT_FLAGS = {"--cpu-offload-gb", "--offload-group-size", "--offload-num-in-group", "--offload-prefetch-step"}
+HYBRID_FLAGS = {"--disable-hybrid-kv-cache-manager", "--kv-transfer-config", "--offload-params"}
+GUARDED_FLAGS = PROFILE_FLAGS | WEIGHT_FLAGS | HYBRID_FLAGS | {
+    "--model", "--hf-overrides", "--config", "--kv-offloading",
+}
 MAX_BYTES = (1 << 63) - 1
 
 
@@ -64,19 +68,37 @@ def _budget(value: str | None, name: str) -> int | None:
         return int(size)
 
 
+def _option_parts(token: str) -> tuple[str, str, str, bool]:
+    """Match vLLM's underscore normalization and dotted dictionary roots.
+
+    Only the option root is normalized; dictionary keys and values are data.
+    The same root interpretation is used for validation and argv removal.
+    """
+    name, equals, value = token.partition("=")
+    root, dotted, _ = name.partition(".")
+    if root.startswith("--"):
+        root = root.replace("_", "-")
+    return root, equals, value, bool(dotted)
+
+
 def _options(args: Sequence[str]) -> dict[str, str]:
     options: dict[str, str] = {}
     index = 0
     while index < len(args):
         token = args[index]
-        name, equals, value = token.partition("=")
+        name, equals, value, dotted = _option_parts(token)
+        if name == "--config" or (name.startswith("-c") and not name.startswith("--")):
+            raise ConfigurationError("--config/-c files are not allowed with a capacity profile; provide explicit full-name CLI options")
+        if name.startswith("--") and name != "--" and name not in GUARDED_FLAGS:
+            if any(flag.startswith(name) for flag in GUARDED_FLAGS):
+                raise ConfigurationError(f"abbreviated guarded option {name} is not allowed; use the full option name")
         if name == "--hf-overrides":
             raise ConfigurationError("--hf-overrides can change the approved model layout; remove it for this capacity profile")
-        if name.startswith("--kv-offloading-") or name in {
-            "--disable-hybrid-kv-cache-manager", "--kv-transfer-config", "--offload-params",
-        }:
+        if name.startswith("--kv-offloading") or name in HYBRID_FLAGS:
             raise ConfigurationError(f"{name} is incompatible with this hybrid profile; no adapter is validated")
         if name in PROFILE_FLAGS | WEIGHT_FLAGS | {"--model"}:
+            if dotted:
+                raise ConfigurationError(f"{name} is a scalar option; dotted overrides are not allowed")
             if name in options:
                 raise ConfigurationError(f"duplicate {name} is not allowed in a capacity profile")
             if not equals:
@@ -164,7 +186,7 @@ def _without_profile_flags(args: Sequence[str]) -> list[str]:
     result = []
     index = 0
     while index < len(args):
-        name, equals, _ = args[index].partition("=")
+        name, equals, _, _ = _option_parts(args[index])
         if name in PROFILE_FLAGS:
             index += 1 if equals else 2
         else:

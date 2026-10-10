@@ -208,3 +208,74 @@ def test_planning_cli_can_report_unsupported_modes_without_launch_arguments(conf
     assert profile["validation_status"] == "unvalidated"
     with pytest.raises(config.ConfigurationError):
         config.profile_arguments(profile)
+
+
+@pytest.mark.parametrize("args", [
+    ["--cpu_offload_gb=1"], ["--offload_group_size", "1"],
+    ["--offload_num_in_group=1"], ["--offload_prefetch_step", "1"],
+    ["--offload_params", "layer.weight"], ["--kv_offloading_size=8"],
+    ["--disable_hybrid_kv_cache_manager"], ["--kv_transfer_config", "{}"],
+    ["--hf_overrides.num_hidden_layers=40"], ["--hf-overrides.num_hidden_layers", "40"],
+    ["--kv-transfer-config.kv_connector=LMCacheConnectorV1"],
+    ["--kv_transfer_config.kv_connector", "LMCacheConnectorV1"],
+    ["--max_num_seqs=8"], ["--max_model_len=131072"],
+    ["--kv_cache_dtype=turboquant_k4v4"],
+    ["--kv_cache_memory_bytes=12"], ["--max-num-seqs.foo=4"],
+])
+def test_downstream_option_spellings_cannot_bypass_guards(config, args):
+    with pytest.raises(config.ConfigurationError):
+        config.resolve_profile({"KV_CACHE_TARGET_ACTIVE_SEQUENCES": "4",
+                                "VLLM_MAX_MODEL_LEN": "262144", "KV_CACHE_VRAM_GIB": "1"}, args)
+
+
+@pytest.mark.parametrize("equals", [False, True])
+def test_matching_underscore_profile_options_consolidate_in_launch_cli(config, equals):
+    pairs = [("--max_num_seqs", "4"), ("--max_model_len", "131072"),
+             ("--kv_cache_dtype", "turboquant_k8v4"), ("--kv_cache_memory_bytes", "536870912")]
+    args = [f"{k}={v}" for k, v in pairs] if equals else [x for pair in pairs for x in pair]
+    result = subprocess.run([sys.executable, str(SCRIPT), "--launch-argv", "--", *args], env={
+        "KV_CACHE_TARGET_ACTIVE_SEQUENCES": "4",
+    }, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.split(b"\0")[:-1] == [
+        b"--max-num-seqs", b"4", b"--max-model-len", b"131072",
+        b"--kv-cache-dtype", b"turboquant_k8v4", b"--kv-cache-memory-bytes", b"536870912",
+    ]
+
+
+@pytest.mark.parametrize("args", [
+    ["--max-num-seqs=4", "--max_num_seqs=4"],
+    ["--max-model-len=262144", "--max_model_len=262144"],
+    ["--kv-cache-dtype=turboquant_k8v4", "--kv_cache_dtype=turboquant_k8v4"],
+    ["--kv-cache-memory-bytes=12", "--kv_cache_memory_bytes=12"],
+])
+def test_mixed_spelling_duplicates_reject(config, args):
+    with pytest.raises(config.ConfigurationError, match="duplicate"):
+        config.resolve_profile({"KV_CACHE_TARGET_ACTIVE_SEQUENCES": "4"}, args)
+
+
+@pytest.mark.parametrize("args", [
+    ["--config", "/tmp/weight-offload.yaml"], ["--config=/tmp/weight-offload.yaml"],
+    ["--conf", "/tmp/weight-offload.yaml"], ["--con=/tmp/weight-offload.yaml"],
+    ["--c", "/tmp/weight-offload.yaml"], ["-c", "/tmp/weight-offload.yaml"],
+    ["-c/tmp/weight-offload.yaml"], ["--config.cpu_offload_gb=1"],
+    ["--cpu_offload_g=1"], ["--offload-group=1"], ["--offload_p=1"],
+    ["--kv-offl=8"], ["--disable_hybrid_kv=1"],
+    ["--hf-over.num_hidden_layers=40"], ["--kv-transfer.kv_connector=LMCacheConnectorV1"],
+    ["--max-num-se=8"], ["--max_model_l=131072"], ["--kv-cache-d=fp8"],
+    ["--mo=example/other"],
+])
+def test_external_configs_and_guarded_abbreviations_reject(config, args):
+    with pytest.raises(config.ConfigurationError):
+        config.resolve_profile({"KV_CACHE_TARGET_ACTIVE_SEQUENCES": "4"}, args)
+
+
+def test_no_profile_leaves_extended_parser_syntax_unchanged(config):
+    assert config.resolve_profile({}, ["--config", "/tmp/config.yaml",
+                                       "--cpu_offload_gb=1", "--hf-overrides.foo=40"]) is None
+
+
+def test_unrelated_dotted_json_options_remain_usable(config):
+    assert config.resolve_profile({"KV_CACHE_TARGET_ACTIVE_SEQUENCES": "4"}, [
+        "--speculative-config.method=mtp", "--compilation_config.cudagraph_mode=PIECEWISE",
+    ])["active_sequences"] == 4

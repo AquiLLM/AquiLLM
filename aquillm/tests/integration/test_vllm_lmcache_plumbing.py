@@ -216,6 +216,39 @@ def test_explicit_vram_budget_is_emitted_in_bytes(tmp_path):
     assert args[args.index("--kv-cache-memory-bytes") + 1] == "26038239232"
 
 
+@pytest.mark.parametrize("raw", [
+    "--cpu_offload_gb=1", "--hf-overrides.num_hidden_layers=40",
+    "--kv-transfer-config.kv_connector=LMCacheConnectorV1",
+    "--max_num_seqs=8", "--kv_cache_dtype=turboquant_k4v4",
+    "--cpu-offload-g=1", "--hf-over.num_hidden_layers=40",
+    "--config /tmp/weight-offload.yaml", "--config=/tmp/weight-offload.yaml",
+    "--conf=/tmp/weight-offload.yaml", "-c /tmp/weight-offload.yaml",
+])
+def test_profile_guard_rejects_downstream_aliases_before_startup(tmp_path, raw):
+    help_count = tmp_path / "help-count"
+    result = _launch(tmp_path, KV_CACHE_TARGET_ACTIVE_SEQUENCES="4", VLLM_EXTRA_ARGS=raw,
+                     FAKE_HELP_COUNT_FILE=_bash_path(help_count))
+    assert result.returncode != 0
+    assert not _final_args(result)
+    assert not help_count.exists()
+
+
+def test_launcher_removes_matching_underscore_capacity_options(tmp_path):
+    args = _run_vllm_start(tmp_path, KV_CACHE_TARGET_ACTIVE_SEQUENCES="4",
+                           VLLM_EXTRA_ARGS="--max_num_seqs=4 --max_model_len 131072 --kv_cache_dtype=turboquant_k8v4 "
+                           "--speculative-config.method=mtp --compilation_config.cudagraph_mode=PIECEWISE")
+    assert args[-6:] == ["--max-num-seqs", "4", "--max-model-len", "131072",
+                         "--kv-cache-dtype", "turboquant_k8v4"]
+    assert not any(arg.startswith(("--max_num", "--max_model", "--kv_cache")) for arg in args)
+    assert "--speculative-config.method=mtp" in args
+    assert "--compilation_config.cudagraph_mode=PIECEWISE" in args
+
+
+def test_profile_unset_preserves_config_and_alias_forwarding(tmp_path):
+    args = _run_vllm_start(tmp_path, VLLM_EXTRA_ARGS="--config /tmp/config.yaml --cpu_offload_gb=1")
+    assert args[-3:] == ["--config", "/tmp/config.yaml", "--cpu_offload_gb=1"]
+
+
 def test_base_compose_vllm_exports_lmcache_env():
     text = _BASE_YML.read_text(encoding="utf-8")
     assert "LMCACHE_ENABLED=" in text
