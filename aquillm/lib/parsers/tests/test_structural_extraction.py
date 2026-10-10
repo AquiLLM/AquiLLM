@@ -81,6 +81,97 @@ def test_csv_quoted_commas_blank_rows_and_trailing_cells():
     assert len(result.elements[2].cells) == 3
 
 
+def _wrap_docx_control(node):
+    from docx.oxml import OxmlElement
+    control, content = OxmlElement('w:sdt'), OxmlElement('w:sdtContent')
+    node.addprevious(control)
+    content.append(node)
+    control.append(content)
+    return control
+
+
+def test_docx_body_and_cell_content_controls_preserve_native_order():
+    from docx import Document
+    doc = Document()
+    doc.add_paragraph('Before')
+    controlled = doc.add_paragraph('ControlledRevenue 93017')
+    _wrap_docx_control(_wrap_docx_control(controlled._p))
+    table = doc.add_table(rows=1, cols=2)
+    cell = table.cell(0, 0)
+    cell.text = 'ControlledCell 481'
+    _wrap_docx_control(cell.paragraphs[0]._p)
+    nested = cell.add_table(rows=1, cols=1)
+    nested.cell(0, 0).text = 'ControlledNested 517'
+    _wrap_docx_control(nested._tbl)
+    _wrap_docx_control(cell.add_paragraph('ControlledTail 639')._p)
+    table.cell(0, 1).text = 'NextCell 752'
+    _wrap_docx_control(table._tbl)
+    doc.add_paragraph('After')
+    output = io.BytesIO()
+    doc.save(output)
+    result = extract('content-controls.docx', output.getvalue())
+    facts = ['Before', 'ControlledRevenue 93017', 'ControlledCell 481',
+             'ControlledNested 517', 'ControlledTail 639', 'NextCell 752', 'After']
+    positions = [result.canonical_text.index(fact) for fact in facts]
+    assert positions == sorted(positions)
+    assert result.quality == 'complete'
+    assert any(e.parent_key for e in result.elements)
+    assert ''.join(result.canonical_text[e.start:e.end] for e in result.elements) == result.canonical_text
+
+
+@pytest.mark.parametrize('wrapper,inline', [('w:customXml', False), ('w:sdt', True), ('w:sdt', 'row'), ('w:del', True)])
+def test_docx_remaining_unsupported_wrappers_are_explicitly_partial(wrapper, inline):
+    from docx import Document
+    from docx.oxml import OxmlElement
+    doc = Document()
+    paragraph = doc.add_paragraph('Visible before')
+    if inline == 'row':
+        table = doc.add_table(rows=1, cols=1)
+        table.cell(0, 0).text = 'HiddenRowRevenue 93017'
+        _wrap_docx_control(table.rows[0]._tr)
+    elif inline:
+        run = paragraph.add_run('HiddenInlineRevenue 93017')._r
+        if wrapper == 'w:sdt':
+            _wrap_docx_control(run)
+        else:
+            from docx.oxml.ns import qn
+            run.find(qn('w:t')).tag = qn('w:delText')
+            node = OxmlElement(wrapper)
+            run.addprevious(node)
+            node.append(run)
+    else:
+        controlled = doc.add_paragraph('HiddenCustomRevenue 93017')
+        node = OxmlElement(wrapper)
+        controlled._p.addprevious(node)
+        node.append(controlled._p)
+    doc.add_paragraph('Visible after')
+    output = io.BytesIO()
+    doc.save(output)
+    result = extract('unsupported-wrapper.docx', output.getvalue())
+    assert result.quality == 'partial'
+    assert 'document_wrapper_structure_unavailable' in result.issue_codes
+    assert result.canonical_text.index('Visible before') < result.canonical_text.index('Visible after')
+
+
+def test_xlsx_chart_only_fact_is_explicitly_partial():
+    from openpyxl import Workbook
+    from openpyxl.chart import BarChart, Reference
+    book = Workbook()
+    book.active.append(['Metric', 'Value'])
+    book.active.append(['A', 7])
+    chart = BarChart()
+    chart.title = 'ChartOnlyRevenue 93017'
+    chart.add_data(Reference(book.active, min_col=2, min_row=1, max_row=2), titles_from_data=True)
+    book.active.add_chart(chart, 'D1')
+    output = io.BytesIO()
+    book.save(output)
+    book.close()
+    result = extract('chart.xlsx', output.getvalue())
+    assert result.quality == 'partial'
+    assert 'spreadsheet_chart_structure_unavailable' in result.issue_codes
+    assert result.elements[-1].cells[1].text == '7'
+
+
 def test_literal_coordinate_markers_cannot_collide_in_canonical_projection():
     a = extract('a.csv', b'"X B1 value=Y",Z\n')
     b = extract('b.csv', b'X,"Y B1 value=Z"\n')

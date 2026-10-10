@@ -101,3 +101,117 @@ def test_oversized_formula_row_repeats_unknown_value_qualifiers_in_embedding_con
     assert len(output) > 1
     assert all('B1 formula==50+20 value=<unknown>' in chunk.embedding_text for chunk in output)
     assert all(chunk.source_text == result.canonical_text[chunk.start:chunk.end] for chunk in output)
+
+
+def review_bpe_tokenizer(*, suffix=False):
+    import tiktoken
+    ranks = {bytes([i]): i for i in range(256)}
+    ranks.update({b'X\xc3': 256, b'X\xc3\xa9': 257} if suffix else {b'\xa9X': 256, b'\xc3\xa9X': 257})
+    name = 'review-byte-bpe-suffix-v1' if suffix else 'review-byte-bpe-v1'
+    encoding = tiktoken.Encoding(name=name, pat_str=r'[\s\S]+',
+                                 mergeable_ranks=ranks, special_tokens={})
+    class Adapter:
+        revision = name
+        encode = staticmethod(encoding.encode)
+    return Adapter()
+
+
+def test_real_local_bpe_nonmonotone_prefix_remains_representable():
+    tokenizer = review_bpe_tokenizer()
+    assert [len(tokenizer.encode(text)) for text in ['\u00e9', '\u00e9X', '\u00e9Xq']] == [2, 1, 2]
+    result = extract('unicode.txt', '\u00e9Xqrst'.encode())
+    output = chunks(result, max_tokens=1, overlap_tokens=0, tokenizer=tokenizer)
+    assert ''.join(chunk.source_text for chunk in output) == result.canonical_text
+    assert all(len(tokenizer.encode(chunk.embedding_text)) <= 1 for chunk in output)
+
+
+def test_real_local_bpe_nonmonotone_suffix_preserves_available_overlap():
+    tokenizer = review_bpe_tokenizer(suffix=True)
+    assert [len(tokenizer.encode(text)) for text in ['\u00e9', 'X\u00e9']] == [2, 1]
+    result = extract('unicode.txt', 'abcdX\u00e9qrst'.encode())
+    output = chunks(result, max_tokens=5, overlap_tokens=1, tokenizer=tokenizer)
+    assert output[0].source_text == 'abcdX\u00e9'
+    assert output[1].start == 4
+    assert all(len(tokenizer.encode(c.embedding_text)) <= 5 for c in output)
+    assert all(c.source_text == result.canonical_text[c.start:c.end] for c in output)
+    assert set(range(len(result.canonical_text))) == {i for c in output for i in range(c.start, c.end)}
+
+
+def test_real_local_bpe_genuinely_unrepresentable_codepoint():
+    with pytest.raises(SourceContractError, match='^unrepresentable_source_element$'):
+        chunks(extract('unicode.txt', '\u00e9'.encode()), max_tokens=1, overlap_tokens=0,
+               tokenizer=review_bpe_tokenizer())
+
+
+@pytest.mark.parametrize('with_heading', [False, True])
+def test_nonmonotone_fallback_has_total_input_codepoint_ceiling(with_heading):
+    class NoFit:
+        revision = 'adversarial-no-fit-v1'
+        lengths = []
+        def encode(self, text):
+            self.lengths.append(len(text))
+            return [0] if text == 'Header\n' else [0, 1]
+    tokenizer = NoFit()
+    size = 10000
+    result = extract('large.txt', (('Header\n' if with_heading else '') + 'x' * size).encode())
+    context = 'heading=Header\n' if with_heading else ''
+    if with_heading:
+        element = result.elements[0]
+        result = replace(result, elements=(replace(element, kind='heading', end=7),
+                         replace(element, element_key='element-2', start=7)))
+    # Pin the ordinary heuristic probes so the fallback work can be measured
+    # independently; every tokenizer invocation receives its complete input.
+    ordinary = ([7, 7] if with_heading else []) + [size + len(context)]
+    low, high = 1, size
+    while low <= high:
+        middle = (low + high) // 2
+        ordinary.append(middle + len(context))
+        high = middle - 1
+    with pytest.raises(SourceContractError, match='^chunker_work_limit$'):
+        chunks(result, max_tokens=1, overlap_tokens=0, tokenizer=tokenizer)
+    assert tokenizer.lengths[:len(ordinary)] == ordinary
+    fallback = tokenizer.lengths[len(ordinary):]
+    assert 0 < len(fallback) <= 4096
+    assert sum(fallback) <= 1000000
+    assert len(tokenizer.lengths) <= len(ordinary) + 4096
+
+
+def test_nonmonotone_fallback_call_ceiling_spans_all_elements_without_publication():
+    bpe = review_bpe_tokenizer()
+    class CountingBPE:
+        revision = bpe.revision
+        lengths = []
+        def encode(self, text):
+            self.lengths.append(len(text))
+            return bpe.encode(text)
+    tokenizer = CountingBPE()
+    result = extract('many.txt', ('\u00e9Xqrst' * 1500).encode())
+    element = result.elements[0]
+    result = replace(result, elements=tuple(replace(element, element_key=f'element-{i+1}',
+                     start=i*6, end=(i+1)*6) for i in range(1500)))
+    module = importlib.import_module('lib.parsers.source_chunking')
+    assert module.MAX_FALLBACK_TOKENIZER_CALLS == 4096
+    assert module.MAX_FALLBACK_INPUT_CODEPOINTS == 1000000
+    # Each element needs the real BPE fallback; even many already built chunks
+    # must never escape the tuple-return boundary when the call ceiling is hit.
+    with pytest.raises(SourceContractError, match='^chunker_work_limit$'):
+        chunks(result, max_tokens=1, overlap_tokens=0, tokenizer=tokenizer)
+    # Each completed element needs exactly three fallback probes (5, 4, 2).
+    # The 1366th element gets one probe, reaching 4096, then stops before the
+    # next tokenizer call. Five-codepoint inputs occur only in that fallback.
+    assert tokenizer.lengths.count(5) == 1366
+    assert tokenizer.lengths.count(6) == 1366
+
+
+def test_chunker_fingerprint_binds_nonmonotone_policy_and_both_work_limits(monkeypatch):
+    module = importlib.import_module('lib.parsers.source_chunking')
+    options = dict(tokenizer=LocalTokenizer(), max_tokens=120, overlap_tokens=8)
+    key = module.chunker_key_for(**options)
+    for setting, value in [('FITTING_POLICY', 'different-policy'),
+                           ('MAX_FALLBACK_TOKENIZER_CALLS', 4095),
+                           ('MAX_FALLBACK_INPUT_CODEPOINTS', 999999)]:
+        with monkeypatch.context() as change:
+            change.setattr(module, setting, value)
+            assert module.chunker_key_for(**options) != key
+            with pytest.raises(SourceContractError, match='^chunker_key_mismatch$'):
+                module.chunk_extraction(extract('notes.txt', b'hello'), chunker_key=key, **options)

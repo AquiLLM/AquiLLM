@@ -105,6 +105,11 @@ def _xlsx(builder, data):
             for image in sheet._images:
                 builder.figure(sheet=sheet.title)
                 builder.issue('figure_layout_unavailable')
+            if sheet._charts:
+                # Cell coordinates cannot account for chart titles, axis labels
+                # and drawing-only facts. Keep the supported rows faithful and
+                # explicitly classify the unavailable chart structure.
+                builder.issue('spreadsheet_chart_structure_unavailable')
     finally:
         if formulas is not None:
             formulas.close()
@@ -203,6 +208,40 @@ def _docx(builder, data):
     from docx.text.paragraph import Paragraph
     from docx.oxml.ns import qn
     doc = Document(io.BytesIO(data))
+    def unavailable(node):
+        if (node.tag == qn('w:altChunk') or any(next(node.iter(qn(tag)), None) is not None
+                for tag in ('w:t', 'w:delText', 'w:instrText', 'a:t', 'a:blip'))):
+            builder.issue('document_wrapper_structure_unavailable')
+
+    # python-docx omits these wrappers from Paragraph.text/Table.rows. Native
+    # body/cell content controls are supported below; run/row/cell controls and
+    # revision/custom XML wrappers must not silently advertise completeness.
+    block_parents = {qn('w:body'), qn('w:tc'), qn('w:sdtContent')}
+    unsupported_wrappers = {qn(f'w:{name}') for name in
+                            ('customXml', 'ins', 'del', 'moveFrom', 'moveTo', 'altChunk')}
+    for node in doc.element.body.iter():
+        if node.tag in unsupported_wrappers or (node.tag == qn('w:sdt') and node.getparent().tag not in block_parents):
+            unavailable(node)
+
+    def blocks(owner):
+        # Unwrap controls in place, without descendant queries that conflate
+        # table/cell order. An explicit stack also handles deeply nested controls.
+        stack = [iter(owner)]
+        while stack:
+            child = next(stack[-1], None)
+            if child is None:
+                stack.pop()
+            elif child.tag in (qn('w:p'), qn('w:tbl')):
+                yield child
+            elif child.tag == qn('w:sdt'):
+                contents = child.findall(qn('w:sdtContent'))
+                if len(contents) != 1:
+                    builder.issue('document_wrapper_structure_unavailable')
+                else:
+                    stack.append(iter(contents[0]))
+            else:
+                unavailable(child)
+
     for relation in doc.part.rels.values():
         if relation.reltype.rsplit('/', 1)[-1] in {'header', 'footer', 'footnotes', 'endnotes', 'comments'}:
             element = getattr(relation.target_part, 'element', None)
@@ -210,6 +249,9 @@ def _docx(builder, data):
                 builder.issue('auxiliary_document_content_unavailable')
     def paragraph(node, owner, parent=None):
         p = Paragraph(node, owner)
+        for child in node:
+            if child.tag not in (qn('w:r'), qn('w:hyperlink'), qn('w:pPr')):
+                unavailable(child)
         key = parent
         if p.text:
             kind = 'heading' if p.style and p.style.name.startswith('Heading') else 'paragraph'
@@ -220,8 +262,14 @@ def _docx(builder, data):
         return key
     def table(node, owner, parent=None):
         table_obj = Table(node, owner)
+        for child in node:
+            if child.tag not in (qn('w:tr'), qn('w:tblPr'), qn('w:tblGrid')):
+                unavailable(child)
         headers = ()
         for row_number, row in enumerate(table_obj.rows, 1):
+            for child in row._tr:
+                if child.tag not in (qn('w:tc'), qn('w:trPr')):
+                    unavailable(child)
             cells, tails, column = [], [], 1
             # Read original tc nodes instead of row.cells, which aliases merged
             # cells and repeats the merged origin's text in covered coordinates.
@@ -233,7 +281,7 @@ def _docx(builder, data):
                 cell = _Cell(tc, table_obj)
                 span = tc.grid_span
                 leading, tail, seen_nested = [], [], False
-                for child in tc.iterchildren():
+                for child in blocks(tc):
                     if child.tag == qn('w:tbl'):
                         seen_nested = True
                     if child.tag in (qn('w:p'), qn('w:tbl')):
@@ -272,7 +320,7 @@ def _docx(builder, data):
             if not any(tail for _, tail, _, _ in tails):
                 key = builder.row(tuple(cells), parent_key=parent)
                 for cell, _, _, _ in tails:
-                    for child in cell._tc.iterchildren():
+                    for child in blocks(cell._tc):
                         if child.tag == qn('w:p'):
                             for blip in child.iter(qn('a:blip')):
                                 builder.figure(parent_key=key)
@@ -286,7 +334,7 @@ def _docx(builder, data):
                     segment = tuple(c for c in cells if cell_column <= c.column < cell_column + span)
                     emitted_columns.update(c.column for c in segment)
                     key = builder.row(segment, parent_key=parent)
-                    for child in cell._tc.iterchildren():
+                    for child in blocks(cell._tc):
                         if child in tail:
                             break
                         if child.tag == qn('w:p'):
@@ -301,7 +349,7 @@ def _docx(builder, data):
                 omitted = tuple(c for c in cells if c.column not in emitted_columns)
                 if omitted:
                     builder.row(omitted, parent_key=parent)
-    for node in doc.element.body.iterchildren():
+    for node in blocks(doc.element.body):
         if node.tag == qn('w:p'):
             paragraph(node, doc)
         elif node.tag == qn('w:tbl'):
@@ -355,7 +403,8 @@ def _pdf(builder, data):
 def extract_structure(filename: str, data: bytes, *, artifact) -> ExtractionV1:
     validate_artifact_ref(artifact, data=data)
     extension = PurePath(filename).suffix.lower()
-    parser_key = f'native-{extension.lstrip(".")}-ordered-v1'
+    policy_version = 2 if extension in ('.docx', '.xlsx') else 1
+    parser_key = f'native-{extension.lstrip(".")}-ordered-v{policy_version}'
     if extension not in NATIVE_FORMATS:
         return ExtractionV1(parser_key, artifact, '', (), 'unsupported', ('source_format_unsupported',))
     builder = _Builder()

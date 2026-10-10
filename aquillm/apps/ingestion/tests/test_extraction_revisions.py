@@ -123,6 +123,62 @@ def test_generic_text_projection_is_explicitly_partial_without_invented_structur
 
 
 @pytest.mark.django_db
+@pytest.mark.parametrize('format', ['docx', 'xlsx'])
+def test_parser_policy_v2_preserves_frozen_v1_identity_and_replays_both(artifact_storage, format):
+    import io
+    from aquillm.ingestion.parsers import extract_text_payloads
+    from apps.ingestion.models import ExtractionRevision
+    from apps.ingestion.services.source_artifacts import bind_payload_source
+    stream = io.BytesIO()
+    if format == 'docx':
+        from docx import Document
+        from lib.parsers.tests.test_structural_extraction import _wrap_docx_control
+        doc = Document()
+        doc.add_paragraph('Before')
+        _wrap_docx_control(doc.add_paragraph('ControlledRevenue 93017')._p)
+        doc.add_paragraph('After')
+        doc.save(stream)
+    else:
+        from openpyxl import Workbook
+        from openpyxl.chart import BarChart, Reference
+        book = Workbook()
+        book.active.append(['Metric', 'Value'])
+        book.active.append(['A', 7])
+        chart = BarChart()
+        chart.title = 'ChartOnlyRevenue 93017'
+        chart.add_data(Reference(book.active, min_col=2, min_row=1, max_row=2), titles_from_data=True)
+        book.active.add_chart(chart, 'D1')
+        book.save(stream)
+        book.close()
+    service, _ = modules()
+    payload = extract_text_payloads('policy.' + format, stream.getvalue())[0]
+    current = payload.extraction
+    assert current.parser_key == f'native-{format}-ordered-v2'
+    # These capture the original v1 behavior for the exact same source bytes:
+    # body controls were omitted, and a cell-only chart extraction was complete.
+    if format == 'docx':
+        legacy = replace(current, parser_key='native-docx-ordered-v1', canonical_text='Before\nAfter',
+                         elements=(current.elements[0], replace(current.elements[-1], element_key='element-2', start=7, end=12)))
+    else:
+        legacy = replace(current, parser_key='native-xlsx-ordered-v1', quality='complete', issue_codes=())
+    occurrence = bind_payload_source(payload, using='default')
+    old_id = service.persist_extraction_revision(occurrence, legacy, using='default')
+    new_id = service.bind_payload_extraction(payload, using='default')
+    assert new_id != old_id
+    assert service.persist_extraction_revision(occurrence, legacy, using='default') == old_id
+    assert service.persist_extraction_revision(occurrence, current, using='default') == new_id
+    old, new = ExtractionRevision.objects.get(pk=old_id), ExtractionRevision.objects.get(pk=new_id)
+    assert old.parser_key == f'native-{format}-ordered-v1'
+    assert new.parser_key == current.parser_key
+    assert old.canonical_text == legacy.canonical_text
+    assert old.quality == legacy.quality
+    assert old.issue_codes == list(legacy.issue_codes)
+    assert old.manifest_sha256 != new.manifest_sha256
+    assert old.occurrence_id == new.occurrence_id == occurrence.occurrence_id
+    assert ExtractionRevision.objects.count() == 2
+
+
+@pytest.mark.django_db
 def test_figure_payload_uses_parent_extraction_and_its_own_exact_media(artifact_storage, monkeypatch):
     from aquillm.ingestion.parsers import extract_text_payloads
     from aquillm.ingestion.types import ExtractedTextPayload
