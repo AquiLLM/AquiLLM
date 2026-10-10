@@ -1,5 +1,6 @@
 """Allocator controls must reach services even without a shared env_file."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -45,7 +46,25 @@ def test_allocator_global_defaults_and_rollback_reach_every_python_service(
             )
             assert service["environment"]["PYTHONMALLOC"] == "default"
         else:
-            assert "AQUILLM_ALLOCATOR" not in service.get("environment", {})
+            # Shared env_file entries can carry this inert selector into other
+            # services. Activation requires a wrapped image/entrypoint or preload.
+            if dockerfile:
+                assert dockerfile == "deploy/docker/certbot/Dockerfile"
+            else:
+                assert service["image"].split(":", 1)[0] in {
+                    "minio/mc", "minio/minio", "pgvector/pgvector",
+                    "memgraph/memgraph-mage", "redis", "nginx",
+                    "qdrant/qdrant", "localstack/localstack",
+                }
+            assert not service.get("environment", {}).get("LD_PRELOAD")
+            wiring = json.dumps({
+                key: service.get(key)
+                for key in ("entrypoint", "command", "volumes")
+            })
+            for marker in (
+                "aquillm-allocator", "with_mimalloc", "libmimalloc", "/opt/mimalloc"
+            ):
+                assert marker not in wiring
     assert checked >= 4
 
 
