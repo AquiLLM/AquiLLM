@@ -28,7 +28,6 @@ export function useCollectionViewMoveBatch({
   setIsBatchOperationLoading,
   setSuccessMessage,
   setContents,
-  allCollections,
 }: UseCollectionViewMoveBatchParams) {
   const handleMoveSubmit = useCallback(
     (itemId: number, newParentId: number | null) => {

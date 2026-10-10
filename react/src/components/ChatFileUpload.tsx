@@ -62,7 +62,7 @@ const ChatFileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
     setProcessedFiles(prev => [...prev, ...newFiles]);
     
     // Process each file and update its state once complete
-    const processPromises = Array.from(fileList).map(async (file, index) => {
+    const processPromises = Array.from(fileList).map(async (file) => {
       try {
         const base64Data = await convertFileToBase64(file);
         
@@ -117,10 +117,6 @@ const ChatFileUpload: React.FC<FileUploadProps> = ({ onFileUpload }) => {
 
   const removeFile = (index: number) => {
     setProcessedFiles(files => files.filter((_, i) => i !== index));
-  };
-
-  const clearAllFiles = () => {
-    setProcessedFiles([]);
   };
 
   // Format file size in a human-readable way

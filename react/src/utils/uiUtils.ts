@@ -1,4 +1,4 @@
-import { Folder } from '../components/CollectionsTree';
+import type { Collection } from '../components/CollectionsTree';
 
 /**
  * Shows a temporary message then clears it after a delay
@@ -22,7 +22,7 @@ export const showTempMessage = (
  * @param collectionsData - Raw collections data from API
  * @returns Parsed collection objects
  */
-export const parseCollections = (collectionsData: any[]): Folder[] => {
+export const parseCollections = (collectionsData: any[]): Collection[] => {
   return collectionsData.map((col: any) => ({
     id: col.id,
     name: col.name,

@@ -25,7 +25,6 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
   collection,
   onOpenItem,
   onRemoveItem,
-  onSelectCollection,
   onMove,
   onContextMenuRename,
   onBatchMove,
@@ -128,7 +127,7 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
   const selectedItems = useMemo(() => items.filter((item) => selectedIds.has(item.id)), [items, selectedIds]);
 
   useEffect(() => {
-    const remainingIds = new Set(items.map((item) => item.id));
+    const remainingIds = new Set<number | string>(items.map((item) => item.id));
     setSelectedIds((prev) => {
       const next = new Set<number | string>();
       prev.forEach((id) => {
@@ -168,15 +167,6 @@ const FileSystemViewer: React.FC<FileSystemViewerProps> = ({
   const sortSuffix = (key: 'name' | 'type' | 'details') => {
     if (sortKey !== key) return '';
     return sortDirection === 'asc' ? ' (asc)' : ' (desc)';
-  };
-
-  const handleBatchMove = () => {
-    const sel = items.filter((i) => selectedIds.has(i.id));
-    if (sel.length === 0) {
-      alert('No items selected');
-      return;
-    }
-    onBatchMove?.(sel);
   };
 
   const handleBatchRemove = () => {

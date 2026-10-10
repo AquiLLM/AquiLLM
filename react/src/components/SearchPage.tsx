@@ -1,4 +1,4 @@
-import React, { ChangeEvent, useState } from 'react';
+import React, { useState } from 'react';
 import { getCsrfCookie } from '../main';
 
 // Helper component to render a text chunk, similar to text_chunk.html
