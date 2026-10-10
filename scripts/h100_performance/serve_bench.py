@@ -49,6 +49,12 @@ def stream_request(base, payload):
                 output_sha256=hashlib.sha256("".join(output).encode()).hexdigest(), usage=usage)
 
 
+def speculation_metrics(base):
+    with request(base, "/metrics") as response:
+        return [line for line in response.read().decode().splitlines()
+                if not line.startswith("#") and "spec_decode" in line]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -64,6 +70,7 @@ def main():
     with request(args.base_url, "/tokenize", {"model": args.model, "prompt": seed_text, "add_special_tokens": False}) as response:
         seed = json.load(response)["tokens"]
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    before = speculation_metrics(args.base_url)
     with args.output.open("a", encoding="utf-8") as out:
         for length in map(int, args.prompt_tokens.split(",")):
             ids = (seed * (length // len(seed) + 1))[:length]
@@ -79,6 +86,9 @@ def main():
                 out.write(json.dumps(result) + "\n")
                 out.flush()
                 print(json.dumps(result), flush=True)
+    metrics_path = args.output.with_name(args.output.stem + "-" + args.label + "-metrics.json")
+    metrics_path.write_text(json.dumps(dict(label=args.label, before=before,
+                                           after=speculation_metrics(args.base_url)), indent=2) + "\n")
 
 
 if __name__ == "__main__":

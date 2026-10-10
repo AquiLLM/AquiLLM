@@ -11,8 +11,8 @@ import socket
 import subprocess
 
 
-def run(args):
-    return subprocess.check_output(args, text=True)
+def run(args, env=None):
+    return subprocess.check_output(args, text=True, env=env)
 
 
 def main():
@@ -47,23 +47,30 @@ def main():
     flags = dict(AQUILLM_H100_MTP_KERNEL=args.mtp if args.action == "switch" else "baseline",
                  AQUILLM_H100_SPLIT_POLICY="baseline", AQUILLM_H100_PREFILL="0",
                  AQUILLM_H100_GDN="baseline")
+    previous_env = dict(item.split("=", 1) for item in current["Config"]["Env"] if "=" in item)
+    # App settings may have changed in the shared .env since vLLM started.
+    # Preserve this container's exact environment through subprocess-only
+    # interpolation variables. The override contains names, never credentials;
+    # prefixed names also avoid changing host HOME/PATH while Compose resolves.
+    prefix = "AQUILLM_H100_CAPTURED_ENV_"
+    inherited = {name: "${" + prefix + name + "}" for name in previous_env}
+    process_env = dict(os.environ, **{prefix + name: value for name, value in previous_env.items()})
     override = directory / "current.json"
-    override.write_text(json.dumps({"services": {"vllm": {"image": image_id, "environment": flags}}}, indent=2))
-    compose = ["docker", "compose", "--project-name", state["project"],
+    override.write_text(json.dumps({"services": {"vllm": {"image": image_id, "environment": inherited | flags}}}, indent=2))
+    compose = ["docker", "compose", "--profile", "*", "--project-name", state["project"],
                "--project-directory", state["working_dir"],
                "--env-file", "/home/exouser/AquiLLM/.env"]
     for path in state["files"]:
         compose += ["-f", path]
     compose += ["-f", str(override)]
-    resolved = json.loads(run(compose + ["config", "--format", "json"]))["services"]["vllm"]
-    previous_env = dict(item.split("=", 1) for item in current["Config"]["Env"] if "=" in item)
+    resolved = json.loads(run(compose + ["config", "--format", "json"], env=process_env))["services"]["vllm"]
     differences = [name for name, value in resolved.get("environment", {}).items()
                    if name in previous_env and not name.startswith("AQUILLM_H100_")
                    and str(value or "") != previous_env[name]]
     if differences:
         raise SystemExit("Compose environment drift; refusing an invalid A/B: " + ",".join(sorted(differences)))
     print(json.dumps(dict(action=args.action, image=image_id, flags=flags)), flush=True)
-    subprocess.run(compose + ["up", "-d", "--no-deps", "--no-build", "vllm"], check=True)
+    subprocess.run(compose + ["up", "-d", "--no-deps", "--no-build", "vllm"], check=True, env=process_env)
 
 
 if __name__ == "__main__":
