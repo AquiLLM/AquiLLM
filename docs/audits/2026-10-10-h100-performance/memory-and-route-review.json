@@ -1,0 +1,80 @@
+{
+  "sampling_interval_seconds": 5,
+  "scope": "whole GPU including unchanged embedding/reranking sidecars",
+  "limits": "Samples cannot capture every transient allocation peak. Baseline block1 predates this watcher; its separate runtime snapshot remains available.",
+  "blocks": [
+    {
+      "label": "baseline-block1",
+      "interval_start": "2026-10-10T14:06:43.297486+00:00",
+      "interval_end": "2026-10-10T14:12:00.350035+00:00",
+      "samples": 0,
+      "minimum_used_mib": null,
+      "maximum_used_mib": null,
+      "total_mib": 81559,
+      "minimum_observed_headroom_mib": null
+    },
+    {
+      "label": "baseline-block2",
+      "interval_start": "2026-10-10T15:15:25.078688+00:00",
+      "interval_end": "2026-10-10T15:20:47.124427+00:00",
+      "samples": 63,
+      "minimum_used_mib": 65027,
+      "maximum_used_mib": 67269,
+      "total_mib": 81559,
+      "minimum_observed_headroom_mib": 14290
+    },
+    {
+      "label": "baseline-block3",
+      "interval_start": "2026-10-10T15:31:17.431666+00:00",
+      "interval_end": "2026-10-10T15:36:34.339684+00:00",
+      "samples": 62,
+      "minimum_used_mib": 65027,
+      "maximum_used_mib": 67269,
+      "total_mib": 81559,
+      "minimum_observed_headroom_mib": 14290
+    },
+    {
+      "label": "prefill-block1",
+      "interval_start": "2026-10-10T15:02:23.451051+00:00",
+      "interval_end": "2026-10-10T15:07:02.955022+00:00",
+      "samples": 55,
+      "minimum_used_mib": 66855,
+      "maximum_used_mib": 67055,
+      "total_mib": 81559,
+      "minimum_observed_headroom_mib": 14504
+    },
+    {
+      "label": "prefill-block2",
+      "interval_start": "2026-10-10T15:23:43.321323+00:00",
+      "interval_end": "2026-10-10T15:28:21.185850+00:00",
+      "samples": 54,
+      "minimum_used_mib": 65027,
+      "maximum_used_mib": 66209,
+      "total_mib": 81559,
+      "minimum_observed_headroom_mib": 15350
+    },
+    {
+      "label": "prefill-block3",
+      "interval_start": "2026-10-10T15:39:25.390011+00:00",
+      "interval_end": "2026-10-10T15:44:02.595313+00:00",
+      "samples": 54,
+      "minimum_used_mib": 65027,
+      "maximum_used_mib": 66209,
+      "total_mib": 81559,
+      "minimum_observed_headroom_mib": 15350
+    }
+  ],
+  "route_activation": {
+    "first_marker": "2026-10-10T15:42:07.130911543Z (EngineCore pid=192) [WARNING:aquillm.h100] AQUILLM_H100 route_exercised prefill runtime=aa04660c3a1e198b58608f37ebabf43a74a47eb9d684117cbe35e773c50e9671 cached_len=32768 query_len=4096",
+    "prompt_tokens": 36864,
+    "warmup": true,
+    "all_512_8192_32768_requests_completed_before_marker": true
+  },
+  "final_candidate_log_review": {
+    "broad_error_word_matches": 16,
+    "actual_error_or_traceback_records": 0,
+    "classification": "Matches were Genesis startup patch descriptions/skip warnings mentioning error names.",
+    "source_sha256": "8de43a80396de8ebd329cc3df9542dc5955dff9e0be80cfb0497159ed0cac4b9"
+  },
+  "memory_source_sha256": "0ed8de49692a9a6bd97271611097217168d2f04a35b3c5e1108d2e5bb382c573"
+}

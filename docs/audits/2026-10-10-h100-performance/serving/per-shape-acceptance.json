@@ -1,0 +1,364 @@
+[
+  {
+    "label": "baseline-block1",
+    "aggregate": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3102.0,
+        "vllm:spec_decode_num_draft_tokens": 12408.0,
+        "vllm:spec_decode_num_accepted_tokens": 8184.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 8184.0
+      },
+      "draft_tokens": 12408.0,
+      "accepted_tokens": 8184.0,
+      "acceptance_rate": 0.6595744680851063,
+      "interval_includes_warmups": true
+    },
+    "shapes": []
+  },
+  {
+    "label": "baseline-block2",
+    "aggregate": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3289.0,
+        "vllm:spec_decode_num_draft_tokens": 13156.0,
+        "vllm:spec_decode_num_accepted_tokens": 7964.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7964.0
+      },
+      "draft_tokens": 13156.0,
+      "accepted_tokens": 7964.0,
+      "acceptance_rate": 0.6053511705685619,
+      "interval_includes_warmups": true
+    },
+    "shapes": [
+      {
+        "prompt_tokens": 512,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 946.0,
+            "vllm:spec_decode_num_draft_tokens": 3784.0,
+            "vllm:spec_decode_num_accepted_tokens": 1859.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1859.0
+          },
+          "draft_tokens": 3784.0,
+          "accepted_tokens": 1859.0,
+          "acceptance_rate": 0.49127906976744184,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 8192,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 847.0,
+            "vllm:spec_decode_num_draft_tokens": 3388.0,
+            "vllm:spec_decode_num_accepted_tokens": 1969.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1969.0
+          },
+          "draft_tokens": 3388.0,
+          "accepted_tokens": 1969.0,
+          "acceptance_rate": 0.5811688311688312,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 32768,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 748.0,
+            "vllm:spec_decode_num_draft_tokens": 2992.0,
+            "vllm:spec_decode_num_accepted_tokens": 2057.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2057.0
+          },
+          "draft_tokens": 2992.0,
+          "accepted_tokens": 2057.0,
+          "acceptance_rate": 0.6875,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 36864,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 748.0,
+            "vllm:spec_decode_num_draft_tokens": 2992.0,
+            "vllm:spec_decode_num_accepted_tokens": 2079.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2079.0
+          },
+          "draft_tokens": 2992.0,
+          "accepted_tokens": 2079.0,
+          "acceptance_rate": 0.6948529411764706,
+          "interval_includes_warmups": true
+        }
+      }
+    ]
+  },
+  {
+    "label": "baseline-block3",
+    "aggregate": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3047.0,
+        "vllm:spec_decode_num_draft_tokens": 12188.0,
+        "vllm:spec_decode_num_accepted_tokens": 8195.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 8195.0
+      },
+      "draft_tokens": 12188.0,
+      "accepted_tokens": 8195.0,
+      "acceptance_rate": 0.6723826714801444,
+      "interval_includes_warmups": true
+    },
+    "shapes": [
+      {
+        "prompt_tokens": 512,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 770.0,
+            "vllm:spec_decode_num_draft_tokens": 3080.0,
+            "vllm:spec_decode_num_accepted_tokens": 2035.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2035.0
+          },
+          "draft_tokens": 3080.0,
+          "accepted_tokens": 2035.0,
+          "acceptance_rate": 0.6607142857142857,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 8192,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 770.0,
+            "vllm:spec_decode_num_draft_tokens": 3080.0,
+            "vllm:spec_decode_num_accepted_tokens": 2035.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2035.0
+          },
+          "draft_tokens": 3080.0,
+          "accepted_tokens": 2035.0,
+          "acceptance_rate": 0.6607142857142857,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 32768,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 759.0,
+            "vllm:spec_decode_num_draft_tokens": 3036.0,
+            "vllm:spec_decode_num_accepted_tokens": 2046.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2046.0
+          },
+          "draft_tokens": 3036.0,
+          "accepted_tokens": 2046.0,
+          "acceptance_rate": 0.6739130434782609,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 36864,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 748.0,
+            "vllm:spec_decode_num_draft_tokens": 2992.0,
+            "vllm:spec_decode_num_accepted_tokens": 2079.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2079.0
+          },
+          "draft_tokens": 2992.0,
+          "accepted_tokens": 2079.0,
+          "acceptance_rate": 0.6948529411764706,
+          "interval_includes_warmups": true
+        }
+      }
+    ]
+  },
+  {
+    "label": "prefill-block1",
+    "aggregate": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3311.0,
+        "vllm:spec_decode_num_draft_tokens": 13244.0,
+        "vllm:spec_decode_num_accepted_tokens": 7953.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7953.0
+      },
+      "draft_tokens": 13244.0,
+      "accepted_tokens": 7953.0,
+      "acceptance_rate": 0.6004983388704319,
+      "interval_includes_warmups": true
+    },
+    "shapes": []
+  },
+  {
+    "label": "prefill-block2",
+    "aggregate": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3289.0,
+        "vllm:spec_decode_num_draft_tokens": 13156.0,
+        "vllm:spec_decode_num_accepted_tokens": 7975.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7975.0
+      },
+      "draft_tokens": 13156.0,
+      "accepted_tokens": 7975.0,
+      "acceptance_rate": 0.6061872909698997,
+      "interval_includes_warmups": true
+    },
+    "shapes": [
+      {
+        "prompt_tokens": 512,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 924.0,
+            "vllm:spec_decode_num_draft_tokens": 3696.0,
+            "vllm:spec_decode_num_accepted_tokens": 1881.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1881.0
+          },
+          "draft_tokens": 3696.0,
+          "accepted_tokens": 1881.0,
+          "acceptance_rate": 0.5089285714285714,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 8192,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 792.0,
+            "vllm:spec_decode_num_draft_tokens": 3168.0,
+            "vllm:spec_decode_num_accepted_tokens": 2013.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2013.0
+          },
+          "draft_tokens": 3168.0,
+          "accepted_tokens": 2013.0,
+          "acceptance_rate": 0.6354166666666666,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 32768,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 825.0,
+            "vllm:spec_decode_num_draft_tokens": 3300.0,
+            "vllm:spec_decode_num_accepted_tokens": 2013.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2013.0
+          },
+          "draft_tokens": 3300.0,
+          "accepted_tokens": 2013.0,
+          "acceptance_rate": 0.61,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 36864,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 748.0,
+            "vllm:spec_decode_num_draft_tokens": 2992.0,
+            "vllm:spec_decode_num_accepted_tokens": 2068.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2068.0
+          },
+          "draft_tokens": 2992.0,
+          "accepted_tokens": 2068.0,
+          "acceptance_rate": 0.6911764705882353,
+          "interval_includes_warmups": true
+        }
+      }
+    ]
+  },
+  {
+    "label": "prefill-block3",
+    "aggregate": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3311.0,
+        "vllm:spec_decode_num_draft_tokens": 13244.0,
+        "vllm:spec_decode_num_accepted_tokens": 7964.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7964.0
+      },
+      "draft_tokens": 13244.0,
+      "accepted_tokens": 7964.0,
+      "acceptance_rate": 0.6013289036544851,
+      "interval_includes_warmups": true
+    },
+    "shapes": [
+      {
+        "prompt_tokens": 512,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 935.0,
+            "vllm:spec_decode_num_draft_tokens": 3740.0,
+            "vllm:spec_decode_num_accepted_tokens": 1870.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1870.0
+          },
+          "draft_tokens": 3740.0,
+          "accepted_tokens": 1870.0,
+          "acceptance_rate": 0.5,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 8192,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 847.0,
+            "vllm:spec_decode_num_draft_tokens": 3388.0,
+            "vllm:spec_decode_num_accepted_tokens": 1980.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1980.0
+          },
+          "draft_tokens": 3388.0,
+          "accepted_tokens": 1980.0,
+          "acceptance_rate": 0.5844155844155844,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 32768,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 781.0,
+            "vllm:spec_decode_num_draft_tokens": 3124.0,
+            "vllm:spec_decode_num_accepted_tokens": 2035.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2035.0
+          },
+          "draft_tokens": 3124.0,
+          "accepted_tokens": 2035.0,
+          "acceptance_rate": 0.6514084507042254,
+          "interval_includes_warmups": true
+        }
+      },
+      {
+        "prompt_tokens": 36864,
+        "metrics": {
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 748.0,
+            "vllm:spec_decode_num_draft_tokens": 2992.0,
+            "vllm:spec_decode_num_accepted_tokens": 2079.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 2079.0
+          },
+          "draft_tokens": 2992.0,
+          "accepted_tokens": 2079.0,
+          "acceptance_rate": 0.6948529411764706,
+          "interval_includes_warmups": true
+        }
+      }
+    ]
+  }
+]

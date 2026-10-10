@@ -1,0 +1,31 @@
+{
+  "at": "2026-10-10T15:48:54.501026+00:00",
+  "image": "sha256:00441111dd81532d55310362a55b57b100fd48aa0cc589fb16b836ab042f885f",
+  "health": "healthy",
+  "effective_flags": {
+    "AQUILLM_H100_MTP_KERNEL": "baseline",
+    "AQUILLM_H100_SPLIT_POLICY": "baseline",
+    "AQUILLM_H100_PREFILL": "0",
+    "AQUILLM_H100_GDN": "baseline"
+  },
+  "checkout_commit_at_runtime_check": "82f2d5a57ded9d81a7c35dca9b89e582082ec99a",
+  "rollback": {
+    "action": "rollback",
+    "image": "sha256:00441111dd81532d55310362a55b57b100fd48aa0cc589fb16b836ab042f885f",
+    "verified": true
+  },
+  "smoke": {
+    "passed": true,
+    "content": "71593",
+    "finish_reason": "stop",
+    "seconds": 0.18310414200095693,
+    "usage": {
+      "prompt_tokens": 29,
+      "total_tokens": 35,
+      "completion_tokens": 6,
+      "prompt_tokens_details": null
+    }
+  },
+  "gpu": "NVIDIA H100 80GB HBM3, GPU-b46186ba-7ab3-72de-b9e5-57d95d5be294, 65029, 81559, 2",
+  "gpu_processes": "10420, VLLM::EngineCore, 18304\n12644, VLLM::EngineCore, 7992\n1167516, python3, 588\n1169535, VLLM::EngineCore, 38114"
+}

@@ -1,0 +1,6 @@
+{
+  "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c",
+  "base_image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+  "source_commit": "fedc29373c634fd47cf1f4429d133edaa2bc7e91",
+  "pr": "https://github.com/AquiLLM/AquiLLM/pull/240"
+}

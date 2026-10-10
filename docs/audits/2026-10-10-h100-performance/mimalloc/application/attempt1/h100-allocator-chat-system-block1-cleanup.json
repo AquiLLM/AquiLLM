@@ -1,0 +1,32 @@
+{
+  "success": false,
+  "phase": "clear_conversations",
+  "error_type": "PermissionError",
+  "locations": [
+    {
+      "file": "allocator_fixture_helper.py",
+      "function": "main",
+      "line": 630
+    },
+    {
+      "file": "allocator_fixture_helper.py",
+      "function": "clear",
+      "line": 517
+    },
+    {
+      "file": "allocator_fixture_helper.py",
+      "function": "save",
+      "line": 32
+    },
+    {
+      "file": "pathlib.py",
+      "function": "write_text",
+      "line": 1047
+    },
+    {
+      "file": "pathlib.py",
+      "function": "open",
+      "line": 1013
+    }
+  ]
+}

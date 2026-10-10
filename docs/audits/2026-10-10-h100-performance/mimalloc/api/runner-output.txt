@@ -1,0 +1,25 @@
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "system", "verified": true}
+
+{"quality": "system-block1-strict", "passed": 32}
+{"quality": "system-block1-long", "passed": 6}
+{"completed": "system-block1", "requests": 44, "at": "2026-10-10T16:39:02.963666+00:00"}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "mimalloc", "verified": true}
+
+{"quality": "mimalloc-block1-strict", "passed": 32}
+{"quality": "mimalloc-block1-long", "passed": 6}
+{"completed": "mimalloc-block1", "requests": 44, "at": "2026-10-10T16:47:42.238070+00:00"}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "system", "verified": true}
+
+{"completed": "system-block2", "requests": 44, "at": "2026-10-10T16:55:18.414406+00:00"}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "mimalloc", "verified": true}
+
+{"completed": "mimalloc-block2", "requests": 44, "at": "2026-10-10T17:02:42.396656+00:00"}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "system", "verified": true}
+
+{"completed": "system-block3", "requests": 44, "at": "2026-10-10T17:10:15.977832+00:00"}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "mimalloc", "verified": true}
+
+{"completed": "mimalloc-block3", "requests": 44, "at": "2026-10-10T17:17:40.891701+00:00"}
+{"action": "rollback", "image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7", "allocator": null, "verified": true}
+
+{"restored_prefill_image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7", "healthy": true}

@@ -1,0 +1,24 @@
+{
+  "reconciled": true,
+  "run_id": "allocator20261010",
+  "user_id": 29,
+  "cleared_conversation_ids": [
+    371,
+    372,
+    373,
+    374,
+    375,
+    376,
+    377,
+    378,
+    379,
+    380,
+    381,
+    382
+  ],
+  "proof_ids_match": true,
+  "all_recorded_ids_absent": true,
+  "no_other_owned_chats": true,
+  "owned_memory_jobs_absent": true,
+  "profile_facts_empty": true
+}

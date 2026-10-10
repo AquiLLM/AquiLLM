@@ -1,0 +1,2 @@
+# Preserve archived analysis/verification source bytes for their manifest hashes.
+*.py -text whitespace=cr-at-eol

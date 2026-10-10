@@ -1,0 +1,50 @@
+{
+  "at": "2026-10-10T16:12:42.410391+00:00",
+  "image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+  "health": "healthy",
+  "flags": {
+    "AQUILLM_H100_PREFILL": "1",
+    "AQUILLM_H100_MTP_KERNEL": "baseline",
+    "AQUILLM_H100_SPLIT_POLICY": "baseline",
+    "AQUILLM_H100_GDN": "baseline"
+  },
+  "development_commit": "5c84b2f7a2ca55244a2ed83beb0d21d6bdb9ac5d",
+  "quality": {
+    "strict": {
+      "passed": 32,
+      "capture": "/tmp/h100-development-rollout-strict.jsonl"
+    },
+    "long": {
+      "passed": 6,
+      "capture": "/tmp/h100-development-rollout-long.jsonl"
+    }
+  },
+  "activation": [
+    "2026-10-10T16:09:13.306371511Z [WARNING:aquillm.h100] AQUILLM_H100 {\"status\": \"installed\", \"mtp\": \"baseline\", \"split\": \"baseline\", \"prefill\": false, \"prefill_reason\": \"post-Genesis prefill method fingerprint mismatch\", \"prefill_profile\": null, \"prefill_qualification\": null}",
+    "2026-10-10T16:09:51.974698225Z (EngineCore pid=192) [WARNING:aquillm.h100] AQUILLM_H100 {\"status\": \"installed\", \"mtp\": \"baseline\", \"split\": \"baseline\", \"prefill\": true, \"prefill_reason\": \"measured_profile_and_runtime_abi_validated\", \"prefill_profile\": \"h100-long-prefill-dev-v1\", \"prefill_qualification\": \"experimental_pending_serving\"}",
+    "2026-10-10T16:09:59.364012167Z (EngineCore pid=192) [WARNING:aquillm.h100] AQUILLM_H100 prefill_constructor revision_present=True revision_match=True configured_fa=2 backend_fa=2 kwargs_keys=() causal=True sliding_window=False soft_cap=False",
+    "2026-10-10T16:11:42.081322251Z (EngineCore pid=192) [WARNING:aquillm.h100] AQUILLM_H100 route_exercised prefill runtime=aa04660c3a1e198b58608f37ebabf43a74a47eb9d684117cbe35e773c50e9671 cached_len=32768 query_len=4096"
+  ],
+  "containers": [
+    "compose-vllm-1 5ed97fe0906e Up 4 minutes (healthy)",
+    "compose-web-1 eb68bf2a10eb Up 12 hours (healthy)",
+    "compose-worker-1 9319f9320974 Up 13 hours",
+    "compose-worker_memory_promotion-1 88277f63758a Up 13 hours",
+    "compose-scheduler_application_maintenance-1 0ac47940f3a9 Up 13 hours",
+    "compose-worker_knowledge_graph-1 6d0bb16a8a1c Up 13 hours",
+    "compose-worker_knowledge_graph_schema-1 51288418f2ef Up 13 hours",
+    "compose-knowledge_graph_query_extractor-1 93d0db2376cb Up 13 hours (healthy)",
+    "compose-knowledge_graph_query_gateway-1 8e3bf0e4742e Up 13 hours (healthy)",
+    "compose-scheduler_knowledge_graph_maintenance-1 8c6c87f81c17 Up 13 hours",
+    "compose-worker_knowledge_graph_projection-1 824f64eb6045 Up 13 hours",
+    "compose-redis-1 9de3b8fc008c Up 15 hours (healthy)",
+    "compose-db-1 82e96f15e1ec Up 15 hours (healthy)",
+    "compose-vllm_rerank-1 54a5535d2d68 Up 15 hours (healthy)",
+    "compose-vllm_embed-1 8912321b09bd Up 15 hours (healthy)",
+    "compose-storage-1 9ed0570c727b Up 15 hours (healthy)",
+    "compose-memgraph_knowledge_graph-1 51c79ff5669a Up 15 hours (healthy)",
+    "compose-nginx-1 207675ab4d4e Up 15 hours (healthy)",
+    "compose-memgraph-1 28d908af04aa Up 15 hours",
+    "compose-qdrant-1 612bf4755f02 Up 15 hours"
+  ]
+}

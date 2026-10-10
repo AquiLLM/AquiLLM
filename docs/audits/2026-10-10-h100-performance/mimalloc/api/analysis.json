@@ -1,0 +1,2497 @@
+{
+  "status": "exploratory_analysis_only",
+  "treatment_units": "paired boot blocks; warmups excluded from serving latency",
+  "allocator_order": "fixed system then mimalloc in each pair; neither randomized nor counterbalanced; time/order drift unresolved",
+  "expected_repeats": 10,
+  "serving_errors": [],
+  "prompt_output_pairing_issues": [
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 0,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 1,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 2,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 3,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 4,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 5,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 6,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 7,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 8,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 8192,
+      "repeat": 9,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 0,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 1,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 2,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 3,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 4,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 5,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 6,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 7,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 8,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 1,
+      "prompt_tokens": 36864,
+      "repeat": 9,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 0,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 1,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 2,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 3,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 4,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 5,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 6,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 7,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 8,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 8192,
+      "repeat": 9,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 0,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 1,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 2,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 3,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 4,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 5,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 6,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 7,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 8,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 2,
+      "prompt_tokens": 32768,
+      "repeat": 9,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 0,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 1,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 2,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 3,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 4,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 5,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 6,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 7,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 8,
+      "reason": "output_digest_difference"
+    },
+    {
+      "block": 3,
+      "prompt_tokens": 8192,
+      "repeat": 9,
+      "reason": "output_digest_difference"
+    }
+  ],
+  "shapes": [
+    {
+      "input_sha256": "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+      "prompt_tokens": 512,
+      "requested_output_tokens": 256,
+      "blocks": {
+        "system-block1": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 18.202769923009328,
+          "ttft_ms": {
+            "median": 109.30554700098583,
+            "p95": 122.48225815346814
+          },
+          "total_ms": {
+            "median": 1817.27684049838,
+            "p95": 1829.618251303691
+          },
+          "decode_ms_per_token": {
+            "median": 6.69769995883518,
+            "p95": 6.700224834507132,
+            "aggregate": 6.697761024706244
+          },
+          "output_tokens_per_second": 140.63793646943896
+        },
+        "system-block2": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 18.188536763998854,
+          "ttft_ms": {
+            "median": 108.27508749935078,
+            "p95": 109.17934759745549
+          },
+          "total_ms": {
+            "median": 1819.0543749988137,
+            "p95": 1819.3536750004569
+          },
+          "decode_ms_per_token": {
+            "median": 6.708011527456726,
+            "p95": 6.710014460381809,
+            "aggregate": 6.708114585487112
+          },
+          "output_tokens_per_second": 140.74799051824164
+        },
+        "system-block3": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 18.06819555502443,
+          "ttft_ms": {
+            "median": 117.16739400071674,
+            "p95": 123.18310950031446
+          },
+          "total_ms": {
+            "median": 1807.949854999606,
+            "p95": 1812.8834500039375
+          },
+          "decode_ms_per_token": {
+            "median": 6.630519454897605,
+            "p95": 6.6356329829489145,
+            "aggregate": 6.630830630593289
+          },
+          "output_tokens_per_second": 141.68542687087043
+        },
+        "mimalloc-block1": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 17.97825718499371,
+          "ttft_ms": {
+            "median": 107.03391499919235,
+            "p95": 113.03560504820778
+          },
+          "total_ms": {
+            "median": 1796.2259615014773,
+            "p95": 1804.9834568471852
+          },
+          "decode_ms_per_token": {
+            "median": 6.622410131382696,
+            "p95": 6.645281189797542,
+            "aggregate": 6.626016712943252
+          },
+          "output_tokens_per_second": 142.39422507187234
+        },
+        "mimalloc-block2": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 18.002418421994662,
+          "ttft_ms": {
+            "median": 109.84644249765552,
+            "p95": 111.75630409707082
+          },
+          "total_ms": {
+            "median": 1800.1768795002135,
+            "p95": 1803.8468991999252
+          },
+          "decode_ms_per_token": {
+            "median": 6.629703668623537,
+            "p95": 6.646676026270429,
+            "aggregate": 6.631784832156971
+          },
+          "output_tokens_per_second": 142.20311626977244
+        },
+        "mimalloc-block3": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 18.01613197799452,
+          "ttft_ms": {
+            "median": 107.2654080016946,
+            "p95": 115.68328699977428
+          },
+          "total_ms": {
+            "median": 1800.9658090013545,
+            "p95": 1808.3402581483824
+          },
+          "decode_ms_per_token": {
+            "median": 6.632227756841424,
+            "p95": 6.658687925884413,
+            "aggregate": 6.637034441958474
+          },
+          "output_tokens_per_second": 142.0948738123625
+        }
+      },
+      "paired_boot_effects": {
+        "ttft_median": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 3.1135164917934333,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            2.078240367593598,
+            -1.451261813401139,
+            8.45114469215008
+          ],
+          "block_t_95_percent": [
+            -10.29302939454273,
+            14.890444680718428
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.6774925574944668,
+            7.101204394944209
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.5,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "total_median": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 0.8613910431264471,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            1.1583749117239361,
+            1.0377642228871053,
+            0.38629644394937435
+          ],
+          "block_t_95_percent": [
+            -0.17462541750301597,
+            1.8866929130876287
+          ],
+          "exact_block_bootstrap_95_percent": [
+            0.5277566261312949,
+            1.1322532178580784
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.25,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "decode_p95": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 0.47387049973292017,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            0.8200268806894728,
+            0.9439388616127808,
+            -0.3474415024872668
+          ],
+          "block_t_95_percent": [
+            -1.3083311069917336,
+            2.2247198718258643
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.09350266149263818,
+            0.9171024527739756
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.5,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "total_p95": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 0.8174697376490014,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            1.3464445076972975,
+            0.852323328531901,
+            0.25060584316907164
+          ],
+          "block_t_95_percent": [
+            -0.5548635162872184,
+            2.1710739267344237
+          ],
+          "exact_block_bootstrap_95_percent": [
+            0.38124099464944383,
+            1.2395631645240703
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.25,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "output_throughput": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 0.8563723278233626,
+          "effect_definition": "throughput increase percent",
+          "block_effects_percent": [
+            1.248801458925719,
+            1.0338518839046573,
+            0.2889831018861422
+          ],
+          "block_t_95_percent": [
+            -0.38858297810736575,
+            2.1168872328452437
+          ],
+          "exact_block_bootstrap_95_percent": [
+            0.4499734229832675,
+            1.2021960545874766
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.25,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        }
+      }
+    },
+    {
+      "input_sha256": "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+      "prompt_tokens": 8192,
+      "requested_output_tokens": 256,
+      "blocks": {
+        "system-block1": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 33.10639418899518,
+          "ttft_ms": {
+            "median": 1275.1010520041746,
+            "p95": 1276.8160354997235
+          },
+          "total_ms": {
+            "median": 3311.4881399997103,
+            "p95": 3313.607566551582
+          },
+          "decode_ms_per_token": {
+            "median": 7.984039549017895,
+            "p95": 7.990408177848782,
+            "aggregate": 7.984993830979482
+          },
+          "output_tokens_per_second": 77.32645196531139
+        },
+        "system-block2": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 33.651246967994666,
+          "ttft_ms": {
+            "median": 1273.7400579972018,
+            "p95": 1275.875077049568
+          },
+          "total_ms": {
+            "median": 3365.6422714993823,
+            "p95": 3368.158166397552
+          },
+          "decode_ms_per_token": {
+            "median": 8.20418589803511,
+            "p95": 8.208778392160871,
+            "aggregate": 8.204307652942553
+          },
+          "output_tokens_per_second": 76.07444688260105
+        },
+        "system-block3": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 32.59569460400962,
+          "ttft_ms": {
+            "median": 1274.6659155018278,
+            "p95": 1275.5329784515197
+          },
+          "total_ms": {
+            "median": 3259.730950499943,
+            "p95": 3261.7099393508397
+          },
+          "decode_ms_per_token": {
+            "median": 7.783683990191111,
+            "p95": 7.790857226072523,
+            "aggregate": 7.784493306663696
+          },
+          "output_tokens_per_second": 78.53797966572839
+        },
+        "mimalloc-block1": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 32.84988765901653,
+          "ttft_ms": {
+            "median": 1271.8945780034119,
+            "p95": 1275.109546902604
+          },
+          "total_ms": {
+            "median": 3284.240557502926,
+            "p95": 3290.143719302796
+          },
+          "decode_ms_per_token": {
+            "median": 7.893050194109616,
+            "p95": 7.905673996075148,
+            "aggregate": 7.8942601349034724
+          },
+          "output_tokens_per_second": 77.9302512864862
+        },
+        "mimalloc-block2": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 32.48089905998495,
+          "ttft_ms": {
+            "median": 1267.6511850004317,
+            "p95": 1282.760068148491
+          },
+          "total_ms": {
+            "median": 3253.4254619968124,
+            "p95": 3259.2826102983963
+          },
+          "decode_ms_per_token": {
+            "median": 7.786757901953488,
+            "p95": 7.802086963915202,
+            "aggregate": 7.7550947113680495
+          },
+          "output_tokens_per_second": 78.81555234269388
+        },
+        "mimalloc-block3": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 32.852445247001015,
+          "ttft_ms": {
+            "median": 1270.2476384984038,
+            "p95": 1273.6481899017235
+          },
+          "total_ms": {
+            "median": 3284.8314924995066,
+            "p95": 3289.182189249914
+          },
+          "decode_ms_per_token": {
+            "median": 7.901150770582413,
+            "p95": 7.905852689993267,
+            "aggregate": 7.900467291371623
+          },
+          "output_tokens_per_second": 77.92418435683089
+        }
+      },
+      "paired_boot_effects": {
+        "ttft_median": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 0.3587505120139167,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            0.25146822643765665,
+            0.4780310518257669,
+            0.3466223541157887
+          ],
+          "block_t_95_percent": [
+            0.07571881907773026,
+            0.6409805285381154
+          ],
+          "exact_block_bootstrap_95_percent": [
+            0.2720915132857432,
+            0.44957168955247473
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.25,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "total_median": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 1.1434762926981645,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            0.8228198726626501,
+            3.334187071895134,
+            -0.770018826115515
+          ],
+          "block_t_95_percent": [
+            -4.144971303651035,
+            6.1633782489723625
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.42306926290559876,
+            2.7947027984506168
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.5,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "decode_p95": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 1.5486018819917957,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            1.0604487266187124,
+            4.954347758176148,
+            -1.4760309499178836
+          ],
+          "block_t_95_percent": [
+            -6.865247816009723,
+            9.300001736032403
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.9218166925494353,
+            4.121935826918703
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.75,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "total_p95": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 1.0470733324410508,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            0.7081057964025694,
+            3.2324953496944864,
+            -0.8422652660690533
+          ],
+          "block_t_95_percent": [
+            -4.209214884923451,
+            6.038235612003273
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.5046152095561396,
+            2.6902326598030055
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.75,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "output_throughput": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 1.184630722217217,
+          "effect_definition": "throughput increase percent",
+          "block_effects_percent": [
+            0.7808444663226943,
+            3.6031881563633794,
+            -0.7815267358670441
+          ],
+          "block_t_95_percent": [
+            -4.172422471449677,
+            6.841159491286475
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.4447744261973985,
+            2.9860418900339747
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.75,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        }
+      }
+    },
+    {
+      "input_sha256": "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+      "prompt_tokens": 32768,
+      "requested_output_tokens": 256,
+      "blocks": {
+        "system-block1": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 89.47981400699791,
+          "ttft_ms": {
+            "median": 5604.093335499783,
+            "p95": 5612.3468544006755
+          },
+          "total_ms": {
+            "median": 8948.746697999013,
+            "p95": 8957.882776001497
+          },
+          "decode_ms_per_token": {
+            "median": 13.116117123546942,
+            "p95": 13.122276672739627,
+            "aggregate": 13.114968412938099
+          },
+          "output_tokens_per_second": 28.609804662756574
+        },
+        "system-block2": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 90.00869368900021,
+          "ttft_ms": {
+            "median": 5605.043797499093,
+            "p95": 5611.868283900185
+          },
+          "total_ms": {
+            "median": 9001.323363001575,
+            "p95": 9005.01894105073
+          },
+          "decode_ms_per_token": {
+            "median": 13.31828515882508,
+            "p95": 13.325176658033216,
+            "aggregate": 13.316152522745018
+          },
+          "output_tokens_per_second": 28.441697074788816
+        },
+        "system-block3": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 89.7901288889916,
+          "ttft_ms": {
+            "median": 5582.438964498579,
+            "p95": 5586.399741599234
+          },
+          "total_ms": {
+            "median": 8978.324908999639,
+            "p95": 8984.742935999384
+          },
+          "decode_ms_per_token": {
+            "median": 13.318485015684821,
+            "p95": 13.331646869995108,
+            "aggregate": 13.320324185099475
+          },
+          "output_tokens_per_second": 28.510929115214353
+        },
+        "mimalloc-block1": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 89.78761172000668,
+          "ttft_ms": {
+            "median": 5571.465024000645,
+            "p95": 5575.514396352082
+          },
+          "total_ms": {
+            "median": 8979.172619499877,
+            "p95": 8981.565581551695
+          },
+          "decode_ms_per_token": {
+            "median": 13.364242629405435,
+            "p95": 13.366309637651781,
+            "aggregate": 13.362276516866176
+          },
+          "output_tokens_per_second": 28.511728410630784
+        },
+        "mimalloc-block2": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 89.93475566099369,
+          "ttft_ms": {
+            "median": 5573.206639997807,
+            "p95": 5576.470340797823
+          },
+          "total_ms": {
+            "median": 8995.67650300014,
+            "p95": 8998.305707099644
+          },
+          "decode_ms_per_token": {
+            "median": 13.421639133322934,
+            "p95": 13.432561093353549,
+            "aggregate": 13.422178600785806
+          },
+          "output_tokens_per_second": 28.465079836874654
+        },
+        "mimalloc-block3": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 89.72896896900784,
+          "ttft_ms": {
+            "median": 5591.538578999462,
+            "p95": 5599.7710830459255
+          },
+          "total_ms": {
+            "median": 8968.75850500146,
+            "p95": 8994.479518901062
+          },
+          "decode_ms_per_token": {
+            "median": 13.244335619617463,
+            "p95": 13.3283889588404,
+            "aggregate": 13.258668231371535
+          },
+          "output_tokens_per_second": 28.530362372537876
+        }
+      },
+      "paired_boot_effects": {
+        "ttft_median": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 0.3296824089515926,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            0.5822228422294629,
+            0.5680090763160783,
+            -0.1630042810812915
+          ],
+          "block_t_95_percent": [
+            -0.7334140316205051,
+            1.3815593941639892
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.004231170304829217,
+            0.5791433397024526
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.5,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "total_median": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": -0.05670447088468311,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            -0.3400020419358496,
+            0.06273366452587137,
+            0.10654998671956184
+          ],
+          "block_t_95_percent": [
+            -0.6696137428713334,
+            0.5524732105880226
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.25262563319180753,
+            0.09705783795793396
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 1.0,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "decode_p95": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": -0.8774303705009423,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            -1.8596846492279218,
+            -0.8058762602265013,
+            0.024437424621870374
+          ],
+          "block_t_95_percent": [
+            -3.2492929635889123,
+            1.439945339442239
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -1.6305675477036041,
+            -0.15496812230744286
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.5,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "total_p95": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": -0.09930334007606234,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            -0.26437949839714925,
+            0.07454991483120121,
+            -0.10836796301278984
+          ],
+          "block_t_95_percent": [
+            -0.5216356812167922,
+            0.32125461085339424
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.23055945164472957,
+            0.034941866227319186
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.5,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "output_throughput": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": -0.06433884930898692,
+          "effect_definition": "throughput increase percent",
+          "block_effects_percent": [
+            -0.34280643744996064,
+            0.08221296367918463,
+            0.06816072968016673
+          ],
+          "block_t_95_percent": [
+            -0.6627043177568681,
+            0.5376309173168448
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.2538856701905501,
+            0.0791681704716196
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 1.0,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        }
+      }
+    },
+    {
+      "input_sha256": "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+      "prompt_tokens": 36864,
+      "requested_output_tokens": 256,
+      "blocks": {
+        "system-block1": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 110.5295525560141,
+          "ttft_ms": {
+            "median": 7472.037974999694,
+            "p95": 7485.284615202545
+          },
+          "total_ms": {
+            "median": 11057.834422499582,
+            "p95": 11077.185700101836
+          },
+          "decode_ms_per_token": {
+            "median": 14.081621299998256,
+            "p95": 14.11219137411464,
+            "aggregate": 14.040187199217126
+          },
+          "output_tokens_per_second": 23.161226484678338
+        },
+        "system-block2": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 110.31208330298978,
+          "ttft_ms": {
+            "median": 7469.516263499827,
+            "p95": 7474.842990200705
+          },
+          "total_ms": {
+            "median": 11031.724463999126,
+            "p95": 11050.644692644346
+          },
+          "decode_ms_per_token": {
+            "median": 13.968958600005362,
+            "p95": 14.036980769401541,
+            "aggregate": 13.980813863916623
+          },
+          "output_tokens_per_second": 23.20688652908993
+        },
+        "system-block3": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 110.06135526599974,
+          "ttft_ms": {
+            "median": 7431.874593497923,
+            "p95": 7441.796974499084
+          },
+          "total_ms": {
+            "median": 11000.167554000654,
+            "p95": 11039.477823602647
+          },
+          "decode_ms_per_token": {
+            "median": 13.979200349022708,
+            "p95": 14.118731645890055,
+            "aggregate": 14.014514117648908
+          },
+          "output_tokens_per_second": 23.259753560301995
+        },
+        "mimalloc-block1": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 110.95710093300295,
+          "ttft_ms": {
+            "median": 7434.524350999709,
+            "p95": 7446.555987101965
+          },
+          "total_ms": {
+            "median": 11095.371483497729,
+            "p95": 11107.89194684985
+          },
+          "decode_ms_per_token": {
+            "median": 14.350965837251815,
+            "p95": 14.367501888830471,
+            "aggregate": 14.352239167452424
+          },
+          "output_tokens_per_second": 23.071979877572275
+        },
+        "mimalloc-block2": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 110.32061158000579,
+          "ttft_ms": {
+            "median": 7455.573759998515,
+            "p95": 7460.0404281009105
+          },
+          "total_ms": {
+            "median": 11032.36339650175,
+            "p95": 11037.098906250321
+          },
+          "decode_ms_per_token": {
+            "median": 14.0270464647163,
+            "p95": 14.04009642745294,
+            "aggregate": 14.026796072162231
+          },
+          "output_tokens_per_second": 23.205092532898608
+        },
+        "mimalloc-block3": {
+          "requests": 10,
+          "output_tokens": 2560,
+          "total_wall_request_seconds": 110.31199588800519,
+          "ttft_ms": {
+            "median": 7455.469002496102,
+            "p95": 7461.719417750282
+          },
+          "total_ms": {
+            "median": 11032.12014449673,
+            "p95": 11036.174939502234
+          },
+          "decode_ms_per_token": {
+            "median": 14.02191845098095,
+            "p95": 14.034538688035408,
+            "aggregate": 14.021239897262479
+          },
+          "output_tokens_per_second": 23.206904919017628
+        }
+      },
+      "paired_boot_effects": {
+        "ttft_median": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": 0.1243153729948765,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            0.5020534441272817,
+            0.1866587207185355,
+            -0.3174758763935692
+          ],
+          "block_t_95_percent": [
+            -0.9073741410624336,
+            1.1454567654458625
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.2080632280241368,
+            0.4337899985531105
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.75,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "total_median": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": -0.21180084191712023,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            -0.33946123231660685,
+            -0.005791773577290549,
+            -0.2904736708710942
+          ],
+          "block_t_95_percent": [
+            -0.6605962556044842,
+            0.2349936167705846
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.32884553288968443,
+            -0.06741441547890822
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.25,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "decode_p95": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": -0.4065126304583444,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            -1.809148614467726,
+            -0.022196069814328645,
+            0.596320972494413
+          ],
+          "block_t_95_percent": [
+            -3.549590209510378,
+            2.641161995786734
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -1.4196879945168206,
+            0.46258594302723843
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.75,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "total_p95": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": -0.04142239056510455,
+          "effect_definition": "latency reduction percent",
+          "block_effects_percent": [
+            -0.2772025998240002,
+            0.1225791505453322,
+            0.029918843564769038
+          ],
+          "block_t_95_percent": [
+            -0.5623551229008594,
+            0.4768118079973793
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.2105915703247585,
+            0.10250895606320136
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 1.0,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        },
+        "output_throughput": {
+          "status": "exploratory",
+          "paired_boots": 3,
+          "improvement_percent": -0.20687633766462987,
+          "effect_definition": "throughput increase percent",
+          "block_effects_percent": [
+            -0.38532763869435493,
+            -0.007730447550879926,
+            -0.22721066733297768
+          ],
+          "block_t_95_percent": [
+            -0.676756653640509,
+            0.26522689717598524
+          ],
+          "exact_block_bootstrap_95_percent": [
+            -0.3510870717046821,
+            -0.05531933092618029
+          ],
+          "paired_sign_flip_sensitivity_two_sided_p": 0.25,
+          "minimum_possible_two_sided_p": 0.25,
+          "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+          "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+          "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+        }
+      }
+    }
+  ],
+  "mixed_per_block": {
+    "system-block1": {
+      "requests": 40,
+      "output_tokens": 10240,
+      "total_wall_request_seconds": 251.31853067501652,
+      "ttft_ms": {
+        "median": 3435.9765510016587,
+        "p95": 7476.37322000046
+      },
+      "total_ms": {
+        "median": 6126.292173499678,
+        "p95": 11066.43775840239
+      },
+      "decode_ms_per_token": {
+        "median": 10.54731993920309,
+        "p95": 14.09282140197391,
+        "aggregate": 10.459477616960237
+      },
+      "output_tokens_per_second": 40.74510531514083
+    },
+    "system-block2": {
+      "requests": 40,
+      "output_tokens": 10240,
+      "total_wall_request_seconds": 252.1605607239835,
+      "ttft_ms": {
+        "median": 3437.366230500629,
+        "p95": 7472.664337145034
+      },
+      "total_ms": {
+        "median": 6181.922389998363,
+        "p95": 11037.078181996549
+      },
+      "decode_ms_per_token": {
+        "median": 10.751714811768206,
+        "p95": 13.981924369798826,
+        "aggregate": 10.552347156272827
+      },
+      "output_tokens_per_second": 40.60904675417805
+    },
+    "system-block3": {
+      "requests": 40,
+      "output_tokens": 10240,
+      "total_wall_request_seconds": 250.5153743140254,
+      "ttft_ms": {
+        "median": 3426.8735385012405,
+        "p95": 7439.232442445791
+      },
+      "total_ms": {
+        "median": 6119.016083499446,
+        "p95": 11035.336261497287
+      },
+      "decode_ms_per_token": {
+        "median": 10.549589343139031,
+        "p95": 14.102367917849001,
+        "aggregate": 10.437540560001342
+      },
+      "output_tokens_per_second": 40.87573478489979
+    },
+    "mimalloc-block1": {
+      "requests": 40,
+      "output_tokens": 10240,
+      "total_wall_request_seconds": 251.57285749701987,
+      "ttft_ms": {
+        "median": 3419.880789999297,
+        "p95": 7439.992102297765
+      },
+      "total_ms": {
+        "median": 6131.6341445017315,
+        "p95": 11102.058368301368
+      },
+      "decode_ms_per_token": {
+        "median": 10.629392313735568,
+        "p95": 14.363828854704979,
+        "aggregate": 10.55869813304133
+      },
+      "output_tokens_per_second": 40.70391417373515
+    },
+    "mimalloc-block2": {
+      "requests": 40,
+      "output_tokens": 10240,
+      "total_wall_request_seconds": 250.7386847229791,
+      "ttft_ms": {
+        "median": 3426.430921495921,
+        "p95": 7456.751217198689
+      },
+      "total_ms": {
+        "median": 6122.069332999672,
+        "p95": 11035.457203001715
+      },
+      "decode_ms_per_token": {
+        "median": 10.60686728430001,
+        "p95": 14.035973728244368,
+        "aggregate": 10.458963554118265
+      },
+      "output_tokens_per_second": 40.83933044202313
+    },
+    "mimalloc-block3": {
+      "requests": 40,
+      "output_tokens": 10240,
+      "total_wall_request_seconds": 250.90954208200856,
+      "ttft_ms": {
+        "median": 3428.5252495028544,
+        "p95": 7459.9221495504025
+      },
+      "total_ms": {
+        "median": 6126.3237224993645,
+        "p95": 11035.21129700057
+      },
+      "decode_ms_per_token": {
+        "median": 10.567132837248067,
+        "p95": 14.028017024513034,
+        "aggregate": 10.454352465491027
+      },
+      "output_tokens_per_second": 40.81152081754271
+    }
+  },
+  "mixed_boot_uncertainty": {
+    "status": "exploratory",
+    "paired_boots": 3,
+    "improvement_percent": 0.10242178213806241,
+    "effect_definition": "throughput increase percent",
+    "block_effects_percent": [
+      -0.10109469858303743,
+      0.5670748423105776,
+      -0.1570955670766483
+    ],
+    "block_t_95_percent": [
+      -0.8923439245003939,
+      1.1071721746251262
+    ],
+    "exact_block_bootstrap_95_percent": [
+      -0.1449643133859696,
+      0.42198296805633645
+    ],
+    "paired_sign_flip_sensitivity_two_sided_p": 1.0,
+    "minimum_possible_two_sided_p": 0.25,
+    "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+    "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+    "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+  },
+  "mixed_wall_latency_uncertainty": {
+    "status": "exploratory",
+    "paired_boots": 3,
+    "improvement_percent": 0.10231698725629013,
+    "effect_definition": "latency reduction percent",
+    "block_effects_percent": [
+      -0.10119700338859783,
+      0.5638772363616318,
+      -0.15734274555503358
+    ],
+    "block_t_95_percent": [
+      -0.9003783964183221,
+      1.095048106689056
+    ],
+    "exact_block_bootstrap_95_percent": [
+      -0.14517556092754735,
+      0.42009789686935595
+    ],
+    "paired_sign_flip_sensitivity_two_sided_p": 1.0,
+    "minimum_possible_two_sided_p": 0.25,
+    "sign_flip_assumptions": "paired-effect sign exchangeability/symmetry; this is sensitivity analysis, not randomized-treatment evidence",
+    "assumptions": "paired-block t interval assumes independent approximately normal log boot effects; df=2",
+    "limitation": "three boots are exploratory; bootstrap has only 27 resamples; fixed system-then-mimalloc order leaves time/order drift unresolved"
+  },
+  "speculation": {
+    "system-block1": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3278.0,
+        "vllm:spec_decode_num_draft_tokens": 13112.0,
+        "vllm:spec_decode_num_accepted_tokens": 7964.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7964.0
+      },
+      "draft_tokens": 13112.0,
+      "accepted_tokens": 7964.0,
+      "acceptance_rate": 0.6073825503355704,
+      "interval_includes_warmups": true,
+      "per_shape": [
+        {
+          "prompt_tokens": 512,
+          "input_sha256": "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 946.0,
+              "vllm:spec_decode_num_draft_tokens": 3784.0,
+              "vllm:spec_decode_num_accepted_tokens": 1859.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1859.0
+            },
+            "draft_tokens": 3784.0,
+            "accepted_tokens": 1859.0,
+            "acceptance_rate": 0.49127906976744184,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 8192,
+          "input_sha256": "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 836.0,
+              "vllm:spec_decode_num_draft_tokens": 3344.0,
+              "vllm:spec_decode_num_accepted_tokens": 1969.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1969.0
+            },
+            "draft_tokens": 3344.0,
+            "accepted_tokens": 1969.0,
+            "acceptance_rate": 0.5888157894736842,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 32768,
+          "input_sha256": "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 748.0,
+              "vllm:spec_decode_num_draft_tokens": 2992.0,
+              "vllm:spec_decode_num_accepted_tokens": 2057.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2057.0
+            },
+            "draft_tokens": 2992.0,
+            "accepted_tokens": 2057.0,
+            "acceptance_rate": 0.6875,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 36864,
+          "input_sha256": "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 748.0,
+              "vllm:spec_decode_num_draft_tokens": 2992.0,
+              "vllm:spec_decode_num_accepted_tokens": 2079.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2079.0
+            },
+            "draft_tokens": 2992.0,
+            "accepted_tokens": 2079.0,
+            "acceptance_rate": 0.6948529411764706,
+            "interval_includes_warmups": true
+          }
+        }
+      ]
+    },
+    "system-block2": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3311.0,
+        "vllm:spec_decode_num_draft_tokens": 13244.0,
+        "vllm:spec_decode_num_accepted_tokens": 7942.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7942.0
+      },
+      "draft_tokens": 13244.0,
+      "accepted_tokens": 7942.0,
+      "acceptance_rate": 0.5996677740863787,
+      "interval_includes_warmups": true,
+      "per_shape": [
+        {
+          "prompt_tokens": 512,
+          "input_sha256": "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 946.0,
+              "vllm:spec_decode_num_draft_tokens": 3784.0,
+              "vllm:spec_decode_num_accepted_tokens": 1859.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1859.0
+            },
+            "draft_tokens": 3784.0,
+            "accepted_tokens": 1859.0,
+            "acceptance_rate": 0.49127906976744184,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 8192,
+          "input_sha256": "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 858.0,
+              "vllm:spec_decode_num_draft_tokens": 3432.0,
+              "vllm:spec_decode_num_accepted_tokens": 1958.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1958.0
+            },
+            "draft_tokens": 3432.0,
+            "accepted_tokens": 1958.0,
+            "acceptance_rate": 0.5705128205128205,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 32768,
+          "input_sha256": "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 759.0,
+              "vllm:spec_decode_num_draft_tokens": 3036.0,
+              "vllm:spec_decode_num_accepted_tokens": 2046.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2046.0
+            },
+            "draft_tokens": 3036.0,
+            "accepted_tokens": 2046.0,
+            "acceptance_rate": 0.6739130434782609,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 36864,
+          "input_sha256": "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 748.0,
+              "vllm:spec_decode_num_draft_tokens": 2992.0,
+              "vllm:spec_decode_num_accepted_tokens": 2079.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2079.0
+            },
+            "draft_tokens": 2992.0,
+            "accepted_tokens": 2079.0,
+            "acceptance_rate": 0.6948529411764706,
+            "interval_includes_warmups": true
+          }
+        }
+      ]
+    },
+    "system-block3": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3256.0,
+        "vllm:spec_decode_num_draft_tokens": 13024.0,
+        "vllm:spec_decode_num_accepted_tokens": 7986.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7986.0
+      },
+      "draft_tokens": 13024.0,
+      "accepted_tokens": 7986.0,
+      "acceptance_rate": 0.6131756756756757,
+      "interval_includes_warmups": true,
+      "per_shape": [
+        {
+          "prompt_tokens": 512,
+          "input_sha256": "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 935.0,
+              "vllm:spec_decode_num_draft_tokens": 3740.0,
+              "vllm:spec_decode_num_accepted_tokens": 1870.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1870.0
+            },
+            "draft_tokens": 3740.0,
+            "accepted_tokens": 1870.0,
+            "acceptance_rate": 0.5,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 8192,
+          "input_sha256": "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 814.0,
+              "vllm:spec_decode_num_draft_tokens": 3256.0,
+              "vllm:spec_decode_num_accepted_tokens": 1991.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1991.0
+            },
+            "draft_tokens": 3256.0,
+            "accepted_tokens": 1991.0,
+            "acceptance_rate": 0.6114864864864865,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 32768,
+          "input_sha256": "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 759.0,
+              "vllm:spec_decode_num_draft_tokens": 3036.0,
+              "vllm:spec_decode_num_accepted_tokens": 2046.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2046.0
+            },
+            "draft_tokens": 3036.0,
+            "accepted_tokens": 2046.0,
+            "acceptance_rate": 0.6739130434782609,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 36864,
+          "input_sha256": "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 748.0,
+              "vllm:spec_decode_num_draft_tokens": 2992.0,
+              "vllm:spec_decode_num_accepted_tokens": 2079.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2079.0
+            },
+            "draft_tokens": 2992.0,
+            "accepted_tokens": 2079.0,
+            "acceptance_rate": 0.6948529411764706,
+            "interval_includes_warmups": true
+          }
+        }
+      ]
+    },
+    "mimalloc-block1": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3278.0,
+        "vllm:spec_decode_num_draft_tokens": 13112.0,
+        "vllm:spec_decode_num_accepted_tokens": 7975.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7975.0
+      },
+      "draft_tokens": 13112.0,
+      "accepted_tokens": 7975.0,
+      "acceptance_rate": 0.6082214765100671,
+      "interval_includes_warmups": true,
+      "per_shape": [
+        {
+          "prompt_tokens": 512,
+          "input_sha256": "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 935.0,
+              "vllm:spec_decode_num_draft_tokens": 3740.0,
+              "vllm:spec_decode_num_accepted_tokens": 1870.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1870.0
+            },
+            "draft_tokens": 3740.0,
+            "accepted_tokens": 1870.0,
+            "acceptance_rate": 0.5,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 8192,
+          "input_sha256": "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 825.0,
+              "vllm:spec_decode_num_draft_tokens": 3300.0,
+              "vllm:spec_decode_num_accepted_tokens": 2002.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2002.0
+            },
+            "draft_tokens": 3300.0,
+            "accepted_tokens": 2002.0,
+            "acceptance_rate": 0.6066666666666667,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 32768,
+          "input_sha256": "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 759.0,
+              "vllm:spec_decode_num_draft_tokens": 3036.0,
+              "vllm:spec_decode_num_accepted_tokens": 2046.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2046.0
+            },
+            "draft_tokens": 3036.0,
+            "accepted_tokens": 2046.0,
+            "acceptance_rate": 0.6739130434782609,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 36864,
+          "input_sha256": "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 759.0,
+              "vllm:spec_decode_num_draft_tokens": 3036.0,
+              "vllm:spec_decode_num_accepted_tokens": 2057.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2057.0
+            },
+            "draft_tokens": 3036.0,
+            "accepted_tokens": 2057.0,
+            "acceptance_rate": 0.677536231884058,
+            "interval_includes_warmups": true
+          }
+        }
+      ]
+    },
+    "mimalloc-block2": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3267.0,
+        "vllm:spec_decode_num_draft_tokens": 13068.0,
+        "vllm:spec_decode_num_accepted_tokens": 7975.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7975.0
+      },
+      "draft_tokens": 13068.0,
+      "accepted_tokens": 7975.0,
+      "acceptance_rate": 0.6102693602693603,
+      "interval_includes_warmups": true,
+      "per_shape": [
+        {
+          "prompt_tokens": 512,
+          "input_sha256": "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 935.0,
+              "vllm:spec_decode_num_draft_tokens": 3740.0,
+              "vllm:spec_decode_num_accepted_tokens": 1870.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1870.0
+            },
+            "draft_tokens": 3740.0,
+            "accepted_tokens": 1870.0,
+            "acceptance_rate": 0.5,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 8192,
+          "input_sha256": "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 814.0,
+              "vllm:spec_decode_num_draft_tokens": 3256.0,
+              "vllm:spec_decode_num_accepted_tokens": 1991.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1991.0
+            },
+            "draft_tokens": 3256.0,
+            "accepted_tokens": 1991.0,
+            "acceptance_rate": 0.6114864864864865,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 32768,
+          "input_sha256": "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 770.0,
+              "vllm:spec_decode_num_draft_tokens": 3080.0,
+              "vllm:spec_decode_num_accepted_tokens": 2035.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2035.0
+            },
+            "draft_tokens": 3080.0,
+            "accepted_tokens": 2035.0,
+            "acceptance_rate": 0.6607142857142857,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 36864,
+          "input_sha256": "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 748.0,
+              "vllm:spec_decode_num_draft_tokens": 2992.0,
+              "vllm:spec_decode_num_accepted_tokens": 2079.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2079.0
+            },
+            "draft_tokens": 2992.0,
+            "accepted_tokens": 2079.0,
+            "acceptance_rate": 0.6948529411764706,
+            "interval_includes_warmups": true
+          }
+        }
+      ]
+    },
+    "mimalloc-block3": {
+      "status": "measured",
+      "deltas": {
+        "vllm:spec_decode_num_drafts": 3267.0,
+        "vllm:spec_decode_num_draft_tokens": 13068.0,
+        "vllm:spec_decode_num_accepted_tokens": 7997.0,
+        "vllm:spec_decode_num_accepted_tokens_per_pos": 7997.0
+      },
+      "draft_tokens": 13068.0,
+      "accepted_tokens": 7997.0,
+      "acceptance_rate": 0.6119528619528619,
+      "interval_includes_warmups": true,
+      "per_shape": [
+        {
+          "prompt_tokens": 512,
+          "input_sha256": "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 935.0,
+              "vllm:spec_decode_num_draft_tokens": 3740.0,
+              "vllm:spec_decode_num_accepted_tokens": 1870.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 1870.0
+            },
+            "draft_tokens": 3740.0,
+            "accepted_tokens": 1870.0,
+            "acceptance_rate": 0.5,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 8192,
+          "input_sha256": "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 825.0,
+              "vllm:spec_decode_num_draft_tokens": 3300.0,
+              "vllm:spec_decode_num_accepted_tokens": 2002.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2002.0
+            },
+            "draft_tokens": 3300.0,
+            "accepted_tokens": 2002.0,
+            "acceptance_rate": 0.6066666666666667,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 32768,
+          "input_sha256": "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 759.0,
+              "vllm:spec_decode_num_draft_tokens": 3036.0,
+              "vllm:spec_decode_num_accepted_tokens": 2046.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2046.0
+            },
+            "draft_tokens": 3036.0,
+            "accepted_tokens": 2046.0,
+            "acceptance_rate": 0.6739130434782609,
+            "interval_includes_warmups": true
+          }
+        },
+        {
+          "prompt_tokens": 36864,
+          "input_sha256": "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49",
+          "requested_output_tokens": 256,
+          "counters": {
+            "status": "measured",
+            "deltas": {
+              "vllm:spec_decode_num_drafts": 748.0,
+              "vllm:spec_decode_num_draft_tokens": 2992.0,
+              "vllm:spec_decode_num_accepted_tokens": 2079.0,
+              "vllm:spec_decode_num_accepted_tokens_per_pos": 2079.0
+            },
+            "draft_tokens": 2992.0,
+            "accepted_tokens": 2079.0,
+            "acceptance_rate": 0.6948529411764706,
+            "interval_includes_warmups": true
+          }
+        }
+      ]
+    }
+  },
+  "process_memory": {
+    "mimalloc-block1-after": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 5482100,
+          "maximum": 3393820
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11524804,
+          "maximum": 7340740
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 5482100,
+          "maximum": 3393820
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 4993389,
+          "maximum": 3149234
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 4265596,
+          "maximum": 2754616
+        }
+      },
+      "processes_with_mapped_mimalloc": 2,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "mimalloc",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "mimalloc-block1-before": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6426176,
+          "maximum": 3595588
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11524804,
+          "maximum": 7340740
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6426176,
+          "maximum": 3595588
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 5938237,
+          "maximum": 3351415
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 5211076,
+          "maximum": 2956956
+        }
+      },
+      "processes_with_mapped_mimalloc": 2,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "mimalloc",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "mimalloc-block2-after": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 5414052,
+          "maximum": 3347604
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11489196,
+          "maximum": 7301968
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 5414052,
+          "maximum": 3347604
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 4926136,
+          "maximum": 3103418
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 4198052,
+          "maximum": 2707492
+        }
+      },
+      "processes_with_mapped_mimalloc": 2,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "mimalloc",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "mimalloc-block2-before": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6420812,
+          "maximum": 3593984
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11489196,
+          "maximum": 7301968
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6420812,
+          "maximum": 3593984
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 5932942,
+          "maximum": 3349817
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 5204400,
+          "maximum": 2953460
+        }
+      },
+      "processes_with_mapped_mimalloc": 2,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "mimalloc",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "mimalloc-block3-after": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 5409124,
+          "maximum": 3340296
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11352144,
+          "maximum": 7182712
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 5409124,
+          "maximum": 3340296
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 4921471,
+          "maximum": 3096233
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 4192704,
+          "maximum": 2699992
+        }
+      },
+      "processes_with_mapped_mimalloc": 2,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "mimalloc",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "mimalloc-block3-before": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6521392,
+          "maximum": 3587684
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11352144,
+          "maximum": 7182712
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6521392,
+          "maximum": 3587684
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 6033726,
+          "maximum": 3343619
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 5304644,
+          "maximum": 2947052
+        }
+      },
+      "processes_with_mapped_mimalloc": 2,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "mimalloc",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "system-block1-after": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6320560,
+          "maximum": 3718364
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11179140,
+          "maximum": 7271128
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6320560,
+          "maximum": 3718364
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 5833424,
+          "maximum": 3474583
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 5104976,
+          "maximum": 3079672
+        }
+      },
+      "processes_with_mapped_mimalloc": 0,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "system",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "system-block1-before": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6145708,
+          "maximum": 3587908
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11179140,
+          "maximum": 7271128
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6145708,
+          "maximum": 3587908
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 5659434,
+          "maximum": 3344528
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 4931448,
+          "maximum": 2949708
+        }
+      },
+      "processes_with_mapped_mimalloc": 0,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "system",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "system-block2-after": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6172776,
+          "maximum": 3595212
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11200340,
+          "maximum": 7273100
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6172776,
+          "maximum": 3595212
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 5685248,
+          "maximum": 3351199
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 4958572,
+          "maximum": 2957152
+        }
+      },
+      "processes_with_mapped_mimalloc": 0,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "system",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "system-block2-before": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6168280,
+          "maximum": 3591076
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11200340,
+          "maximum": 7273100
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6168280,
+          "maximum": 3591076
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 5680786,
+          "maximum": 3347076
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 4953852,
+          "maximum": 2952728
+        }
+      },
+      "processes_with_mapped_mimalloc": 0,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "system",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "system-block3-after": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6100908,
+          "maximum": 3592412
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11179024,
+          "maximum": 7271640
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6100908,
+          "maximum": 3592412
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 5613781,
+          "maximum": 3348556
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 4885184,
+          "maximum": 2952524
+        }
+      },
+      "processes_with_mapped_mimalloc": 0,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "system",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    },
+    "system-block3-before": {
+      "status": "captured",
+      "memory_fields": {
+        "vmrss_kb": {
+          "records": 2,
+          "sum": 6096504,
+          "maximum": 3588304
+        },
+        "vmhwm_kb": {
+          "records": 2,
+          "sum": 11179024,
+          "maximum": 7271640
+        },
+        "rss_kb": {
+          "records": 2,
+          "sum": 6096504,
+          "maximum": 3588304
+        },
+        "pss_kb": {
+          "records": 2,
+          "sum": 5609396,
+          "maximum": 3344464
+        },
+        "private_dirty_kb": {
+          "records": 2,
+          "sum": 4880368,
+          "maximum": 2948004
+        }
+      },
+      "processes_with_mapped_mimalloc": 0,
+      "activation": {
+        "status": "verified_for_captured_roles",
+        "expected_allocator": "system",
+        "captured_role_counts": {
+          "api": 1,
+          "engine": 1
+        },
+        "failures": [],
+        "unreliable_engine_environment_records": 1,
+        "note": "engine /proc environment marked unreliable is inconclusive; API environment and both roles' library mappings remain strict"
+      },
+      "limitation": "before/after endpoints are not a memory soak or leak test; mapping count alone does not prove every serving child is covered"
+    }
+  },
+  "missing_process_snapshots": [],
+  "protocol_screen": {
+    "gain_at_least_5_and_block_t_interval_excludes_zero": false,
+    "wall_latency_reduction_at_least_5_and_block_t_interval_excludes_zero": false,
+    "request_evidence_complete": false,
+    "qualification": "pending independent review of p95/errors/output/quality/activation/runtime/memory, fixed-order drift, and application replay",
+    "limitation": "three boot pairs cannot support a distribution-free 95% improvement claim; exact two-sided minimum p=.25"
+  }
+}

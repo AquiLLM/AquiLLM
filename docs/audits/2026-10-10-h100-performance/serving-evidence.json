@@ -1,0 +1,18 @@
+{
+  "target_kernel_median_reduction_percent": 66.41650634014486,
+  "activation_verified": true,
+  "runtime_identity_frozen": true,
+  "numerical_graph_checks_passed": true,
+  "memory_gate_passed": true,
+  "application_replay_passed": null,
+  "greedy_changes_reviewed": null,
+  "evidence_notes": {
+    "target_kernel": "Worst median CUDA reduction among the four complete-caller FA2/page16 cases with prefix 32768 or 65536 and query 1024 or 4096 in prefill-microbenchmark.json. The measured 8192-prefix losses are excluded by the installed profile, not excluded from the raw benchmark.",
+    "activation": "Worker installation plus exercised-route markers in serving/h100-prefill-first-activation.json and per-block activation captures; parent-process inactive logs are not treated as worker activation.",
+    "runtime": "Protected image/command/environment/mount checks run before and after every switch. Kernel source e766a05a; candidate image f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7. Actual attention pages16, FP16, FA2, Q24/KV4/D256, MTP4, one sequence, 4096-token scheduler budget.",
+    "numerical_graph": "verification.json records183 GPU passes with no skips, including graph replay and real route/store checks. The installed complete-prefill route is eager/piecewise only; full graph capture falls back. Focused sanitizer completed with zero errors; larger instrumented allocator-OOM failures remain disclosed.",
+    "memory": "memory-and-route-review.json summarizes five-second samples over all three candidate blocks and baseline blocks2/3. Every captured serving request completed; no actual ERROR/traceback/CUDA-OOM records were found in the final candidate boot. Sampling is not a transient-allocation peak measurement.",
+    "application": "Not performed. Existing automated retrieval replay prohibits generation, and RAG eval tests stub the LLM. A live authenticated retrieval-to-visible-answer replay is still required for application qualification.",
+    "greedy": "The earliest baseline block has hashes but no captured output text. All available output texts are retained separately; a complete changed-output comparison is not yet established. Strict and long quality outputs match substantively, with only random tool-call IDs differing."
+  }
+}

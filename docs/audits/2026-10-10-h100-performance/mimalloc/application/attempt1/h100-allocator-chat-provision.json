@@ -1,0 +1,47 @@
+{
+  "provisioned": true,
+  "user_id": 29,
+  "fixture": {
+    "collection_id": 258,
+    "document_id": "ef11f88d-5ba1-47ac-ac28-b2273ef46e10",
+    "chunk_ids": [
+      15737
+    ],
+    "run_id": "allocator20261010",
+    "chat_code": "CHAT-7391",
+    "rag_code": "ORCHID-7391",
+    "expected_model": "qwen3.6:27b-mtp-awq"
+  },
+  "ingestion_proof": {
+    "ready": true,
+    "document_id": "ef11f88d-5ba1-47ac-ac28-b2273ef46e10",
+    "full_text_sha256": "fa7114870548c15392b4088b3b0b37ce65347cea784c832b40b9d7969bb57d02",
+    "chunks": [
+      {
+        "chunk_id": 15737,
+        "has_fact": true,
+        "vector_dimensions": 1024,
+        "valid_provenance": true,
+        "provenance_sha256": "8a548ed78c32dfc76307c2a21e660b56576b1f9481fc990cda8b4d5d7e931333",
+        "content_sha256": "fa7114870548c15392b4088b3b0b37ce65347cea784c832b40b9d7969bb57d02",
+        "provider": "local-openai",
+        "route": "openai-embeddings"
+      }
+    ]
+  },
+  "profile": {
+    "profile_fact_count": 0,
+    "profile_facts_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "profile_facts_empty": true,
+    "queued_profile_promotion_terminal_verified": false
+  },
+  "knowledge_graph": {
+    "build_enabled": true,
+    "configured_extractor_provider": "gliner2_local",
+    "configured_extractor_model": "fastino/gliner2-base-v1",
+    "configured_extractor_device": "cpu",
+    "owned_build_runs": [],
+    "observed_nonterminal_runs": 0,
+    "queued_graph_tasks_quiescent_verified": false
+  }
+}

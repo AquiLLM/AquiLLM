@@ -1,0 +1,22 @@
+{
+  "success": false,
+  "phase": "final_cleanup",
+  "error_type": "AssertionError",
+  "locations": [
+    {
+      "file": "allocator_fixture_helper.py",
+      "function": "main",
+      "line": 630
+    },
+    {
+      "file": "allocator_fixture_helper.py",
+      "function": "clear",
+      "line": 498
+    },
+    {
+      "file": "allocator_fixture_helper.py",
+      "function": "scoped_chats",
+      "line": 357
+    }
+  ]
+}

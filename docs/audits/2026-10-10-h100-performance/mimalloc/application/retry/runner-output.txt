@@ -1,0 +1,26 @@
+{"fixture_ready": true, "run_id": "allocator20261010r2"}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "system", "verified": true}
+
+{"action": "switch", "image": "sha256:228df3cc1e66c7249acb60b1e78c558083f507825f61b094e97f12d42b887d0e", "allocator": "system", "verified": true}
+
+{"completed": "system-block1", "requests": 12, "answer_proof_passed": true}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "mimalloc", "verified": true}
+
+{"action": "switch", "image": "sha256:228df3cc1e66c7249acb60b1e78c558083f507825f61b094e97f12d42b887d0e", "allocator": "mimalloc", "verified": true}
+
+{"completed": "mimalloc-block1", "requests": 12, "answer_proof_passed": true}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "system", "verified": true}
+
+{"action": "switch", "image": "sha256:228df3cc1e66c7249acb60b1e78c558083f507825f61b094e97f12d42b887d0e", "allocator": "system", "verified": true}
+
+{"completed": "system-block2", "requests": 12, "answer_proof_passed": true}
+{"action": "switch", "image": "sha256:dc14ba6ec72907fdcbc097a08eb99d69f104d9817a6e5758d29b5c819694926c", "allocator": "mimalloc", "verified": true}
+
+{"action": "switch", "image": "sha256:228df3cc1e66c7249acb60b1e78c558083f507825f61b094e97f12d42b887d0e", "allocator": "mimalloc", "verified": true}
+
+{"completed": "mimalloc-block2", "requests": 12, "answer_proof_passed": true}
+{"action": "rollback", "image": "sha256:224d3155904e0fbb061c396e64808c2e4a0a4a7c56e58442359135041bb67bd8", "allocator": null, "verified": true}
+
+{"action": "rollback", "image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7", "allocator": null, "verified": true}
+
+{"prefill_restored_healthy": true, "web_restored_healthy": true}

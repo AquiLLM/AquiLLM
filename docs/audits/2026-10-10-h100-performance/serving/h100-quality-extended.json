@@ -1,0 +1,54 @@
+[
+  {
+    "oracle": "exact-v1",
+    "complete": true,
+    "error": null,
+    "finish_reason": "stop",
+    "passed": true,
+    "message": {
+      "role": "assistant",
+      "content": "730041",
+      "refusal": null,
+      "annotations": null,
+      "audio": null,
+      "function_call": null,
+      "reasoning": null
+    },
+    "usage": {
+      "prompt_tokens": 65661,
+      "total_tokens": 65668,
+      "completion_tokens": 7,
+      "prompt_tokens_details": null
+    },
+    "case_sha256": "1805cb7efbd72ca1c349a229fe9bfd76e00e70d7492a51b2d34a46a701cb88d6",
+    "id": "extended-number-extra3000",
+    "input_sha256": "9c1bb6eef63f27a35f5bfc7fdb82d12f2bf89488ba415a841ecc654056ea9a38",
+    "seconds": 25.639059556000575
+  },
+  {
+    "oracle": "exact-v1",
+    "complete": true,
+    "error": null,
+    "finish_reason": "stop",
+    "passed": true,
+    "message": {
+      "role": "assistant",
+      "content": "730041",
+      "refusal": null,
+      "annotations": null,
+      "audio": null,
+      "function_call": null,
+      "reasoning": null
+    },
+    "usage": {
+      "prompt_tokens": 120061,
+      "total_tokens": 120068,
+      "completion_tokens": 7,
+      "prompt_tokens_details": null
+    },
+    "case_sha256": "b8adcb51609ac43d1f981dea984565984c7a27fe61460b359a69793f9f4e4350",
+    "id": "extended-number-extra9800",
+    "input_sha256": "2a11012d671669b4632c290aa2714813a82bd8106f5916898ddd4a11f58bdda6",
+    "seconds": 214.2200814090029
+  }
+]
