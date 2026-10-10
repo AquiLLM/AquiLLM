@@ -26,4 +26,4 @@ CELERY_BROKER_URL = os.environ["CELERY_BROKER_URL"]
 CELERY_RESULT_BACKEND = os.environ["CELERY_RESULT_BACKEND"]
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 EMAIL_BACKEND = "django.core.mail.backends.locmem.EmailBackend"
-STATICFILES_DIRS = ["/frontend-build"]
+STATICFILES_DIRS = [("js/dist", "/frontend-build")]

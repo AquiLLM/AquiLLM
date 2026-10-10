@@ -4,6 +4,11 @@ import importlib.util
 import os
 from pathlib import Path
 import unittest
+import tempfile
+import sys
+from contextlib import redirect_stderr
+from io import StringIO
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[3]
 WRAPPER = ROOT / "scripts/run_rag_remediation_tests.py"
@@ -50,34 +55,116 @@ class IsolationTests(unittest.TestCase):
     def test_validates_owned_containers_networks_and_volumes(self):
         project = "aquillm-rag-review"
         labels = {"com.docker.compose.project": project, self.h.OWNER_LABEL: "v1"}
-        network = {"Name": project + "_isolated", "Internal": True, "Labels": labels}
+        network = {"Name": project + "_isolated", "Internal": True, "Driver": "bridge", "Labels": labels}
         volume = {"Name": project + "_artifacts", "Labels": labels, "Driver": "local", "Options": None}
         container = {
             "Id": "abc", "Name": "/" + project + "-app-1",
             "Config": {"Labels": {**labels, "com.docker.compose.service": "app"},
                        "Env": [f"{k}={v}" for k, v in self.h.test_environment().items()]},
             "HostConfig": {"NetworkMode": project + "_isolated", "PortBindings": {}},
-            "NetworkSettings": {"Networks": {project + "_isolated": {}}},
+            "NetworkSettings": {"Networks": {project + "_isolated": {"Aliases": ["app"]}}},
             "Mounts": [{"Type": "volume", "Name": volume["Name"]}],
         }
-        self.h.validate_resources(project, [container], [network], [volume])
+        peers = [container]
+        for service in sorted(self.h.SERVICES - {"app", "frontend"}):
+            peer = copy.deepcopy(container)
+            peer["Id"] = service + "-id"
+            peer["Config"]["Labels"]["com.docker.compose.service"] = service
+            peer["NetworkSettings"]["Networks"][project + "_isolated"]["Aliases"] = [service]
+            peers.append(peer)
+        network["Containers"] = {c["Id"]: {} for c in peers}
+        self.h.validate_resources(project, peers, [network], [volume])
         mutations = (
             lambda c: c["Config"]["Labels"].pop(self.h.OWNER_LABEL),
             lambda c: c["NetworkSettings"]["Networks"].update({"bridge": {}}),
             lambda c: c["Mounts"].append({"Type": "bind", "Source": "/host/data"}),
             lambda c: c["Config"]["Env"].append("POSTGRES_HOST=production"),
             lambda c: c["HostConfig"].update({"PortBindings": {"8000/tcp": [{"HostPort": "8080"}]}}),
+            lambda c: c["HostConfig"].update({"CapAdd": ["NET_ADMIN"]}),
+            lambda c: c["HostConfig"].update({"PidMode": "host"}),
+            lambda c: c["NetworkSettings"]["Networks"][project + "_isolated"].update(Aliases=["db"]),
         )
         for change in mutations:
             unsafe = copy.deepcopy(container)
             change(unsafe)
             with self.assertRaises(self.h.IsolationError):
-                self.h.validate_resources(project, [unsafe], [network], [volume])
+                self.h.validate_resources(project, [unsafe, *peers[1:]], [network], [volume])
         for change in (lambda n: n.update(Internal=False), lambda n: n["Labels"].clear()):
             unsafe = copy.deepcopy(network)
             change(unsafe)
             with self.assertRaises(self.h.IsolationError):
-                self.h.validate_resources(project, [container], [unsafe], [volume])
+                self.h.validate_resources(project, peers, [unsafe], [volume])
+
+    def test_compose_foreign_network_rejected_before_creation(self):
+        project = "aquillm-rag-review"
+        config = {
+            "services": {name: {"labels": {self.h.OWNER_LABEL: "v1"}, "networks": {"isolated": {}}, "environment": self.h.test_environment() if name == "app" else {}} for name in self.h.SERVICES},
+            "networks": {"isolated": {"name": project + "_isolated", "internal": True, "labels": {self.h.OWNER_LABEL: "v1"}}},
+            "volumes": {},
+        }
+        for name, service in config["services"].items():
+            if name in {"app", "fake-models", "frontend"}:
+                service["build"] = {"context": str(ROOT), "dockerfile": "deploy/docker/test/Dockerfile.rag-remediation-browser" if name == "frontend" else "deploy/docker/test/Dockerfile.rag-remediation"}
+            else:
+                service["image"] = {"db": "pgvector/pgvector:pg16", "redis": "redis:7.4-bookworm", "memgraph": "memgraph/memgraph-mage:3.8.1"}[name]
+        self.h.validate_compose(config, project)
+        for change in (lambda n: n.update(external=True), lambda n: n.update(name="shared"), lambda n: n["labels"].clear()):
+            unsafe = copy.deepcopy(config)
+            change(unsafe["networks"]["isolated"])
+            with self.assertRaises(self.h.IsolationError):
+                self.h.validate_compose(unsafe, project)
+        for field, value in (("context", str(ROOT.parent)), ("dockerfile", "../foreign.Dockerfile")):
+            unsafe = copy.deepcopy(config)
+            unsafe["services"]["app"]["build"][field] = value
+            with self.assertRaises(self.h.IsolationError):
+                self.h.validate_compose(unsafe, project)
+
+    def test_cli_refusal_occurs_before_any_process_launch(self):
+        for key, value in (("POSTGRES_HOST", "production"), ("DJANGO_CACHE_REDIS_URL", "redis://foreign:6379"), ("APP_EMBED_BASE_URL", "https://foreign.example/private-key")):
+            errors = StringIO()
+            with patch.dict(os.environ, {key: value}), patch.object(self.h.subprocess, "run", side_effect=AssertionError("process launched")), redirect_stderr(errors):
+                self.assertEqual(self.h.main(["--project", "aquillm-rag-review", "--", "unused.py"]), 2)
+            self.assertIn(key, errors.getvalue())
+            self.assertNotIn(value, errors.getvalue())
+
+    def test_cli_rejects_settings_and_configuration_overrides_before_docker(self):
+        for tokens in (("--ds", "aquillm.settings"), ("--ds=aquillm.settings",), ("-c", "foreign.ini"), ("-cforeign.ini",), ("--override-ini=DJANGO_SETTINGS_MODULE=aquillm.settings",), ("-o", "DJANGO_SETTINGS_MODULE=aquillm.settings"), ("--rootdir=foreign",)):
+            with self.subTest(tokens=tokens), patch.object(self.h.subprocess, "run", side_effect=AssertionError("Docker launched")), redirect_stderr(StringIO()):
+                self.assertEqual(self.h.main(["--project", "aquillm-rag-review", "--", *tokens]), 2)
+        for tokens in (("showmigrations", "--settings", "aquillm.settings"), ("showmigrations", "--settings=aquillm.settings"), ("check", "--pythonpath=foreign")):
+            with self.subTest(tokens=tokens), patch.object(self.h.subprocess, "run", side_effect=AssertionError("Docker launched")), redirect_stderr(StringIO()):
+                self.assertEqual(self.h.main(["--project", "aquillm-rag-review", "--manage", *tokens]), 2)
+
+    def test_incomplete_container_inventory_and_unowned_peers_rejected(self):
+        project = "aquillm-rag-review"
+        labels = {"com.docker.compose.project": project, self.h.OWNER_LABEL: "v1"}
+        app = {"Id": "app-id", "Config": {"Labels": {**labels, "com.docker.compose.service": "app"}, "Env": [f"{k}={v}" for k, v in self.h.test_environment().items()]}, "HostConfig": {"NetworkMode": project + "_isolated"}, "NetworkSettings": {"Networks": {project + "_isolated": {"Aliases": ["app"]}}}, "Mounts": []}
+        network = {"Name": project + "_isolated", "Internal": True, "Driver": "bridge", "Labels": labels, "Containers": {"app-id": {}}}
+        with self.assertRaises(self.h.IsolationError):
+            self.h.validate_resources(project, [app], [network], [])
+        peers = []
+        for service in self.h.SERVICES - {"frontend"}:
+            peer = copy.deepcopy(app)
+            peer["Id"] = service + "-id"
+            peer["Config"]["Labels"]["com.docker.compose.service"] = service
+            peer["NetworkSettings"]["Networks"][project + "_isolated"]["Aliases"] = [service]
+            peers.append(peer)
+        network["Containers"] = {c["Id"]: {} for c in peers}
+        self.h.validate_resources(project, peers, [network], [])
+        network["Containers"]["unowned-peer"] = {}
+        with self.assertRaises(self.h.IsolationError):
+            self.h.validate_resources(project, peers, [network], [])
+
+    def test_records_unicode_output_and_failure_artifacts(self):
+        self.assertTrue(hasattr(self.h, "run_recorded"), "runner must retain test output and handle Windows Unicode")
+        with tempfile.TemporaryDirectory() as temp:
+            output = StringIO()
+            with patch.object(sys, "stdout", output):
+                result = self.h.run_recorded([sys.executable, "-c", "print(chr(10003)); raise SystemExit(1)"], Path(temp), "aquillm-rag-review")
+            self.assertEqual(result, 1)
+            self.assertIn("\u2713", output.getvalue())
+            self.assertIn("\u2713", (Path(temp) / "test-output.log").read_text(encoding="utf-8"))
+            self.assertIn('"exit_code": 1', (Path(temp) / "result.json").read_text())
 
     def test_foreign_browser_url_storage_and_spec_rejected(self):
         self.h.validate_browser("http://app:8000", "/artifacts/browser/run-123/state.json")
@@ -109,6 +196,12 @@ class IsolationTests(unittest.TestCase):
         with GraphDatabase.driver(settings.KG_MEMGRAPH_URI, auth=None) as driver:
             with driver.session() as session:
                 self.assertEqual(session.run("RETURN 1 AS ready").single()["ready"], 1)
+
+    def test_owned_frontend_bundle_uses_application_static_prefix(self):
+        if os.environ.get("RAG_REMEDIATION_TEST") != "1" or not Path("/frontend-build/main.js").exists():
+            self.skipTest("frontend assertion requires the owned browser build volume")
+        from django.contrib.staticfiles import finders
+        self.assertEqual(finders.find("js/dist/main.js"), "/frontend-build/main.js")
 
 
 if __name__ == "__main__":

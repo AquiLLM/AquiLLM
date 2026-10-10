@@ -14,7 +14,6 @@ import subprocess
 import sys
 import tempfile
 import uuid
-from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER_LABEL = "io.aquillm.rag-remediation-test"
@@ -90,13 +89,19 @@ def _owned(labels, project):
         raise IsolationError("resource lacks the owned test-project labels")
 
 
-def validate_resources(project, containers, networks, volumes):
+def validate_resources(project, containers, networks, volumes, *, require_complete=True):
     validate_project(project)
     network_name = project + "_isolated"
+    service_names = [c.get("Config", {}).get("Labels", {}).get("com.docker.compose.service") for c in containers]
+    if containers and (len(service_names) != len(set(service_names)) or (require_complete and not SERVICES - {"frontend"} <= set(service_names))):
+        raise IsolationError("incomplete or duplicate owned service inventory")
+    identities = {c["Id"] for c in containers}
     for network in networks:
         _owned(network.get("Labels") or {}, project)
-        if network.get("Name") != network_name or network.get("Internal") is not True:
+        if network.get("Name") != network_name or network.get("Internal") is not True or network.get("Driver") != "bridge":
             raise IsolationError("unexpected or externally connected network")
+        if not set(network.get("Containers") or {}) <= identities:
+            raise IsolationError("uninspected peers attached to owned network")
     volume_names = set()
     for volume in volumes:
         _owned(volume.get("Labels") or {}, project)
@@ -111,10 +116,13 @@ def validate_resources(project, containers, networks, volumes):
         if service not in SERVICES:
             raise IsolationError("unexpected test service")
         host = container.get("HostConfig") or {}
-        if host.get("Privileged") or host.get("PortBindings") or host.get("NetworkMode") != network_name:
+        if any(host.get(key) for key in ("Privileged", "PortBindings", "CapAdd", "Devices", "ExtraHosts")) or host.get("PidMode") == "host" or host.get("IpcMode") == "host" or host.get("NetworkMode") != network_name:
             raise IsolationError("host access or published ports forbidden")
         if set(container.get("NetworkSettings", {}).get("Networks", {})) != {network_name}:
             raise IsolationError("container is attached to an unexpected network")
+        aliases = set(container["NetworkSettings"]["Networks"][network_name].get("Aliases") or [])
+        if service not in aliases or (aliases & SERVICES) != {service}:
+            raise IsolationError("service endpoint aliases do not match owned identity")
         if any(m.get("Type") != "volume" or m.get("Name") not in volume_names for m in container.get("Mounts", [])):
             raise IsolationError("host or foreign volumes forbidden")
         if service == "app":
@@ -127,7 +135,7 @@ def validate_resources(project, containers, networks, volumes):
         raise IsolationError("owned network missing")
 
 
-def docker(*args, capture=False):
+def docker(*args, capture=True):
     result = subprocess.run(["docker", *args], cwd=ROOT, text=True, capture_output=capture)
     if result.returncode:
         # Never echo inspect/config output, which can contain secret values.
@@ -135,22 +143,37 @@ def docker(*args, capture=False):
     return result.stdout if capture else ""
 
 
-def inspect_project(project):
+def inspect_project(project, *, require_complete=True):
     snapshots = []
     for kind, listing in (("container", ("ps", "-aq")), ("network", ("network", "ls", "-q")), ("volume", ("volume", "ls", "-q"))):
         identities = docker(*listing, "--filter", "label=com.docker.compose.project=" + project, capture=True).split()
         snapshots.append(json.loads(docker(kind, "inspect", *identities, capture=True)) if identities else [])
-    validate_resources(project, *snapshots)
+    known = {c["Id"] for c in snapshots[0]}
+    attached = {identity for network in snapshots[1] for identity in (network.get("Containers") or {})}
+    foreign = attached - known
+    if foreign:
+        snapshots[0].extend(json.loads(docker("container", "inspect", *sorted(foreign), capture=True)))
+    validate_resources(project, *snapshots, require_complete=require_complete)
     return snapshots
 
 
 def validate_compose(config, project):
     if set(config["services"]) != SERVICES or set(config["networks"]) != {"isolated"} or config["networks"]["isolated"].get("internal") is not True:
         raise IsolationError("unexpected Compose services or networks")
+    network = config["networks"]["isolated"]
+    if network.get("external") or network.get("driver", "bridge") != "bridge" or network.get("driver_opts") or network.get("name") != project + "_isolated" or network.get("labels", {}).get(OWNER_LABEL) != "v1":
+        raise IsolationError("Compose network is not owned")
     for name, service in config["services"].items():
+        if name in {"app", "fake-models", "frontend"}:
+            build = service.get("build", {})
+            expected_file = "deploy/docker/test/Dockerfile.rag-remediation-browser" if name == "frontend" else "deploy/docker/test/Dockerfile.rag-remediation"
+            if Path(build.get("context", "")).resolve() != ROOT or build.get("dockerfile") != expected_file or any(build.get(key) for key in ("additional_contexts", "ssh", "secrets", "args", "dockerfile_inline", "network", "privileged")):
+                raise IsolationError("unexpected build source or Dockerfile")
+        elif service.get("image") != {"db": "pgvector/pgvector:pg16", "redis": "redis:7.4-bookworm", "memgraph": "memgraph/memgraph-mage:3.8.1"}[name]:
+            raise IsolationError("unexpected dependency image")
         if service.get("labels", {}).get(OWNER_LABEL) != "v1" or set(service.get("networks", {})) != {"isolated"}:
             raise IsolationError("Compose ownership or network mismatch")
-        if any(service.get(key) for key in ("ports", "env_file", "privileged", "network_mode", "devices", "extra_hosts")):
+        if any(service.get(key) for key in ("ports", "env_file", "privileged", "network_mode", "devices", "extra_hosts", "cap_add", "pid", "ipc")):
             raise IsolationError("unsafe Compose service setting")
         if any(v.get("type") != "volume" or v.get("source") not in config["volumes"] for v in service.get("volumes", [])):
             raise IsolationError("Compose host or foreign volume")
@@ -158,6 +181,32 @@ def validate_compose(config, project):
     for volume in config["volumes"].values():
         if volume.get("external") or volume.get("driver_opts") or volume.get("labels", {}).get(OWNER_LABEL) != "v1" or not volume["name"].startswith(project + "_"):
             raise IsolationError("unsafe Compose volume")
+
+
+def validate_arguments(arguments, *, manage=False):
+    forbidden = {"--ds", "--dc", "--settings", "--pythonpath", "--config-file", "--override-ini", "--rootdir", "--confcutdir", "--noconftest", "--env", "--environment"}
+    for token in arguments:
+        option = token.split("=", 1)[0]
+        if option in forbidden or (not manage and (token.startswith("-c") or token.startswith("-o"))):
+            raise IsolationError("settings, environment and configuration overrides are forbidden")
+    if manage and arguments and arguments[0] not in {"check", "makemigrations", "showmigrations", "migrate"}:
+        raise IsolationError("only isolated Django check/migration commands are supported")
+
+
+def run_recorded(command, artifact, project):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    with (artifact / "test-output.log").open("w", encoding="utf-8") as log:
+        process = subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        try:
+            for line in process.stdout:
+                sys.stdout.write(line)
+                log.write(line)
+        finally:
+            process.stdout.close()
+        result = process.wait()
+    (artifact / "result.json").write_text(json.dumps({"project": project, "exit_code": result}), encoding="utf-8")
+    return result
 
 
 def main(argv=None):
@@ -172,6 +221,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         validate_project(args.project)
+        validate_arguments(args.manage or args.pytest_args, manage=bool(args.manage))
         # Reject inherited connection settings before Compose or Django startup.
         expected = test_environment()
         for key, value in os.environ.items():
@@ -184,7 +234,7 @@ def main(argv=None):
         if args.storage_state:
             raise IsolationError("externally supplied storage state is forbidden; wrapper creates fresh state")
         spec = resolve_spec(args.playwright) if args.playwright else None
-        snapshots = inspect_project(args.project)
+        snapshots = inspect_project(args.project, require_complete=False)
         if args.cleanup:
             containers, networks, volumes = snapshots
             for container in containers:
@@ -217,7 +267,9 @@ def main(argv=None):
                 if tests[:1] == ["--"]:
                     tests = tests[1:]
                 command = ["docker", *compose, "exec", "-T", "app", "python", "-m", "pytest", *tests]
-            return subprocess.run(command, cwd=ROOT).returncode
+            artifact = ROOT / ".superpowers/sdd/rag-harness" / args.project / ("run-" + str(uuid.uuid4()))
+            artifact.mkdir(parents=True, exist_ok=False)
+            return run_recorded(command, artifact, args.project)
     except IsolationError as error:
         print(f"Isolation refused: {error}", file=sys.stderr)
         return 2
