@@ -18,6 +18,7 @@ from .config import (
     is_context_limit_error,
     max_embed_input_chars,
 )
+from .utils import EmbeddingContractError, validate_embedding
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -53,6 +54,32 @@ def _dims_kwargs() -> dict:
     return {"dimensions": dims} if dims else {}
 
 
+def _response_vectors(response: Any, count: int) -> list[list[float]]:
+    """Validate response cardinality and bind each vector to its input index."""
+    data = getattr(response, "data", None)
+    if not isinstance(data, (list, tuple)) or len(data) != count:
+        raise EmbeddingContractError("Embedding response count differs from input")
+    indexed = {}
+    for item in data:
+        index = getattr(item, "index", None)
+        if type(index) is not int or not 0 <= index < count or index in indexed:
+            raise EmbeddingContractError("Embedding response has invalid input indices")
+        vector = getattr(item, "embedding", None)
+        validate_embedding(vector)
+        indexed[index] = list(vector)
+    return [indexed[index] for index in range(count)]
+
+
+def _validate_input_type(input_type: str) -> None:
+    if input_type not in (
+        "search_query",
+        "search_document",
+        "classification",
+        "clustering",
+    ):
+        raise EmbeddingContractError("Unsupported embedding input type")
+
+
 def _embed_local_with_context_retry(
     client: OpenAI, model: str, query: Any
 ) -> list[float]:
@@ -64,7 +91,7 @@ def _embed_local_with_context_retry(
             input=query,
             **dims_kw,
         )
-        return response.data[0].embedding
+        return _response_vectors(response, 1)[0]
 
     max_retries = _env_int("APP_EMBED_CONTEXT_RETRIES", 6)
     candidate = query
@@ -80,7 +107,7 @@ def _embed_local_with_context_retry(
                 input=candidate,
                 **dims_kw,
             )
-            return response.data[0].embedding
+            return _response_vectors(response, 1)[0]
         except Exception as exc:
             last_exc = exc
             if not is_context_limit_error(exc):
@@ -112,15 +139,21 @@ def _embed_local_with_context_retry(
     raise RuntimeError("Local embedding failed without an exception detail.")
 
 
-def get_embedding_via_local_openai(query: Any) -> list[float]:
-    """Get embedding via local OpenAI-compatible endpoint."""
+def get_embedding_via_local_openai(
+    query: Any, input_type: str = "search_query"
+) -> list[float]:
+    """Embed raw input. Role is validated but does not alter the legacy payload."""
+    _validate_input_type(input_type)
     base_url, api_key, model = get_local_embed_config()
     client = _get_local_openai_client(base_url, api_key)
     return _embed_local_with_context_retry(client, model, query)
 
 
-def get_embeddings_via_local_openai(queries: list[Any]) -> list[list[float]]:
-    """Get batch embeddings via local OpenAI-compatible endpoint."""
+def get_embeddings_via_local_openai(
+    queries: list[Any], input_type: str = "search_query"
+) -> list[list[float]]:
+    """Embed raw inputs; role-specific request formatting remains unsupported."""
+    _validate_input_type(input_type)
     if not queries:
         return []
     base_url, api_key, model = get_local_embed_config()
@@ -137,7 +170,7 @@ def get_embeddings_via_local_openai(queries: list[Any]) -> list[list[float]]:
             input=prepared_queries,
             **dims_kw,
         )
-        return [item.embedding for item in response.data]
+        return _response_vectors(response, len(queries))
     except Exception as exc:
         if not is_context_limit_error(exc):
             raise

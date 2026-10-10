@@ -30,13 +30,15 @@ class _FakeEmbeddingsApi:
                 raise RuntimeError(CONTEXT_LIMIT_ERROR)
             return SimpleNamespace(
                 data=[
-                    SimpleNamespace(embedding=[float(index), 0.0, 0.0, 0.0])
+                    SimpleNamespace(index=index, embedding=[float(index + 1), 0, 0, 0])
                     for index, _ in enumerate(input)
                 ]
             )
         if isinstance(input, str) and len(input) > 2047:
             raise RuntimeError(CONTEXT_LIMIT_ERROR)
-        return SimpleNamespace(data=[SimpleNamespace(embedding=[1.0, 2.0, 3.0, 4.0])])
+        return SimpleNamespace(
+            data=[SimpleNamespace(index=0, embedding=[1.0, 2.0, 3.0, 4.0])]
+        )
 
 
 class _FakeOpenAIClient:

@@ -1,10 +1,14 @@
 """Embedding generation for document text/image chunks."""
+
 from __future__ import annotations
 
+from collections.abc import Callable
 from os import getenv
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any
 
-from tenacity import retry, wait_exponential
+from tenacity import retry, retry_if_not_exception_type, wait_exponential
+
+from lib.embeddings.utils import EmbeddingContractError
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
@@ -60,8 +64,11 @@ def image_embedding_payloads(chunk: TextChunk) -> list[Any]:
     ]
 
 
-@retry(wait=wait_exponential())
-def get_chunk_embedding(chunk: TextChunk, callback: Optional[Callable[[], None]] = None):
+@retry(
+    wait=wait_exponential(),
+    retry=retry_if_not_exception_type(EmbeddingContractError),
+)
+def get_chunk_embedding(chunk: TextChunk, callback: Callable[[], None] | None = None):
     from aquillm.utils import get_embedding, get_multimodal_embedding
 
     if chunk.modality == chunk.Modality.IMAGE:

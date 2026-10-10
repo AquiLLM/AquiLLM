@@ -25,6 +25,7 @@ from lib.embeddings import (
     get_strict_indexed_embeddings_via_local_openai,
 )
 from lib.embeddings.config import get_local_embed_config, get_target_dims
+from lib.embeddings.utils import EmbeddingContractError, validate_embedding
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -108,6 +109,8 @@ def get_multimodal_embedding(
                 ),
             )
             return fit_embedding_dims(embedding)
+    except EmbeddingContractError:
+        raise
     except Exception:
         logger.debug(
             "obs.core.multimodal_embedding_failed",
@@ -140,7 +143,11 @@ def get_embedding(query: Any, input_type: str = "search_query"):
         raise ValueError(f"bad input type to embedding call: {input_type}")
 
     try:
-        return fit_embedding_dims(get_embedding_via_local_openai(query))
+        return fit_embedding_dims(
+            get_embedding_via_local_openai(query, input_type=input_type)
+        )
+    except EmbeddingContractError:
+        raise
     except Exception:
         logger.warning(
             "obs.core.embedding_local_fallback",
@@ -162,6 +169,8 @@ def get_embedding(query: Any, input_type: str = "search_query"):
         return fit_embedding_dims(
             get_embedding_via_cohere(cohere_client, query, input_type)
         )
+    except EmbeddingContractError:
+        raise
     except Exception as exc:
         raise RuntimeError("All embedding providers failed") from exc
 
@@ -181,8 +190,11 @@ def get_embeddings(
         return []
     try:
         return [
-            fit_embedding_dims(emb) for emb in get_embeddings_via_local_openai(queries)
+            fit_embedding_dims(emb)
+            for emb in get_embeddings_via_local_openai(queries, input_type=input_type)
         ]
+    except EmbeddingContractError:
+        raise
     except Exception:
         logger.warning(
             "obs.core.embedding_batch_local_fallback",
@@ -207,6 +219,8 @@ def get_embeddings(
                 cohere_client, text_queries, input_type
             )
         ]
+    except EmbeddingContractError:
+        raise
     except Exception as exc:
         raise RuntimeError("All embedding providers failed") from exc
 
@@ -286,6 +300,7 @@ def get_strict_index_embeddings(
             for value in raw_vector
         ):
             raise RuntimeError("Local embedding endpoint returned an invalid vector")
+        validate_embedding(raw_vector)
         vectors.append((index, [float(value) for value in raw_vector]))
     return vectors, actual_signature
 
