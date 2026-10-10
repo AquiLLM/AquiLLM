@@ -170,3 +170,11 @@ The active context tracks its issued message UUIDs and write epoch across databa
 ### D7 clarification: changed parser policies
 
 The corrected DOCX traversal and XLSX unsupported-chart classification use `native-docx-ordered-v2` and `native-xlsx-ordered-v2`. Changed canonical content or quality cannot reuse an older immutable extraction identity. No persisted revision is overwritten.
+
+### D5 clarification: source and dense revalidation APIs
+
+I4 owns `validate_representation_snapshot(snapshot: RepresentationSnapshotV1, *, using: str) -> RepresentationSnapshotV1`. It returns the same input object after re-reading all concrete owners for each original UUID and matching exact model/PK/UUID/collection/source hash and canonical text digest. Invalid, ambiguous or changed source raises `SourceScopeUnavailable('source_scope_unavailable')`; it never freezes replacement selections.
+
+I4 owns `validate_dense_snapshot(snapshot: RepresentationSnapshotV1, dense_snapshot: DenseGenerationSnapshotV1, *, using: str) -> tuple[UUID, ...]`. It revalidates original source scope and canonical digest/mapping, then returns only captured generation keys whose current active pointer, ready state, source, profile and manifest still match. Pointer loss/swap removes a captured key and can yield an empty tuple (lexical-only); invalid source or mapping raises the closed source-scope error. It never selects a newer generation.
+
+R2/C2 and later representation/graph consumers must retain current authorization and call the same applicable guards immediately before body/cache/publication. Rank-time checks also verify frozen membership, receipt compatibility and current chunk content digest, then recheck pointer/authorization before returning. Validation does not grant authority or create a new budget/scope.
