@@ -1,11 +1,13 @@
 #!/bin/bash
 set -euo pipefail
 lm_ref=05a013b29da78cf2321b9b46ec5039dde2fb0bb0
+lm_tag=v0.5.5
 git init /opt/LMCache
 git -C /opt/LMCache remote add origin https://github.com/LMCache/LMCache.git
-git -C /opt/LMCache fetch --depth 1 origin "$lm_ref"
-test "$(git -C /opt/LMCache rev-parse FETCH_HEAD)" = "$lm_ref"
-git -C /opt/LMCache checkout --detach FETCH_HEAD
+# setuptools_scm needs the real release tag in local refs, not just its commit.
+git -C /opt/LMCache fetch --depth 1 origin "refs/tags/${lm_tag}:refs/tags/${lm_tag}"
+test "$(git -C /opt/LMCache rev-parse "refs/tags/${lm_tag}^{commit}")" = "$lm_ref"
+git -C /opt/LMCache checkout --detach "$lm_ref"
 git -C /opt/LMCache submodule update --init --recursive --depth 1
 # Upstream installs libraries but not a complete public header SDK. Keep the
 # pinned source tree and reuse the real client's actual CMake include closure.

@@ -3,6 +3,7 @@ import importlib
 import json
 import re
 import shlex
+import shutil
 import socket
 import subprocess
 import sys
@@ -163,3 +164,39 @@ def test_build_requires_complete_installed_cuda_component_headers(tmp_path, miss
     else:
         assert result.returncode == 0, result.stderr
         assert result.stdout.strip() == str(tmp_path)
+
+
+@pytest.mark.parametrize("tag_state", ["matching", "mismatch", "missing"])
+def test_lmcache_checkout_retains_verified_release_metadata(tmp_path, tag_state):
+    bash = "C:/Program Files/Git/bin/bash.exe" if sys.platform == "win32" else shutil.which("bash")
+    assert bash, "bash is required to exercise the native build checkout"
+    remote = tmp_path / "upstream"
+    checkout = tmp_path / "checkout"
+    remote.mkdir()
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(remote), *args], text=True).strip()
+
+    git("init")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+        "commit", "--allow-empty", "-m", "pinned source")
+    pinned = git("rev-parse", "HEAD")
+    if tag_state == "mismatch":
+        git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+            "commit", "--allow-empty", "-m", "different source")
+    if tag_state != "missing":
+        git("tag", "v0.5.5")
+    script = (ROOT / "deploy/docker/vllm/build_lmcache.sh").read_text().split("# Upstream installs")[0]
+    script = script.replace("05a013b29da78cf2321b9b46ec5039dde2fb0bb0", pinned)
+    script = script.replace("https://github.com/LMCache/LMCache.git", shlex.quote(remote.as_posix()))
+    script = script.replace("/opt/LMCache", shlex.quote(checkout.as_posix()))
+    result = subprocess.run([bash, "-c", script], capture_output=True, text=True, timeout=30)
+    if tag_state != "matching":
+        assert result.returncode != 0, "unverified release tag must stop the build"
+    else:
+        assert result.returncode == 0, result.stderr
+        # This is the upstream setuptools_scm git_describe_command.
+        described = subprocess.check_output([
+            "git", "-C", str(checkout), "describe", "--tags", "--long",
+            "--match", "v[0-9]*.[0-9]*", "--exclude", "v*-*"], text=True).strip()
+        assert described.startswith("v0.5.5-0-g")
