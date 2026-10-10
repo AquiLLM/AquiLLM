@@ -10,6 +10,7 @@ import argparse
 import importlib
 import json
 import os
+import random
 from pathlib import Path
 import statistics
 import sys
@@ -26,6 +27,7 @@ def _parser():
     parser.add_argument("--dtype", choices=("float16", "bfloat16"), default="float16")
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--samples", type=int, default=100)
+    parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--graph", action="store_true")
     parser.add_argument("--output", type=Path)
     return parser
@@ -52,7 +54,7 @@ def _measure(torch, callback, warmup, samples, graph):
     us = sorted(start.elapsed_time(end) * 1000 for start, end in events)
     return {"median_us": statistics.median(us),
             "p95_us": us[min(len(us) - 1, int(len(us) * 0.95))],
-            "samples": samples}
+            "samples": samples, "samples_us": us}
 
 
 def _resources(jit, torch):
@@ -70,7 +72,7 @@ def _resources(jit, torch):
 
 def main(argv=None):
     args = _parser().parse_args(argv)
-    if args.samples < 1 or args.warmup < 1 or args.batch_size < 1:
+    if args.samples < 1 or args.warmup < 1 or args.batch_size < 1 or args.rounds < 1:
         raise ValueError("samples, warmup and batch size must be positive")
     import torch
     import triton
@@ -91,7 +93,7 @@ def main(argv=None):
     # candidates. Environment mutation occurs once before any JIT or capture.
     os.environ.update(GENESIS_P67_USE_FUSED="0", GENESIS_P67_DOT_PRECISION="tf32x3",
                       GENESIS_P67_BLOCK_KV="32", GENESIS_P67_NUM_WARPS="8",
-                      GENESIS_P67_NUM_STAGES="2")
+                      GENESIS_P67_NUM_STAGES="3")
     p67._CACHED_KERNEL = None
     p67._CACHED_STAGE1_SPLITK = None
     buckets = tuple(tuple(map(int, pair.split(":")))
@@ -140,12 +142,27 @@ def main(argv=None):
         for actual in (out, baseline_out, single_out):
             assert_close(actual, expected, batch.q.dtype)
         assert_close(out, baseline_out, batch.q.dtype)
-        baseline_time = _measure(torch, baseline, args.warmup, args.samples, args.graph)
-        candidate_time = _measure(torch, candidate, args.warmup, args.samples, args.graph)
-        single_time = _measure(torch, single, args.warmup, args.samples, args.graph)
+        callbacks = {"baseline": baseline, "candidate": candidate, "single": single}
+        samples = {name: [] for name in callbacks}
+        order_rng = random.Random(17)
+        orders = []
+        for _ in range(args.rounds):
+            order = list(callbacks)
+            order_rng.shuffle(order)
+            orders.append(order)
+            for name in order:
+                samples[name].extend(_measure(torch, callbacks[name], args.warmup,
+                                               args.samples, args.graph)["samples_us"])
+        def summarize(values):
+            values = sorted(values)
+            return dict(median_us=statistics.median(values), p95_us=values[int(0.95 * len(values))],
+                        samples=len(values), samples_us=values)
+        baseline_time, candidate_time, single_time = (summarize(samples[name])
+                                                      for name in ("baseline", "candidate", "single"))
         rows.append({"prior": prior, "baseline_split": baseline_time,
                      "fused": candidate_time, "baseline_single": single_time,
                      "speedup_vs_split": baseline_time["median_us"] / candidate_time["median_us"],
+                     "candidate_order": orders,
                      "max_absolute_difference_vs_split":
                          (out.float() - baseline_out.float()).abs().max().item()})
     report = {"kind": "synthetic_total_verifier", "gpu": torch.cuda.get_device_name(),
