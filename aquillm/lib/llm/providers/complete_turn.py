@@ -466,12 +466,27 @@ async def complete_conversation_turn(
     is_post_tool_result_turn = (
         isinstance(last_message, ToolMessage) and last_message.for_whom == "assistant"
     )
+    from lib.llm.turn_context import current_turn, is_retrieval_tool
+
+    publication = getattr(current_turn(), "answer_publication", None)
+    current_source_refs = (
+        _collect_source_refs_from_tool_message(last_message)
+        if is_post_tool_result_turn
+        else set()
+    )
+    rag_answer = is_post_tool_result_turn and (
+        is_retrieval_tool(last_message.tool_name)
+        or publication is not None
+        or bool(current_source_refs)
+    )
     citation_allowlist: set[str] = set()
     source_allowlist: set[str] = set()
     enforce_citations = False
     request_system_prompt = system_prompt
-    if is_post_tool_result_turn and citations.citation_enforcement_enabled():
-        citation_allowlist = citations.collect_allowed_chunk_citations(conversation)
+    if rag_answer and citations.citation_enforcement_enabled():
+        citation_allowlist = citations.collect_allowed_chunk_citations(
+            Conversation(system="", messages=[last_message])
+        )
         if citation_allowlist:
             enforce_citations = True
             request_system_prompt = (
@@ -479,7 +494,12 @@ async def complete_conversation_turn(
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
     if is_post_tool_result_turn:
-        if current_stage() == "direct_synthesis":
+        if not rag_answer:
+            synthesis_instruction = (
+                "Answer the user's request using the current tool result. "
+                "Do not reuse document evidence or citations from earlier turns."
+            )
+        elif current_stage() == "direct_synthesis":
             if DIRECT_SYNTHESIS_GROUNDING not in request_system_prompt:
                 request_system_prompt += f"\n\n{DIRECT_SYNTHESIS_GROUNDING}"
             synthesis_instruction = (
@@ -507,19 +527,13 @@ async def complete_conversation_turn(
     if CONDITIONAL_IMAGE_INSTRUCTION not in request_system_prompt:
         request_system_prompt += f"\n\n{CONDITIONAL_IMAGE_INSTRUCTION}"
     source_allowlist = set(citation_allowlist)
-    if is_post_tool_result_turn and not source_allowlist:
-        source_allowlist = _collect_source_refs_from_tool_message(last_message)
-    from lib.llm.turn_context import current_turn, is_retrieval_tool
-
-    publication = getattr(current_turn(), "answer_publication", None)
-    rag_answer = is_post_tool_result_turn and (
-        bool(source_allowlist) or is_retrieval_tool(last_message.tool_name)
-    )
+    if rag_answer and not source_allowlist:
+        source_allowlist = current_source_refs
     selecting_document_tool = isinstance(last_message, UserMessage) and any(
         is_retrieval_tool(tool.name) for tool in (last_message.tools or ())
     )
     defer_stream_until_final = callable(stream_func) and (
-        rag_answer
+        is_post_tool_result_turn
         or selecting_document_tool
         or final_stream.final_answer_streaming_enabled()
     )
@@ -1014,6 +1028,16 @@ async def complete_conversation_turn(
         message_uuid=response.message_uuid or uuid.uuid4(),
         **response_tool_call,
     )
+    if (
+        is_post_tool_result_turn
+        and not new_msg.tool_call_id
+        and (
+            citations.find_invalid_citations(new_msg.content, set())
+            or "/aquillm/document_image/" in new_msg.content
+        )
+    ):
+        # Ordinary tool turns cannot revive historical document authority.
+        rag_answer = True
     if rag_answer and not new_msg.tool_call_id:
         from lib.llm.answer_publication import LIMITED_ANSWER, bind_answer
 

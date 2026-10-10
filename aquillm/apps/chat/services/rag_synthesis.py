@@ -46,17 +46,6 @@ logger = structlog.stdlib.get_logger(__name__)
 _MAX_EXTRACTIVE_POINTS = 5
 
 
-def _truncate_sentence(text: str, max_chars: int = 240) -> str:
-    compact = " ".join((text or "").split()).strip()
-    if not compact:
-        return ""
-    match = re.search(r"(.+?[.!?])(\s|$)", compact)
-    sentence = match.group(1) if match else compact
-    if len(sentence) > max_chars:
-        return sentence[:max_chars].rstrip() + "..."
-    return sentence
-
-
 def _last_assistant_tool_result(convo: Conversation) -> ToolMessage | None:
     for msg in reversed(convo.messages):
         if isinstance(msg, ToolMessage) and msg.for_whom == "assistant":

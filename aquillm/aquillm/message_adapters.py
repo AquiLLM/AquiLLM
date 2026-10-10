@@ -235,6 +235,7 @@ def save_conversation_to_db(
         incoming_uuids = []
         rows_to_create = []
         rows_to_update = []
+        verified_messages = []
 
         for seq, msg in enumerate(convo.messages):
             incoming_uuids.append(msg.message_uuid)
@@ -261,6 +262,7 @@ def save_conversation_to_db(
                 async_to_sync(verify_message)(
                     msg, content=incoming.content, sink="persist"
                 )
+                verified_messages.append(msg)
             if current is None:
                 rows_to_create.append(incoming)
                 continue
@@ -308,9 +310,14 @@ def save_conversation_to_db(
 
         # Keep DB in sync when callers pass a shorter conversation than what's stored.
         db_convo.db_messages.exclude(message_uuid__in=incoming_uuids).delete()
-        saved_revision = _message_revisions(
-            list(locked.db_messages.order_by("sequence_number", "pk"))
-        )
+        saved_rows = list(locked.db_messages.order_by("sequence_number", "pk"))
+        saved_revision = _message_revisions(saved_rows)
+        saved_by_uuid = {row.message_uuid: row for row in saved_rows}
+        # Recheck exact written bytes and the original lease before committing.
+        for msg in verified_messages:
+            async_to_sync(verify_message)(
+                msg, content=saved_by_uuid[msg.message_uuid].content, sink="persist"
+            )
 
     # Advance immediately for sequential writes within an outer transaction. If
     # that transaction later rolls back (e.g. publication cancellation), this
