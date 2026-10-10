@@ -105,3 +105,55 @@ async def test_prepared_named_source_constraints_reach_actual_acquisition(
     assert synthesis_questions == [question]
     assert len({id(ledger) for ledger in ledgers}) == 1
     assert ledgers[0].planner_calls == 1 and ledgers[0].actions_used == len(expected)
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("followup", [False, True])
+@pytest.mark.parametrize("historical_title", ["Red", "Red Giants"])
+async def test_explicit_longer_title_does_not_borrow_partial_historical_identity(
+    followup, historical_title, monkeypatch,
+):
+    actor, collection, auth = await database_sync_to_async(setup_scope)()
+    doc_id = next(iter(auth.selected_document_ids))
+    chunk = (await database_sync_to_async(TextChunk.objects.bulk_create)([
+        TextChunk(doc_id=doc_id, chunk_number=0, content="A different paper.",
+                  start_position=0, end_position=18)]))[0]
+    citation = f"[doc:{doc_id} chunk:{chunk.pk}]"
+    question = "Summarize the paper Red Giants"
+    rewrite = "Explain the paper Red Giants"
+    convo = Conversation(system="sys", messages=[
+        ToolMessage(tool_name="vector_search", for_whom="assistant", content="{}",
+            result_dict={"result": [{"doc_id": str(doc_id), "chunk_id": chunk.pk,
+                "chunk": 0, "title": historical_title, "text": "A different paper.", "citation": citation}]}),
+        AssistantMessage(content=historical_title + " " + citation, stop_reason="end_turn"),
+        UserMessage(content=question),
+    ])
+    for key, value in {
+        "RAG_DIRECT_ENABLED": "1", "RAG_QUERY_REWRITE_ENABLED": "1",
+        "RAG_VOCABULARY_QUERY_ENABLED": "0", "OPENAI_CONTEXT_LIMIT": "16000",
+        "RAG_EVIDENCE_TEXT_MODE": "source" if followup else "legacy",
+        "RAG_FOLLOWUP_EVIDENCE_ENABLED": str(int(followup)),
+        "RAG_RERANK_TEXT_MODE": "legacy", "RAG_DOCUMENT_CAPACITY_MODE": "legacy",
+        "RAG_ITERATIVE_RETRIEVAL_ENABLED": "0", "RAG_EVIDENCE_SELECTION_MODE": "legacy",
+    }.items():
+        monkeypatch.setenv(key, value)
+    searches, identities = [], []
+
+    def search(_consumer, query, _top_k):
+        from apps.chat.services.rag_action_tools import admit_tool_action
+        assert admit_tool_action("vector", query)
+        searches.append(query)
+        identities.append(current_source_runtime()._query_proposal_anchors.document_ids)
+        return {"result": []}
+
+    async def get_message(**kwargs):
+        return SimpleNamespace(text=json.dumps({"rewrite": rewrite}))
+
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
+    consumer = SimpleNamespace(user=actor, col_ref=CollectionsRef([collection.pk]), convo=convo)
+    assert await rag_pipeline.run_direct_rag_turn(consumer,
+        SimpleNamespace(base_args={"model": "synthetic"}, get_message=get_message), convo) == "handled"
+    assert searches == [question, rewrite]
+    expected_identity = (str(doc_id),) if historical_title == "Red Giants" else ()
+    assert identities == [expected_identity, expected_identity]

@@ -161,13 +161,22 @@ def _reference_events(question, titles):
         known = next((event for event in events if event[2] == "title"
             and event[0] >= cue.end() and not question[cue.end():event[0]].strip()), None)
         named = _NAMED_SOURCE.match(question, cue.end())
-        if known is not None:
-            occupied.append((cue.start(), known[1]))
-        elif named is not None:
+        if named is not None:
             start, end = named.span("title")
-            if not _overlaps(start, end, occupied):
+            literal = named.group("title").strip('"“”').casefold()
+            partial = {event[:2] for event in events if event[2] == "title"
+                and _overlaps(start, end, (event[:2],)) and event[3] != literal}
+            events = [event for event in events if event[:2] not in partial]
+            occupied = [span for span in occupied if span not in partial]
+            exact = any(event[2] == "title" and event[3] == literal
+                        and _overlaps(start, end, (event[:2],)) for event in events)
+            if exact:
+                occupied.append((cue.start(), end))
+            elif not _overlaps(start, end, occupied):
                 events.append((start, end, "named_source", named.group("title")))
                 occupied.append((cue.start(), end))
+        elif known is not None:
+            occupied.append((cue.start(), known[1]))
     for pattern, kind in (
         (_ORDINAL, "ordinal"),
         (_PLURAL, "plural"),
