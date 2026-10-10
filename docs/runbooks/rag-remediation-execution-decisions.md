@@ -272,3 +272,14 @@ Backfill defaults to at most 100 chunk IDs in one batch, with an explicit cursor
 Deterministic exact matching and pre-limit coverage ordering are the default repair. FTS, reciprocal-rank fusion and protected exact slots remain separately disabled treatments; protected slots require fusion. Failure paths preserve the selected candidate order and unavailable confidence. The fixed disposable query-plan experiment uses 20 authorized documents with 500 chunks each plus 500 unauthorized chunks, one-document and 20-document selected scopes, and fixed rare/common/absent queries. It records actual EXPLAIN ANALYZE BUFFERS without forcing the planner or implying production latency.
 
 Schema reversal of 0011 refuses used projections or structural metadata before dropping fields; unused/legacy-only reversal is allowed. Index-only reversal can disable FTS without erasing provenance. Operational rollback retains the additive schema and history. The cost is stored projection metadata, bounded refresh work, and explicit lexical fallback while coverage is incomplete.
+
+
+### D14 legacy result identity clarification
+
+Display names are mutable and do not establish source identity. Legacy figure status retains exact historical parent and figure IDs after a parent-title or child-collection rename, provided the uniquely resolved typed parent is among the authorized historical item IDs, belongs to the current source collection, and the figure collection is its current direct child. Current access is required to both. Ambiguous, deleted, revoked, wrong-parent, or incoherently moved references remain unavailable. Historical rows do not acquire invented original child IDs or extraction provenance.
+
+### D15 captured representation mapping and unavailable frontier
+
+The private frontier factory receives the original `SelectedGraphScopeV2` and identifier codec. It derives exact graph-generation/document-key bindings to the captured representation generation, including explicit legacy nulls, from that selection. Missing or ambiguous mappings fail closed. Each requested group must match its captured member and recomputed checksum; callers do not supply a dictionary as authority or select a newer snapshot.
+
+A successful `BoundedGraphTopologyV2` always preserves complete artifact-provenance scope closure. When missing index data or an exhausted budget prevents constructing a closed snapshot, the loader produces a typed unavailable/budget failure with truthful coverage and consumed work. G3 retains that accounting and returns no candidates for the unavailable group. Corrupted authority cannot trigger a legacy retry. An empty V2 success is valid only when required provenance was actually acquired and its identities, seeds, relations, mentions, and audits are empty.
