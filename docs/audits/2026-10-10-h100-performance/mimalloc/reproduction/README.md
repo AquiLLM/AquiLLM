@@ -11,6 +11,12 @@ records each source hash and the source checkout commit
 tracked at that commit. The image build pins PR #240's source commit
 `fedc29373c634fd47cf1f4429d133edaa2bc7e91`.
 
+Four subsequently executed recovery/retry sources were captured from checkout
+`d6dc287e215efa527c62a8a7ff4a328d2da9c78f`. Their hashes and provenance are
+separate additions to the manifest; the original ten source hashes and provenance
+remain intact. The retry was running at capture time. This archive does not
+attest retry completion and includes no runtime fixture/state or credential files.
+
 The application stage uses harness commit
 `c1624504139e04bfdd737077bb62dba521b719a9`; the manifest records its corrected web
 helper hash separately from the historical capture. Read-only live preflight
@@ -24,7 +30,7 @@ Docker omits that key when empty; its manifest hash reflects the executed fix.
 
 ## Original locations and dependencies
 
-All ten archived files were staged under `/tmp/` on the authorized development
+The original ten files and four recovery/retry additions were staged under `/tmp/` on the authorized development
 host `aquillm-dev2`, retaining these basenames. Keep `run_prefill_blocks.py`
 beside both allocator runners: they import only its `run` and `wait_ready`
 functions, without running its prefill experiment entry point.
@@ -37,6 +43,8 @@ functions, without running its prefill experiment entry point.
 | `run_allocator_chat.py`, `probe_web_allocator.py` | Two serial pairs switching both web and model; one warmup plus five measured requests per chat/RAG kind. Web probe copied into `compose-web-1:/tmp/`. |
 | `allocator_fixture_helper.py` | Verified disposable principal, real HTTP numbered VTT ingestion, owned DB/provenance checks and scoped cleanup; copied into `compose-web-1:/tmp/`. |
 | `run_prefill_blocks.py` | Shared Docker command and model-health helpers. |
+| `recover_allocator_fixture.py`, `run_fixture_recovery.py` | Reconcile the original attempt's exact deleted test conversation IDs, then invoke its unchanged final cleanup. |
+| `run_allocator_chat_retry.py`, `allocator_fixture_helper_retry.py` | Repeat the application comparison with a separate principal, evidence paths and journal-writability checks. |
 
 The runners need Docker, host Python 3, and the matching harness checkout at
 `/home/exouser/AquiLLM-h100`. Its `scripts/h100_performance/` supplies
@@ -49,7 +57,7 @@ verified separately. Model benchmark scripts are copied into
 The dependency hashes cover captured checkout bytes, including line endings,
 rather than Git's normalized blobs. Five dependencies used CRLF;
 `long_quality_bench.py` used LF. A checkout with another line-ending policy can
-therefore have different byte hashes with identical source text. The ten archived
+therefore have different byte hashes with identical source text. The fourteen archived
 reproduction files retain their original bytes and must match their hashes exactly.
 
 Web execution uses `/opt/venv/bin/python`, installed Django/allauth/httpx/websockets,
@@ -82,3 +90,41 @@ checks do not establish terminal queued profile-promotion/KG/Celery tasks.
 Mem0 deletion history is deliberately retained. Aggregate event capture covers
 the web log time window and is not per-conversation route evidence. Consult the
 separate runtime evidence before drawing performance or correctness conclusions.
+
+## Ownership failure, recovery and retry
+
+In the original application attempt, `docker cp` restored the state journal into
+a replacement web container as root-owned. The default web user could read it
+but its post-conversation-deletion save raised `PermissionError`, leaving the
+deleted conversations absent and the journal unchanged. Recovery is explicit:
+the original disposable owner and ready fixture must match, twelve unique row
+IDs must match the successful retained answer proof, every ID and its memory job
+must be globally absent, and the principal must have no other chats or profile
+facts. Only then does `recover_allocator_fixture.py` journal those cleared IDs.
+`run_fixture_recovery.py` verifies current original service images/health, fixes
+ownership of the exact journal, and invokes the unchanged scoped final cleanup.
+The coordinator's additional comparison of retained proof fixture provenance
+with ingestion proof is separate runtime evidence, not an assertion added
+retroactively to the executed recovery source.
+
+Retry uses principal suffix `allocator20261010r2`, distinct
+`/tmp/h100-allocator-chat-retry-*` captures and
+`/tmp/h100-allocator-fixture-retry*.json` state/fixture paths. After copying,
+the runner obtains the actual default web UID/GID, chowns only those two known
+state/fixture files, and opens them with `r+` as that user. The retry helper saves
+the unchanged journal as a writability preflight before acquiring execution
+locks and deleting chats. It does not pre-journal cleared IDs or claim database
+deletion and filesystem writes are atomic across stores.
+
+Native collection graph deletion also schedules synchronous post-commit
+canonical-registry reconciliation. In application source `c774b1af`,
+`resolution/canonical.py` locks all active collection scopes, reads their current
+graph/entity inputs, and reconciles derived `CanonicalEntity` and
+`CanonicalEntityLink` records, potentially enqueueing derived membership
+projections. This global derived maintenance does not delete other source
+collections, documents, chunks or graph inputs. The collection deletion can be
+committed while its callback still runs and the disposable principal still
+exists. The observed cleanup took roughly ten minutes without cancellation.
+It runs after request capture, outside visible-answer TTFT/final/persisted timing;
+record it as application cleanup overhead, not an allocator effect. The source
+hash is recorded in the manifest, and the archive changes no lifecycle behavior.

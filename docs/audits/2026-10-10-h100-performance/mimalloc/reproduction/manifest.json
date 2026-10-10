@@ -12,7 +12,11 @@
     "build_web_allocator.py": "c81ad86a1daba6febb2ee756e290f3770c492344d8a20e92f3e61a2808b32ca3",
     "Dockerfile.mimalloc-experiment": "58aa5af1e34e61bfe0faa1a7142668f234df93cf36d4c59ecdbd34263ce96ae3",
     "Dockerfile.web-mimalloc-experiment": "b51ebfd5e24a60f8b230296b8f28fe64e47c4cd6ea08081e491e665c879f637b",
-    "run_prefill_blocks.py": "003e40274bfe63d9b299f92b57008a28ac1d4c0fffbdd4f45aa9ef158c4f69d3"
+    "run_prefill_blocks.py": "003e40274bfe63d9b299f92b57008a28ac1d4c0fffbdd4f45aa9ef158c4f69d3",
+    "run_allocator_chat_retry.py": "4e7215524279860251ad69d522b43b846e80b20f2af63e457054103c63576b79",
+    "allocator_fixture_helper_retry.py": "9924ca5d6dfbf51530444270a336c23acec16ddc41a9142befcffef3ddfc4413",
+    "recover_allocator_fixture.py": "57033461e37d43e8ae5fb1d1abefd19b5cea0be18a8ea427551ac449ab3d1616",
+    "run_fixture_recovery.py": "1dff7298c10fcae9341b4a15aa8a1750b53929b0bf755b2e476bb8c1f59130b5"
   },
   "repository_dependencies_sha256": {
     "scripts/h100_performance/allocator_switch.py": "42666767fb6d366010d512ed20f0895ad7392a7cafc9bca3a5e4f92f70ca8c5e",
@@ -25,5 +29,17 @@
   "application_harness_commit": "c1624504139e04bfdd737077bb62dba521b719a9",
   "application_dependency_overrides_sha256": {
     "scripts/h100_performance/web_allocator_switch.py": "3b164633ef63df043d0256849ec8e6f80525a27695a46a76cebc20f257b0b9c0"
+  },
+  "recovery_retry_source_checkout_commit": "d6dc287e215efa527c62a8a7ff4a328d2da9c78f",
+  "recovery_retry_source_files": [
+    "run_allocator_chat_retry.py",
+    "allocator_fixture_helper_retry.py",
+    "recover_allocator_fixture.py",
+    "run_fixture_recovery.py"
+  ],
+  "retry_completion_attested_by_archive": false,
+  "application_cleanup_source_commit": "c774b1af",
+  "application_cleanup_source_normalized_sha256": {
+    "aquillm/apps/knowledge_graph/resolution/canonical.py": "7e502506a9301654cf5083bee4cde75e1336047f422b25d78a12bbe35882c649"
   }
 }
