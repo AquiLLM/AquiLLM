@@ -335,6 +335,24 @@ class SwitchTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             dev_switch.make_override(state, current, 'candidate', prefill='arbitrary')
 
+    def test_candidate_runtime_and_gdn_switch_preserve_prefill_and_rollback(self):
+        state = self.prepare()
+        override, _ = dev_switch.make_override(state, self.current, 'candidate',
+            prefill='1', runtime_profile='flashinfer-0.6.18', gdn='flashinfer')
+        values = override['services']['vllm']['environment']
+        self.assertEqual(values['AQUILLM_H100_PREFILL'], '1')
+        self.assertEqual(values['AQUILLM_H100_RUNTIME_PROFILE'], 'flashinfer-0.6.18')
+        self.assertEqual(values['AQUILLM_H100_GDN'], 'flashinfer')
+        current = json.loads(json.dumps(self.current))
+        current['Config']['Env'].extend([
+            'AQUILLM_H100_RUNTIME_PROFILE=flashinfer-0.6.18', 'AQUILLM_H100_GDN=flashinfer'])
+        rollback, _ = dev_switch.make_override(state, current, state['image'], rollback=True)
+        self.assertIsNone(rollback['services']['vllm']['environment']['AQUILLM_H100_RUNTIME_PROFILE'])
+        self.assertIsNone(rollback['services']['vllm']['environment']['AQUILLM_H100_GDN'])
+        for kwargs in ({'runtime_profile': 'anything'}, {'gdn': 'anything'}):
+            with self.assertRaises(SystemExit):
+                dev_switch.make_override(state, self.current, 'candidate', **kwargs)
+
     def mount_fixture(self):
         current = json.loads(json.dumps(self.current))
         current['Config']['Cmd'] = ['serve', '--model', 'model']

@@ -1,0 +1,23 @@
+# Experimental derived image: preserve the captured model-serving stack.
+# The matching runtime profile is explicitly selected by the development runner.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+USER root
+COPY deploy/docker/vllm/flashinfer_experiment_manifest.py /opt/flashinfer_experiment_manifest.py
+RUN python3 /opt/flashinfer_experiment_manifest.py before
+RUN python3 -m pip install --no-cache-dir --no-deps \
+      flashinfer-python==0.6.18 \
+      nvidia-cutlass-dsl==4.6.2 \
+      nvidia-cutlass-dsl-libs-base==4.6.2 \
+      nvidia-cutlass-dsl-libs-core==4.6.2 \
+      nvidia-cutlass-dsl-libs-cu12==4.6.2 \
+      nvidia-cutlass-dsl-libs-cu13==4.6.2 \
+      nvidia-cuda-nvdisasm==13.4.92 cuda-tile==1.4.0 nccl4py==0.3.1 \
+    && python3 -m pip install --no-cache-dir --no-deps \
+      --index-url https://flashinfer.ai/whl flashinfer-cubin==0.6.18 \
+    && python3 -m pip install --no-cache-dir --no-deps \
+      --index-url https://flashinfer.ai/whl/cu130 flashinfer-jit-cache==0.6.18+cu130
+COPY deploy/vllm_plugins/h100_kernels /opt/aquillm-h100
+RUN python3 -m pip install --no-deps --no-build-isolation /opt/aquillm-h100 \
+    && python3 -m aquillm_vllm_h100.build_hook /opt/genesis/sndr/plugin.py \
+    && python3 /opt/flashinfer_experiment_manifest.py after

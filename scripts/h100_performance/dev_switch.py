@@ -13,12 +13,13 @@ from pathlib import Path
 import socket
 import subprocess
 
-FLAGS = frozenset(("AQUILLM_H100_MTP_KERNEL", "AQUILLM_H100_SPLIT_POLICY", "AQUILLM_H100_PREFILL", "AQUILLM_H100_GDN"))
+FLAGS = frozenset(("AQUILLM_H100_MTP_KERNEL", "AQUILLM_H100_SPLIT_POLICY", "AQUILLM_H100_PREFILL", "AQUILLM_H100_GDN", "AQUILLM_H100_RUNTIME_PROFILE"))
 PREFIX = "AQUILLM_H100_CAPTURED_ENV_"
 FLAG_VALUES = {"AQUILLM_H100_MTP_KERNEL": {"baseline", "fused"},
                "AQUILLM_H100_SPLIT_POLICY": {"baseline", "adaptive"},
                "AQUILLM_H100_PREFILL": {"0", "1"},
-               "AQUILLM_H100_GDN": {"baseline"}}
+               "AQUILLM_H100_GDN": {"baseline", "flashinfer"},
+               "AQUILLM_H100_RUNTIME_PROFILE": {"baseline", "flashinfer-0.6.18"}}
 
 
 def run(args, env=None, input=None):
@@ -145,13 +146,14 @@ def validate_configuration(state, current, resolved, *, check_resolved_environme
         raise SystemExit("Protected command/mount/runtime configuration drift; refusing switch or rollback")
 
 
-def make_override(state, current, image, *, rollback=False, mtp="baseline", prefill="0"):
+def make_override(state, current, image, *, rollback=False, mtp="baseline", prefill="0", runtime_profile="baseline", gdn="baseline"):
     if state.get("schema_version") != 2 or protected_environment(environment(current)) != state.get("environment_digests"):
         raise SystemExit("Protected baseline environment unavailable; cannot safely reconstruct rollback")
     values = environment(current)
     inherited = {name: "${" + PREFIX + name + "}" for name in values if name not in FLAGS}
     flags = state["baseline_flags"] if rollback else dict(AQUILLM_H100_MTP_KERNEL=mtp,
-        AQUILLM_H100_SPLIT_POLICY="baseline", AQUILLM_H100_PREFILL=prefill, AQUILLM_H100_GDN="baseline")
+        AQUILLM_H100_SPLIT_POLICY="baseline", AQUILLM_H100_PREFILL=prefill, AQUILLM_H100_GDN=gdn,
+        AQUILLM_H100_RUNTIME_PROFILE=runtime_profile)
     if any(value not in FLAG_VALUES[name] for name, value in flags.items()):
         raise SystemExit("Unsupported experiment flag value; refusing operation")
     inherited.update({name: flags.get(name) for name in FLAGS})
@@ -174,11 +176,14 @@ def main():
     parser.add_argument("--image")
     parser.add_argument("--mtp", choices=("baseline", "fused"), default="baseline")
     parser.add_argument("--prefill", choices=("baseline", "0", "1"), default="baseline")
+    parser.add_argument("--runtime-profile", choices=("baseline", "flashinfer-0.6.18"), default="baseline")
+    parser.add_argument("--gdn", choices=("baseline", "flashinfer"), default="baseline")
+    parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--verify-current-baseline", action="store_true")
     args = parser.parse_args()
     if socket.gethostname() != "aquillm-dev2":
         raise SystemExit("This experiment is restricted to the authorized 254 development host")
-    directory = Path.home() / ".config/aquillm/h100-performance"
+    directory = args.state_dir or Path.home() / ".config/aquillm/h100-performance"
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     state_path = directory / "baseline.json"
     current = json.loads(run(["docker", "inspect", "compose-vllm-1"]))[0]
@@ -217,7 +222,8 @@ def main():
     if any(image_info["Config"].get(key) != baseline_info["Config"].get(key) for key in keys):
         raise SystemExit("Image runtime defaults changed; refusing an invalid image-only comparison")
     override_data, process_env = make_override(state, current, image_id, rollback=args.action == "rollback", mtp=args.mtp,
-                                              prefill="0" if args.prefill == "baseline" else args.prefill)
+                                              prefill="0" if args.prefill == "baseline" else args.prefill,
+                                              runtime_profile=args.runtime_profile, gdn=args.gdn)
     override = directory / "next.json"
     override.write_text(json.dumps(override_data, indent=2))
     override.chmod(0o600)
