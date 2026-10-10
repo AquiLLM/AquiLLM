@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aquillm-vllm-h100"
+version = "0.1.0"
+description = "Opt-in H100 TurboQuant kernels for the pinned AquiLLM runtime"
+requires-python = ">=3.10"
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["gpu: requires the pinned CUDA serving runtime"]
+
