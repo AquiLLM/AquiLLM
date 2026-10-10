@@ -342,6 +342,8 @@ jobs:
           aquillm/tests/integration/test_vllm_transcribe_image.py
           aquillm/tests/integration/test_vllm_readiness.py
           aquillm/tests/integration/test_vllm_lmcache_plumbing.py
+          aquillm/tests/integration/test_kv_offloading_benchmark.py
+          aquillm/tests/integration/test_kv_offloading_benchmark_contracts.py
           aquillm/tests/integration/test_compose_multimodal_services.py
           aquillm/tests/integration/test_compose_render_test_support.py
           aquillm/tests/integration/test_sidecar_revision_compose.py
