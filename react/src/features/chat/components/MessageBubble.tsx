@@ -1,4 +1,5 @@
 import React, { useRef, useEffect } from 'react';
+import { FileText, Image as ImageIcon } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -7,11 +8,13 @@ import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import formatUrl from '../../../utils/formatUrl';
 import { DOC_CHUNK_CITATION_RE, linkifyRagCitations } from '../../../utils/linkifyRagCitations';
+import { stripCitationSources } from '../../../utils/stripCitationSources';
 import { resolveSiteAbsoluteUrl } from '../../../utils/resolveSiteAbsoluteUrl';
 import { Collapsible, ToolResult, AquillmLogo, UserLogo } from '../../../shared/components';
 import { RatingButtons } from './RatingButtons';
 import { useCitationModal } from './CitationModalProvider';
 import MessageSources from './MessageSources';
+import { useMessageCitations } from '../hooks/useMessageCitations';
 import { getCsrfCookie } from '../../../main';
 import type { Message } from '../types';
 
@@ -27,6 +30,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
   const activeBtnRef = useRef<HTMLButtonElement | null>(null);
   const { openCitation } = useCitationModal();
   const messageUuid = message.message_uuid;
+  const citations = useMessageCitations(
+    message.role === 'assistant' && !message.tool_call_input ? message.content : '',
+  );
   const eagerNarrowSeenRef = useRef<Set<string>>(new Set());
 
   // Eager LLM-narrow every citation in newly arrived assistant messages
@@ -173,6 +179,24 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
               remarkPlugins={[remarkGfm, remarkMath]}
               rehypePlugins={[[rehypeRaw, { passThrough: ['math', 'inlineMath'] }], rehypeKatex]}
               components={{
+                a: ({ node, children, ...props }) => {
+                  const docId = String(node?.properties.dataDocId ?? '');
+                  const chunkId = String(node?.properties.dataChunkId ?? '');
+                  const citation = citations.find((item) => item.docId === docId && item.chunkId === chunkId);
+                  if (!props.className?.split(' ').includes('rag-citation-link') || !citation) {
+                    return <a {...props}>{children}</a>;
+                  }
+                  const label = citation.title || `Source ${citation.sourceNumber}`;
+                  const description = `${label} · Passage ${citation.passageNumber}`;
+                  const Icon = citation.modality === 'image' ? ImageIcon : FileText;
+                  return (
+                    <a {...props} title={description} aria-label={description}
+                      className="rag-citation-link not-prose inline-flex max-w-[min(100%,18rem)] items-center gap-1 rounded-full border border-border-low_contrast bg-scheme-shade_3 px-2 py-0.5 align-baseline text-[0.75em] font-medium leading-normal !text-text-normal !no-underline transition-colors hover:border-border-high_contrast hover:bg-scheme-shade_4 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent">
+                      <Icon aria-hidden="true" className="h-3 w-3 shrink-0 text-text-low_contrast" />
+                      <span className="truncate">{label}</span>
+                    </a>
+                  );
+                },
                 h1: ({ children, ...props }) => (
                   <h1 {...props} className="mt-0 mb-3 text-[1.75rem] leading-tight font-semibold">
                     {children}
@@ -221,12 +245,12 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, onRate, o
                 },
               }}
             >
-              {linkifyRagCitations(message.content)}
+              {linkifyRagCitations(stripCitationSources(message.content))}
             </ReactMarkdown>
           </div>
         )}
         {message.role === 'assistant' && !message.tool_call_input && (
-          <MessageSources content={message.content} messageUuid={messageUuid} />
+          <MessageSources citations={citations} messageUuid={messageUuid} />
         )}
 
         {message.role === 'assistant' && message.tool_call_input && (
