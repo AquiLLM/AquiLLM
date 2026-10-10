@@ -106,6 +106,7 @@ def main(argv=None):
     if not original:
         for row in observations:
             row["code_revision"] = revision
+            row["corpus_sha256"] = hashlib.sha256(args.cases.read_bytes()).hexdigest()
     results = [
         evaluate(c, o, reviews.get(c["case_id"], o.get("human_review")))
         for c, o in zip(cases, observations, strict=True)
@@ -124,6 +125,14 @@ def main(argv=None):
         "observations": results,
         "summary": aggregate(results),
         **metadata,
+    }
+    from apps.chat.evals.evidence_support_cases import SPLIT_DIGESTS, load_support_cases
+
+    report["support_supplement"] = {
+        "case_count": len(load_support_cases()),
+        "split_sha256": SPLIT_DIGESTS,
+        "independent_human_labels": False,
+        "activation_eligible": False,
     }
     from apps.chat.evals.evidence_quality_review import dirty_checkout
 
@@ -150,6 +159,11 @@ def main(argv=None):
                 for p in args.operational_reports
             ],
         )
+    # Never inherit activation from an input observation report or fixture comparison.
+    report["activation_eligible"] = (
+        args.backend == "live"
+        and report.get("gate", {}).get("activation_eligible") is True
+    )
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(
         json.dumps(
@@ -160,12 +174,7 @@ def main(argv=None):
         + "\n",
         encoding="utf-8",
     )
-    return (
-        0
-        if not args.require_activation
-        or report.get("gate", {}).get("activation_eligible")
-        else 2
-    )
+    return 0 if not args.require_activation or report["activation_eligible"] else 2
 
 
 if __name__ == "__main__":

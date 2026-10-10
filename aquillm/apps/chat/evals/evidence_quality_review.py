@@ -83,6 +83,19 @@ def attach_evidence(report, evidence):
             ):
                 continue
         result[flag] = True
+    from .evidence_support_gates import attach_support_evidence
+
+    result["support_policy_verified"] = attach_support_evidence(report, evidence)
+    if result["support_policy_verified"]:
+        from .evidence_support_calibration import reviewed_policy_record
+        from .evidence_support_metrics import measure_cohorts
+
+        accepted = reviewed_policy_record(evidence["support_policy"])
+        result["support_policy_measurements"] = {
+            "criteria": accepted["criteria"],
+            "cohorts": measure_cohorts(accepted["observations"], accepted["criteria"]),
+            "probability_calibration": "unmeasured",
+        }
     return {**result, "independent_evidence": evidence}
 
 

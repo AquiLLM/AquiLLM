@@ -24,6 +24,9 @@ def independent_operational_gate(monkeypatch):
     monkeypatch.setattr(
         "apps.chat.evals.evidence_quality_gates.verified_flags", lambda r: r
     )
+    monkeypatch.setattr(
+        "apps.chat.evals.evidence_quality_gates.support_gate_errors", lambda *a: []
+    )
 
 
 def reports():

@@ -159,6 +159,11 @@ async def test_actual_asgi_seed_retrieval_and_sdk_observation(
         assert actual_safety(result)["passed"] is None
         return
     assert sent, result
+    from apps.chat.evals.evidence_support_metrics import publication_matches
+
+    assert publication_matches(result), result
+    assert result["primary_question"] == case["question"]
+    assert result["persisted_answer"] == result["final_stream"] == result["answer"]
     assert result["sdk_payloads"]
     assert result["delivered"], result
     assert (
@@ -180,5 +185,6 @@ async def test_actual_asgi_seed_retrieval_and_sdk_observation(
             assert 0 < result["pairs"]["acquisition"] <= 5
             assert result["pairs"]["final"] == 0
     else:
-        assert "actions" not in result
+        # R1 publishes a ledger even when this inactive-runtime fixture charges none.
+        assert result["actions"] == 0
         assert len(result["delivered"]) == 3

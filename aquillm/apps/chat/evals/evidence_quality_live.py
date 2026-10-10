@@ -63,11 +63,13 @@ async def run_case(case, manifest, *, mode, cache_state):
 
     from .evidence_quality_seed import create_conversation, validate_case
     from .evidence_quality_trace import Trace
+    from .evidence_support_capture import PublicationCapture, publication_result
 
     user, conversation_id, sources = await sync_to_async(create_conversation)(
         case, manifest
     )
     trace = Trace(sources)
+    publication = PublicationCapture()
     trace.done, trace.sdk_started = asyncio.Event(), asyncio.Event()
     incoming = asyncio.Queue()
     outbound, closed_at = [], None
@@ -75,8 +77,12 @@ async def run_case(case, manifest, *, mode, cache_state):
     class EvaluationConsumer(ChatConsumer):
         # Persist through the real transaction/cancellation fence; omit unrelated
         # memory/index background jobs for this explicitly isolated fixture.
-        async def _save_conversation(self, create_memories=False):
-            return await super()._save_conversation(create_memories=False)
+        async def _save_conversation(
+            self, create_memories=False, *, selected_collections=None
+        ):
+            return await super()._save_conversation(
+                create_memories=False, selected_collections=selected_collections
+            )
 
     consumer = EvaluationConsumer()
 
@@ -86,6 +92,7 @@ async def run_case(case, manifest, *, mode, cache_state):
         outbound.append((at, message))
         if message["type"] == "websocket.send":
             payload = json.loads(message.get("text", "{}"))
+            publication.outbound(payload)
             # A delta is emitted only after completion's citation validation.
             if any(
                 m.get("role") == "assistant" and m.get("content")
@@ -136,12 +143,18 @@ async def run_case(case, manifest, *, mode, cache_state):
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
     await sync_to_async(validate_case)(case, manifest)
-    answer = ""
+    answer, final_message_id = "", None
     if consumer.convo:
         last = consumer.convo.messages[-1]
         if last.role == "assistant" and not last.tool_call_name:
             answer = last.content or ""
+            final_message_id = last.message_uuid
     result = trace.result(answer)
+    result.update(
+        await publication_result(
+            publication, conversation_id, final_message_id, case, manifest
+        )
+    )
     result["observation_failed"] = observation.failed.is_set()
     if result["observation_failed"]:
         result.update(provenance_complete=False, dispatch_accounting_complete=False)

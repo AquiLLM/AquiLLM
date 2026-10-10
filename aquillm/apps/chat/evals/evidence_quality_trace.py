@@ -69,6 +69,8 @@ class Trace:
         self.coverage = None
         self.upstream = []
         self.window_scores = []
+        self.delivered_packet = None
+        self.delivery_binding = None
 
     def sink(self, event, data):
         from apps.documents.services.source_loading import current_source_runtime
@@ -99,6 +101,14 @@ class Trace:
                 self.sdk_started.set()
             hints = {}
             packet = runtime.observation.get("delivered_packet") if runtime else None
+            if packet is None:
+                from lib.llm.turn_context import current_turn
+
+                publication = getattr(current_turn(), "answer_publication", None)
+                packet = getattr(publication, "packet", None)
+            # Only an actual dispatch changes the retained delivery identity.
+            self.delivered_packet = packet
+            self.delivery_binding = None
             if packet:
                 for prepared in packet.source_evidence:
                     key = (str(prepared.source.document_id), prepared.source.chunk_id)
@@ -113,7 +123,19 @@ class Trace:
                 data["payload"], self.sources, hints
             )
             self.sdk_payloads.append(data["payload"])
+            if packet:
+                from .evidence_support_capture import delivery_binding
+
+                self.delivery_binding = delivery_binding(
+                    packet, data["payload"], self.delivered
+                )
         if event == "turn_complete":
+            if self.delivered_packet is not None:
+                from .evidence_support_capture import packet_support
+
+                # SourceRuntime has exited; the dispatched packet may be invalidated.
+                self.final.update(packet_support(self.delivered_packet))
+                self.final["support_delivery_binding"] = self.delivery_binding
             self.final.update(data)
             self.timings["completion"] = (data["at"] - self.started) * 1000
             if runtime:

@@ -11,6 +11,11 @@ from .evidence_quality_comparison import (
 )
 from .evidence_quality_eval import MODES, join_arms
 from .evidence_quality_review import verified_flags
+from .evidence_support_gates import (
+    paired_domain_errors,
+    support_gate_errors,
+    support_observation_metrics,
+)
 
 
 def percentile(values, fraction):
@@ -74,6 +79,7 @@ def aggregate(rows):
         if r["quality_aggregation"] == "safety_only"
     )
     result["coverage_counts"] = dict(Counter(str(r.get("coverage")) for r in rows))
+    result["support"] = [support_observation_metrics(r) for r in rows]
     result["stop_reason_counts"] = dict(
         Counter(str(r.get("stop_reason")) for r in rows)
     )
@@ -91,7 +97,7 @@ def aggregate(rows):
 def compare(reports, targets=None, operational_reports=()):
     """Missing observations or uncertainty block activation; no equivalence claim."""
     groups = join_arms({m: reports[m]["observations"] for m in MODES})
-    reasons, comparisons = [], {}
+    reasons, comparisons, support_measurements = [], {}, {}
     reasons.extend(frozen_comparison_errors(reports))
     from .evidence_review_subject import quality_review_errors
 
@@ -102,6 +108,10 @@ def compare(reports, targets=None, operational_reports=()):
     reasons.extend(operational["blocking_reasons"])
     for mode, report in reports.items():
         verified = verified_flags(report)
+        support_measurements[mode] = verified.get("support_policy_measurements")
+        reasons.extend(
+            f"{mode}: {reason}" for reason in support_gate_errors(report, verified)
+        )
         if report.get("dirty") is not False:
             reasons.append(f"{mode}: unverified clean code revision")
         if (
@@ -124,11 +134,8 @@ def compare(reports, targets=None, operational_reports=()):
             ) is not True:
                 reasons.append(f"{mode}: missing {requirement}")
         for row in report["observations"]:
-            safety_only = row["quality_aggregation"] == "safety_only"
             candidate = mode in ("preservation", "combined")
-            if (not safety_only or candidate) and (
-                row.get("citation_violations") or row.get("authorization_violations")
-            ):
+            if row.get("citation_violations") or row.get("authorization_violations"):
                 reasons.append(f"{mode}: authorization/citation violation")
             if (
                 row.get("provenance_complete") is not True
@@ -138,6 +145,7 @@ def compare(reports, targets=None, operational_reports=()):
             if candidate and row.get("actual_safety", {}).get("passed") is not True:
                 reasons.append(f"{mode}: unproven safety outcome")
     normal = [g for g in groups if g["baseline"]["quality_aggregation"] == "normal"]
+    reasons.extend(paired_domain_errors(normal))
     for mode in MODES[1:]:
         metrics = {}
         for key in ("support_recall", "faithfulness", "qualification_accuracy", "ndcg"):
@@ -217,9 +225,10 @@ def compare(reports, targets=None, operational_reports=()):
         comparisons[mode] = metrics
     return {
         "activation_eligible": not reasons,
-        "gate_version": "evidence-activation-v2",
+        "gate_version": "evidence-activation-v3-support",
         "operational_evidence": operational,
         "blocking_reasons": sorted(set(reasons)),
         "paired_comparisons": comparisons,
+        "support_policy_measurements": support_measurements,
         "targets_ms": targets,
     }
