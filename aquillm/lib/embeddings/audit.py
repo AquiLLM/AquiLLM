@@ -10,6 +10,7 @@ from openai import OpenAI
 
 from .config import (
     allow_embed_dimensions_override,
+    get_embed_fallback_policy,
     get_local_embed_config,
     get_target_dims,
 )
@@ -41,7 +42,7 @@ def build_report(*, probe: bool = False) -> dict:
             "request_dimensions_override": dimensions_override,
             "local_role_handling": "validated_only_raw_input_unchanged",
             "dimension_policy": "legacy_pad_or_truncate",
-            "transport_failure_policy": "legacy_cohere_fallback",
+            "transport_failure_policy": get_embed_fallback_policy(),
             "fallback_space_compatibility": "unproven",
         },
         "observed": {"status": "not_probed"},

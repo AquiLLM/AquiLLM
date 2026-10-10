@@ -24,11 +24,19 @@ from lib.embeddings import (
     get_multimodal_embedding_via_vllm_pooling,
     get_strict_indexed_embeddings_via_local_openai,
 )
-from lib.embeddings.config import get_local_embed_config, get_target_dims
+from lib.embeddings.config import (
+    get_embed_fallback_policy,
+    get_local_embed_config,
+    get_target_dims,
+)
 from lib.embeddings.utils import EmbeddingContractError, validate_embedding
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 logger = structlog.stdlib.get_logger(__name__)
+
+
+class EmbeddingUpstreamUnavailableError(RuntimeError):
+    """Local embedding unavailable; transient failure, never a vector contract error."""
 
 
 def _strict_embedding_endpoint_digest(base_url: str) -> str:
@@ -89,6 +97,7 @@ def get_multimodal_embedding(
     Returns:
         Embedding vector fitted to APP_EMBED_DIMS
     """
+    get_embed_fallback_policy()
     if input_type not in (
         "search_document",
         "search_query",
@@ -133,7 +142,8 @@ def get_multimodal_embedding(
 
 
 def get_embedding(query: Any, input_type: str = "search_query"):
-    """Get embedding for a single query, with Cohere fallback."""
+    """Get a local embedding, with cross-provider fallback only under legacy policy."""
+    fallback_policy = get_embed_fallback_policy()
     if input_type not in (
         "search_document",
         "search_query",
@@ -149,6 +159,10 @@ def get_embedding(query: Any, input_type: str = "search_query"):
     except EmbeddingContractError:
         raise
     except Exception:
+        if fallback_policy == "local-only":
+            raise EmbeddingUpstreamUnavailableError(
+                "Local embedding upstream unavailable"
+            ) from None
         logger.warning(
             "obs.core.embedding_local_fallback",
             **retrieval_log_fields(
@@ -178,7 +192,8 @@ def get_embedding(query: Any, input_type: str = "search_query"):
 def get_embeddings(
     queries: list[Any], input_type: str = "search_query"
 ) -> list[list[float]]:
-    """Get embeddings for multiple queries, with Cohere fallback."""
+    """Get local embeddings, with cross-provider fallback only under legacy policy."""
+    fallback_policy = get_embed_fallback_policy()
     if input_type not in (
         "search_document",
         "search_query",
@@ -196,6 +211,10 @@ def get_embeddings(
     except EmbeddingContractError:
         raise
     except Exception:
+        if fallback_policy == "local-only":
+            raise EmbeddingUpstreamUnavailableError(
+                "Local embedding upstream unavailable"
+            ) from None
         logger.warning(
             "obs.core.embedding_batch_local_fallback",
             **retrieval_log_fields(
@@ -261,8 +280,8 @@ def get_strict_index_embeddings(
 ) -> tuple[list[tuple[int, list[float]]], str]:
     """Embed one durable index batch locally with no cross-provider fallback.
 
-    The ordinary query interface intentionally falls back to Cohere for
-    availability. A durable graph build cannot do that because one artifact
+    The ordinary query interface permits Cohere fallback under legacy policy.
+    A durable graph build cannot do that because one artifact
     must never silently mix providers or model revisions.
     """
 

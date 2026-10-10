@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from django.test import override_settings
 
 from apps.documents.services.chunk_search import text_chunk_search
@@ -99,6 +100,57 @@ def _make_cfg():
     cfg.vector_top_k = 30
     cfg.trigram_top_k = 30
     return cfg
+
+
+@override_settings(RAG_CACHE_ENABLED=False, KG_OVERLAY_ENABLED=False)
+@pytest.mark.parametrize("lexical_available", [False, True])
+def test_local_only_transport_failure_keeps_scoped_lexical_results(
+    monkeypatch, lexical_available
+):
+    from types import SimpleNamespace
+
+    from lib.embeddings import local
+
+    monkeypatch.setenv("APP_EMBED_FALLBACK_POLICY", "local-only")
+
+    def fail(**kwargs):
+        raise ConnectionError("PRIVATE_EMBEDDING_TRANSPORT")
+
+    monkeypatch.setattr(
+        local,
+        "_get_local_openai_client",
+        lambda *_: SimpleNamespace(embeddings=SimpleNamespace(create=fail)),
+    )
+    cfg = _make_cfg()
+    cfg.cohere_client.embed.side_effect = AssertionError("Cohere must not be called")
+    lexical = (
+        [MagicMock(pk=31, content="lexical evidence")] if lexical_available else []
+    )
+    root = _QRoot([], lexical)
+    model = type("LocalOnlySearch", (), {"Modality": _Modality, "objects": MagicMock()})
+    model.objects.filter_by_documents.return_value = root
+    docs = [MagicMock()]
+    with (
+        patch(
+            "apps.documents.services.chunk_search.apps.get_app_config", return_value=cfg
+        ),
+        patch(
+            "apps.documents.services.chunk_search.rerank_chunks", return_value=lexical
+        ),
+        patch(
+            "apps.documents.services.chunk_search._fallback_rerank",
+            return_value=lexical,
+        ),
+    ):
+        vectors, _, results, diagnostics = text_chunk_search(model, "query", 3, docs)
+    assert tuple(vectors) == ()
+    assert results == lexical
+    assert diagnostics["vector_error"] == "embedding_unavailable"
+    assert "PRIVATE" not in repr(diagnostics)
+    cfg.cohere_client.embed.assert_not_called()
+    assert model.objects.filter_by_documents.call_args_list
+    for call in model.objects.filter_by_documents.call_args_list:
+        assert tuple(call.args[0]) == tuple(docs)
 
 
 @override_settings(RAG_CACHE_ENABLED=False)

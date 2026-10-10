@@ -2,10 +2,10 @@
 Embedding system configuration from environment variables.
 """
 
-import structlog
 import re
 from os import getenv
-from typing import Any
+
+import structlog
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -13,6 +13,19 @@ _CONTEXT_LIMIT_RE = re.compile(
     r"maximum input length of\s*(\d+)\s*tokens|context length is only\s*(\d+)\s*tokens",
     flags=re.IGNORECASE,
 )
+
+
+def get_embed_fallback_policy() -> str:
+    """Choose only an explicit supported policy; absence preserves legacy behavior."""
+    policy = getenv("APP_EMBED_FALLBACK_POLICY", "legacy-cohere")
+    if policy not in ("local-only", "legacy-cohere"):
+        # utils imports dimension configuration from this module.
+        from .utils import EmbeddingContractError
+
+        raise EmbeddingContractError(
+            "APP_EMBED_FALLBACK_POLICY must be local-only or legacy-cohere"
+        )
+    return policy
 
 
 def _env_int(name: str, default: int) -> int:
@@ -105,6 +118,7 @@ def extract_context_limit_tokens(exc: Exception) -> int | None:
 
 
 __all__ = [
+    'get_embed_fallback_policy',
     'get_local_embed_config',
     'get_target_dims',
     'allow_embed_dimensions_override',
