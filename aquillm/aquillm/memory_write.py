@@ -27,6 +27,10 @@ def add_source_memory(
     def receipt(result):
         nonlocal provider_ids, complete
         provider_ids, complete = capture_provider_receipt(result)
+    def coverage(graph_attempted):
+        nonlocal complete
+        if graph_attempted:
+            complete = False  # Vector IDs cannot substantiate graph erasure.
     wrote = api.add_mem0_memory_with_client(
         user_id=str(user.id),
         user_content=user_content,
@@ -35,7 +39,7 @@ def add_source_memory(
         assistant_message_uuid=assistant_message_uuid,
         strict=True,
         source_message_uuid=source_message_uuid, source_content_digest=source_content_digest,
-        result_observer=receipt,
+        result_observer=receipt, coverage_observer=coverage,
     )
     provider_wrote = bool(provider_ids) or not complete
     if provider_wrote and intent.kind == 'affirmative':

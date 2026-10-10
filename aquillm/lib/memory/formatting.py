@@ -22,7 +22,7 @@ def _compact_memory_line(text: str) -> str:
 
 
 def format_memories_for_system(profile_facts: list[Any], episodic_memories: list[Any], *, max_chars: int = 8000, max_item_chars: int = 2000) -> str:
-    """Keep whole escaped items within the caller's remaining memory allocation."""
+    """Bound each complete ASCII JSON line and the total memory allocation."""
     if type(max_chars) is not int or max_chars < 0 or type(max_item_chars) is not int or max_item_chars <= 0:
         raise ValueError('memory budgets must be nonnegative exact integers')
     header = ('\n\n[Retrieved memory data]\n'
@@ -46,7 +46,7 @@ def format_memories_for_system(profile_facts: list[Any], episodic_memories: list
             payload = {'kind': kind, 'id': identity, 'status': status,
                        'revision': getattr(item, 'revision', None), 'fact' if kind == 'profile' else 'content': text}
             serialized = json.dumps(payload, ensure_ascii=True, separators=(',', ':'), allow_nan=False) + '\n'
-            if len(text) > max_item_chars or used + len(serialized) > max_chars:
+            if len(serialized) > max_item_chars or used + len(serialized) > max_chars:
                 omitted = True
                 continue
             used += len(serialized)

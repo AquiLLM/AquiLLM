@@ -30,6 +30,13 @@ def execute_profile_reconciliation(fact_id):
                 return
             if fact.status == 'active':
                 return
+            if job.attempts >= 3:
+                job.state, job.last_error = 'failed', 'attempts_exhausted'
+                job.token = job.lease_expires_at = None
+                job.save()
+                fact.reconciliation_status = 'failed'
+                fact.save(update_fields=['reconciliation_status'])
+                return  # Worker loss must not permit a fourth provider attempt.
             token = uuid.uuid4()
             job.state, job.token = 'running', token
             job.attempts += 1

@@ -16,6 +16,7 @@ import requests
 from ..config import MEM0_TIMEOUT_SECONDS
 from ..mem0.client import _normalize_openai_base_url
 from ..types import MemoryIntent
+from ._intent_scope import directive_is_example
 
 INTENT_POLICY_VERSION = 'affirmative-source-v1'
 _DIRECTIVE = re.compile(
@@ -42,6 +43,8 @@ def parse_memory_intent(text: str) -> MemoryIntent:
     quoted = [(m.start(), m.end()) for m in re.finditer(r'"[^"\n]*"|“[^”\n]*”|(?<!\w)\x27[^\x27\n]*\x27', text)]
     for match in _DIRECTIVE.finditer(text):
         start = match.end()
+        if directive_is_example(text, start, fenced + quoted, accepted[-1].end if accepted else 0):
+            continue
         stop = re.search(r'[.!?;\n](?:\s|$)|\s+(?:and|but)\s+(?:do not|don\x27t|never)\s+remember\b', text[start:], re.I)
         end = start + stop.start() + (1 if stop and text[start + stop.start()] in '.!?;' else 0) if stop else len(text)
         while end > start and text[end - 1].isspace():

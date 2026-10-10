@@ -9,6 +9,7 @@ from apps.chat.models import Message, WSConversation
 from apps.memory.models import UserMemoryFact, ProfileMemoryReconciliationJob
 from lib.memory.extraction.stable_facts import INTENT_POLICY_VERSION, is_substantive_fact, parse_memory_intent
 from lib.memory.types import RetrievedEpisodicMemory
+from lib.memory.mem0._provenance import validated_source_provenance
 
 
 class ProfileFactConflict(Exception):
@@ -175,14 +176,27 @@ def filter_reconciled_memories(user, memories):
     local_conversations = {fact.source_conversation_id for fact in tombstones if fact.source_message_uuid}
     unknown_copies_unresolved = any(fact.origin == 'legacy_unknown' or
         (fact.reconciliation_status in {'pending', 'failed'} and not fact.provider_receipt_complete) for fact in tombstones)
-    return [item for item in memories if getattr(item, 'provider_memory_id', None) not in ids
-        and (getattr(item, 'source_message_uuid', None), getattr(item, 'source_content_digest', None)) not in sources
-        and fact_digest(item.content) not in digests
+    source_uuids = {identity for identity, _ in sources}
+    eligible = []
+    for item in memories:
+        source_uuid, digest = validated_source_provenance(
+            getattr(item, 'source_message_uuid', None), getattr(item, 'source_content_digest', None))
+        attributed = source_uuid is not None and digest is not None
+        if (getattr(item, 'provider_memory_id', None) in ids
+                or (source_uuid, digest) in sources or fact_digest(item.content) in digests):
+            continue
+        if source_uuid in source_uuids and (not attributed or not source_is_current(
+                user_id=user.pk, conversation_id=getattr(item, 'conversation_id', None),
+                message_uuid=source_uuid, digest=digest)):
+            continue  # Same source needs proof of an independent live revision.
         # Old local episodes identify only the conversation/assistant, so omit
         # that conversation's copies rather than guess which user span survived.
-        and not (hasattr(item, 'assistant_message_uuid') and getattr(item, 'conversation_id', None) in local_conversations)
+        if hasattr(item, 'assistant_message_uuid') and getattr(item, 'conversation_id', None) in local_conversations:
+            continue
         # Missing receipts/source attribution cannot prove independence from
         # an erased fact. Even an absent provider ID must not bypass erasure.
-        and not (tombstones and isinstance(item, RetrievedEpisodicMemory)
-                 and not item.source_message_uuid
-                 and (unknown_copies_unresolved or not item.provider_memory_id))]
+        if (tombstones and isinstance(item, RetrievedEpisodicMemory) and not attributed
+                and (unknown_copies_unresolved or not item.provider_memory_id)):
+            continue
+        eligible.append(item)
+    return eligible

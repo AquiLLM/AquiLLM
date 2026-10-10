@@ -71,3 +71,12 @@ def test_identified_provider_episode_and_legacy_string_profile_are_serialized():
     items = [json.loads(line) for line in rendered.splitlines() if line.startswith('{')]
     assert items[0]['fact'] == 'I prefer short replies.'
     assert items[1]['id'] == 'known-provider-id'
+
+
+@pytest.mark.parametrize('text', ['界' * 100, ('\\"' * 100)])
+def test_per_item_cap_bounds_serialized_unicode_and_escape_heavy_items(text):
+    rendered = format_memories_for_system([text, 'I prefer short replies.'], [], max_chars=8000, max_item_chars=300)
+    lines = [line for line in rendered.splitlines(keepends=True) if line.startswith('{')]
+    assert all(len(line) <= 300 for line in lines)
+    assert not any(json.loads(line).get('fact') == text for line in lines)
+    assert any(json.loads(line).get('fact') == 'I prefer short replies.' for line in lines)

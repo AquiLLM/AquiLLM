@@ -72,7 +72,8 @@ def _mem0_add_result_has_writes(result: Any) -> bool:
             for item in events:
                 if not isinstance(item, dict):
                     continue
-                if item.get("event") in {"ADD", "UPDATE", "UPSERT"}:
+                kind = item.get("event")
+                if isinstance(kind, str) and kind in {"ADD", "UPDATE", "UPSERT"}:
                     return True
             return bool(events)
     if isinstance(result, list):

@@ -39,6 +39,19 @@ def test_mixed_clauses_only_admit_the_separately_affirmative_span():
     assert stable_facts.validate_fact_candidates(text, ['I use telescope A.', 'I prefer telescope B.', 'I prefer telescope C.']) == ['I prefer telescope B.']
 
 
+def test_multiline_hypothetical_does_not_grant_source_consent():
+    text = 'If I wrote the following, what would happen?\nRemember that I prefer telescope A.'
+    assert stable_facts.parse_memory_intent(text).kind == 'hypothetical'
+    assert heuristic_facts_from_turn(text, '') == []
+
+
+def test_affirmative_outside_hypothetical_keeps_exact_source_span():
+    text = 'Remember that I prefer telescope B.\nIf I wrote the following, what would happen?\nRemember that I prefer telescope A.'
+    intent = stable_facts.parse_memory_intent(text)
+    assert intent.kind == 'affirmative' and intent.payload == 'I prefer telescope B.'
+    assert text[intent.start:intent.end] == intent.payload
+
+
 def test_old_preference_regex_cannot_reintroduce_an_excluded_clause():
     text = 'Do not remember that I prefer telescope A. Please remember that I prefer telescope B.'
     assert heuristic_facts_from_turn(text, 'I prefer telescope C.') == ['I prefer telescope B.']

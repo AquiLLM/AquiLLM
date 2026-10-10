@@ -505,7 +505,7 @@ def add_mem0_messages(
     conversation_id: int,
     assistant_message_uuid: str,
     *, strict: bool = False,
-    source_message_uuid=None, source_content_digest=None, result_observer=None,
+    source_message_uuid=None, source_content_digest=None, result_observer=None, coverage_observer=None,
 ) -> bool:
     """Return whether inference added memories; strict callers receive failures.
 
@@ -571,6 +571,8 @@ def add_mem0_messages(
 
     if result_observer is not None:
         result_observer(result)
+    if coverage_observer is not None:
+        coverage_observer(enable_graph)  # Includes a failed graph attempt before vector retry.
     return _mem0_add_result_has_writes(result)
 
 
@@ -644,7 +646,7 @@ def add_mem0_memory_with_client(
     conversation_id: int,
     assistant_message_uuid: str,
     *, strict: bool = False,
-    source_message_uuid=None, source_content_digest=None, result_observer=None,
+    source_message_uuid=None, source_content_digest=None, result_observer=None, coverage_observer=None,
 ) -> bool:
     """Write a raw conversation turn to OSS Mem0 with inference enabled."""
     from ..extraction import parse_memory_intent
@@ -661,7 +663,7 @@ def add_mem0_memory_with_client(
         assistant_message_uuid=assistant_message_uuid,
         strict=strict,
         source_message_uuid=source_message_uuid, source_content_digest=source_content_digest,
-        result_observer=result_observer,
+        result_observer=result_observer, coverage_observer=coverage_observer,
     )
 
 
