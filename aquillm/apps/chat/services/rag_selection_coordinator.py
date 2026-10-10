@@ -148,7 +148,7 @@ async def coordinate_selection(
             query=query,
             search_scope="selected documents",
         )
-        if preservation.active:
+        if preservation.active or current_source_runtime() is not None:
             packet.source_mode = preservation.evidence_text_mode == "source"
             packet.source_authorization = turn.authorization
             packet.selection = selection
@@ -156,7 +156,7 @@ async def coordinate_selection(
                 packet.retrieval_status = "context_limited"
         return turn, packet, selected_tool_result(packet)
     except Exception:
-        if config.mode == "adaptive" or rag_preservation_config().active:
+        if config.mode == "adaptive" or rag_preservation_config().active or current_source_runtime() is not None:
             raise
         logger.warning("obs.rag.shadow_selection_failed")
         return None, None, None

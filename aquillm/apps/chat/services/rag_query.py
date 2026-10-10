@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from apps.chat.services.rag_config import query_rewrite_enabled
 
 _RETRY_RE = re.compile(
     r"^\s*(?:try again|retry|please retry|run it again|do that again)\s*[.!?]*\s*$",
@@ -28,16 +27,6 @@ def _last_vector_search_query(conversation: Any) -> str | None:
     return None
 
 
-def _llm_rewrite_query(text: str, conversation: Any) -> str:
-    """Placeholder for optional LLM-based query rewrite.
-
-    In production this would call the LLM; in tests it is replaced via monkeypatch.
-    When ``RAG_QUERY_REWRITE_ENABLED=1`` but no real LLM is wired here, the caller
-    receives the original text unchanged (safe fallback).
-    """
-    return text
-
-
 def build_retrieval_query(conversation: Any, latest_user_text: str) -> str:
     """Build the vector-search query string for the current turn.
 
@@ -54,14 +43,7 @@ def build_retrieval_query(conversation: Any, latest_user_text: str) -> str:
             return prior
         return text
 
-    if query_rewrite_enabled():
-        return _llm_rewrite_query(text, conversation)
-
     return text
-
-
-def _query_key(text: str) -> str:
-    return re.sub(r"[\s?;]+", " ", text or "").strip().casefold()
 
 
 def build_retrieval_queries(
@@ -70,27 +52,12 @@ def build_retrieval_queries(
     *,
     max_queries: int,
 ) -> list[str]:
-    """Return the primary query plus meaningful clauses for multi-part questions."""
+    """Keep all constraints together; optional additions use the shared ledger."""
     primary = build_retrieval_query(conversation, latest_user_text)
     if not primary:
         return []
 
-    limit = max(1, min(3, int(max_queries)))
-    queries = [primary]
-    if limit == 1:
-        return queries
-    seen = {_query_key(primary)}
-    for raw_clause in re.split(r"[?;\n]+", primary):
-        clause = " ".join(raw_clause.split()).strip()
-        clause = re.sub(r"^(?:and|also|then)\s+", "", clause, flags=re.IGNORECASE)
-        key = _query_key(clause)
-        if len(clause) < 12 or not key or key in seen:
-            continue
-        seen.add(key)
-        queries.append(clause)
-        if len(queries) >= limit:
-            break
-    return queries
+    return [primary]
 
 
 __all__ = ["build_retrieval_queries", "build_retrieval_query"]

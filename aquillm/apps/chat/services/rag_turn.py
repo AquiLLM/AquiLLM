@@ -55,7 +55,9 @@ async def preservation_turn(consumer, *, max_func_calls):
         # Nested direct/manual/tool calls inherit the owner's lifetime and latch.
         yield parent
         return
-    active = rag_preservation_config().active
+    from .retrieval_query_runtime import query_proposals_enabled
+
+    active = rag_preservation_config().active or query_proposals_enabled()
     budget = (
         parent.budget
         if parent

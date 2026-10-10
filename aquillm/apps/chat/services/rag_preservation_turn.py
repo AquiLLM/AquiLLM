@@ -90,6 +90,9 @@ async def finish_preservation(
             vector_runner=vector_runner,
         )
 
+    from .retrieval_query_runtime import prepare_query_proposals
+
+    proposals = await prepare_query_proposals(question, llm=llm, runtime=runtime, anchors=anchors)
     acquired = await acquire_evidence(
         question,
         budget=budget,
@@ -97,6 +100,7 @@ async def finish_preservation(
         execute=execute,
         evidence_views=source_views,
         anchors=anchors,
+        query_proposals=proposals,
         allowed_documents=allowed,
         initial_results=initial_results,
         initial_acquired=initial_acquired,

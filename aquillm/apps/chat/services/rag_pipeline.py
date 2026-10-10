@@ -173,7 +173,9 @@ async def _run_direct_rag_turn(consumer, llm_if, convo, *, stream_func=None):
             AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
         ]
         return "handled"
-    if preservation.active:
+    from .retrieval_query_runtime import query_proposals_enabled
+
+    if preservation.active or query_proposals_enabled():
         from apps.chat.services.rag_preservation_turn import run_preservation_rag
 
         return await run_preservation_rag(

@@ -140,6 +140,13 @@ def test_enabled_followup_does_not_prepend_sorted_title(monkeypatch):
         build_retrieval_query(convo, "compare their totals") == "compare their totals"
     )
 
+@pytest.mark.parametrize("separator", ["; ", "\n"])
+def test_clause_boundaries_never_drop_negation_quantity_or_source(separator):
+    from apps.chat.services.rag_query import build_retrieval_queries
+
+    original = "From the second paper only, exclude A_12" + separator + "report 12 km"
+    assert build_retrieval_queries(_make_convo(), original, max_queries=3) == [original]
+
 
 # ---------------------------------------------------------------------------
 # LLM rewrite (mocked, gated behind RAG_QUERY_REWRITE_ENABLED)
@@ -153,7 +160,7 @@ def test_rewrite_disabled_returns_plain_query(monkeypatch):
     assert result == "describe the calibration method"
 
 
-def test_rewrite_enabled_calls_rewrite_function(monkeypatch):
+def test_rewrite_enabled_never_replaces_the_original(monkeypatch):
     monkeypatch.setenv("RAG_QUERY_REWRITE_ENABLED", "1")
     rewrite_called_with = []
 
@@ -163,15 +170,15 @@ def test_rewrite_enabled_calls_rewrite_function(monkeypatch):
 
     from apps.chat.services import rag_query
 
-    monkeypatch.setattr(rag_query, "_llm_rewrite_query", _fake_rewrite)
+    monkeypatch.setattr(rag_query, "_llm_rewrite_query", _fake_rewrite, raising=False)
 
     convo = _make_convo()
     result = build_retrieval_query(convo, "describe the calibration method")
-    assert result == "REWRITTEN: describe the calibration method"
-    assert rewrite_called_with == ["describe the calibration method"]
+    assert result == "describe the calibration method"
+    assert rewrite_called_with == []
 
 
-def test_multi_part_question_keeps_full_query_and_question_clauses():
+def test_multi_part_question_keeps_all_constraints_in_one_baseline_query():
     from apps.chat.services import rag_query
 
     builder = getattr(rag_query, "build_retrieval_queries", None)
@@ -186,8 +193,6 @@ def test_multi_part_question_keeps_full_query_and_question_clauses():
 
     assert result == [
         "Explain what each paper is about? What overlaps between them?",
-        "Explain what each paper is about",
-        "What overlaps between them",
     ]
 
 
@@ -205,7 +210,7 @@ def test_simple_question_uses_one_retrieval_query():
 
 
 @pytest.mark.parametrize(
-    ("max_queries", "expected_count"), ((0, 1), (1, 1), (2, 2), (3, 3), (4, 3))
+    ("max_queries", "expected_count"), ((0, 1), (1, 1), (2, 1), (3, 1), (4, 1))
 )
 def test_multi_part_question_honors_query_limit(max_queries, expected_count):
     from apps.chat.services.rag_query import build_retrieval_queries
@@ -215,7 +220,5 @@ def test_multi_part_question_honors_query_limit(max_queries, expected_count):
         build_retrieval_queries(_make_convo(), primary, max_queries=max_queries)
         == [
             primary,
-            "Explain the first paper",
-            "Compare the methods",
         ][:expected_count]
     )

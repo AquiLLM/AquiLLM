@@ -66,6 +66,8 @@ class FrozenRetrievalScope:
     query_digest: str = ""
     query_compatibility: str | None = None
     graph_enabled: bool = False
+    vocabulary_digest: str = "vocabulary-disabled-v1"
+    proposal_binding: object = None
 
     def database(self):
         return (
@@ -75,6 +77,10 @@ class FrozenRetrievalScope:
         )
 
     def validate(self):
+        if self.proposal_binding is not None:
+            from apps.chat.services.retrieval_query_runtime import validate_bound
+
+            validate_bound(self.proposal_binding)
         from apps.collections.services.retrieval_authorization import (
             revalidate_retrieval_authorization_context,
         )
@@ -147,7 +153,7 @@ class FrozenRetrievalScope:
                     ),
                 }
             ),
-            vocabulary_digest="vocabulary-disabled-v1",
+            vocabulary_digest=self.vocabulary_digest,
         )
 
     def queryset(self, queryset):
@@ -258,6 +264,9 @@ def freeze_search_scope(documents, *, using, authorization=None):
 
 
 def bind_search_scope(scope, query, *, graph_enabled):
+    from apps.chat.services.retrieval_query_runtime import proposal_identity
+
+    scope.vocabulary_digest, scope.proposal_binding = proposal_identity(scope.runtime, query)
     scope.query_digest = digest({"version": "unprepared-query-v1", "query": query})
     scope.graph_enabled = graph_enabled
     return _SCOPE.set(scope)
