@@ -134,6 +134,24 @@ def test_acceptance_uses_counter_deltas_and_rejects_more_than_two_point_drop():
     assert report["gates"]["mtp_acceptance"]["status"] == "fail"
 
 
+def test_shape_diagnostics_preserve_blockwide_acceptance_and_report_gates():
+    baseline = [metrics(f"baseline-block{i}", 80) for i in range(1, 4)]
+    candidate = [metrics(f"candidate-block{i}", 77) for i in range(1, 4)]
+    reporter = module()
+    original = reporter.build_report(rows("baseline"), rows("candidate", 0.9),
+        bootstrap_samples=10, baseline_metrics=baseline, candidate_metrics=candidate)
+    # Deliberately different diagnostic counters must not enter blockwide gates.
+    for snapshot in baseline + candidate:
+        snapshot["shapes"] = [dict(prompt_tokens=512, requested_output_tokens=256,
+            input_sha256="a" * 64, before=[], after=[
+                'vllm:spec_decode_num_draft_tokens{model_name="x"} 999',
+                'vllm:spec_decode_num_accepted_tokens{model_name="x"} 0'],
+            interval_includes_warmups=True)]
+    enhanced = reporter.build_report(rows("baseline"), rows("candidate", 0.9),
+        bootstrap_samples=10, baseline_metrics=baseline, candidate_metrics=candidate)
+    assert enhanced == original
+
+
 def test_counter_reset_is_missing_evidence_instead_of_negative_acceptance():
     reset = metrics("baseline-block1", 80)
     reset["after"][0] = 'vllm:spec_decode_num_draft_tokens{model_name="x"} 1'

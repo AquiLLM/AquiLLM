@@ -85,6 +85,50 @@ class StreamTests(unittest.TestCase):
                        ('{invalid', '[DONE]')):
             self.assertFalse(self.probe(*events)['complete'])
 
+    def test_main_records_shape_metrics_outside_unchanged_timed_requests(self):
+        events, payloads = [], []
+        counter = 0
+        def metrics(base):
+            nonlocal counter
+            events.append(('metrics', counter))
+            snapshot = ['vllm:spec_decode_num_draft_tokens ' + str(counter)]
+            counter += 1
+            return snapshot
+        def generate(base, payload):
+            events.append(('request', len(payload['prompt'])))
+            payloads.append(payload)
+            return {'complete': True, 'error': None, 'output_tokens': 4, 'output_text': 'ok'}
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / 'serving.jsonl'
+            argv = ['serve_bench.py', '--label', 'candidate-block2', '--output', str(output),
+                    '--model', 'frozen-model', '--prompt-tokens', '512,32768', '--output-tokens', '4',
+                    '--warmup', '1', '--repeats', '2']
+            with patch.object(sys, 'argv', argv), patch.object(serve_bench, 'request', return_value=io.BytesIO(b'{"tokens":[1,2,3]}')), patch.object(serve_bench, 'speculation_metrics', side_effect=metrics), patch.object(serve_bench, 'stream_request', side_effect=generate), patch('builtins.print'):
+                serve_bench.main()
+            capture = json.loads(output.with_name('serving-candidate-block2-metrics.json').read_text())
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+        self.assertEqual(events, [('metrics', 0), ('metrics', 1)] + [('request', 512)] * 3
+                         + [('metrics', 2), ('metrics', 3)] + [('request', 32768)] * 3
+                         + [('metrics', 4), ('metrics', 5)])
+        self.assertEqual(capture['label'], 'candidate-block2')
+        self.assertEqual(capture['before'], ['vllm:spec_decode_num_draft_tokens 0'])
+        self.assertEqual(capture['after'], ['vllm:spec_decode_num_draft_tokens 5'])
+        self.assertEqual([shape['prompt_tokens'] for shape in capture['shapes']], [512, 32768])
+        for index, shape in enumerate(capture['shapes']):
+            self.assertEqual(shape['before'], ['vllm:spec_decode_num_draft_tokens ' + str(1 + 2 * index)])
+            self.assertEqual(shape['after'], ['vllm:spec_decode_num_draft_tokens ' + str(2 + 2 * index)])
+            self.assertEqual(shape['requested_output_tokens'], 4)
+            self.assertEqual(shape['input_sha256'], rows[index * 3]['input_sha256'])
+            self.assertTrue(shape['interval_includes_warmups'])
+        self.assertEqual([row['repeat'] for row in rows], [-1, 0, 1] * 2)
+        self.assertEqual([row['warmup'] for row in rows], [True, False, False] * 2)
+        for payload in payloads:
+            self.assertEqual({key: value for key, value in payload.items() if key != 'prompt'},
+                dict(model='frozen-model', max_tokens=4, temperature=0, seed=17, ignore_eos=True,
+                     stream=True, stream_options={'include_usage': True}))
+            expected = ([1, 2, 3] * (len(payload['prompt']) // 3 + 1))[:len(payload['prompt'])]
+            self.assertEqual(payload['prompt'], expected)
+
 
 class QualityTests(unittest.TestCase):
     def check(self, case, content, finish='stop'):

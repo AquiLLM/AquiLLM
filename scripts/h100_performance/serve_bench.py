@@ -103,6 +103,7 @@ def main():
         seed = json.load(response)["tokens"]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     before = speculation_metrics(args.base_url)
+    shapes = []
     with args.output.open("a", encoding="utf-8") as out:
         for length in map(int, args.prompt_tokens.split(",")):
             ids = (seed * (length // len(seed) + 1))[:length]
@@ -110,6 +111,7 @@ def main():
                            temperature=0, seed=17, ignore_eos=True, stream=True,
                            stream_options={"include_usage": True})
             digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+            shape_before = speculation_metrics(args.base_url)
             for index in range(-args.warmup, args.repeats):
                 result = stream_request(args.base_url, payload)
                 result.update(label=args.label, prompt_tokens=length, requested_output_tokens=args.output_tokens,
@@ -118,9 +120,14 @@ def main():
                 out.write(json.dumps(result) + "\n")
                 out.flush()
                 print(json.dumps(result), flush=True)
+            shapes.append(dict(prompt_tokens=length, requested_output_tokens=args.output_tokens,
+                               input_sha256=digest, before=shape_before,
+                               after=speculation_metrics(args.base_url),
+                               interval_includes_warmups=True))
     metrics_path = args.output.with_name(args.output.stem + "-" + args.label + "-metrics.json")
     metrics_path.write_text(json.dumps(dict(label=args.label, before=before,
-                                           after=speculation_metrics(args.base_url)), indent=2) + "\n")
+                                           after=speculation_metrics(args.base_url),
+                                           shapes=shapes), indent=2) + "\n")
 
 
 if __name__ == "__main__":
