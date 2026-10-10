@@ -20,6 +20,7 @@ from .chunk_rerank_local_scored import rerank_via_local_vllm_scored
 from .chunk_rerank_parse import ordered_queryset_from_ids, parse_single_score
 from .chunk_rerank_parse import parse_rerank_results as parse_rerank_results
 from .chunk_rerank_payload import rerank_document_payload as rerank_document_payload
+from .rag_cache_rerank import get_scoped_rerank_result, set_scoped_rerank_result
 from .rerank_request_lifetime import rerank_state_for
 
 logger = structlog.stdlib.get_logger(__name__)
@@ -68,9 +69,7 @@ def rerank_via_local_vllm(
     candidate_ids = tuple(chunk.pk for chunk in chunks)
     signature = rag_cache.query_signature_for_rerank(query)
     if not strict and state.can_admit():
-        cached = rag_cache.get_cached_rerank_result(
-            signature, candidate_ids, top_k, model_name
-        )
+        cached = get_scoped_rerank_result(signature, candidate_ids, top_k, model_name)
         if cached and state.can_admit():
             logger.info(
                 "obs.rag.rerank_cache_hit",
@@ -99,7 +98,7 @@ def rerank_via_local_vllm(
         return ()
     if result.score_set.status == "complete" and not strict:
         state.publish(
-            lambda: rag_cache.set_cached_rerank_result(
+            lambda: set_scoped_rerank_result(
                 signature, candidate_ids, top_k, model_name, list(result.ranked_ids)
             )
         )

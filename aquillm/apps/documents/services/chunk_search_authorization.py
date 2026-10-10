@@ -11,6 +11,9 @@ from apps.documents.services.hybrid_graph_authorization import (
 def authorized_search_rows(
     rows: object, *, authorization_context: object | None, hybrid_requested: bool
 ) -> tuple[object, ...]:
+    from .chunk_search_scoped_rows import validate_rows
+
+    rows = validate_rows(rows)
     if not hybrid_requested and not is_exact_authorization_context(
         authorization_context
     ):

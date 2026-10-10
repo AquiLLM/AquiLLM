@@ -3,32 +3,31 @@
 from math import isfinite
 from uuid import UUID
 
-from django.db.models import F, Value, ExpressionWrapper, FloatField
+from django.db.models import ExpressionWrapper, F, FloatField, Value
 from django.db.models.functions import MD5
 from pgvector.django import L2Distance
 
-from apps.collections.services.retrieval_authorization import (
-    revalidate_retrieval_authorization_context,
-)
 from apps.documents.models import TextChunk
-from apps.documents.models.embedding_index import DocumentEmbeddingState, ChunkEmbedding
+from apps.documents.models.embedding_index import ChunkEmbedding, DocumentEmbeddingState
+from lib.embeddings.document_binding import (
+    validate_query_observation,
+    validate_stored_binding,
+)
 from lib.embeddings.document_contracts import (
     DenseGenerationSelectionV1,
     DenseGenerationSnapshotV1,
-    RankedChunkV1,
     QueryEmbeddingObservationV1,
+    RankedChunkV1,
     digest,
     require_digest,
 )
 from lib.embeddings.document_provider import compatible_receipt
 from lib.embeddings.utils import EmbeddingContractError
-from lib.embeddings.document_binding import (
-    validate_stored_binding,
-    validate_query_observation,
-)
-from .embedding_index_store import load_embedding_space
-from .representation_contracts import SourceScopeUnavailable, RepresentationSnapshotV1
 from lib.retrieval.turn_budget import TurnBudget
+
+from .embedding_index_query_scope import _authorized_runtime, requested_dense_scope
+from .embedding_index_store import load_embedding_space
+from .representation_contracts import RepresentationSnapshotV1, SourceScopeUnavailable
 from .representation_store import (
     active_chunk_scope,
     document_payload,
@@ -37,9 +36,9 @@ from .representation_store import (
     validate_representation_snapshot,
 )
 from .source_loading import (
-    current_source_runtime,
-    bounded_source_database,
     SourcePreparationLimited,
+    bounded_source_database,
+    current_source_runtime,
 )
 
 
@@ -180,28 +179,6 @@ def validate_dense_snapshot(
     )
 
 
-def _authorized_runtime(snapshot, budget, using):
-    runtime = current_source_runtime()
-    if (
-        runtime is None
-        or runtime.budget is not budget
-        or runtime.authorization.database_alias != using
-    ):
-        raise SourcePreparationLimited("source_runtime_unavailable")
-    if not budget.can_publish():
-        raise SourcePreparationLimited("source deadline")
-    current = revalidate_retrieval_authorization_context(context=runtime.authorization)
-    if not budget.can_publish():
-        raise SourcePreparationLimited("source deadline")
-    if any(
-        s.document.id not in current.document_ids
-        or s.document.collection_id not in current.collection_ids
-        for s in ordered_selections(snapshot)
-    ):
-        raise SourceScopeUnavailable("source_scope_unavailable")
-    return runtime
-
-
 def rank_compatible_chunks(
     *,
     snapshot: RepresentationSnapshotV1,
@@ -210,6 +187,7 @@ def rank_compatible_chunks(
     limit: int,
     using: str,
     budget: TurnBudget,
+    requested_document_ids: frozenset[UUID] | None = None,
 ) -> tuple[RankedChunkV1, ...]:
     if type(limit) is not int or not 0 < limit <= 45:
         raise ValueError("invalid_dense_limit")
@@ -219,6 +197,12 @@ def rank_compatible_chunks(
     with bounded_source_database(runtime, using):
         _authorized_runtime(snapshot, budget, using)
         keys = validate_dense_snapshot(snapshot, dense_snapshot, using=using)
+        requested, keys = requested_dense_scope(
+            snapshot,
+            dense_snapshot,
+            keys,
+            requested_document_ids,
+        )
         if query.compatibility_key is None or not keys:
             return ()
         if query.compatibility_key != dense_snapshot.space_key:
@@ -227,7 +211,8 @@ def rank_compatible_chunks(
         if validate_query_observation(query, space=space) != query.compatibility_key:
             return ()
         eligible = active_chunk_scope(
-            TextChunk.objects.using(using).all(), snapshot=snapshot
+            TextChunk.objects.using(using).filter(doc_id__in=requested),
+            snapshot=snapshot,
         ).values("pk")
         # Exact filtered baseline. No connection-level ANN settings escape.
         rows = (

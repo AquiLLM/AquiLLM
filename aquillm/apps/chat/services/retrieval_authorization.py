@@ -1,7 +1,6 @@
 """Request-local production authorization for document retrieval tools."""
 
 from apps.collections.services.django_retrieval_authorization import (
-    build_production_retrieval_authorization_context,
     build_selected_scope_authorization_context,
 )
 from apps.documents.services.hybrid_graph_authorization import (
@@ -14,23 +13,24 @@ def resolve_document_retrieval_authorization(user, col_ref, documents, provided)
         return provided
     if provided is not None:
         return None
-    from apps.chat.services.rag_config import (
-        evidence_selection_config,
-        rag_preservation_config,
-    )
+    from contextlib import nullcontext
+    from types import SimpleNamespace
 
-    selection = evidence_selection_config()
-    builder = (
-        build_selected_scope_authorization_context
-        if rag_preservation_config().active
-        or (selection.mode == "adaptive" and not selection.error)
-        else build_production_retrieval_authorization_context
+    from apps.documents.services.source_loading import bounded_source_database
+    from lib.llm.turn_context import current_turn
+
+    turn = current_turn()
+    boundary = (
+        bounded_source_database(SimpleNamespace(budget=turn.budget), "default")
+        if turn
+        else nullcontext()
     )
-    return builder(
-        principal=user,
-        selected_collection_ids=tuple(col_ref.collections),
-        selected_documents=tuple(documents),
-    )
+    with boundary:
+        return build_selected_scope_authorization_context(
+            principal=user,
+            selected_collection_ids=tuple(col_ref.collections),
+            selected_documents=tuple(documents),
+        )
 
 
 __all__ = ["resolve_document_retrieval_authorization"]
