@@ -23,6 +23,11 @@ RUN git init /opt/genesis \
 
 RUN python3 -c 'import sndr; from importlib.metadata import entry_points; assert any(ep.value == "sndr.plugin:register" for ep in entry_points(group="vllm.general_plugins")), "Genesis vLLM plugin entry point missing"; print("Genesis sndr plugin installed and importable")'
 
+# Optional local kernels run after Genesis registration and default to disabled.
+COPY deploy/vllm_plugins/h100_kernels /opt/aquillm-h100
+RUN python3 -m pip install --no-deps --no-build-isolation /opt/aquillm-h100 \
+    && python3 -m aquillm_vllm_h100.build_hook /opt/genesis/sndr/plugin.py
+
 COPY --chmod=755 ./deploy/scripts/vllm_start.sh /vllm_start.sh
 COPY --chmod=755 ./deploy/scripts/genesis_vllm_entrypoint.sh /genesis_entrypoint.sh
 COPY --chmod=755 ./deploy/scripts/parse_vllm_extra_args.py /parse_vllm_extra_args.py

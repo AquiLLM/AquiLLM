@@ -12,7 +12,9 @@ dependencies = []
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+aquillm_vllm_h100 = ["kernels/*.LICENSE"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["gpu: requires the pinned CUDA serving runtime"]
-
