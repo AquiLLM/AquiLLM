@@ -1,12 +1,12 @@
 # KV runtime compatibility investigation
 
-Date: 2026-10-10. Initial source audit plus subsequent base-image inventory and a CPU-only layout fixture; no candidate-runtime build or GPU acceptance performed. The addendum below supersedes the initial assumption that the Genesis digest might contain vLLM 0.21: it actually contains a vLLM 0.23.1 prerelease.
+Date: 2026-10-10. Current evidence comprises source inspection, the pulled pinned base-image inventory, a reproduced CPU-only layout failure, and prior H100 performance artifacts. The Genesis digest contains vLLM `0.23.1rc1.dev748+g2dfaae752`, not the ordinary image's v0.21. Candidate build results are tracked separately in the [implementation runbook](../runbooks/kv-offloading.md); this source audit does not establish offloading GPU acceptance. H100 testing is deferred at the user's request while that GPU is busy.
 
 ## Decision
 
 There is a concrete LMCache multiprocess -> embedded Mooncake RealClient -> SSD integration to build and test. There is also a real raw-byte MP GPU transfer path capable, by source inspection, of representing packed 388-byte K8V4 slots. Neither establishes correctness of the exact Genesis/Qwen3.6/AWQ/MTP combination.
 
-No complete active-decode pager was found in the inspected runtime. Genesis PN95's own pinned code records the missing scheduler/attention coordination. Keep experimental paged execution rejected until that implementation and GPU validation exist. Prefix storage is a separate deliverable.
+Active-pager implementation is incomplete. No complete active-decode pager was found in the inspected runtime, and Genesis PN95's pinned code records missing scheduler/attention coordination. Keep experimental paged execution rejected until the implementation and GPU validation exist. The draft PR can present configuration, guarded storage integration and research; it cannot claim completed hierarchical active execution. Prefix storage is a separate deliverable whose GPU round trips and failure behavior also remain to be validated.
 
 ## Reproducible pins and observed environment
 
@@ -14,19 +14,20 @@ No complete active-decode pager was found in the inspected runtime. Genesis PN95
 | --- | --- |
 | Ordinary vLLM image | vllm/vllm-openai:v0.21.0 |
 | Genesis image base declared in repository | vllm/vllm-openai@sha256:6a93ae4316826f3dd8a92bee5442cbed50184a9cbd688d310f9e56ecad1eabeb |
+| Measured Genesis base vLLM | 0.23.1rc1.dev748+g2dfaae752; source 2dfaae752b4db0d43cfc0715c780e33be030d0f1 |
 | Genesis source | 34e269301cc3df71ae4b0da00a0a159b16b4e5d8 |
 | LMCache candidate | v0.5.5 -> 05a013b29da78cf2321b9b46ec5039dde2fb0bb0 |
 | Mooncake candidate | v0.3.13.post1 -> 719735896c86b56fabec6cf3e825fb2ea640597a |
 
-Release-to-commit identities were resolved through public GitHub API. These are build candidates, not a validated compatibility matrix. The declared Genesis digest's installed Python/PyTorch/CUDA/vLLM tuple remains unmeasured.
+Release-to-commit identities were resolved through public GitHub API. These are build candidates, not a validated compatibility matrix. The base-image addendum records the measured Python/PyTorch/CUDA/vLLM tuple, dependency metadata comparison and bundled-connector failure; the H100 addendum independently corroborates the core serving tuple.
 
-Local read-only checks: Windows host has one NVIDIA GeForce RTX 3090, 24576 MiB, driver 591.86. Docker desktop-linux engine responds with 29.7.2. Cached images contain no AquiLLM vLLM/Genesis serving image or LMCache image. Windows Python is 3.13 with torch 2.10.0+cu128 and pytest 9.0.2; vllm and lmcache are absent. No remote production service was contacted. No serving image was pulled/built and no global dependency was installed.
+Initial local checks found one NVIDIA GeForce RTX 3090, 24576 MiB, driver 591.86, Docker desktop-linux 29.7.2, and no cached serving image. That initial cache state was superseded: the exact public Genesis base was subsequently pulled after disk checks and inspected without GPU access, model loading or private mounts. Windows Python was 3.13 with torch 2.10.0+cu128 and pytest 9.0.2; vllm and lmcache were absent from that host environment. No global dependency was installed and no remote production service was contacted. The later local source closure used the cached image with `--rm --pull never --network none`, reading source files without importing vLLM or allocating GPU workloads.
 
 The target checkpoint's approximately 26.9 GiB stored tensor payload suggests insufficient room on this 24 GiB GPU, but stored bytes are not measured runtime weight allocation: loading and tied-tensor behavior can differ. Exact target fit remains unverified. This host can run small synthetic fixtures, but it is not the target H100 validation hardware.
 
 ## Exact MP interface
 
-vLLM 0.21 exposes SupportsHMA, register_kv_caches, start_load_kv, wait_for_layer_load, update_state_after_alloc, and request_finished_all_groups. Select the external LMCache implementation explicitly:
+The actual pinned nightly exposes SupportsHMA, register_kv_caches, start_load_kv, wait_for_layer_load, update_state_after_alloc, and request_finished_all_groups. Select the external LMCache implementation explicitly:
 
 ```json
 {
@@ -41,7 +42,7 @@ vLLM 0.21 exposes SupportsHMA, register_kv_caches, start_load_kv, wait_for_layer
 }
 ```
 
-The inspected connector also accepts lmcache.mp.server_urls and heartbeat_interval. The default server port is 5555. Avoid selecting the older bundled connector simply by omitting module_path. See [vLLM base interface](https://github.com/vllm-project/vllm/blob/v0.21.0/vllm/distributed/kv_transfer/kv_connector/v1/base.py) and [pinned LMCache MP connector](https://github.com/LMCache/LMCache/blob/05a013b29da78cf2321b9b46ec5039dde2fb0bb0/lmcache/integration/vllm/lmcache_mp_connector.py).
+The inspected connector also accepts lmcache.mp.server_urls and heartbeat_interval. The default server port is 5555. Avoid selecting the older bundled connector simply by omitting module_path. See [pinned nightly base interface](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/distributed/kv_transfer/kv_connector/v1/base.py) and [pinned LMCache MP connector](https://github.com/LMCache/LMCache/blob/05a013b29da78cf2321b9b46ec5039dde2fb0bb0/lmcache/integration/vllm/lmcache_mp_connector.py).
 
 Candidate server invocation, with measured values substituted:
 
@@ -89,7 +90,7 @@ The smallest sensible image is an opt-in derivative of the exact serving base, w
 
 ## Packed K8V4: real copy path, unresolved geometry
 
-vLLM TurboQuant produces uint8 [num_blocks, block_size, num_kv_heads, slot_size_aligned], without a separate K/V dimension. Its K8V4 head-dimension-256 slot is 388 bytes. [Backend shape](https://github.com/vllm-project/vllm/blob/v0.21.0/vllm/v1/attention/backends/turboquant_attn.py#L132).
+The pinned nightly's TurboQuant backend produces uint8 [num_blocks, block_size, num_kv_heads, slot_size_aligned], without a separate K/V dimension. K8V4 with head dimension 256 has 388 payload bytes per head; record the deployed slot width and strides separately, rather than assuming no padding. [Pinned nightly backend shape](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/attention/backends/turboquant_attn.py#L133).
 
 LMCache VLLM_Detector identifies a four-dimensional NHD tensor as NL_X_NB_BS_NH_CS. The corresponding spec retains dtype and actual trailing content size, sets kv_size=1 and does not require CS=2*head_dim in executable code. Therefore its descriptive BF16 example does not exclude 388-byte slots. [Detector](https://github.com/LMCache/LMCache/blob/05a013b29da78cf2321b9b46ec5039dde2fb0bb0/lmcache/v1/gpu_connector/kv_format/detectors/vllm.py), [format spec](https://github.com/LMCache/LMCache/blob/05a013b29da78cf2321b9b46ec5039dde2fb0bb0/lmcache/v1/gpu_connector/kv_format/specs/nl_x_nb_bs_nh_cs.py).
 
@@ -97,7 +98,7 @@ The MP transfer kernel implements this format, copying raw integer units rather 
 
 Required fail-closed registration checks:
 
-1. Effective dtype is turboquant_k8v4; actual FA tensors are uint8 with trailing 388, expected head count, valid strides and in-bounds storage.
+1. Effective dtype is turboquant_k8v4; actual FA tensors are uint8 with the expected head count, validated trailing slot width, valid strides and in-bounds storage. The semantic payload is 388 bytes; any larger physical slot or page padding needs explicit supported handling and a transfer fixture, not silent acceptance.
 2. Each block ID means the same bytes in vLLM and LMCache. Require TQ tensor token axis to equal its logical spec.block_size for the initial supported path, and verify spec page bytes against tensor shape/stride. LMCache's hybrid subpaged-attention correction only matches five-dimensional standard K/V tensors. A four-dimensional TQ kernel/logical-page mismatch passes unchanged and must not be mistaken for validated token compression.
 3. Keep the hybrid manager enabled. Use prefix caching, mamba-cache-mode=align and separate-object-groups. Resolve the actual block geometry after Genesis patches; reject chunk size not divisible by every group's token span. The standard recipe's 784 is not a K8V4 value.
 4. Validate that GDN conv/SSM state share the expected backing allocation/page stride before LMCache's opaque-page view. Group by physical identity (dtype, layout, head dimensions, block span) and restore corresponding GDN snapshots at matching boundaries.
@@ -112,7 +113,7 @@ Before loading weights, verify package identities/imports/native symbols, intend
 
 The pinned Genesis PN95 scheduler hook selects unused cached blocks (ref_cnt=0). Its virtual_blocks.py records that physical blocks held by active requests leave no donor slots, with unresolved scheduler coordination; the allocation guard raises when materialization fails. Its comments contain historical rollback language alongside later inflation code, so neither successful inflation nor an enabled flag demonstrates safe execution. Keep GENESIS_PN95_VIRT_ENABLE disabled. [PN95 scheduler hook](https://github.com/Sandermage/genesis-vllm-patches/blob/34e269301cc3df71ae4b0da00a0a159b16b4e5d8/sndr/cache/pn95/hooks.py#L580), [virtual-block failure](https://github.com/Sandermage/genesis-vllm-patches/blob/34e269301cc3df71ae4b0da00a0a159b16b4e5d8/sndr/cache/pn95/virtual_blocks.py#L327).
 
-A real implementation must change these connected seams:
+A real implementation must change these connected seams. The vLLM rows below were checked against source inside the exact cached base at `2dfaae752b4db0d43cfc0715c780e33be030d0f1`; they do not rely on the ordinary v0.21 image. Genesis and the development H100 plugin must then be accounted for in the effective patched methods.
 
 | Seam | Required work |
 | --- | --- |
@@ -121,9 +122,18 @@ A real implementation must change these connected seams:
 | TurboQuantMetadata.block_table and slot_mapping | Translate ready logical tiles into physical staging addresses; preserve append and speculative-tail mapping. |
 | triton_turboquant_decode_attention | Adapt existing _tq_decode_stage1 and _fwd_kernel_stage2 to externally scheduled tiles and stable aggregate reduction. Existing split-KV launches all splits against GPU-resident storage. |
 | Genesis G4_81 multi-query wrapper | Preserve synthetic per-query lengths/causal masking, buffer lifetime and all MTP verification queries when sharing a transferred tile. |
+| Connector load/save completion and error reporting | Publish only completed replicas; keep reader/writer pins until GPU work and saves finish. Existing layer/request hooks do not schedule per-tile active paging. |
+| CUDA graph and persistent state addresses | Keep staging, metadata and captured state buffers alive at stable addresses; order transfers before consumption and retire a slot only after all readers complete. |
+| GDN and MTP commit/rollback | Restore convolution and recurrent state together with attention KV at the same accepted boundary; reconcile rejected-token counts and preserve mutable speculative state. |
 | Store ownership | Protect sole backing replicas; LMCache's inspected adapter calls put/get/remove and exposes no active-page lifetime lease to the engine. |
 
-[vLLM capacity](https://github.com/vllm-project/vllm/blob/v0.21.0/vllm/v1/core/kv_cache_utils.py#L689), [allocation](https://github.com/vllm-project/vllm/blob/v0.21.0/vllm/v1/core/kv_cache_manager.py#L225), [scheduler](https://github.com/vllm-project/vllm/blob/v0.21.0/vllm/v1/core/sched/scheduler.py#L423), [TQ stages](https://github.com/vllm-project/vllm/blob/v0.21.0/vllm/v1/attention/ops/triton_turboquant_decode.py#L486), [Genesis multi-query route](https://github.com/Sandermage/genesis-vllm-patches/blob/34e269301cc3df71ae4b0da00a0a159b16b4e5d8/sndr/engines/vllm/patches/attention/turboquant/g4_81_tq_multi_query_direct_route.py).
+[Nightly capacity check](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/core/kv_cache_utils.py#L836), [allocate_slots](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/core/kv_cache_manager.py#L244), [running-request allocation/preemption](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/core/sched/scheduler.py#L535), [TQ split launches and reduction](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/attention/ops/triton_turboquant_decode.py#L486), [Genesis multi-query route](https://github.com/Sandermage/genesis-vllm-patches/blob/34e269301cc3df71ae4b0da00a0a159b16b4e5d8/sndr/engines/vllm/patches/attention/turboquant/g4_81_tq_multi_query_direct_route.py). The nightly TQ launcher imports `_fwd_kernel_stage2` from `vllm/v1/attention/ops/triton_decode_attention.py`, launches stage 1 against the resident cache, then stage 2 with output and LSE buffers. Its fixed `max_num_kv_splits` graph constraint is not a transfer schedule.
+
+**Transfer completion:** nightly `KVConnectorBase_V1.start_load_kv` begins restoration; `wait_for_layer_load` is the attention-side completion barrier. `wait_for_save` protects source pages from overwrite; `get_finished` reports asynchronous request transfers, and `get_block_ids_with_load_errors` reports failed block IDs no later than that completion. A pager needs corresponding per-tile events/version publication and bounded failure/cancellation handling. Neither submitting an asynchronous copy nor returning request completion permits early physical-slot reuse. These are implementation requirements inferred from the interface, not existing active-pager functionality. [Pinned completion contracts](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/distributed/kv_transfer/kv_connector/v1/base.py#L293).
+
+**Graph address lifetime:** nightly `CUDAGraphWrapper` explicitly leaves persistent input allocation/copying to its caller and checks captured input addresses in DEBUG mode. It synchronizes the existing offloader before capture/replay and joins its stream after captured forward. Those calls are not evidence that a new KV transfer stream is covered. A pager must provide persistent physical staging/metadata buffers, correct event dependencies and lifetimes across capture/replay; changing Python tensor references or remapping slots while captured readers are active is insufficient. Mutable table contents may change only through ordered writes into their retained allocations. Resetting pointers also affects the Mamba postprocess context, which binds persistent block tables and state pointers on its first call. [Graph wrapper](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/compilation/cuda_graph.py#L146), [capture/replay synchronization](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/compilation/cuda_graph.py#L308), [persistent Mamba binding](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/worker/mamba_utils.py#L1065).
+
+**Paired GDN state and MTP rollback:** nightly Qwen GDN reads convolution state from `self.kv_cache[0]` (with layout-dependent transpose) and temporal state from `[1]`; both speculative update paths use `num_accepted_tokens`. `_copy_mamba_state_block` shifts the convolution window by the accepted-token bias and selects the corresponding temporal-state column. `preprocess_mamba` passes `num_accepted_tokens_cpu[i] - 1`; the runner's align postprocess performs state copies and records the accepted-count event. Separately, the scheduler subtracts rejected drafts from computed-token counts and asynchronous output placeholders. Thus a restorable commit must pair attention KV, convolution state, temporal state and accepted-boundary metadata. Keep append/raw MTP-tail state mutable and resident, do not persist rejected drafts as committed history, and preserve Genesis's effective verification route. Test partial/all rejection across snapshot/chunk boundaries and after eviction/reload; the base source alone does not prove patched-runtime correctness. [Qwen GDN state/update inputs](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/model_executor/layers/mamba/gdn/qwen_gdn_linear_attn.py#L1308), [paired-state copy semantics](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/worker/mamba_utils.py#L27), [align preprocessing](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/worker/mamba_utils.py#L954), [runner accepted-count handling](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/worker/gpu_model_runner.py#L1517), [scheduler rollback](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/core/sched/scheduler.py#L1585).
 
 ## Next validation gates
 
@@ -132,6 +142,17 @@ First build the pinned candidate and run the small synthetic packed/mixed-state 
 The exact-model gate needs Linux NVIDIA hardware with enough GPU capacity for resident checkpoint weights, runtime overhead and an equivalent all-VRAM baseline; pinned model revision; actual Genesis applied-patch report; effective K8V4/MTP flags; GPU topology and colocated consumers; measured RAM/cgroup/memlock and SSD headroom. Test N=1 before N=4/8, always reserve output space. Capture raw registered layout and byte sizes.
 
 Only after resident correctness/throughput and simultaneous compute-copy bandwidth measurements should active paging be implemented. An oversubscription acceptance must force the active working set above physical GPU KV capacity and demonstrate history transfers during ongoing decode. SSD prefix hits and successful restoration before prefill do not satisfy that test.
+
+### Deferred exact-model acceptance checklist
+
+These gates are unfulfilled for the offloading candidate; prior H100 prefill results do not mark them passed. User-directed H100 deferral permits local preparation and a draft PR, not enabling paged execution.
+
+- Pin `hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16` revision `2d783431e303148fc6e16622fac5edac83a6b5c4`, the measured nightly/torch/CUDA/Genesis tuple, installed LMCache/Mooncake artifacts and the retained H100 plugin. Record image IDs, patch reports, MTP depth 4, K8V4, TP1, actual attention backend, colocated consumers and all changed flags.
+- Before readiness, capture effective hybrid groups under prefix caching/align: logical/storage/kernel spans, tensor shapes/strides, payload/slot/page padding, paired GDN state and a justified chunk span. Reject unsupported four-dimensional subpaging or any mismatch; retain the independent cache-off rollback.
+- Prove exact byte preservation and numerical continuation for attention plus paired GDN state through bounded RAM and SSD: cold store, warm restore, eviction/reload, worker/store restart, missing/corrupt entries, disk full, outage and cancellation. Exercise partial/all MTP rejection and accepted-prefix continuation across boundaries; test actual graph capture/replay and retain source/route guards.
+- On target hardware, establish an equivalent all-VRAM baseline and compute-plus-copy bandwidth before promising a spill fraction. Start N=1, then test N=4 and N=8 separately at the requested T=262144 with distinct near-full prompts and reserved output space. Record actual concurrent scheduling and capacity-driven preemptions. Report an unavailable equivalent baseline explicitly rather than substituting a smaller workload.
+- After an active pager is implemented, deliberately limit GPU KV below the active history size. Demonstrate history reads during ongoing decode, bounded staging, completed-transfer publication, stale-generation rejection, protected sole replicas and safe cancellation/slot reuse. Prefix hits or prefill-only reloads cannot pass this gate.
+- Report capacity separately from speed: per-user 55-75 tokens/s target, at most 10% added latency versus the equivalent resident baseline (5% preferred), TTFT/TPOT and p50/p95, peak GPU/host/pinned memory, SSD use, transfer bytes/stalls and accepted tokens per round. Report the largest measured spill fraction meeting both targets for each N-by-T profile; leave untested profiles unvalidated.
 
 ## Addendum: measured pinned Genesis base and bundled connector failure
 
@@ -245,7 +266,7 @@ get_kv_cache_shape(
 
 Its return is (num_blocks, block_size, num_kv_heads, tq_config.slot_size_aligned). Actual AttentionSpec includes page_size_padded and indexes_kv_by_block_stride, so a plain product-of-shape test cannot automatically substitute for effective page-stride validation. The external connector factory gives kv_connector_module_path priority over its bundled registry. [Actual vLLM worker](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/v1/worker/gpu_model_runner.py), [actual connector base](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/distributed/kv_transfer/kv_connector/v1/base.py), [actual factory](https://github.com/vllm-project/vllm/blob/2dfaae752b4db0d43cfc0715c780e33be030d0f1/vllm/distributed/kv_transfer/kv_connector/factory.py).
 
-The earlier v0.21 kernel/allocation references remain useful for the ordinary development image; the Genesis build must use this measured nightly's sources and revalidate the corresponding seams after Genesis applies its patches.
+The initial investigation used v0.21 kernel/allocation references for the ordinary image. The current interface and active-pager sections above have since been checked against this measured nightly's installed sources. Revalidate the effective seams after Genesis and the retained H100 plugin apply their patches.
 
 ## Addendum: completed H100 work on development, inspected locally
 
@@ -257,7 +278,7 @@ The baseline identity artifact `docs/audits/2026-10-10-h100-performance/serving/
 
 `docs/operations/h100-turboquant-performance.md` and the audit's `results.md` establish the live attention geometry: Q24/KV4/D256, packed K8V4, FP16 queries, **16-token physical attention-cache pages**, model revision `2d783431e303148fc6e16622fac5edac83a6b5c4`, TP1, MTP depth 4, FA2, one sequence and a 4096-token scheduler budget. The PN522 worker warmup value 2128 was not the live attention tensor's page size. Earlier page-2128 performance experiments were excluded from the final comparison. The verifier uses 15 committed splits plus a raw speculative-tail slot and tile 32.
 
-These records resolve which physical geometry to exercise first; they do **not** establish the LMCache chunk size. The measured run disabled prefix caching. The proposed LMCache hybrid path enables prefix caching and Mamba align mode, which can change effective grouping. Capture `KVCacheConfig` after those settings and Genesis patches, each group's logical/storage/kernel block sizes, page stride/padding, Mamba state shapes and actual registered tensor shapes/strides before calculating a common chunk span. Neither 16 nor 2128 should become the configured LMCache chunk size merely from these records. If that future capture really shows logical blocks of 2128 backed by physical pages of 16, the relationship is 133 physical pages per logical block; that would require a proved addressing/view adaptation, not just a chunk-size multiple. The warmup log alone does not prove that relationship exists in the effective connector configuration. The 0.5.5 four-dimensional subpaging limitation identified above therefore remains a blocker to automatic activation.
+These records resolve which physical geometry to exercise first; they do **not** establish the LMCache chunk size. The measured run disabled prefix caching and its identity artifact records `VLLM_MAX_MODEL_LEN=131072`, so it does not qualify the requested 262144-token profile. The proposed LMCache hybrid path enables prefix caching and Mamba align mode, which can change effective grouping. Capture `KVCacheConfig` after those settings and Genesis patches, each group's logical/storage/kernel block sizes, page stride/padding, Mamba state shapes and actual registered tensor shapes/strides before calculating a common chunk span. Neither 16 nor 2128 should become the configured LMCache chunk size merely from these records. If that future capture really shows logical blocks of 2128 backed by physical pages of 16, the relationship is 133 physical pages per logical block; that would require a proved addressing/view adaptation, not just a chunk-size multiple. The warmup log alone does not prove that relationship exists in the effective connector configuration. The 0.5.5 four-dimensional subpaging limitation identified above therefore remains a blocker to automatic activation.
 
 ### Existing packed-layout fixtures are useful, but not a transfer test
 
