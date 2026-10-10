@@ -127,6 +127,8 @@ def main(argv=None):
     parser.add_argument("--splits", type=parse_split_counts, default=(7, 15, 31, 47, 63))
     parser.add_argument("--contexts", type=parse_split_counts, default=(1, 32, 2048, 8192, 32768, 131072))
     parser.add_argument("--batches", type=parse_split_counts, default=(1, 2, 4))
+    parser.add_argument("--block-size", type=int, default=32,
+                        help="Actual physical cache page size; development hybrid runtime uses 2128")
     parser.add_argument("--mode", choices=("graph", "eager"), default="graph")
     parser.add_argument("--rounds", type=int, default=7)
     parser.add_argument("--iterations", type=int, default=100)
@@ -137,8 +139,8 @@ def main(argv=None):
     parser.add_argument("--best-fixed", type=int, default=15, help="measured fixed winner used for adaptive comparison")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    if min(args.rounds, args.iterations, args.warmup) <= 0:
-        parser.error("rounds, iterations, and warmup must be positive")
+    if min(args.rounds, args.iterations, args.warmup, args.block_size) <= 0:
+        parser.error("rounds, iterations, warmup, and block size must be positive")
     if args.best_fixed not in args.splits:
         parser.error("best-fixed must be included in the fixed candidate sweep")
     # Set once before the first baseline builder call, never in capture/replay.
@@ -162,7 +164,7 @@ def main(argv=None):
 
     identity = dict(gpu=properties.name, sm_count=properties.multi_processor_count,
                     torch=torch.__version__, triton=triton.__version__, dtype="float16",
-                    length=5, gqa=6, head_dim=256, block_kv=32,
+                    length=5, gqa=6, head_dim=256, block_kv=32, block_size=args.block_size,
                     dot_precision="committed QK=tf32, PV=tf32x3; raw=FP32 scalar; output=FP16",
                     genesis_source_sha256=hashlib.sha256(Path(inspect.getfile(baseline)).read_bytes()).hexdigest())
     manifest = json.loads(args.manifest.read_text()) if args.manifest else None
@@ -170,7 +172,8 @@ def main(argv=None):
     orders = candidate_orders(candidates, rounds=args.rounds, seed=args.seed)
     for batch_size in args.batches:
         for prior in args.contexts:
-            batch = make_verify_batch([prior] * batch_size, length=5, dtype=torch.float16, seed=args.seed)
+            batch = make_verify_batch([prior] * batch_size, length=5, dtype=torch.float16,
+                                      seed=args.seed, block_size=args.block_size)
             expected = reference_verify(batch)
             runners = {}
             buffers = {}
