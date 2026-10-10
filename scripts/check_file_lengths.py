@@ -14,7 +14,7 @@ MAX_LINES = 300
 # A path must match its count: shrinking ratchets down; growth always fails.
 _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/documents/tests/test_chunk_search_diagnostics.py": 304,
-    "aquillm/apps/documents/tests/test_rerank_http_cache.py": 447,
+    "aquillm/apps/documents/tests/test_rerank_http_cache.py": 340,
     "aquillm/apps/chat/services/tool_wiring/documents.py": 326,
     "aquillm/apps/chat/tests/test_direct_rag_pipeline.py": 612,
     "aquillm/apps/chat/tests/test_llm_complete_retry.py": 854,
@@ -93,7 +93,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/lib/tools/search/tests/test_vector_search_pack.py": 306,
     "aquillm/lib/llm/utils/context_packer.py": 427,
     "aquillm/lib/memory/mem0/memgraph_compat.py": 651,
-    "aquillm/lib/memory/mem0/operations.py": 704,
+    "aquillm/lib/memory/mem0/operations.py": 692,
     "aquillm/lib/memory/tests/test_mem0_graph_mode.py": 390,
     "aquillm/lib/memory/tests/test_mem0_graph_mode_async.py": 436,
     "aquillm/tests/integration/test_knowledge_graph_compose.py": 362,

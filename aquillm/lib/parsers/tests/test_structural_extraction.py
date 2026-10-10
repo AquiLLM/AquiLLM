@@ -1,27 +1,11 @@
-"""Synthetic source files exercise the installed native parsers (no providers)."""
-import importlib
+"""test structural extraction: synthetic regression coverage."""
+
 import io
-import struct
 import zipfile
-
 import pytest
-from lib.parsers.source_contracts import SourceContractError, source_artifact_ref
-
-
-def extract(name, data):
-    module = importlib.import_module('lib.parsers.structural')
-    return module.extract_structure(name, data, artifact=source_artifact_ref(data, member_path=None, container_sha256=None))
-
-
-def workbook_bytes(rows):
-    from openpyxl import Workbook
-    book = Workbook()
-    for row in rows:
-        book.active.append(row)
-    output = io.BytesIO()
-    book.save(output)
-    book.close()
-    return output.getvalue()
+from lib.parsers.source_contracts import SourceContractError
+from .structural_extraction_support import extract, workbook_bytes, xls_bytes
+from .test_structural_docx_extraction import _wrap_docx_control
 
 
 def test_public_wrong_column_fixture_preserves_empty_columns():
@@ -52,105 +36,12 @@ def test_uncached_and_cached_formula_are_distinct():
     assert cached.elements[-1].cells[1].value_status == 'cached'
 
 
-def test_docx_public_table_fixture_and_nested_order():
-    from docx import Document
-    doc = Document()
-    doc.add_paragraph('Quarterly report')
-    table = doc.add_table(rows=1, cols=2)
-    table.cell(0, 0).text = 'SecretRevenue'
-    table.cell(0, 1).text = '93017'
-    cell = table.cell(0, 1)
-    nested = cell.add_table(rows=1, cols=1)
-    nested.cell(0, 0).text = 'nested fact'
-    cell.add_paragraph('after nested')
-    doc.add_paragraph('End report −4 kg')
-    output = io.BytesIO()
-    doc.save(output)
-    result = extract('report.docx', output.getvalue())
-    text = result.canonical_text
-    assert text.index('Quarterly report') < text.index('SecretRevenue') < text.index('93017') < text.index('nested fact') < text.index('after nested') < text.index('End report −4 kg')
-    assert any(e.parent_key for e in result.elements)
-    assert ''.join(text[e.start:e.end] for e in result.elements if e.kind != 'figure') == text
-
-
 def test_csv_quoted_commas_blank_rows_and_trailing_cells():
     result = extract('data.csv', b'Product,Domestic,Foreign\r\n"Widget, large",,7\r\n,,\r\n')
     assert result.elements[1].cells[0].text == 'Widget, large'
     assert result.elements[1].cells[1].value_status == 'blank'
     assert result.elements[1].cells[2].address == 'C2'
     assert len(result.elements[2].cells) == 3
-
-
-def _wrap_docx_control(node):
-    from docx.oxml import OxmlElement
-    control, content = OxmlElement('w:sdt'), OxmlElement('w:sdtContent')
-    node.addprevious(control)
-    content.append(node)
-    control.append(content)
-    return control
-
-
-def test_docx_body_and_cell_content_controls_preserve_native_order():
-    from docx import Document
-    doc = Document()
-    doc.add_paragraph('Before')
-    controlled = doc.add_paragraph('ControlledRevenue 93017')
-    _wrap_docx_control(_wrap_docx_control(controlled._p))
-    table = doc.add_table(rows=1, cols=2)
-    cell = table.cell(0, 0)
-    cell.text = 'ControlledCell 481'
-    _wrap_docx_control(cell.paragraphs[0]._p)
-    nested = cell.add_table(rows=1, cols=1)
-    nested.cell(0, 0).text = 'ControlledNested 517'
-    _wrap_docx_control(nested._tbl)
-    _wrap_docx_control(cell.add_paragraph('ControlledTail 639')._p)
-    table.cell(0, 1).text = 'NextCell 752'
-    _wrap_docx_control(table._tbl)
-    doc.add_paragraph('After')
-    output = io.BytesIO()
-    doc.save(output)
-    result = extract('content-controls.docx', output.getvalue())
-    facts = ['Before', 'ControlledRevenue 93017', 'ControlledCell 481',
-             'ControlledNested 517', 'ControlledTail 639', 'NextCell 752', 'After']
-    positions = [result.canonical_text.index(fact) for fact in facts]
-    assert positions == sorted(positions)
-    assert result.quality == 'complete'
-    assert any(e.parent_key for e in result.elements)
-    assert ''.join(result.canonical_text[e.start:e.end] for e in result.elements) == result.canonical_text
-
-
-@pytest.mark.parametrize('wrapper,inline', [('w:customXml', False), ('w:sdt', True), ('w:sdt', 'row'), ('w:del', True)])
-def test_docx_remaining_unsupported_wrappers_are_explicitly_partial(wrapper, inline):
-    from docx import Document
-    from docx.oxml import OxmlElement
-    doc = Document()
-    paragraph = doc.add_paragraph('Visible before')
-    if inline == 'row':
-        table = doc.add_table(rows=1, cols=1)
-        table.cell(0, 0).text = 'HiddenRowRevenue 93017'
-        _wrap_docx_control(table.rows[0]._tr)
-    elif inline:
-        run = paragraph.add_run('HiddenInlineRevenue 93017')._r
-        if wrapper == 'w:sdt':
-            _wrap_docx_control(run)
-        else:
-            from docx.oxml.ns import qn
-            run.find(qn('w:t')).tag = qn('w:delText')
-            node = OxmlElement(wrapper)
-            run.addprevious(node)
-            node.append(run)
-    else:
-        controlled = doc.add_paragraph('HiddenCustomRevenue 93017')
-        node = OxmlElement(wrapper)
-        controlled._p.addprevious(node)
-        node.append(controlled._p)
-    doc.add_paragraph('Visible after')
-    output = io.BytesIO()
-    doc.save(output)
-    result = extract('unsupported-wrapper.docx', output.getvalue())
-    assert result.quality == 'partial'
-    assert 'document_wrapper_structure_unavailable' in result.issue_codes
-    assert result.canonical_text.index('Visible before') < result.canonical_text.index('Visible after')
 
 
 def test_xlsx_chart_only_fact_is_explicitly_partial():
@@ -201,24 +92,6 @@ def test_ods_repeated_rows_cells_and_merged_spans():
     assert result.elements[0].cells[0].column_span == 2
     assert [c.address for c in result.elements[0].cells] == ['A1', 'B1', 'C1', 'D1']
     assert result.elements[0].cells[1].value_status == 'blank'
-
-
-def xls_bytes():
-    # A minimal BIFF8 workbook; raw BIFF is supported by xlrd without an OLE wrapper.
-    def record(kind, body=b''):
-        return struct.pack('<HH', kind, len(body)) + body
-    def bof(kind):
-        return record(0x809, struct.pack('<HHHHII', 0x600, kind, 0, 0, 0, 0))
-    name = b'Sheet'
-    bound = lambda offset: record(0x85, struct.pack('<IBBBB', offset, 0, 0, len(name), 0) + name)
-    globals_ = bof(5) + bound(0) + record(0xA)
-    globals_ = bof(5) + bound(len(globals_)) + record(0xA)
-    label = lambda row, col, value: record(0x204, struct.pack('<HHHHB', row, col, 0, len(value), 0) + value)
-    sheet = bof(0x10) + record(0x200, struct.pack('<IIHHH', 0, 2, 0, 3, 0))
-    sheet += label(0, 0, b'Product') + label(0, 1, b'Domestic') + label(0, 2, b'Foreign')
-    sheet += label(1, 0, b'Widget') + record(0x203, struct.pack('<HHHd', 1, 2, 0, 7))
-    sheet += record(0xE5, struct.pack('<HHHHH', 1, 0, 0, 0, 1)) + record(0xA)
-    return globals_ + sheet
 
 
 def test_xls_blank_columns_and_merged_spans():
@@ -273,22 +146,6 @@ def test_malformed_source_has_stable_issue_code():
         extract('broken.docx', b'broken')
 
 
-def test_docx_merged_spans_and_native_table_headers():
-    from docx import Document
-    doc = Document()
-    table = doc.add_table(rows=3, cols=3)
-    for col, value in enumerate(['Product', 'Domestic', 'Foreign']):
-        table.cell(0, col).text = value
-    table.cell(1, 0).merge(table.cell(2, 0)).text = 'Widget'
-    table.cell(1, 1).text = '7'
-    output = io.BytesIO()
-    doc.save(output)
-    result = extract('table.docx', output.getvalue())
-    assert result.elements[1].cells[0].row_span == 2
-    assert result.elements[1].cells[1].header_keys == ('Domestic',)
-    assert result.elements[2].cells[0].value_status == 'blank'
-
-
 def test_xlsx_both_readers_close_on_cache_reader_failure(monkeypatch):
     from openpyxl import load_workbook
     import openpyxl
@@ -338,21 +195,6 @@ def test_blank_pdf_retains_page_location_without_inventing_body_text():
     assert result.canonical_text == ''
     assert result.elements[0].page == 1
     assert result.elements[0].start == result.elements[0].end == 0
-
-
-def test_nested_table_in_first_cell_stays_before_next_cell_text():
-    from docx import Document
-    doc = Document()
-    table = doc.add_table(rows=1, cols=2)
-    table.cell(0, 0).text = 'cell one before'
-    nested = table.cell(0, 0).add_table(rows=1, cols=1)
-    nested.cell(0, 0).text = 'nested first cell'
-    table.cell(0, 0).add_paragraph('cell one after')
-    table.cell(0, 1).text = 'cell two'
-    output = io.BytesIO()
-    doc.save(output)
-    text = extract('nested.docx', output.getvalue()).canonical_text
-    assert text.index('cell one before') < text.index('nested first cell') < text.index('cell one after') < text.index('cell two')
 
 
 @pytest.mark.parametrize('format', ['docx', 'pptx', 'xlsx', 'ods'])
@@ -409,18 +251,6 @@ def test_embedded_images_have_figure_overlays_with_native_locations(format):
         assert figures[0].bbox is not None
     if format in ('xlsx', 'ods'):
         assert figures[0].sheet == 'Sheet'
-
-
-def test_unparsed_docx_auxiliary_content_cannot_claim_complete():
-    from docx import Document
-    source = Document()
-    source.add_paragraph('Body fact')
-    source.sections[0].header.paragraphs[0].text = 'Header fact'
-    output = io.BytesIO()
-    source.save(output)
-    result = extract('header.docx', output.getvalue())
-    assert result.quality == 'partial'
-    assert 'auxiliary_document_content_unavailable' in result.issue_codes
 
 
 def test_unparsed_pptx_charts_cannot_claim_complete():

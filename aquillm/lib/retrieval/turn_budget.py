@@ -52,18 +52,9 @@ class TurnLimits:
     final_scoring_ms: int = 3_000
 
     def __post_init__(self) -> None:
-        for name in self.__dataclass_fields__:
-            value = getattr(self, name)
-            if (
-                isinstance(value, bool)
-                or not isinstance(value, int)
-                or not 0 <= value <= _PILOT_MAX[name]
-            ):
-                raise ValueError(f"{name} must be within the pilot allowance")
-        if self.acquisition_pairs + self.final_pairs > 135:
-            raise ValueError("overall pair allowance exceeds 135")
-        if self.final_scoring_ms > self.retrieval_ms:
-            raise ValueError("final scoring reserve exceeds retrieval deadline")
+        from .turn_limits import validate_limits
+
+        validate_limits(self, _PILOT_MAX)
 
     def clamped_to(self, parent: TurnLimits) -> TurnLimits:
         """A nested caller can narrow, never enlarge, a parent allowance."""

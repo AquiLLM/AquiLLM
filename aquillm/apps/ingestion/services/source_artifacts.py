@@ -231,61 +231,9 @@ def persist_occurrence(
 
 
 def _validate_transient_source(payload) -> None:
-    try:
-        if payload.source_bytes is None or not payload.source_filename:
-            raise SourceContractError("source_bytes_and_filename_required")
-        validate_artifact_ref(payload.source_artifact, data=payload.source_bytes)
-        validate_archive_lineage(payload.source_artifact, payload.archive_lineage)
-        if len(payload.source_containers) != len(payload.archive_lineage):
-            raise SourceContractError("source_containers_lineage_mismatch")
-        for index, step in enumerate(payload.archive_lineage):
-            filename, container_bytes, _content_type = payload.source_containers[index]
-            if sha256(container_bytes).hexdigest() != step.container_sha256:
-                raise SourceContractError("source_container_bytes_mismatch")
-            if index and filename != payload.archive_lineage[index - 1].member_path:
-                raise SourceContractError("source_container_filename_mismatch")
-            child_bytes = (
-                payload.source_containers[index + 1][1]
-                if index + 1 < len(payload.source_containers)
-                else payload.source_bytes
-            )
-            # ZipInfo ordinals distinguish byte-identical duplicate names.
-            with zipfile.ZipFile(io.BytesIO(container_bytes)) as archive:
-                entries = archive.infolist()
-                if step.archive_ordinal >= len(entries):
-                    raise SourceContractError("source_archive_ordinal_missing")
-                entry = entries[step.archive_ordinal]
-                entry_name = canonical_archive_entry_name(
-                    entry.orig_filename, entry.filename, is_directory=entry.is_dir()
-                )
-                if (
-                    entry.is_dir()
-                    or entry_name != step.member_path
-                    or entry.file_size != len(child_bytes)
-                ):
-                    raise SourceContractError("source_archive_member_mismatch")
-                with archive.open(entry) as file_obj:
-                    actual = file_obj.read(len(child_bytes) + 1)
-                if actual != child_bytes:
-                    raise SourceContractError("source_archive_bytes_mismatch")
-        if (
-            payload.archive_lineage
-            and payload.source_filename != payload.archive_lineage[-1].member_path
-        ):
-            raise SourceContractError("source_member_filename_mismatch")
-        if payload.media_artifact is not None:
-            if payload.media_bytes is None:
-                raise SourceContractError("media_bytes_required")
-            validate_artifact_ref(payload.media_artifact, data=payload.media_bytes)
-    except (
-        SourceContractError,
-        zipfile.BadZipFile,
-        RuntimeError,
-        EOFError,
-        TypeError,
-        ValueError,
-    ) as exc:
-        raise SourceArtifactIntegrityError("source_payload_integrity_failed") from exc
+    from .source_artifact_transient import validate_transient_source
+
+    validate_transient_source(payload)
 
 
 def bind_payload_source(payload, *, using: str) -> SourceArtifactOccurrenceRefV1:

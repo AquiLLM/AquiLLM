@@ -45,48 +45,9 @@ def canonical_provider(*, deadline):
 
 
 def load_attested_attempt():
-    """Consume an operator-verified, short-lived, locally mounted attestation.
+    from .pair_worker_attestation import load_attested_attempt as load
 
-    The worker has no Docker privilege. This file is deployment evidence, not
-    inferred from /models, environment names or the successful warm probes.
-    """
-    path = os.getenv("RAG_PAIR_CAPABILITY_ATTESTATION")
-    if not path:
-        return None
-    try:
-        with Path(path).open("rb") as stream:
-            raw = stream.read(65537)
-        if len(raw) > 65536:
-            return None
-        data = json.loads(raw)
-        provider = canonical_provider(deadline=monotonic() + 15)
-        template = data["template"]
-        identity = data["identity"]
-        if not (
-            provider
-            and data["verified_by"]
-            and data["verification_record"]
-            and data["verified_at"] <= time() < data["expires_at"]
-            and 0 < data["expires_at"] - data["verified_at"] <= 300
-            and data["endpoint"] == provider.endpoint
-            and data["served_model"] == provider.model_name
-            and data["pair_context"] == provider.pair_limit == 1024
-            and data["tokenizer_name"] == config.rerank_tokenizer()
-            and identity["model_revision"] == config.rerank_model_revision()
-            and identity["tokenizer_revision"] == config.rerank_tokenizer_revision()
-            and identity["code_revision"] == config.rerank_code_revision()
-            and _valid_identity(identity, template)
-        ):
-            return None
-        return dict(
-            provider=provider,
-            tokenizer_name=data["tokenizer_name"],
-            template=template,
-            identity=identity,
-            attestation_expires=data["expires_at"],
-        )
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+    return load()
 
 
 class PairCapabilityController:
@@ -296,108 +257,6 @@ def protocol_warm_enabled():
     ) == "1" and config.rerank_provider() in ("auto", "local", "vllm")
 
 
-class RerankProtocolController:
-    """One startup/renewal slot; three attempts/15s, no serving-driven discovery."""
-
-    def __init__(self):
-        self.thread = self.task = self.budget = self.binding = None
-        self.stopping = False
-        self.base = self.model = None
-
-    async def attempt(self):
-        from .rerank_transport_policy import (
-            discover_rerank_protocol,
-            resolve_rerank_protocol,
-        )
-
-        if self.stopping or (self.thread and self.thread.is_alive()):
-            return None
-        try:
-            timeout = min(
-                15,
-                max(
-                    0.001,
-                    float(os.getenv("RAG_RERANK_PROTOCOL_WARM_TIMEOUT_SECONDS", "15")),
-                ),
-            )
-            attempts = min(
-                3, max(1, int(os.getenv("RAG_RERANK_PROTOCOL_WARM_ATTEMPTS", "3")))
-            )
-        except ValueError:
-            timeout, attempts = 15, 3
-        self.base, self.model = config.rerank_base_url(), config.rerank_model()
-        cached = resolve_rerank_protocol(self.base, self.model)
-        if cached is not None and cached.expires_at - time() > 60:
-            self.binding = cached
-            return cached
-        self.budget = budget = TurnBudget(
-            TurnLimits(
-                acquisition_pairs=attempts,
-                final_pairs=0,
-                in_flight_pairs=1,
-                retrieval_ms=max(1, int(timeout * 1000)),
-                final_scoring_ms=0,
-            )
-        )
-        deadline = monotonic() + timeout
-        results, done = [], threading.Event()
-
-        def work():
-            try:
-                binding = discover_rerank_protocol(
-                    self.base,
-                    self.model,
-                    deadline=deadline,
-                    max_attempts=attempts,
-                    headers=config.rerank_headers(),
-                    budget=budget,
-                )
-                if binding and budget.can_publish():
-                    results.append(binding)
-            finally:
-                done.set()
-
-        self.thread = threading.Thread(
-            target=work, daemon=True, name="rerank-protocol-warm"
-        )
-        self.thread.start()
-        try:
-            while not done.is_set() and monotonic() < deadline:
-                await asyncio.sleep(0.01)
-            if not done.is_set() or self.stopping:
-                budget.close("warm_deadline")
-                return None
-            self.binding = results[0] if results else None
-            return self.binding
-        except asyncio.CancelledError:
-            budget.close("warm_cancelled")
-            raise
-
-    async def run(self):
-        # Per-worker jitter avoids simultaneous fleet renewal bursts; all actual
-        # probes still share the process-wide weighted admission mechanism.
-        import random
-
-        try:
-            while not self.stopping and protocol_warm_enabled():
-                binding = await self.attempt()
-                delay = max(30, binding.expires_at - time() - 60) if binding else 30
-                await asyncio.sleep(delay + random.uniform(0, 5))
-        finally:
-            self.revoke()
-
-    def revoke(self):
-        from .rerank_transport_policy import revoke_rerank_protocol
-
-        if self.budget:
-            self.budget.close("worker_stopped")
-        if self.binding:
-            revoke_rerank_protocol(self.base, self.binding)
-        self.binding = None
-
-    async def stop(self):
-        self.stopping = True
-        self.revoke()
-        if self.task:
-            self.task.cancel()
-            await asyncio.gather(self.task, return_exceptions=True)
+# Keep one controller class and the existing public import/patch path.
+from .pair_worker_protocol import RerankProtocolController
+RerankProtocolController.__module__ = __name__
