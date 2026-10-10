@@ -164,7 +164,12 @@ async def prepare_query_proposals(question, *, llm, runtime, anchors=None):
         raise
     except Exception:
         return original
-    rows = build_query_proposals(question, vocabulary=snapshot, rewrite=rewrite)
+    constraints = getattr(anchors, "source_constraints", ())
+    if anchors is not None and anchors.chunk_identities and not constraints:
+        rewrite = None  # Identity without a retained literal cannot admit a rewrite.
+    rows = build_query_proposals(question, vocabulary=snapshot, rewrite=rewrite,
+                                source_constraints=constraints)
+    runtime._query_proposal_anchors = anchors
     runtime._query_proposals = rows
     observation = {"configured": configured_proposal_controls(),
         "observed_policy": rows[0].policy_key,
@@ -193,6 +198,10 @@ async def run_optional_proposal(row, *, anchors, run):
     runtime = current_source_runtime()
     if runtime is None or row not in getattr(runtime, "_query_proposals", ()):
         raise ValueError("optional query was not prepared by this turn")
+    prepared_anchors = getattr(runtime, "_query_proposal_anchors", anchors)
+    if anchors is not None and anchors != prepared_anchors:
+        raise ValueError("proposal source scope mismatch")
+    anchors = prepared_anchors
     with proposal_scope(row, runtime=runtime, anchors=anchors) as bound:
         await _database_call(validate_bound, bound)
         return await run(AcquisitionAction("vector", row.text))

@@ -6,7 +6,7 @@ import unicodedata
 
 from apps.collections.services.vocabulary_contracts import digest, normalized
 
-POLICY = "faithful-query-proposals-v1"
+POLICY = "faithful-query-proposals-v2"
 _NEGATION = re.compile(r"\b(?:not|no|never|without|exclude[sd]?|except|neither|nor)\b|\b\w+n['’]t\b", re.I)
 _PROTECTED = re.compile(
     r"\"[^\"]*\"|'[^']*'|“[^”]*”|‘[^’]*’|\b[\w.+/-]*\d[\w.+/-]*\b|\b\w+[_/-]\w+\b|\b[A-Z]{2,}\b|\b[A-Z]\b|(?:\d+(?:\.\d+)?)\s*(?:km|cm|mm|kg|mg|ms|Hz|MHz|GHz|m|s|g|K|°C|%)\b|\b(?:first|second|third|fourth|fifth|last|former|latter)\b",
@@ -28,20 +28,27 @@ def _key(text):
     return " ".join(unicodedata.normalize("NFKC", text).casefold().split())
 
 
-def preserves_constraints(original, proposed):
+def preserves_constraints(original, proposed, *, source_constraints=()):
     if type(proposed) is not str or not proposed.strip() or len(proposed) > 2000:
         return False
     # Exact multisets prevent both deletion and invention of protected constraints.
     for pattern in (_NEGATION, _PROTECTED, _SOURCE, _QUANTITY):
         if Counter(pattern.findall(original)) != Counter(pattern.findall(proposed)):
             return False
+    for phrase in source_constraints:
+        pattern = re.compile(r"(?<!\w)" + re.escape(_key(phrase)) + r"(?!\w)")
+        present = pattern.findall(_key(original))
+        if not present or len(pattern.findall(_key(proposed))) != len(present):
+            return False
     return True
 
 
-def build_query_proposals(original, *, vocabulary=None, rewrite=None, max_queries=3):
+def build_query_proposals(original, *, vocabulary=None, rewrite=None, max_queries=3,
+                          source_constraints=()):
     if type(original) is not str:
         raise ValueError("original query must be text")
-    policy = digest({"policy": POLICY, "vocabulary": vocabulary.checksum if vocabulary else None})
+    policy = digest({"policy": POLICY, "vocabulary": vocabulary.checksum if vocabulary else None,
+                     "source_constraints": tuple(_key(value) for value in source_constraints)})
     rows = [QueryProposalV1(original, "original", (), policy)]
     limit = max(1, min(3, int(max_queries)))
     phrases, keys = [], []
@@ -57,7 +64,7 @@ def build_query_proposals(original, *, vocabulary=None, rewrite=None, max_querie
             if len(proposed) <= 2000 and len(rows) < limit:
                 rows.append(QueryProposalV1(proposed, "vocabulary", tuple(dict.fromkeys(keys)), policy))
     if (len(rows) < limit and rewrite is not None
-        and preserves_constraints(original, rewrite)
+        and preserves_constraints(original, rewrite, source_constraints=source_constraints)
         and _key(rewrite) not in {_key(r.text) for r in rows}):
         rows.append(QueryProposalV1(rewrite, "rewrite", (), policy))
     return tuple(rows)

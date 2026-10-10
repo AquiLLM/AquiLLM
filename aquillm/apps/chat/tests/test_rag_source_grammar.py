@@ -36,17 +36,21 @@ def test_source_noun_and_ordinal_one_require_displayed_antecedents():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("followup", [False, True])
 @pytest.mark.parametrize("question", [
     "What causes stars to lose their mass?",
     "Is it true that Vega is variable?",
+    "Summarize the paper Attention Is All You Need",
+    'Summarize the paper "Attention Is All You Need"',
+    "Summarize the report Cosmic Dust",
 ])
-async def test_fresh_conversation_grammar_reaches_retrieval(question, monkeypatch):
+async def test_fresh_conversation_grammar_reaches_retrieval(question, followup, monkeypatch):
     from apps.chat.refs import CollectionsRef
     from apps.chat.services import rag_pipeline
 
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
-    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
-    monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "1")
+    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source" if followup else "legacy")
+    monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "1" if followup else "0")
     convo = Conversation(system="sys", messages=[UserMessage(content=question)])
     runtime = SourceRuntime(TurnBudget(TurnLimits()), _authorization(Policy()))
     consumer = SimpleNamespace(

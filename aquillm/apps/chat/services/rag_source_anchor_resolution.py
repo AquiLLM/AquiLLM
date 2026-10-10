@@ -22,6 +22,10 @@ _SINGULAR = re.compile(
     r"\b((?:this|that|the)\s+(?:paper|report|document|source)|it|its|this|that)\b", re.I
 )
 _GENERIC_TITLES = frozenset({"paper", "report", "document", "source"})
+_NAMED_SOURCE = re.compile(
+    r'\s+(?:(?i:titled|named|called)\s+)?(?P<title>"[^"\n]+"|“[^”\n]+”|'
+    r"[A-Z][\w’'-]*(?:\s+(?:[A-Z][\w’'-]*|of|the|and|in|on|for|to|a|an))*)"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +34,7 @@ class SourceAnchors:
     chunk_identities: tuple[tuple[int, str, int], ...] = ()
     basis: str = "none"
     unresolved_references: tuple[str, ...] = ()
+    source_constraints: tuple[str, ...] = ()
 
 
 def _history_rows(history):
@@ -150,6 +155,19 @@ def _reference_events(question, titles):
         if not _overlaps(start, end, occupied):
             events.append((start, end, "title", title))
             occupied.append((start, end))
+    for cue in _SINGULAR.finditer(question):
+        if " " not in cue.group(0) or _overlaps(*cue.span(), occupied):
+            continue
+        known = next((event for event in events if event[2] == "title"
+            and event[0] >= cue.end() and not question[cue.end():event[0]].strip()), None)
+        named = _NAMED_SOURCE.match(question, cue.end())
+        if known is not None:
+            occupied.append((cue.start(), known[1]))
+        elif named is not None:
+            start, end = named.span("title")
+            if not _overlaps(start, end, occupied):
+                events.append((start, end, "named_source", named.group("title")))
+                occupied.append((cue.start(), end))
     for pattern, kind in (
         (_ORDINAL, "ordinal"),
         (_PLURAL, "plural"),
@@ -194,9 +212,13 @@ def resolve_source_anchors(question: str, history) -> SourceAnchors:
     identities = []
     unresolved = []
     bases = []
+    constraints = []
     for _start, _end, kind, value in events:
         found = ()
         basis = kind
+        if kind == "named_source":
+            constraints.append(value)  # Search text only; never document authority.
+            continue
         if kind == "citation":
             identity = valid.get(value)
             found = (identity,) if identity is not None else ()
@@ -239,6 +261,7 @@ def resolve_source_anchors(question: str, history) -> SourceAnchors:
             unresolved.append(value)
             continue
         bases.append(basis)
+        constraints.append(question[_start:_end])
         for identity in found:
             if identity not in identities:
                 identities.append(identity)
@@ -248,6 +271,7 @@ def resolve_source_anchors(question: str, history) -> SourceAnchors:
         tuple(identities),
         "+".join(dict.fromkeys(bases)) or "none",
         tuple(unresolved),
+        tuple(dict.fromkeys(constraints)),
     )
 
 
