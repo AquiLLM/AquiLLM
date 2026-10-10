@@ -23,6 +23,7 @@ PREFILL_FLAGS = dict(AQUILLM_H100_PREFILL='1', AQUILLM_H100_MTP_KERNEL='baseline
                      AQUILLM_H100_SPLIT_POLICY='baseline', AQUILLM_H100_GDN='baseline')
 IMAGE_DEFAULTS = ('Cmd', 'Entrypoint', 'Env', 'User', 'WorkingDir', 'Healthcheck',
                   'ExposedPorts', 'Volumes', 'StopSignal', 'Shell')
+MTP_GRAPH_SIZES = {2: (5, 10, 20), 4: (5, 10, 15, 20, 40)}
 
 
 def immutable_image(image):
@@ -157,12 +158,35 @@ def _tokens(text):
     return tokens, selected
 
 
-def transform_args(original, *, max_num_seqs, profile=None):
+def _has_graph_control(tokens):
+    # Pinned EngineArgs accepts -cc, JSON dotted keys, and top-level sizing
+    # overrides. Refuse every spelling/prefix rather than merge unknown config.
+    controls = ('--compilation-config', '--cudagraph-capture-sizes',
+                '--max-cudagraph-capture-size', '--cuda-graph-sizes')
+    for token in tokens:
+        option = token.split('=', 1)[0].replace('_', '-')
+        if option == '-cc' or option.startswith('-cc.'):
+            return True
+        if option.startswith('--') and any(
+                target.startswith(option) or option.startswith(target + '.') for target in controls):
+            return True
+    return False
+
+
+def transform_args(original, *, max_num_seqs, profile=None, graph_policy='baseline'):
     if type(max_num_seqs) is not int or max_num_seqs not in (1, 2, 4):
         raise SystemExit('Sequence limit must be exactly 1, 2 or 4')
+    if graph_policy not in ('baseline', 'mtp'):
+        raise SystemExit('Only baseline or bounded MTP graph policies are supported')
+    if graph_policy == 'mtp' and (max_num_seqs not in MTP_GRAPH_SIZES or profile is not None):
+        raise SystemExit('MTP graph policy requires seq2/4 without profiling')
     if profile is not None and (profile not in ('decode', 'prefill') or max_num_seqs != 1):
         raise SystemExit('Bounded profiler runs require max-num-seqs=1')
     tokens, selected = _tokens(original)
+    if graph_policy == 'mtp' and '--profiler-config' in selected:
+        raise SystemExit('MTP graph policy refuses existing profiler configuration')
+    if graph_policy == 'mtp' and _has_graph_control(tokens):
+        raise SystemExit('MTP graph policy refuses existing compilation/graph controls')
     result, skip = [], set()
     for name, (index, joined, _) in selected.items():
         skip.add(index)
@@ -179,6 +203,11 @@ def transform_args(original, *, max_num_seqs, profile=None):
         result += ['--max-num-seqs', str(max_num_seqs)]
     if profile is not None:
         result += ['--profiler-config', json.dumps(profiler_config(profile), separators=(',', ':'))]
+    if graph_policy == 'mtp':
+        # EngineArgs 2dfaae752 --compilation-config accepts this dataclass JSON.
+        # Only capture sizes change; maximum remains 20/40, and C1 retains 5.
+        result += ['--compilation-config', json.dumps(
+            {'cudagraph_capture_sizes': MTP_GRAPH_SIZES[max_num_seqs]}, separators=(',', ':'))]
     return shlex.join(result)
 
 
@@ -234,24 +263,31 @@ def prepare_state(original, current, resolved, compose_hash, image):
         approved_images={PREFILL_IMAGE: base.digest(image['Config'])})
 
 
-def selected_environment(state, max_num_seqs=1, profile=None, *, rollback=False):
+def selected_environment(state, max_num_seqs=1, profile=None, *, rollback=False, graph_policy='baseline'):
     original = state['baseline_environment']
     if rollback:
         return dict(original)
     values = dict(original)
-    values['VLLM_EXTRA_ARGS'] = transform_args(original.get('VLLM_EXTRA_ARGS', ''), max_num_seqs=max_num_seqs, profile=profile)
+    values['VLLM_EXTRA_ARGS'] = transform_args(original.get('VLLM_EXTRA_ARGS', ''), max_num_seqs=max_num_seqs,
+                                              profile=profile, graph_policy=graph_policy)
     if profile is not None:
         values['VLLM_CUSTOM_SCOPES_FOR_PROFILING'] = '1'
     return values
 
 
-def normalize_environment(state, values):
+def normalize_environment(state, values, *, image=PREFILL_IMAGE):
     if protected_environment(values) != state['environment_digests']:
         raise SystemExit('Protected environment/plugin/MTP flag drift; recovery refused')
     affected = affected_environment(values)
     allowed = [state['baseline_environment']]
     allowed += [selected_environment(state, limit) for limit in (1, 2, 4)]
     allowed += [selected_environment(state, 1, mode) for mode in ('decode', 'prefill')]
+    # Existing original compilation settings remain protected under baseline
+    # policy. They are never merged or replaced by the MTP experiment.
+    baseline_tokens, baseline_selected = _tokens(state['baseline_environment'].get('VLLM_EXTRA_ARGS', ''))
+    if (image != PREFILL_IMAGE and image in approved_images(state)
+            and '--profiler-config' not in baseline_selected and not _has_graph_control(baseline_tokens)):
+        allowed += [selected_environment(state, limit, graph_policy='mtp') for limit in MTP_GRAPH_SIZES]
     if affected not in allowed:
         raise SystemExit('Running/resolved sequence/profiler settings are outside the bounded experiment')
     normalized = {name: value for name, value in values.items() if name not in AFFECTED and value is not None}
@@ -271,7 +307,7 @@ def validate_configuration(state, original, current, resolved=None):
     if current.get('Image') not in approved_images(state):
         raise SystemExit('Image drift; only baseline or explicitly registered images are supported')
     normalized = copy.deepcopy(current)
-    values = normalize_environment(state, base.environment(current))
+    values = normalize_environment(state, base.environment(current), image=current['Image'])
     if current['Image'] != PREFILL_IMAGE:
         _, selected = _tokens(base.environment(current).get('VLLM_EXTRA_ARGS', ''))
         if '--profiler-config' in selected:
@@ -286,7 +322,7 @@ def validate_configuration(state, original, current, resolved=None):
         if resolved.get('image') not in approved_images(state) or base.service_digest(resolved) != state['service_digest']:
             raise SystemExit('Resolved image/service configuration drift')
         service = copy.deepcopy(resolved)
-        service['environment'] = normalize_environment(state, resolved.get('environment', {}))
+        service['environment'] = normalize_environment(state, resolved.get('environment', {}), image=resolved['image'])
         if resolved['image'] != PREFILL_IMAGE and '--profiler-config' in _tokens(resolved.get('environment', {}).get('VLLM_EXTRA_ARGS', ''))[1]:
             raise SystemExit('Profiling is restricted to the baseline image')
     if base.protected_environment(values) != original.get('environment_digests') or not base.runtime_matches(original, normalized):
@@ -295,16 +331,19 @@ def validate_configuration(state, original, current, resolved=None):
         base.validate_configuration(original, normalized, service)
 
 
-def make_override(state, original, current, *, max_num_seqs=1, profile=None, rollback=False, image=None, process_env=None):
+def make_override(state, original, current, *, max_num_seqs=1, profile=None, rollback=False, image=None,
+                  process_env=None, graph_policy='baseline'):
     validate_configuration(state, original, current)
     target = PREFILL_IMAGE if rollback or image is None else image
     if immutable_image(target) not in approved_images(state):
         raise SystemExit('Requested image has not been explicitly authorized')
     if profile is not None and target != PREFILL_IMAGE:
         raise SystemExit('Profiling is restricted to the baseline image')
+    if graph_policy == 'mtp' and (rollback or target == PREFILL_IMAGE):
+        raise SystemExit('MTP graph policy requires an explicitly registered candidate image')
     values = base.environment(current)
     inherited = {name: '${' + base.PREFIX + name + '}' for name in values if name not in AFFECTED}
-    selected = selected_environment(state, max_num_seqs, profile, rollback=rollback)
+    selected = selected_environment(state, max_num_seqs, profile, rollback=rollback, graph_policy=graph_policy)
     # Override literals must survive Compose interpolation; parse_config restores
     # config's reusable escaping before comparisons with the exact runtime text.
     inherited.update({name: selected[name].replace('$', '$$') if name in selected else None for name in AFFECTED})
@@ -359,6 +398,7 @@ def main(argv=None):
     parser.add_argument('--max-num-seqs', type=int, choices=(1, 2, 4))
     parser.add_argument('--profile', choices=('decode', 'prefill'))
     parser.add_argument('--image')
+    parser.add_argument('--graph-policy', choices=('baseline', 'mtp'), default='baseline')
     args = parser.parse_args(argv)
     if socket.gethostname() != 'aquillm-dev2':
         raise SystemExit('This experiment is restricted to the authorized 254 development host')
@@ -368,6 +408,9 @@ def main(argv=None):
         parser.error('sequence/profiler selections are switch-only')
     if args.profile is not None and args.max_num_seqs != 1:
         parser.error('profiler runs require --max-num-seqs 1')
+    if args.graph_policy == 'mtp' and (args.action != 'switch' or args.max_num_seqs not in MTP_GRAPH_SIZES
+            or args.profile is not None or args.image is None or args.image == PREFILL_IMAGE):
+        parser.error('MTP graphs require switch seq2/4, explicit registered candidate image and no profiler')
     if args.action == 'authorize-image' and args.image is None:
         parser.error('authorize-image requires --image')
     if args.image is not None:
@@ -432,7 +475,8 @@ def main(argv=None):
     else:
         rollback = args.action == 'rollback'
         override, process = make_override(state, original, current,
-            max_num_seqs=args.max_num_seqs or 1, profile=args.profile, rollback=rollback, image=target)
+            max_num_seqs=args.max_num_seqs or 1, profile=args.profile, rollback=rollback, image=target,
+            graph_policy=args.graph_policy)
         target = override['services']['vllm']['image']
         override_path = args.state_dir / 'throughput-next.json'
         write_private(override_path, override)
@@ -440,7 +484,8 @@ def main(argv=None):
         raw = base.run(command + ['config', '--format', 'json'], env=process)
         resolved = base.parse_config(raw)['services']['vllm']
         validate_configuration(state, original, current, resolved)
-        expected = selected_environment(state, args.max_num_seqs or 1, args.profile, rollback=rollback)
+        expected = selected_environment(state, args.max_num_seqs or 1, args.profile, rollback=rollback,
+                                        graph_policy=args.graph_policy)
         if affected_environment(resolved.get('environment', {})) != expected:
             raise SystemExit('Resolved sequence/profiler selection differs from the requested operation')
         if resolved.get('image') != target:
@@ -461,7 +506,7 @@ def main(argv=None):
         if failure is not None or not restored.get('State', {}).get('Running'):
             raise SystemExit('Model startup failed; retained recovery permits explicit rollback') from None
     print(json.dumps(dict(action=args.action, image=target, verified=True,
-                         max_num_seqs=args.max_num_seqs, profile=args.profile)), flush=True)
+                         max_num_seqs=args.max_num_seqs, profile=args.profile, graph_policy=args.graph_policy)), flush=True)
 
 
 if __name__ == '__main__':

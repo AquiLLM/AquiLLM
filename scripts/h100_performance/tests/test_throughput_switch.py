@@ -594,3 +594,161 @@ def test_candidate_runtime_config_drift_blocks_rollback_before_compose(baseline,
 def test_override_rejects_invalid_explicit_image_instead_of_defaulting(baseline, image):
     with pytest.raises(SystemExit):
         helper().make_override(prepared(baseline), baseline[0], baseline[1], image=image, process_env={})
+
+
+@pytest.mark.parametrize('limit,sizes', [(2, [5, 10, 20]), (4, [5, 10, 15, 20, 40])])
+def test_mtp_graph_policy_adds_only_exact_capture_sizes(limit, sizes):
+    module = helper()
+    default = module.transform_args(ARGS, max_num_seqs=limit)
+    tokens = shlex.split(module.transform_args(ARGS, max_num_seqs=limit, graph_policy='mtp'))
+    assert tokens[:-2] == shlex.split(default)
+    assert tokens[-2] == '--compilation-config'
+    assert json.loads(tokens[-1]) == {'cudagraph_capture_sizes': sizes}
+    assert module.transform_args(ARGS, max_num_seqs=limit, graph_policy='baseline') == default
+
+
+@pytest.mark.parametrize('limit,profile,policy', [(1, None, 'mtp'), (2, 'decode', 'mtp'),
+                                                (4, 'prefill', 'mtp'), (2, None, 'other')])
+def test_mtp_graph_policy_rejects_sequence_profile_or_policy_mismatch(limit, profile, policy):
+    with pytest.raises(SystemExit):
+        helper().transform_args(ARGS, max_num_seqs=limit, profile=profile, graph_policy=policy)
+
+
+@pytest.mark.parametrize('control', [
+    '--compilation-config {}', '--compilation-config={}', '-cc {}', '-cc={}',
+    '--compilation_config {}', '--compilation-config.cudagraph_capture_sizes [5,10,20]',
+    '--compilation {}', '--cudagraph-capture-sizes 5 10 20', '--cudagraph_capture_sizes 5 10 20',
+    '--max-cudagraph-capture-size 20', '--max-cudagraph 20', '--cuda-graph-sizes 5 10 20',
+    '--cudagraph-capture-sizes 5 --cudagraph-capture-sizes 10',
+    '--compilation-config {broken',
+])
+def test_mtp_graph_policy_refuses_existing_or_ambiguous_graph_controls(control):
+    with pytest.raises(SystemExit):
+        helper().transform_args(ARGS + ' ' + control, max_num_seqs=2, graph_policy='mtp')
+
+
+def test_default_policy_preserves_existing_compilation_settings():
+    text = ARGS + " --compilation-config '{\"mode\":3}'"
+    expected = shlex.split(text)
+    expected[expected.index('--max-num-seqs=1')] = '--max-num-seqs=2'
+    assert shlex.split(helper().transform_args(text, max_num_seqs=2)) == expected
+
+
+@pytest.mark.parametrize('limit', [2, 4])
+def test_mtp_candidate_failed_start_and_default_transition_restore_exact_original(baseline, tmp_path, monkeypatch, limit):
+    module, directory, original_path, runtime = cli_runtime(baseline, tmp_path, monkeypatch)
+    runtime['images'][CANDIDATE] = candidate_image(baseline)
+    module.main(['authorize-image', '--state-dir', str(directory), '--image', CANDIDATE])
+    captured = (directory / 'throughput.json').read_bytes()
+    authoritative = original_path.read_bytes()
+    runtime['fail'] = True
+    with pytest.raises(SystemExit, match='startup failed'):
+        module.main(['switch', '--state-dir', str(directory), '--image', CANDIDATE,
+                     '--max-num-seqs', str(limit), '--graph-policy', 'mtp'])
+    assert runtime['current']['Image'] == CANDIDATE
+    actual = base.environment(runtime['current'])
+    assert actual['VLLM_EXTRA_ARGS'] == module.transform_args(ARGS, max_num_seqs=limit, graph_policy='mtp')
+    assert actual['VLLM_PLUGINS'] == 'sndr,existing-plugin'
+    module.main(['switch', '--state-dir', str(directory), '--image', CANDIDATE, '--max-num-seqs', '2'])
+    assert '--compilation-config' not in shlex.split(base.environment(runtime['current'])['VLLM_EXTRA_ARGS'])
+    module.main(['rollback', '--state-dir', str(directory)])
+    assert runtime['current']['Image'] == IMAGE
+    assert base.environment(runtime['current']) == base.environment(baseline[1])
+    assert (directory / 'throughput.json').read_bytes() == captured
+    assert original_path.read_bytes() == authoritative
+
+
+@pytest.mark.parametrize('selection', [[], ['--image', IMAGE], ['--image', CANDIDATE, '--max-num-seqs', '1'],
+                                      ['--image', CANDIDATE, '--profile', 'decode']])
+def test_cli_mtp_bad_target_or_profile_precedes_docker(baseline, tmp_path, monkeypatch, selection):
+    module, directory, _, runtime = cli_runtime(baseline, tmp_path, monkeypatch)
+    runtime['images'][CANDIDATE] = candidate_image(baseline)
+    module.main(['authorize-image', '--state-dir', str(directory), '--image', CANDIDATE])
+    runtime['calls'].clear()
+    args = ['switch', '--state-dir', str(directory), '--graph-policy', 'mtp']
+    if '--max-num-seqs' not in selection: args += ['--max-num-seqs', '2']
+    with pytest.raises(SystemExit): module.main(args + selection)
+    assert runtime['calls'] == []
+
+
+@pytest.mark.parametrize('drift', ['baseline-image', 'wrong-seq', 'wrong-array', 'extra-field', 'duplicate-key', 'float-size', 'unknown-flag'])
+def test_current_graph_policy_is_allowed_only_for_exact_candidate_array_and_limit(baseline, drift):
+    state = registered(baseline)
+    original, current, _, _ = copy.deepcopy(baseline)
+    current['Image'] = CANDIDATE
+    text = helper().transform_args(ARGS, max_num_seqs=4, graph_policy='mtp')
+    if drift == 'baseline-image': current['Image'] = IMAGE
+    elif drift == 'wrong-seq': text = text.replace('--max-num-seqs=4', '--max-num-seqs=2')
+    elif drift == 'wrong-array': text = text.replace('[5,10,15,20,40]', '[5,10,20,40]')
+    elif drift == 'extra-field': text = text.replace('{"cudagraph_capture_sizes":', '{"mode":3,"cudagraph_capture_sizes":')
+    elif drift == 'duplicate-key': text = text.replace('{"cudagraph_capture_sizes":', '{"cudagraph_capture_sizes":[],"cudagraph_capture_sizes":')
+    elif drift == 'float-size': text = text.replace('[5,10,15,20,40]', '[5.0,10,15,20,40]')
+    elif drift == 'unknown-flag': text += ' --enforce-eager'
+    envset(current, dict(base.environment(current), VLLM_EXTRA_ARGS=text))
+    for rollback in (False, True):
+        with pytest.raises(SystemExit): helper().make_override(state, original, current, rollback=rollback, process_env={})
+
+
+def test_legacy_state_can_restore_registered_mtp_candidate_without_recapture(baseline):
+    state = prepared(baseline)
+    state.pop('approved_images')
+    state = helper().authorize_image(state, baseline[0], baseline[1], baseline[3], candidate_image(baseline))
+    current = copy.deepcopy(baseline[1])
+    current['Image'] = CANDIDATE
+    envset(current, dict(base.environment(current), VLLM_EXTRA_ARGS=helper().transform_args(ARGS, max_num_seqs=4, graph_policy='mtp')))
+    override, _ = helper().make_override(state, baseline[0], current, rollback=True, process_env={})
+    assert override['services']['vllm']['image'] == IMAGE
+    assert override['services']['vllm']['environment']['VLLM_EXTRA_ARGS'] == ARGS
+
+
+def test_original_compilation_config_remains_protected_and_blocks_mtp_only(baseline):
+    original, current, service, _ = baseline
+    text = ARGS + " --compilation-config '{\"mode\":3,\"custom_ops\":[\"+rms_norm\"]}'"
+    values = dict(base.environment(current), VLLM_EXTRA_ARGS=text)
+    envset(current, values)
+    service['environment'] = values.copy()
+    original['environment_digests'] = base.protected_environment(values)
+    state = registered(baseline)
+    before = copy.deepcopy(state)
+    with pytest.raises(SystemExit, match='existing compilation'):
+        helper().make_override(state, original, current, max_num_seqs=4, image=CANDIDATE,
+                               graph_policy='mtp', process_env={})
+    assert state == before
+    override, _ = helper().make_override(state, original, current, max_num_seqs=4, image=CANDIDATE, process_env={})
+    current['Image'] = CANDIDATE
+    envset(current, dict(values, VLLM_EXTRA_ARGS=override['services']['vllm']['environment']['VLLM_EXTRA_ARGS']))
+    rollback, _ = helper().make_override(state, original, current, rollback=True, process_env={})
+    assert rollback['services']['vllm']['environment']['VLLM_EXTRA_ARGS'] == text
+
+
+@pytest.mark.parametrize('scopes', [None, '', '0', '1'])
+def test_mtp_rollback_restores_absent_extra_args_and_exact_scopes(baseline, scopes):
+    original, current, service, _ = baseline
+    values = base.environment(current)
+    values.pop('VLLM_EXTRA_ARGS')
+    if scopes is not None: values['VLLM_CUSTOM_SCOPES_FOR_PROFILING'] = scopes
+    envset(current, values)
+    service['environment'] = values.copy()
+    original['environment_digests'] = base.protected_environment(values)
+    state = registered(baseline)
+    current['Image'] = CANDIDATE
+    envset(current, dict(values, **helper().selected_environment(state, 4, graph_policy='mtp')))
+    current['State']['Running'] = False
+    override, _ = helper().make_override(state, original, current, rollback=True, process_env={})
+    selected = override['services']['vllm']['environment']
+    assert selected['VLLM_EXTRA_ARGS'] is None
+    assert selected['VLLM_CUSTOM_SCOPES_FOR_PROFILING'] == scopes
+
+
+def test_mtp_unregistered_candidate_rejected_before_docker(baseline, tmp_path, monkeypatch):
+    module, directory, _, runtime = cli_runtime(baseline, tmp_path, monkeypatch)
+    with pytest.raises(SystemExit, match='not been explicitly authorized'):
+        module.main(['switch', '--state-dir', str(directory), '--image', CANDIDATE,
+                     '--max-num-seqs', '4', '--graph-policy', 'mtp'])
+    assert runtime['calls'] == []
+
+
+def test_mtp_refuses_original_profiler_instead_of_silently_removing_it():
+    config = json.dumps(helper().profiler_config('decode'))
+    text = ARGS + ' --profiler-config ' + shlex.quote(config)
+    with pytest.raises(SystemExit): helper().transform_args(text, max_num_seqs=2, graph_policy='mtp')
