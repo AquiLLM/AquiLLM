@@ -249,6 +249,20 @@ def test_profile_unset_preserves_config_and_alias_forwarding(tmp_path):
     assert args[-3:] == ["--config", "/tmp/config.yaml", "--cpu_offload_gb=1"]
 
 
+@pytest.mark.parametrize("raw,expected", [
+    ("--compilation-config '{}'", ["--compilation-config", "{}"]),
+    ("-cc '{}'", ["-cc", "{}"]), ("-cc='{}'", ["-cc={}"]),
+    ("-cc.mode 0", ["-cc.mode", "0"]), ("-cc.mode=0", ["-cc.mode=0"]),
+])
+def test_compilation_alias_survives_profile_launcher(tmp_path, raw, expected):
+    args = _run_vllm_start(tmp_path, KV_CACHE_TARGET_ACTIVE_SEQUENCES="4",
+                           VLLM_EXTRA_ARGS=raw)
+    assert args[-len(expected)-6:] == expected + [
+        "--max-num-seqs", "4", "--max-model-len", "262144",
+        "--kv-cache-dtype", "turboquant_k8v4",
+    ]
+
+
 def test_base_compose_vllm_exports_lmcache_env():
     text = _BASE_YML.read_text(encoding="utf-8")
     assert "LMCACHE_ENABLED=" in text

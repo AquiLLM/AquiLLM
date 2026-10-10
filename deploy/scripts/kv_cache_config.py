@@ -87,7 +87,9 @@ def _options(args: Sequence[str]) -> dict[str, str]:
     while index < len(args):
         token = args[index]
         name, equals, value, dotted = _option_parts(token)
-        if name == "--config" or (name.startswith("-c") and not name.startswith("--")):
+        # -cc is vLLM's compilation-config alias, including equals/dotted forms.
+        short_config = name.startswith("-c") and not name.startswith("--") and name != "-cc"
+        if name == "--config" or short_config:
             raise ConfigurationError("--config/-c files are not allowed with a capacity profile; provide explicit full-name CLI options")
         if name.startswith("--") and name != "--" and name not in GUARDED_FLAGS:
             if any(flag.startswith(name) for flag in GUARDED_FLAGS):

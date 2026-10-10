@@ -279,3 +279,15 @@ def test_unrelated_dotted_json_options_remain_usable(config):
     assert config.resolve_profile({"KV_CACHE_TARGET_ACTIVE_SEQUENCES": "4"}, [
         "--speculative-config.method=mtp", "--compilation_config.cudagraph_mode=PIECEWISE",
     ])["active_sequences"] == 4
+
+
+@pytest.mark.parametrize("args", [["-cc", "{}"], ["-cc={}"],
+                                  ["-cc.mode", "0"], ["-cc.mode=0"]])
+def test_compilation_alias_preserves_argv_in_requested_profile(config, args):
+    assert config.resolve_profile({"KV_CACHE_TARGET_ACTIVE_SEQUENCES": "4"}, args)
+    result = subprocess.run([sys.executable, str(SCRIPT), "--launch-argv", "--", *args],
+                            env={"KV_CACHE_TARGET_ACTIVE_SEQUENCES": "4"}, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    tokens = [token.decode() for token in result.stdout.split(b"\0")[:-1]]
+    assert tokens == args + ["--max-num-seqs", "4", "--max-model-len", "262144",
+                             "--kv-cache-dtype", "turboquant_k8v4"]
