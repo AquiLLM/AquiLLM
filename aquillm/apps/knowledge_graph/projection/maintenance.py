@@ -10,6 +10,7 @@ from celery import current_app
 
 PASS_SECONDS = 90
 MAX_ARTIFACTS = 10
+MAX_OUTBOX_PUBLICATIONS = 100
 _SAVE_CURSOR = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
 redis.call('SET', KEYS[2], ARGV[2])

@@ -42,6 +42,16 @@ TTL may independently defer the actual pass. Normal projection/outbox tasks keep
 their current acknowledgement and retry guarantees. Old release backlogs must
 drain normally during rollout; the new protocol does not remove them.
 
+Each admitted maintenance pass has a 90-second overall budget. It audits at most
+10 active artifacts and makes at most two outbox publication calls, one before and
+one after the audit. Each call claims at most 100 due rows; an explicit smaller
+`page_size` lowers both caps. The first publication, audit, and second publication
+start only while budget remains. An external publication call already in progress
+can run past the 90-second check; the scheduled task's 100-second soft and
+120-second hard limits are the final worker bounds. Due rows left behind remain
+durable for a later admitted pass. Maintenance does not schedule a continuation
+or retry itself.
+
 The precise bound is: **scheduled producers do not grow the maintenance lists
 while their first envelope remains queued; only one token is eligible to start
 maintenance; accepted maintenance has a finite hard lifetime.** Kombu can restore

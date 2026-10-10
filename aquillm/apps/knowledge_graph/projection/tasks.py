@@ -103,7 +103,9 @@ def reconcile_knowledge_graph_projections(
         }
     from .reconciler import _collection, _size
 
-    size = min(_size(size, "page_size"), maintenance.MAX_ARTIFACTS)
+    size = _size(size, "page_size")
+    audit_size = min(size, maintenance.MAX_ARTIFACTS)
+    publication_limit = min(size, maintenance.MAX_OUTBOX_PUBLICATIONS)
     _collection(collection_id)
     if type(dry_run) is not bool:
         raise TypeError("dry_run must be exact")
@@ -138,7 +140,9 @@ def reconcile_knowledge_graph_projections(
     def flush():
         try:
             summary = publish_projection_outbox(
-                limit=size, now=timezone.now(), using=ProjectionDatabaseAliases().state
+                limit=publication_limit,
+                now=timezone.now(),
+                using=ProjectionDatabaseAliases().state,
             )
             result["published_count"] += summary.published_count
             result["failure_count"] += summary.failed_count
@@ -146,12 +150,13 @@ def reconcile_knowledge_graph_projections(
             result["failure_count"] += 1
             result["failure_code"] = "maintenance_outbox_unavailable"
 
-    flush()
+    if monotonic() < deadline:
+        flush()
     try:
         if monotonic() < deadline:
             summary = reconcile_projection_batch(
                 after_id=admission.cursor,
-                page_size=size,
+                page_size=audit_size,
                 deadline=deadline,
                 collection_id=collection_id,
                 save_cursor=admission.save_cursor,

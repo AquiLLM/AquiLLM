@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from celery import current_app
 
 from apps.knowledge_graph.projection import tasks
 from apps.knowledge_graph.projection.memgraph_driver import MemgraphDriverError
@@ -99,11 +99,20 @@ def test_reconcile_and_prune_tasks_are_registered_thin_wrappers(monkeypatch):
     assert len(published) == 2
 
 
-def test_projection_module_registers_exactly_three_production_task_wrappers() -> None:
-    source = Path(tasks.__file__).read_text(encoding="utf-8")
+def test_projection_module_registers_exactly_four_production_task_wrappers() -> None:
+    registered = {
+        name
+        for name in current_app.tasks
+        if name.startswith("apps.knowledge_graph.projection.tasks.")
+    }
 
-    assert source.count("@shared_task(") == 3
-    assert "def publish_knowledge_graph_projection_outbox" not in source
+    assert registered == {
+        "apps.knowledge_graph.projection.tasks.project_knowledge_graph_projection",
+        "apps.knowledge_graph.projection.tasks.reconcile_knowledge_graph_projections",
+        "apps.knowledge_graph.projection.tasks.scheduled_reconcile_knowledge_graph_projections",
+        "apps.knowledge_graph.projection.tasks.prune_knowledge_graph_projection",
+    }
+    assert not hasattr(tasks, "publish_knowledge_graph_projection_outbox")
 
 
 def test_reconcile_task_leaves_failed_outbox_due_without_retry_flood(

@@ -50,8 +50,11 @@ build key; explicit rebuilds can also retry the existing key. Chunk/character
 preflight overflow is skipped before artifact bootstrap because it has no valid
 complete chunk signature. It does not fabricate a partial graph identity.
 Projection reconciliation runs on its separate queue and publishes durable outbox
-work both before and after reconciliation. The scheduler holds no database or
-graph credentials. Artifact pruning has a separate opt-in gate described below.
+work both before and after reconciliation. Each admitted pass audits at most 10
+artifacts and publishes at most 100 due outbox rows in each of those two calls;
+an explicit smaller page size applies to both. Remaining due work waits for the
+next admitted pass. The scheduler holds no database or graph credentials. Artifact
+pruning has a separate opt-in gate described below.
 
 ## Conservative artifact retention scheduling
 

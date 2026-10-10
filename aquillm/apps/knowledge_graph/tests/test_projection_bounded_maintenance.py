@@ -235,7 +235,166 @@ def test_old_task_duplicates_skip_and_full_outbox_does_not_reschedule(monkeypatc
     assert scoped["examined_count"] == 1
     assert second["examined_count"] == 3
     assert enqueued == list(range(1, 11)) + [13, 11, 12, 13]
-    assert publications == [10] * 6
+    assert publications == [100, 100, 100, 100, 100, 100]
+
+
+def test_durable_outbox_backlog_drains_without_expanding_artifact_audit(monkeypatch):
+    redis = RedisBoundary()
+    monkeypatch.setattr(tasks.maintenance, "broker_client", lambda: redis)
+    monkeypatch.setattr(
+        tasks,
+        "_TASK_SETTINGS",
+        SimpleNamespace(projection_batch_size=500),
+    )
+    pending = list(range(398))
+    flush_limits = []
+    audit_sizes = []
+
+    def publish(*, limit, now, using):
+        assert using == "projection_state"
+        flush_limits.append(limit)
+        claimed = pending[:limit]
+        del pending[:limit]
+        return SimpleNamespace(
+            attempted_count=len(claimed),
+            published_count=len(claimed),
+            failed_count=0,
+        )
+
+    def audit(*, page_size, **kwargs):
+        audit_sizes.append(page_size)
+        if len(audit_sizes) == 1:
+            pending.extend(range(398, 418))
+        return SimpleNamespace(
+            examined_count=page_size,
+            enqueued_count=20 if len(audit_sizes) == 1 else 0,
+            failure_count=0,
+        )
+
+    monkeypatch.setattr(tasks, "publish_projection_outbox", publish)
+    monkeypatch.setattr(tasks, "reconcile_projection_batch", audit)
+    monkeypatch.setattr(
+        tasks.reconcile_knowledge_graph_projections,
+        "apply_async",
+        lambda **kwargs: pytest.fail("maintenance must not schedule itself"),
+    )
+
+    first = tasks.reconcile_knowledge_graph_projections.run()
+    duplicate = tasks.reconcile_knowledge_graph_projections.run()
+    assert first["published_count"] == 200
+    assert first["examined_count"] == 10
+    assert len(pending) == 218
+    assert duplicate["skipped"] is True
+    assert duplicate["published_count"] == 0
+    assert flush_limits == [100, 100]
+
+    redis.now = 301
+    second = tasks.reconcile_knowledge_graph_projections.run()
+    assert second["published_count"] == 200
+    assert second["examined_count"] == 10
+    assert len(pending) == 18
+    assert audit_sizes == [10, 10]
+    assert flush_limits == [100, 100, 100, 100]
+
+
+def test_explicit_small_page_size_limits_both_publication_and_audit(monkeypatch):
+    redis = RedisBoundary()
+    monkeypatch.setattr(tasks.maintenance, "broker_client", lambda: redis)
+    limits = []
+    audit_sizes = []
+    monkeypatch.setattr(
+        tasks,
+        "publish_projection_outbox",
+        lambda **kwargs: limits.append(kwargs["limit"])
+        or SimpleNamespace(attempted_count=0, published_count=0, failed_count=0),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_projection_batch",
+        lambda **kwargs: audit_sizes.append(kwargs["page_size"])
+        or SimpleNamespace(examined_count=0, enqueued_count=0, failure_count=0),
+    )
+
+    tasks.reconcile_knowledge_graph_projections.run(page_size=3)
+
+    assert limits == [3, 3]
+    assert audit_sizes == [3]
+
+
+def test_expired_pass_budget_skips_first_publication_and_audit(monkeypatch):
+    redis = RedisBoundary()
+    monkeypatch.setattr(tasks.maintenance, "broker_client", lambda: redis)
+    times = iter((0, 90, 90, 90))
+    monkeypatch.setattr(tasks, "monotonic", lambda: next(times))
+    monkeypatch.setattr(
+        tasks,
+        "publish_projection_outbox",
+        lambda **kwargs: pytest.fail("expired pass must not publish"),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_projection_batch",
+        lambda **kwargs: pytest.fail("expired pass must not audit"),
+    )
+
+    result = tasks.reconcile_knowledge_graph_projections.run()
+
+    assert result["published_count"] == 0
+    assert result["examined_count"] == 0
+
+
+def test_slow_first_publication_skips_audit_and_second_publication(monkeypatch):
+    redis = RedisBoundary()
+    monkeypatch.setattr(tasks.maintenance, "broker_client", lambda: redis)
+    now = [0]
+    monkeypatch.setattr(tasks, "monotonic", lambda: now[0])
+    publications = []
+
+    def publish(**kwargs):
+        publications.append(kwargs["limit"])
+        now[0] = 90
+        return SimpleNamespace(attempted_count=100, published_count=100, failed_count=0)
+
+    monkeypatch.setattr(tasks, "publish_projection_outbox", publish)
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_projection_batch",
+        lambda **kwargs: pytest.fail("expired pass must not audit"),
+    )
+
+    result = tasks.reconcile_knowledge_graph_projections.run()
+
+    assert publications == [100]
+    assert result["published_count"] == 100
+    assert result["examined_count"] == 0
+
+
+def test_publisher_exception_returns_fixed_summary_without_retry(monkeypatch):
+    redis = RedisBoundary()
+    monkeypatch.setattr(tasks.maintenance, "broker_client", lambda: redis)
+    monkeypatch.setattr(
+        tasks,
+        "publish_projection_outbox",
+        lambda **kwargs: (_ for _ in ()).throw(ConnectionError("private detail")),
+    )
+    monkeypatch.setattr(
+        tasks,
+        "reconcile_projection_batch",
+        lambda **kwargs: SimpleNamespace(
+            examined_count=0, enqueued_count=0, failure_count=0
+        ),
+    )
+    monkeypatch.setattr(
+        tasks.reconcile_knowledge_graph_projections,
+        "retry",
+        lambda **kwargs: pytest.fail("maintenance must not self-retry"),
+    )
+
+    result = tasks.reconcile_knowledge_graph_projections.run()
+
+    assert result["failure_code"] == "maintenance_outbox_unavailable"
+    assert result["failure_count"] == 2
+    assert "private detail" not in repr(result)
 
 
 def test_real_isolated_redis_admission_contract():
