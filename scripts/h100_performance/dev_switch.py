@@ -1,18 +1,103 @@
-"""Switch only development's main vLLM image, retaining an immutable rollback.
+"""Digest-only verified baseline. Drift blocks both switch and rollback.
 
-Runs on aquillm-dev2. Existing Compose files/env are preserved. Credentials are
-compared in memory only; neither config output nor credential values are logged.
+Secrets stay in memory: a digest cannot reconstruct changed credentials/config.
+Restore the original configuration before retrying any failed preflight.
 """
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import socket
 import subprocess
 
+FLAGS = frozenset(("AQUILLM_H100_MTP_KERNEL", "AQUILLM_H100_SPLIT_POLICY", "AQUILLM_H100_PREFILL", "AQUILLM_H100_GDN"))
+PREFIX = "AQUILLM_H100_CAPTURED_ENV_"
+FLAG_VALUES = {"AQUILLM_H100_MTP_KERNEL": {"baseline", "fused"},
+               "AQUILLM_H100_SPLIT_POLICY": {"baseline", "adaptive"},
+               "AQUILLM_H100_PREFILL": {"0", "1"},
+               "AQUILLM_H100_GDN": {"baseline"}}
+
 
 def run(args, env=None):
-    return subprocess.check_output(args, text=True, env=env)
+    try:
+        return subprocess.check_output(args, text=True, env=env, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError:
+        raise SystemExit("Docker/Compose failed; diagnostics suppressed to protect credentials") from None
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def environment(current):
+    return dict(item.split("=", 1) for item in current["Config"]["Env"] if "=" in item)
+
+
+def protected_environment(values):
+    return {name: digest(str(value)) for name, value in values.items() if name not in FLAGS and value is not None}
+
+
+def service_digest(service):
+    return digest({key: value for key, value in service.items() if key not in ("image", "environment")})
+
+
+def runtime_digest(current):
+    config = {key: value for key, value in current["Config"].items() if key not in ("Image", "Env", "Labels", "Hostname")}
+    return digest(dict(config=config, host=current.get("HostConfig"), mounts=current.get("Mounts")))
+
+
+def prepare_state(state, current, resolved, compose_hash, *, verified=False):
+    if not verified:
+        raise SystemExit("prepare requires --verify-current-baseline after verifying the restored baseline configuration")
+    if current["Image"] != state["image"]:
+        raise SystemExit("Preparation/migration requires the captured original image; refusing candidate recapture")
+    if compose_hash != current["Config"]["Labels"].get("com.docker.compose.config-hash"):
+        raise SystemExit("Running Compose configuration is unverified or changed; refusing preparation")
+    values = environment(current)
+    if any(values[name] not in FLAG_VALUES[name] for name in FLAGS if name in values):
+        raise SystemExit("Baseline experiment flags contain unsupported values; refusing to persist them")
+    for name, value in resolved.get("environment", {}).items():
+        if value is not None and str(value) != values.get(name):
+            raise SystemExit("Resolved environment differs from running baseline; refusing preparation")
+    if state.get("schema_version") == 2:
+        validate_configuration(state, current, resolved, check_resolved_environment=False)
+        return state
+    return dict(state, schema_version=2, environment_digests=protected_environment(values),
+                baseline_flags={name: value for name, value in values.items() if name in FLAGS},
+                service_digest=service_digest(resolved), runtime_digest=runtime_digest(current))
+
+
+def validate_configuration(state, current, resolved, *, check_resolved_environment=True):
+    if state.get("schema_version") != 2:
+        raise SystemExit("Legacy baseline lacks protected configuration; run verified prepare on the original image")
+    if protected_environment(environment(current)) != state["environment_digests"]:
+        raise SystemExit("Running protected environment drift; restore original configuration before switch or rollback")
+    if check_resolved_environment and protected_environment(resolved.get("environment", {})) != state["environment_digests"]:
+        raise SystemExit("Compose protected environment key/value drift; refusing switch or rollback")
+    if service_digest(resolved) != state["service_digest"] or runtime_digest(current) != state["runtime_digest"]:
+        raise SystemExit("Protected command/mount/runtime configuration drift; refusing switch or rollback")
+
+
+def make_override(state, current, image, *, rollback=False, mtp="baseline"):
+    if state.get("schema_version") != 2 or protected_environment(environment(current)) != state.get("environment_digests"):
+        raise SystemExit("Protected baseline environment unavailable; cannot safely reconstruct rollback")
+    values = environment(current)
+    inherited = {name: "${" + PREFIX + name + "}" for name in values if name not in FLAGS}
+    flags = state["baseline_flags"] if rollback else dict(AQUILLM_H100_MTP_KERNEL=mtp,
+        AQUILLM_H100_SPLIT_POLICY="baseline", AQUILLM_H100_PREFILL="0", AQUILLM_H100_GDN="baseline")
+    inherited.update({name: flags.get(name) for name in FLAGS})
+    process_env = {name: value for name, value in os.environ.items() if name not in FLAGS}
+    process_env.update({PREFIX + name: value for name, value in values.items()})
+    return {"services": {"vllm": {"image": image, "environment": inherited}}}, process_env
+
+
+def compose_command(state, files=None):
+    command = ["docker", "compose", "--profile", "*", "--project-name", state["project"],
+               "--project-directory", state["working_dir"], "--env-file", "/home/exouser/AquiLLM/.env"]
+    for path in state["files"] if files is None else files:
+        command += ["-f", path]
+    return command
 
 
 def main():
@@ -20,6 +105,7 @@ def main():
     parser.add_argument("action", choices=("prepare", "switch", "rollback"))
     parser.add_argument("--image")
     parser.add_argument("--mtp", choices=("baseline", "fused"), default="baseline")
+    parser.add_argument("--verify-current-baseline", action="store_true")
     args = parser.parse_args()
     if socket.gethostname() != "aquillm-dev2":
         raise SystemExit("This experiment is restricted to the authorized 254 development host")
@@ -28,49 +114,53 @@ def main():
     state_path = directory / "baseline.json"
     current = json.loads(run(["docker", "inspect", "compose-vllm-1"]))[0]
     labels = current["Config"]["Labels"]
-    if not state_path.exists():
-        if args.action != "prepare":
-            raise SystemExit("Capture the baseline with prepare before switching")
+    if state_path.exists():
+        state = json.loads(state_path.read_text())
+    elif args.action == "prepare":
         state = dict(image=current["Image"], project=labels["com.docker.compose.project"],
                      working_dir=labels["com.docker.compose.project.working_dir"],
                      files=labels["com.docker.compose.project.config_files"].split(","))
+    else:
+        raise SystemExit("Capture the baseline with verified prepare before switching")
+    if labels["com.docker.compose.project"] != state["project"] or labels["com.docker.compose.project.working_dir"] != state["working_dir"]:
+        raise SystemExit("Compose project identity drift; refusing operation")
+    if args.action == "prepare":
+        command = compose_command(state, labels["com.docker.compose.project.config_files"].split(","))
+        process_env = dict(os.environ, **{PREFIX + name: value for name, value in environment(current).items()})
+        resolved = json.loads(run(command + ["config", "--format", "json"], env=process_env))["services"]["vllm"]
+        hash_output = run(command + ["config", "--hash", "vllm"], env=process_env).split()
+        state = prepare_state(state, current, resolved, hash_output[-1] if hash_output else "", verified=args.verify_current_baseline)
         state_path.write_text(json.dumps(state, indent=2) + "\n")
         state_path.chmod(0o600)
-    state = json.loads(state_path.read_text())
-    if args.action == "prepare":
-        print(json.dumps(state, indent=2))
+        print(json.dumps(dict(action="prepare", image=state["image"], schema_version=2, verified=True)))
         return
+    if state.get("schema_version") != 2:
+        raise SystemExit("Legacy baseline must be migrated with verified prepare on the restored original image")
     image = state["image"] if args.action == "rollback" else args.image
     if not image:
         raise SystemExit("--image is required for switch")
-    image_id = json.loads(run(["docker", "image", "inspect", image]))[0]["Id"]
-    flags = dict(AQUILLM_H100_MTP_KERNEL=args.mtp if args.action == "switch" else "baseline",
-                 AQUILLM_H100_SPLIT_POLICY="baseline", AQUILLM_H100_PREFILL="0",
-                 AQUILLM_H100_GDN="baseline")
-    previous_env = dict(item.split("=", 1) for item in current["Config"]["Env"] if "=" in item)
-    # App settings may have changed in the shared .env since vLLM started.
-    # Preserve this container's exact environment through subprocess-only
-    # interpolation variables. The override contains names, never credentials;
-    # prefixed names also avoid changing host HOME/PATH while Compose resolves.
-    prefix = "AQUILLM_H100_CAPTURED_ENV_"
-    inherited = {name: "${" + prefix + name + "}" for name in previous_env}
-    process_env = dict(os.environ, **{prefix + name: value for name, value in previous_env.items()})
-    override = directory / "current.json"
-    override.write_text(json.dumps({"services": {"vllm": {"image": image_id, "environment": inherited | flags}}}, indent=2))
-    compose = ["docker", "compose", "--profile", "*", "--project-name", state["project"],
-               "--project-directory", state["working_dir"],
-               "--env-file", "/home/exouser/AquiLLM/.env"]
-    for path in state["files"]:
-        compose += ["-f", path]
-    compose += ["-f", str(override)]
-    resolved = json.loads(run(compose + ["config", "--format", "json"], env=process_env))["services"]["vllm"]
-    differences = [name for name, value in resolved.get("environment", {}).items()
-                   if name in previous_env and not name.startswith("AQUILLM_H100_")
-                   and str(value or "") != previous_env[name]]
-    if differences:
-        raise SystemExit("Compose environment drift; refusing an invalid A/B: " + ",".join(sorted(differences)))
-    print(json.dumps(dict(action=args.action, image=image_id, flags=flags)), flush=True)
-    subprocess.run(compose + ["up", "-d", "--no-deps", "--no-build", "vllm"], check=True, env=process_env)
+    image_info = json.loads(run(["docker", "image", "inspect", image]))[0]
+    image_id = image_info["Id"]
+    baseline_info = json.loads(run(["docker", "image", "inspect", state["image"]]))[0]
+    keys = ("Cmd", "Entrypoint", "User", "WorkingDir", "Healthcheck", "ExposedPorts", "Volumes", "StopSignal", "Shell")
+    if any(image_info["Config"].get(key) != baseline_info["Config"].get(key) for key in keys):
+        raise SystemExit("Image runtime defaults changed; refusing an invalid image-only comparison")
+    override_data, process_env = make_override(state, current, image_id, rollback=args.action == "rollback", mtp=args.mtp)
+    override = directory / "next.json"
+    override.write_text(json.dumps(override_data, indent=2))
+    override.chmod(0o600)
+    command = compose_command(state) + ["-f", str(override)]
+    resolved = json.loads(run(command + ["config", "--format", "json"], env=process_env))["services"]["vllm"]
+    validate_configuration(state, current, resolved)
+    run(command + ["up", "-d", "--no-deps", "--no-build", "vllm"], env=process_env)
+    restored = json.loads(run(["docker", "inspect", "compose-vllm-1"]))[0]
+    validate_configuration(state, restored, resolved)
+    expected = state["baseline_flags"] if args.action == "rollback" else override_data["services"]["vllm"]["environment"]
+    expected = {name: value for name, value in expected.items() if name in FLAGS and value is not None}
+    actual = {name: value for name, value in environment(restored).items() if name in FLAGS}
+    if restored["Image"] != image_id or actual != expected:
+        raise SystemExit("Post-switch image/flag verification failed; runtime requires inspection")
+    print(json.dumps(dict(action=args.action, image=image_id, verified=True)), flush=True)
 
 
 if __name__ == "__main__":

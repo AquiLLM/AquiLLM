@@ -1,6 +1,7 @@
 """Synthetic direct-serving latency probe. MTP chunks are not token timestamps."""
 import argparse
 import hashlib
+import http.client
 import json
 import os
 import time
@@ -24,28 +25,58 @@ def stream_request(base, payload):
     chunks = 0
     output = []
     usage = None
-    with request(base, "/v1/completions", payload) as response:
-        headers_at = time.perf_counter()
-        for raw in response:
-            if not raw.startswith(b"data: ") or raw.strip() == b"data: [DONE]":
-                continue
-            item = json.loads(raw[6:])
-            if item.get("usage"):
-                usage = item["usage"]
-            for choice in item.get("choices", []):
-                text = choice.get("text", "")
-                if text:
-                    if first is None:
-                        first = time.perf_counter()
-                    chunks += 1
-                    output.append(text)
+    headers_at = None
+    done = False
+    finish = None
+    error = None
+    try:
+        with request(base, "/v1/completions", payload) as response:
+            headers_at = time.perf_counter()
+            for raw in response:
+                if raw.startswith(b"event:") and raw[6:].strip() == b"error":
+                    error = "server_error"
+                if not raw.startswith(b"data:"):
+                    continue
+                data = raw[5:].strip()
+                if data == b"[DONE]":
+                    done = True
+                    break
+                item = json.loads(data)
+                if item.get("error") is not None:
+                    error = "server_error"
+                if item.get("usage") is not None:
+                    usage = item["usage"]
+                for choice in item.get("choices", []):
+                    if choice.get("finish_reason") is not None:
+                        finish = choice["finish_reason"]
+                    text = choice.get("text") or choice.get("delta", {}).get("content") or ""
+                    if text:
+                        if first is None:
+                            first = time.perf_counter()
+                        chunks += 1
+                        output.append(text)
+    except (OSError, TimeoutError, http.client.HTTPException) as exc:
+        error = "transport_error:" + type(exc).__name__
+    except (ValueError, TypeError, KeyError, AttributeError) as exc:
+        error = "invalid_stream:" + type(exc).__name__
     ended = time.perf_counter()
-    count = usage.get("completion_tokens") if usage else None
-    return dict(headers_seconds=headers_at - started,
-                ttft_seconds=first - started if first else None,
+    count = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    if error is None:
+        if not done:
+            error = "missing_done"
+        elif finish != ("length" if payload.get("ignore_eos") else "stop"):
+            error = "invalid_finish_reason"
+        elif type(count) is not int or count != payload["max_tokens"]:
+            error = "invalid_completion_tokens"
+        elif first is None:
+            error = "missing_output"
+    complete = error is None
+    return dict(complete=complete, error=error, finish_reason=finish, stream_done=done,
+                headers_seconds=headers_at - started if headers_at is not None else None,
+                ttft_seconds=first - started if first is not None else None,
                 total_seconds=ended - started, output_tokens=count, nonempty_chunks=chunks,
                 aggregate_decode_seconds_per_token=(ended - first) / (count - 1)
-                if first and count and count > 1 else None,
+                if complete and first is not None and count > 1 else None,
                 output_sha256=hashlib.sha256("".join(output).encode()).hexdigest(), usage=usage)
 
 

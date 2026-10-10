@@ -1,7 +1,7 @@
 """Frozen synthetic generation checks, independent of performance tuning."""
 import argparse
+import hashlib
 import json
-import re
 import time
 from pathlib import Path
 
@@ -40,6 +40,54 @@ def cases():
     return result
 
 
+def identity(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def evaluate(case, result):
+    """Versioned exact oracle; never qualify partial or error responses."""
+    message = {}
+    finish = None
+    error = None
+    passed = False
+    try:
+        if result.get("error") is not None:
+            error = "server_error"
+        choices = result.get("choices", [])
+        if len(choices) != 1:
+            error = error or "invalid_choices"
+        else:
+            message = choices[0]["message"]
+            finish = choices[0].get("finish_reason")
+            expected_finish = "tool_calls" if "tools" in case else "stop"
+            if finish != expected_finish:
+                error = error or "invalid_finish_reason"
+            if "tools" in case:
+                calls = message.get("tool_calls") or []
+                if len(calls) == 1 and not message.get("content"):
+                    call = calls[0]
+                    function = call.get("function", {})
+                    arguments = json.loads(function.get("arguments", ""))
+                    passed = (call.get("type") == "function" and function.get("name") == "record_measurement"
+                              and isinstance(arguments, dict) and set(arguments) == set(case["expected"])
+                              and all(type(arguments[key]) is type(value) and arguments[key] == value
+                                      for key, value in case["expected"].items()))
+            else:
+                content = message.get("content")
+                if isinstance(content, str) and not message.get("tool_calls"):
+                    expected = case["expected"]
+                    answer = content.strip()
+                    # Only the one-word reasoning cases permit capitalization differences.
+                    if case["id"].startswith("reasoning-") and expected.isalpha():
+                        answer, expected = answer.casefold(), expected.casefold()
+                    passed = answer == expected
+    except (ValueError, TypeError, KeyError, AttributeError):
+        error = error or "invalid_response"
+    return dict(oracle="exact-v1", complete=error is None, error=error, finish_reason=finish,
+                passed=passed and error is None, message=message, usage=result.get("usage") if isinstance(result, dict) else None,
+                case_sha256=identity(case))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -55,21 +103,15 @@ def main():
             if "tools" in case:
                 payload.update(tools=case["tools"], tool_choice="auto")
             started = time.perf_counter()
-            with request(args.base_url, "/v1/chat/completions", payload) as response:
-                result = json.load(response)
-            message = result["choices"][0]["message"]
-            if "tools" in case:
-                calls = message.get("tool_calls") or []
-                passed = len(calls) == 1 and calls[0]["function"]["name"] == "record_measurement"
-                try:
-                    passed = passed and json.loads(calls[0]["function"]["arguments"]) == case["expected"]
-                except (IndexError, KeyError, ValueError):
-                    passed = False
-            else:
-                passed = bool(re.search(r"(?<!\w)" + re.escape(case["expected"]) + r"(?!\w)",
-                                        message.get("content") or "", re.IGNORECASE))
-            row = dict(id=case["id"], label=args.label, passed=passed, message=message,
-                       usage=result.get("usage"), seconds=time.perf_counter() - started)
+            try:
+                with request(args.base_url, "/v1/chat/completions", payload) as response:
+                    result = json.load(response)
+                row = evaluate(case, result)
+            except (OSError, ValueError) as exc:
+                row = evaluate(case, {"error": {}})
+                row["error"] = "request_error:" + type(exc).__name__
+            row.update(id=case["id"], label=args.label, input_sha256=identity(payload),
+                       seconds=time.perf_counter() - started)
             out.write(json.dumps(row) + "\n")
             out.flush()
             print(json.dumps({key: row[key] for key in ("id", "label", "passed", "seconds")}), flush=True)
