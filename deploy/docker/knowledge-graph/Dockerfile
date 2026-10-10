@@ -1,3 +1,7 @@
+FROM ubuntu:22.04 AS mimalloc-builder
+COPY deploy/docker/mimalloc/build.sh deploy/docker/mimalloc/verify.c /build/
+RUN sh /build/build.sh
+
 FROM astral/uv:0.8.17-python3.12-bookworm
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
@@ -29,4 +33,8 @@ COPY . .
 
 WORKDIR /app/aquillm
 
+COPY --from=mimalloc-builder /opt/mimalloc/ /opt/mimalloc/
+COPY --chmod=755 deploy/scripts/with_mimalloc.sh /usr/local/bin/aquillm-allocator
+ENV AQUILLM_ALLOCATOR=mimalloc
+ENTRYPOINT ["/usr/local/bin/aquillm-allocator"]
 CMD ["/opt/venv/bin/python", "-c", "from lib.knowledge_graph.config import run_extraction_worker; run_extraction_worker()"]

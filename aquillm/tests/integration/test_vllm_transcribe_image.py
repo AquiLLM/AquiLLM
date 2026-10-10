@@ -67,7 +67,10 @@ def test_transcription_image_is_pinned_and_self_contained():
     assert "deploy/scripts/vllm_start.sh" in dockerfile
     assert "deploy/scripts/parse_vllm_extra_args.py" in dockerfile
     assert "EXPOSE 8000" in dockerfile
-    assert 'ENTRYPOINT ["/vllm_start.sh"]' in dockerfile
+    assert (
+        'ENTRYPOINT ["/usr/local/bin/aquillm-allocator", "/vllm_start.sh"]'
+        in dockerfile
+    )
     assert "ENV VLLM_EXTRA_ARGS" not in dockerfile
 
 

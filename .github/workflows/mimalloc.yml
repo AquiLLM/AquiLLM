@@ -1,0 +1,41 @@
+name: mimalloc
+
+on:
+  pull_request:
+  push:
+    branches: [development]
+
+jobs:
+  allocator-runtime:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        base-image:
+          - python:3.12-slim-bookworm
+          - ubuntu:22.04
+          - astral/uv:0.8.17-python3.12-bookworm
+    env:
+      MIMALLOC_TEST_IMAGE: aquillm-mimalloc-smoke:ci
+      PYTHONPATH: aquillm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install deployment test dependencies
+        run: python -m pip install pytest pyyaml python-dotenv
+      - name: Build pinned allocator and run upstream tests
+        run: >-
+          docker build -f deploy/docker/mimalloc/Dockerfile.test
+          --build-arg SMOKE_BASE_IMAGE=${{ matrix.base-image }}
+          -t "$MIMALLOC_TEST_IMAGE" .
+      - name: Verify runtime allocation, worker lifecycle, and Compose controls
+        run: >-
+          python -m pytest -c /dev/null --noconftest
+          aquillm/tests/integration/test_mimalloc_runtime.py
+          aquillm/tests/integration/test_mimalloc_compose.py
+          aquillm/tests/integration/test_vllm_genesis_image.py
+          aquillm/tests/integration/test_vllm_lmcache_plumbing.py
+          aquillm/tests/integration/test_sidecar_revision_compose.py
+          aquillm/tests/integration/test_vllm_transcribe_image.py
+          -q --tb=short
