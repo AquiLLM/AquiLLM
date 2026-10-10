@@ -141,3 +141,30 @@ def test_candidate_preserves_validated_tile(monkeypatch, candidate):
     monkeypatch.setenv("GENESIS_P67_BLOCK_KV", "16")
     with pytest.raises(ValueError, match="32-token tile"):
         compatibility.verify_runtime()
+
+
+@pytest.fixture
+def native_baseline(runtime):
+    runtime.update({"flashinfer-cubin":"0.6.13","flashinfer-jit-cache":"0.6.13+cu130",
+                    "nvidia-cutlass-dsl":"4.5.2","nvidia-cutlass-dsl-libs-base":"4.5.2",
+                    "nvidia-cutlass-dsl-libs-cu13":"4.5.2","apache-tvm-ffi":"0.1.9"})
+    return runtime
+
+
+def test_native_profile_accepts_exact_baseline_companions(monkeypatch, native_baseline):
+    monkeypatch.setenv("AQUILLM_H100_RUNTIME_PROFILE","native-gdn-baseline")
+    assert compatibility.verify_runtime() is None
+
+
+@pytest.mark.parametrize("name", ["flashinfer-python","flashinfer-cubin","flashinfer-jit-cache",
+    "nvidia-cutlass-dsl","nvidia-cutlass-dsl-libs-base","nvidia-cutlass-dsl-libs-cu13","apache-tvm-ffi"])
+def test_native_profile_rejects_upgraded_or_missing_companions(monkeypatch,native_baseline,name):
+    monkeypatch.setenv("AQUILLM_H100_RUNTIME_PROFILE","native-gdn-baseline")
+    expected = native_baseline[name]
+    native_baseline[name] = "unqualified"
+    with pytest.raises(ValueError,match=f"unsupported {name}"):
+        compatibility.verify_runtime()
+    del native_baseline[name]
+    with pytest.raises(PackageNotFoundError,match=name):
+        compatibility.verify_runtime()
+    native_baseline[name] = expected

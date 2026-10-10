@@ -85,7 +85,7 @@ def supported(A_log, a, b, dt_bias, q, k, v, beta=1.0, threshold=20.0,
     return _h100(q.device)
 
 
-def make_adapter(original, candidate=None):
+def make_adapter(original, candidate=None, *, route="flashinfer"):
     """Capture the post-Genesis callable and retain positional/default semantics."""
     exercised = False
 
@@ -113,13 +113,14 @@ def make_adapter(original, candidate=None):
             raise SystemExit(f"AquiLLM FlashInfer GDN launch failed: {error}") from error
         if not exercised:
             exercised = True
-            log.warning("AQUILLM_H100 route_exercised gdn=flashinfer shape=%s "
-                        "precision=%s gate_strides=%s state_strides=%s", tuple(q.shape),
+            log.warning("AQUILLM_H100 route_exercised gdn=%s shape=%s "
+                        "precision=%s gate_strides=%s state_strides=%s", route, tuple(q.shape),
                         getattr(launch,"_operand_precision","fp16"),
                         (tuple(a.stride()),tuple(b.stride())),tuple(initial_state.stride()))
         return output, initial_state
 
     call._aquillm_gdn_adapter = True
+    call._aquillm_gdn_route = route
     return call
 
 
@@ -133,16 +134,19 @@ def capture_original(module=None):
     return original
 
 
-def prepare_install(module=None, candidate=None):
+def _prepare_install(module=None, candidate=None, *, route="flashinfer"):
     """Validate every import/signature before changing any runtime alias."""
     if module is None:
         from vllm.model_executor.layers.mamba.gdn import qwen_gdn_linear_attn as module
     original = module.fused_sigmoid_gating_delta_rule_update
     if getattr(original, "_aquillm_gdn_adapter", False):
-        return module, original
-    if candidate is None:
-        from flashinfer import gdn_decode as candidate
-    validate_api(candidate)
+        if getattr(original,"_aquillm_gdn_route","flashinfer") == route:
+            return module, original
+        original = original.__wrapped__
+    if route == "flashinfer":
+        if candidate is None:
+            from flashinfer import gdn_decode as candidate
+        validate_api(candidate)
     expected = inspect.signature(supported)
     actual = inspect.signature(original)
     if tuple(actual.parameters) != tuple(expected.parameters):
@@ -152,10 +156,26 @@ def prepare_install(module=None, candidate=None):
             raise ValueError(f"unsupported post-Genesis GDN default: {name}")
     # Import our launch dependencies during setup, before committing the alias.
     from . import native  # noqa: F401
-    return module, make_adapter(original)
+    return module, make_adapter(original, route=route)
+
+
+def prepare_install(module=None, candidate=None):
+    """Keep the explicit FlashInfer profile's public API compatibility gate."""
+    return _prepare_install(module,candidate)
+
+
+def prepare_native_install(module=None):
+    """Validate the serving alias/native imports without unused FI public APIs."""
+    return _prepare_install(module,route="native-fp16")
 
 
 def install_adapter(module=None, candidate=None):
     module, call = prepare_install(module, candidate)
     module.fused_sigmoid_gating_delta_rule_update = call
     return {"installed": True, "qualification": "experimental_pending_gpu_serving"}
+
+
+def install_native_adapter(module=None):
+    module, call = prepare_native_install(module)
+    module.fused_sigmoid_gating_delta_rule_update = call
+    return {"installed": True, "qualification": "experimental_pending_serving"}

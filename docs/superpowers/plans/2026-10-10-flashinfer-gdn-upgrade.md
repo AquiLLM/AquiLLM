@@ -51,3 +51,16 @@ Files: reproducible serving experiment runner and audit report under the same au
 - [ ] Inspect runtime logs for actual TurboQuant, H100 prefill, Genesis and candidate GDN activation; test cancellation/state reuse.
 - [ ] Restore baseline on failed correctness or performance. Promote only a demonstrated acceptable development candidate; do not upgrade production.
 - [ ] Independently review code and evidence, archive reproducible results, commit/push and pull authorized development changes as appropriate. Report measured wins, remaining limits, and final service state.
+
+## Evidence-driven refinement: retain baseline dependencies
+
+The package-only comparison passed strict32/long6 quality checks and retained the prefill route, but its one-block screening showed only 1.9–2.1% queued throughput improvement and 8.7% less long-generation throughput (MTP acceptance 0.770 to 0.662 on that workload). This is insufficient for promotion. The local FP16 native port passed 137 H100 cases, including 200 changing recurrent windows, and its stride-96 CUDA graph benchmark improved kernel throughput by 39.4%. These are separate findings; a kernel result does not qualify serving.
+
+The user authorized porting optimizations while preserving the deployment stack. The native port does not call FlashInfer's public MTP API, so test it on the exact baseline dependencies before carrying the package upgrade into serving:
+
+- [ ] Run the 135 direct-kernel cases on the exact baseline image; explicitly exclude the two upgraded-public-API installer cases. Keep serving GDN disabled during this probe.
+- [ ] Add an explicit `native-gdn-baseline` runtime profile paired only with `native-fp16`, exact baseline dependency pins, native alias/import checks, and an image that updates only the local plugin.
+- [ ] Restore full native installer GPU coverage and measure graph latency on that image.
+- [ ] Compare baseline against this narrower candidate with quality, cancellation recovery, actual route activation, full request latency, queued throughput, and MTP metrics. Promote only a demonstrated acceptable result.
+
+Request logging is disabled in the pinned server by default. Cancellation screening must therefore report observed stream close, active-to-idle transition, bounded generated-token counters, and quality recovery honestly; it must not claim an observed scheduler abort or physical state-slot reuse without direct evidence. GPU tests separately verify recurrent state ownership and reuse.

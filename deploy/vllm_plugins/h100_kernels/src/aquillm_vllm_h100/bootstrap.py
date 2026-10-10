@@ -20,8 +20,11 @@ def settings(env):
         raise ValueError("unknown split policy")
     if result["prefill"] not in ("0", "1"):
         raise ValueError("unknown prefill setting")
-    if result["gdn"] not in ("baseline", "flashinfer"):
+    if result["gdn"] not in ("baseline", "flashinfer", "native-fp16"):
         raise ValueError("unknown GDN adapter setting")
+    if ((result["gdn"] == "native-fp16")
+            != (result["runtime_profile"] == "native-gdn-baseline")):
+        raise ValueError("native-fp16 requires runtime profile native-gdn-baseline together")
     if result["gdn"] == "flashinfer" and result["runtime_profile"] != "flashinfer-0.6.18":
         raise ValueError("FlashInfer GDN requires candidate runtime flashinfer-0.6.18")
     return result

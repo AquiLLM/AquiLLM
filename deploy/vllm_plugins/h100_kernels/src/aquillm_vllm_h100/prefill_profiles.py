@@ -38,7 +38,7 @@ def development_profile(name=None):
     if name not in (None, PROFILE_NAME):
         raise ValueError(f"unknown H100 prefill profile: {name}")
     runtime_profile = os.environ.get("AQUILLM_H100_RUNTIME_PROFILE", "baseline")
-    if runtime_profile == "baseline":
+    if runtime_profile in ("baseline", "native-gdn-baseline"):
         return _PROFILE
     if runtime_profile == "flashinfer-0.6.18":
         return _CANDIDATE_PROFILE

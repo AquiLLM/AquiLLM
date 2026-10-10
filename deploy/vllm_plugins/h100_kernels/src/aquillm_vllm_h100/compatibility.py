@@ -7,6 +7,12 @@ import sys
 GENESIS_COMMIT = "34e269301cc3df71ae4b0da00a0a159b16b4e5d8"
 PACKAGES = {"vllm": "0.23.1rc1.dev748+g2dfaae752", "torch": "2.11.0+cu130",
             "triton": "3.6.0", "flashinfer-python": "0.6.13"}
+# Captured baseline-packages.json: native kernel dependencies are already
+# present in the baseline image; this profile installs/upgrades none of them.
+NATIVE_BASELINE_PACKAGES = {**PACKAGES, "flashinfer-cubin":"0.6.13",
+    "flashinfer-jit-cache":"0.6.13+cu130", "apache-tvm-ffi":"0.1.9",
+    "nvidia-cutlass-dsl":"4.5.2", "nvidia-cutlass-dsl-libs-base":"4.5.2",
+    "nvidia-cutlass-dsl-libs-cu13":"4.5.2"}
 CANDIDATE_PACKAGES = {**PACKAGES, "flashinfer-python": "0.6.18",
                       "apache-tvm-ffi": "0.1.10",
                       "flashinfer-cubin": "0.6.18",
@@ -31,6 +37,8 @@ def verify_runtime():
     profile = os.environ.get("AQUILLM_H100_RUNTIME_PROFILE", "baseline")
     if profile == "baseline":
         packages = PACKAGES
+    elif profile == "native-gdn-baseline":
+        packages = NATIVE_BASELINE_PACKAGES
     elif profile == "flashinfer-0.6.18":
         packages = CANDIDATE_PACKAGES
     else:

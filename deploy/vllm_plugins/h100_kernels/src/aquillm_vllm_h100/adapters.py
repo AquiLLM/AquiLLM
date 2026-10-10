@@ -94,6 +94,12 @@ def install_adapters(config):
     profile = (development_profile(config.get("profile"))
                if config["prefill"] == "1" or config.get("profile") is not None else None)
     prepared_gdn = None
+    if ((config.get("gdn","baseline") == "native-fp16")
+            != (config.get("runtime_profile","baseline") == "native-gdn-baseline")):
+        raise ValueError("native-fp16 requires runtime profile native-gdn-baseline together")
+    if config.get("gdn") == "native-fp16":
+        from .gdn.adapter import prepare_native_install
+        prepared_gdn = prepare_native_install()
     if config.get("gdn", "baseline") == "flashinfer":
         if config.get("runtime_profile") != "flashinfer-0.6.18":
             raise ValueError("FlashInfer GDN requires candidate runtime flashinfer-0.6.18")

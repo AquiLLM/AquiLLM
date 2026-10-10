@@ -18,8 +18,17 @@ PREFIX = "AQUILLM_H100_CAPTURED_ENV_"
 FLAG_VALUES = {"AQUILLM_H100_MTP_KERNEL": {"baseline", "fused"},
                "AQUILLM_H100_SPLIT_POLICY": {"baseline", "adaptive"},
                "AQUILLM_H100_PREFILL": {"0", "1"},
-               "AQUILLM_H100_GDN": {"baseline", "flashinfer"},
-               "AQUILLM_H100_RUNTIME_PROFILE": {"baseline", "flashinfer-0.6.18"}}
+               "AQUILLM_H100_GDN": {"baseline", "flashinfer", "native-fp16"},
+               "AQUILLM_H100_RUNTIME_PROFILE": {"baseline", "flashinfer-0.6.18", "native-gdn-baseline"}}
+
+
+def validate_gdn_pair(flags):
+    gdn = flags.get("AQUILLM_H100_GDN", "baseline")
+    profile = flags.get("AQUILLM_H100_RUNTIME_PROFILE", "baseline")
+    if (gdn == "native-fp16") != (profile == "native-gdn-baseline"):
+        raise SystemExit("native-fp16 requires runtime profile native-gdn-baseline together")
+    if gdn == "flashinfer" and profile != "flashinfer-0.6.18":
+        raise SystemExit("FlashInfer GDN requires runtime profile flashinfer-0.6.18")
 
 
 def run(args, env=None, input=None):
@@ -124,6 +133,7 @@ def prepare_state(state, current, resolved, compose_hash, *, verified=False):
     values = environment(current)
     if any(values[name] not in FLAG_VALUES[name] for name in FLAGS if name in values):
         raise SystemExit("Baseline experiment flags contain unsupported values; refusing to persist them")
+    validate_gdn_pair(values)
     for name, value in resolved.get("environment", {}).items():
         if value is not None and str(value) != values.get(name):
             raise SystemExit("Resolved environment differs from running baseline; refusing preparation")
@@ -156,6 +166,7 @@ def make_override(state, current, image, *, rollback=False, mtp="baseline", pref
         AQUILLM_H100_RUNTIME_PROFILE=runtime_profile)
     if any(value not in FLAG_VALUES[name] for name, value in flags.items()):
         raise SystemExit("Unsupported experiment flag value; refusing operation")
+    validate_gdn_pair(flags)
     inherited.update({name: flags.get(name) for name in FLAGS})
     process_env = {name: value for name, value in os.environ.items() if name not in FLAGS}
     process_env.update({PREFIX + name: value for name, value in values.items()})
@@ -176,8 +187,8 @@ def main():
     parser.add_argument("--image")
     parser.add_argument("--mtp", choices=("baseline", "fused"), default="baseline")
     parser.add_argument("--prefill", choices=("baseline", "0", "1"), default="baseline")
-    parser.add_argument("--runtime-profile", choices=("baseline", "flashinfer-0.6.18"), default="baseline")
-    parser.add_argument("--gdn", choices=("baseline", "flashinfer"), default="baseline")
+    parser.add_argument("--runtime-profile", choices=("baseline", "flashinfer-0.6.18", "native-gdn-baseline"), default="baseline")
+    parser.add_argument("--gdn", choices=("baseline", "flashinfer", "native-fp16"), default="baseline")
     parser.add_argument("--state-dir", type=Path)
     parser.add_argument("--verify-current-baseline", action="store_true")
     args = parser.parse_args()

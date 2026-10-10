@@ -278,6 +278,30 @@ def test_real_alias_installation_wraps_actual_post_genesis_and_exercises_route(m
     torch.testing.assert_close(state, expected_s, **state_limits())
 
 
+@pytest.mark.parametrize("operand_precision", [pytest.param("fp16", id="precision_fp16")], indirect=True)
+def test_native_baseline_alias_installation_preserves_prefill_and_exercises_fp16(monkeypatch, caplog):
+    from aquillm_vllm_h100.gdn.adapter import install_native_adapter
+    from vllm.model_executor.layers.mamba.gdn import qwen_gdn_linear_attn as qwen
+    saved, prefill = original(), qwen.fi_chunk_gated_delta_rule
+    monkeypatch.setattr(qwen,"fused_sigmoid_gating_delta_rule_update",saved)
+    install_native_adapter()
+    installed = qwen.fused_sigmoid_gating_delta_rule_update
+    assert installed.__wrapped__ is saved and installed._aquillm_gdn_route == "native-fp16"
+    assert qwen.fi_chunk_gated_delta_rule is prefill
+    args, backing = inputs()
+    args = strided_operands(args)
+    args["use_qk_l2norm_in_kernel"] = True
+    before = backing.clone()
+    expected_o, expected_s, _ = reference(args,before,False)
+    output, state = installed(**args)
+    assert any("route_exercised gdn=native-fp16" in record.getMessage()
+               and "precision=fp16" in record.getMessage() for record in caplog.records)
+    assert state is args["initial_state"]
+    torch.testing.assert_close(output,expected_o,**FP16_PRIMARY_OUTPUT)
+    torch.testing.assert_close(state,expected_s,**FP16_PRIMARY_STATE)
+    assert_untouched(args,before,backing)
+
+
 def test_graph_replay_changed_metadata_and_two_independent_workspaces():
     fixtures = [inputs(), inputs(5, 3)]
     for args, _ in fixtures:

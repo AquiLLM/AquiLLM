@@ -1,8 +1,8 @@
 """Fail-closed API inspection. Presence of an API is not qualification.
 
 The pinned service verifies four drafts (T5), uses float16 activations, and
-stores every accepted prefix in vLLM's state slots. This experiment does not
-install an adapter until those contracts are qualified on the actual image.
+stores every accepted prefix in vLLM's state slots. This probe checks only
+the released public API; native adapter setup is independent of that API.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def inspect(module=None) -> RouteDecision:
 
     ``module`` may be supplied to inspect a saved API surface on CPU. The
     default inspects the installed package. The result deliberately stays
-    ineligible: no T5/checkpoint/graph qualification or adapter exists yet.
+    ineligible: API presence alone does not authorize installation or promotion.
     """
     if module is None:
         try:
@@ -57,8 +57,7 @@ def inspect(module=None) -> RouteDecision:
             return RouteDecision(False, f"{name} missing controls: {', '.join(missing)}")
     return RouteDecision(
         False,
-        "API present; explicit candidate GDN opt-in remains experimental. "
-        "BF16-rounded operands require numerical qualification. "
-        "T5 checkpoint/stride, rollback/alias, null-slot and graph qualification "
-        "also remains incomplete; retain baseline",
+        "API present; public API inspection cannot qualify T5 checkpoint/stride, "
+        "rollback/alias, null-slot, graph or serving behavior. "
+        "Native FP16 setup is separate; retain baseline unless explicitly opted in",
     )

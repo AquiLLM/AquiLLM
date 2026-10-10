@@ -363,6 +363,25 @@ class SwitchTests(unittest.TestCase):
                                           {'Type': 'volume', 'Source': 'compile-cache', 'Target': '/compile'}]
         return current
 
+    def test_native_gdn_baseline_switch_requires_pair_and_preserves_rollback(self):
+        state = self.prepare()
+        override, _ = dev_switch.make_override(state,self.current,'native-image',
+            prefill='1',runtime_profile='native-gdn-baseline',gdn='native-fp16')
+        values = override['services']['vllm']['environment']
+        self.assertEqual(values['AQUILLM_H100_PREFILL'],'1')
+        self.assertEqual(values['AQUILLM_H100_RUNTIME_PROFILE'],'native-gdn-baseline')
+        self.assertEqual(values['AQUILLM_H100_GDN'],'native-fp16')
+        current = json.loads(json.dumps(self.current))
+        current['Config']['Env'].extend(['AQUILLM_H100_RUNTIME_PROFILE=native-gdn-baseline',
+                                       'AQUILLM_H100_GDN=native-fp16'])
+        rollback, _ = dev_switch.make_override(state,current,state['image'],rollback=True)
+        self.assertIsNone(rollback['services']['vllm']['environment']['AQUILLM_H100_GDN'])
+        self.assertIsNone(rollback['services']['vllm']['environment']['AQUILLM_H100_RUNTIME_PROFILE'])
+        for kwargs in ({'gdn':'native-fp16'},{'runtime_profile':'native-gdn-baseline'},
+            {'gdn':'native-fp16','runtime_profile':'flashinfer-0.6.18'}):
+            with self.assertRaises(SystemExit):
+                dev_switch.make_override(state,self.current,'native-image',**kwargs)
+
     def test_runtime_digest_ignores_only_mount_collection_order(self):
         current = self.mount_fixture()
         reordered = json.loads(json.dumps(current))
