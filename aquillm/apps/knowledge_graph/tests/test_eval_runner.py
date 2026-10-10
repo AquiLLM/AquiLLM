@@ -170,6 +170,11 @@ def test_extraction_metrics_are_set_based_with_empty_sets_scoring_one():
         "auto_link_precision": 0.0,
         "automatic_link_precision": 0.0,
         "automatic_link_recall": 0.0,
+        "automatic_correct": 0,
+        "automatic_total": 1,
+        "automatic_incorrect": 1,
+        "candidate_correct": 0,
+        "candidate_total": 1,
         "candidate_link_precision": 0.0,
         "candidate_link_recall": 0.0,
         "suppression_precision": 1.0,
@@ -196,6 +201,11 @@ def test_extraction_metrics_accept_immutable_loaded_fixture_records():
         "auto_link_precision": 1.0,
         "automatic_link_precision": 1.0,
         "automatic_link_recall": 1.0,
+        "automatic_correct": 3,
+        "automatic_total": 3,
+        "automatic_incorrect": 0,
+        "candidate_correct": 3,
+        "candidate_total": 3,
         "candidate_link_precision": 1.0,
         "candidate_link_recall": 1.0,
         "suppression_precision": 1.0,
@@ -3134,8 +3144,9 @@ def test_cli_rejects_missing_or_mismatched_rebuild_request_mapping(
 
 def test_fixture_checksum_and_task23_hybrid_runner_contracts_are_public():
     bundle = _passing_comparison_bundle()
-    assert bundle["fixture_checksum"] == sha256(b"fixture").hexdigest() or len(
-        bundle["fixture_checksum"]
-    ) == 64
+    assert (
+        bundle["fixture_checksum"] == sha256(b"fixture").hexdigest()
+        or len(bundle["fixture_checksum"]) == 64
+    )
     assert run_kg_eval.TASK21_HYBRID_ARMS[-1] == "combined_reranked"
     assert callable(run_kg_eval.build_task21_hybrid_report)

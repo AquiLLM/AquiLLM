@@ -1,0 +1,120 @@
+{
+  "schema": "graph-remediation-synthetic-v2",
+  "adoption_eligible": false,
+  "human_labels": false,
+  "cases": [
+    {
+      "id": "homonym-conflict",
+      "lane": "G1",
+      "inputs": {
+        "names": [
+          "Alex",
+          "Alex"
+        ],
+        "identifiers": [
+          "id-a",
+          "id-b"
+        ]
+      },
+      "labels": {
+        "automatic_merge": false
+      }
+    },
+    {
+      "id": "predicate-multiplicity",
+      "lane": "G2",
+      "inputs": {
+        "relation_intent": "supports",
+        "relations": [
+          "opposes",
+          "supports",
+          "supports"
+        ]
+      },
+      "labels": {
+        "distinct_support_edges": 1
+      }
+    },
+    {
+      "id": "partial-scope",
+      "lane": "G3",
+      "inputs": {
+        "selected": 2,
+        "ready": 1
+      },
+      "labels": {
+        "coverage": "partial",
+        "exhaustive": false
+      }
+    },
+    {
+      "id": "hub-201",
+      "lane": "G4",
+      "inputs": {
+        "neighbors": 201,
+        "node_cap": 200
+      },
+      "labels": {
+        "bounded": true,
+        "exhaustive": false
+      }
+    },
+    {
+      "id": "cross-generation",
+      "lane": "G4",
+      "inputs": {
+        "generations": [
+          "generation-a",
+          "generation-b"
+        ],
+        "bridge": "stable-id"
+      },
+      "labels": {
+        "requires_current_authority": true
+      }
+    },
+    {
+      "id": "pending-publication",
+      "lane": "G5",
+      "inputs": {
+        "pending": 1,
+        "ready": 1
+      },
+      "labels": {
+        "coverage": "partial"
+      }
+    },
+    {
+      "id": "cold-extractor-gateway",
+      "lane": "G5",
+      "inputs": {
+        "cache": "cold",
+        "extractor_available": false
+      },
+      "labels": {
+        "quality_claim": false
+      }
+    },
+    {
+      "id": "due-outbox-backlog",
+      "lane": "G5",
+      "inputs": {
+        "due": 201,
+        "pass_limit": 100
+      },
+      "labels": {
+        "bounded": true
+      }
+    },
+    {
+      "id": "held-publication-lock",
+      "lane": "G5",
+      "inputs": {
+        "canonical_lock": "held"
+      },
+      "labels": {
+        "requires_separate_operational_reproduction": true
+      }
+    }
+  ]
+}

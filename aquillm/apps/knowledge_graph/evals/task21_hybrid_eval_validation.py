@@ -108,6 +108,8 @@ def validate_cases(
             "distances": distances,
             "quality_tags": quality_tags,
             "privacy_required": privacy_required,
+            "expected_no_answer": case.get("expected_no_answer"),
+            "expected_coverage": case.get("expected_coverage"),
         }
     if not result:
         raise Task21HybridEvalError("at least one case is required")
@@ -227,11 +229,32 @@ def score_case(
     )
     novel = tuple(item for item in graph if item not in seeds)
     distances = case["distances"]
+    abstained = observation.get("abstained")
+    no_answer_label = case.get("expected_no_answer")
+    coverage_label = case.get("expected_coverage")
+    if "abstained" in observation and (
+        type(abstained) is not bool
+        or type(observation.get("coverage_exhaustive")) is not bool
+        or observation.get("coverage_status")
+        not in ("complete", "partial", "unavailable")
+    ):
+        raise Task21HybridEvalError("invalid abstention/coverage observations")
     return {
         "ranked_chunk_ids": ranked,
         "graph_chunk_ids": graph,
         "recall_at_10": recall,
         "ndcg_at_10": 1.0 if not ideal else dcg / ideal,
+        "precision_at_10": len(expected.intersection(top)) / len(top) if top else None,
+        "no_answer_correct": (not ranked and abstained is True) == no_answer_label
+        if type(no_answer_label) is bool and type(abstained) is bool
+        else None,
+        "coverage_label_accuracy": float(
+            observation.get("coverage_status") == coverage_label
+            and observation.get("coverage_exhaustive") is False
+        )
+        if coverage_label in ("complete", "partial", "unavailable")
+        and "coverage_status" in observation
+        else None,
         "graph_hit_rate": 1.0 if graph else 0.0,
         "adversarial_candidate_count": len(adversarial),
         "inaccessible_result_count": len(observed_inaccessible),

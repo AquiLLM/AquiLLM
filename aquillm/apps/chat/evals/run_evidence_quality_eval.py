@@ -60,6 +60,7 @@ def main(argv=None):
     parser.add_argument("--compare", type=Path, nargs=4)
     parser.add_argument("--targets", type=Path)
     parser.add_argument("--operational-reports", type=Path, nargs="+", default=[])
+    parser.add_argument("--graph-report", type=Path)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument(
         "--cache-state", choices=("cold", "warm", "unknown"), default="unknown"
@@ -146,6 +147,10 @@ def main(argv=None):
             )
         )
     if args.compare:
+        from apps.knowledge_graph.evals.run_graph_quality_gates_v2 import (
+            load_graph_report,
+        )
+
         reports = [json.loads(p.read_text(encoding="utf-8")) for p in args.compare]
         if len({r["mode"] for r in reports}) != 4:
             parser.error("four distinct report modes required")
@@ -158,6 +163,9 @@ def main(argv=None):
                 json.loads(p.read_text(encoding="utf-8"))
                 for p in args.operational_reports
             ],
+            graph_report=load_graph_report(args.graph_report)
+            if args.graph_report
+            else None,
         )
     # Never inherit activation from an input observation report or fixture comparison.
     report["activation_eligible"] = (

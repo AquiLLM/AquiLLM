@@ -80,9 +80,15 @@ def _split_observations(combined):
     traces = {arm: [] for arm in TASK21_HYBRID_ARMS}
     for arm in TASK21_HYBRID_ARMS:
         for row in combined[arm]:
-            if not isinstance(row, Mapping) or set(row) != expected:
+            coverage_fields = {"coverage_status", "coverage_exhaustive", "abstained"}
+            if not isinstance(row, Mapping) or set(row) not in (
+                expected,
+                expected | coverage_fields,
+            ):
                 raise ValueError("combined live observation fields are not exact")
             observations[arm].append(_exact_subset(row, _OBSERVATION_FIELDS, arm))
+            if coverage_fields <= set(row):
+                observations[arm][-1].update(_exact_subset(row, coverage_fields, arm))
             traces[arm].append(_exact_subset(row, _TRACE_FIELDS, arm))
     case_ids = tuple(row["case_id"] for row in observations["vector_only"])
     return observations, traces, case_ids
@@ -100,15 +106,11 @@ def build_live_evidence_payloads(
     """Create exact evaluator rows plus their closed live-trace companion."""
 
     observations, arms, case_ids = _split_observations(combined_observations)
-    if set(combined_freshness) != set(
-        _FRESHNESS_FIELDS + _FRESHNESS_TRACE_FIELDS
-    ):
+    if set(combined_freshness) != set(_FRESHNESS_FIELDS + _FRESHNESS_TRACE_FIELDS):
         raise ValueError("combined live freshness fields are not exact")
     if set(combined_backend_parity) != set(_PARITY_FIELDS) | {"comparison_inputs"}:
         raise ValueError("combined live parity fields are not exact")
-    freshness = _exact_subset(
-        combined_freshness, _FRESHNESS_FIELDS, "live freshness"
-    )
+    freshness = _exact_subset(combined_freshness, _FRESHNESS_FIELDS, "live freshness")
     backend_parity = _exact_subset(
         combined_backend_parity, _PARITY_FIELDS, "live parity"
     )

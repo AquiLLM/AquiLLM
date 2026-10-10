@@ -15,6 +15,10 @@ def independent_operational_gate(monkeypatch):
     )
     # Metric unit tests isolate the separately tested attachment validator.
     monkeypatch.setattr(
+        "apps.knowledge_graph.evals.graph_activation_attachment_v2.validate_graph_activation_attachment_v2",
+        lambda *a, **kw: {"passed": True, "blocking_reasons": []},
+    )
+    monkeypatch.setattr(
         "apps.chat.evals.evidence_operational.validate_attachment",
         lambda *a: {"passed": True, "blocking_reasons": []},
     )

@@ -54,6 +54,9 @@ def additional_controls():
     from apps.chat.services import rag_config
     from apps.documents.services import chunk_rerank_config as rerank
     from apps.documents.services import rag_cache
+    from apps.knowledge_graph.evals.graph_effective_controls import (
+        graph_effective_controls,
+    )
     from lib.llm.providers.completion_policy_snapshot import completion_policy_snapshot
     from lib.llm.providers.openai_runtime_config import (
         context_limit,
@@ -83,6 +86,7 @@ def additional_controls():
         "score_concurrency",
     )
     return {
+        "graph_policy": graph_effective_controls(),
         "completion": completion_policy_snapshot(
             output_tokens=rag_config.synthesis_max_tokens()
         ),

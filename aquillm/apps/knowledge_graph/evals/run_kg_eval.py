@@ -1062,12 +1062,21 @@ def score_extraction(
     report["auto_link_precision"] = automatic_precision
     report["automatic_link_precision"] = automatic_precision
     report["automatic_link_recall"] = automatic_recall
+    report.update(
+        automatic_correct=len(gold_links & predicted_links),
+        automatic_total=len(predicted_links),
+        automatic_incorrect=len(predicted_links - gold_links),
+    )
     predicted_candidates = _relation_set(
         predictions.get("candidate_links", predictions.get("auto_links")),
         predictions.get("entities"),
     )
     report["candidate_link_precision"] = _precision(gold_links, predicted_candidates)
     report["candidate_link_recall"] = _recall(gold_links, predicted_candidates)
+    report.update(
+        candidate_correct=len(gold_links & predicted_candidates),
+        candidate_total=len(predicted_candidates),
+    )
     gold_suppression = _structural_set(expected.get("suppressed_evidence"))
     predicted_suppression = _structural_set(predictions.get("suppressed_evidence"))
     report["suppression_precision"] = _precision(

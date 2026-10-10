@@ -94,7 +94,7 @@ def aggregate(rows):
     return result
 
 
-def compare(reports, targets=None, operational_reports=()):
+def compare(reports, targets=None, operational_reports=(), graph_report=None):
     """Missing observations or uncertainty block activation; no equivalence claim."""
     groups = join_arms({m: reports[m]["observations"] for m in MODES})
     reasons, comparisons, support_measurements = [], {}, {}
@@ -106,6 +106,14 @@ def compare(reports, targets=None, operational_reports=()):
 
     operational = validate_attachment(operational_reports, reports)
     reasons.extend(operational["blocking_reasons"])
+    from apps.knowledge_graph.evals.graph_activation_attachment_v2 import (
+        validate_graph_activation_attachment_v2,
+    )
+
+    graph_evidence = validate_graph_activation_attachment_v2(
+        graph_report, quality_reports=reports
+    )
+    reasons.extend(graph_evidence["blocking_reasons"])
     for mode, report in reports.items():
         verified = verified_flags(report)
         support_measurements[mode] = verified.get("support_policy_measurements")
@@ -226,6 +234,7 @@ def compare(reports, targets=None, operational_reports=()):
     return {
         "activation_eligible": not reasons,
         "gate_version": "evidence-activation-v3-support",
+        "graph_evidence": graph_evidence,
         "operational_evidence": operational,
         "blocking_reasons": sorted(set(reasons)),
         "paired_comparisons": comparisons,
