@@ -7,8 +7,9 @@ production/default promotion or that serving qualification has passed.
 """
 import hashlib
 import json
+import os
 
-from .compatibility import GENESIS_COMMIT, MODEL, PACKAGES
+from .compatibility import CANDIDATE_PACKAGES, GENESIS_COMMIT, MODEL, PACKAGES
 from .prefill import PrefillProfile, PrefillRegion
 
 PROFILE_NAME = "h100-long-prefill-dev-v1"
@@ -24,13 +25,24 @@ _PROFILE = PrefillProfile(
     RUNTIME_KEY, (PrefillRegion(32768, 65536, 1024, 4096),),
     "experimental_microbenchmark:docs/audits/2026-10-10-h100-performance/prefill-microbenchmark.json",
 )
+_CANDIDATE_IDENTITY = {**_IDENTITY, "packages": CANDIDATE_PACKAGES}
+CANDIDATE_RUNTIME_KEY = hashlib.sha256(json.dumps(_CANDIDATE_IDENTITY, sort_keys=True).encode()).hexdigest()
+_CANDIDATE_PROFILE = PrefillProfile(
+    CANDIDATE_RUNTIME_KEY, _PROFILE.regions,
+    "experimental_pending_serving:flashinfer-0.6.18",
+)
 
 
 def development_profile(name=None):
     """None selects the bundled profile only in the explicit prefill installer."""
     if name not in (None, PROFILE_NAME):
         raise ValueError(f"unknown H100 prefill profile: {name}")
-    return _PROFILE
+    runtime_profile = os.environ.get("AQUILLM_H100_RUNTIME_PROFILE", "baseline")
+    if runtime_profile == "baseline":
+        return _PROFILE
+    if runtime_profile == "flashinfer-0.6.18":
+        return _CANDIDATE_PROFILE
+    raise ValueError(f"unknown H100 runtime profile: {runtime_profile}")
 
 
 def matches_runtime(spec, dtype, properties):
