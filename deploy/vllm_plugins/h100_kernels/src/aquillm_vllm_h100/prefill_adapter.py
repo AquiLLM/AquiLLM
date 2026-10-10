@@ -122,13 +122,13 @@ def _make_route(profile, runtime_key):
                              any(region.prefix_min <= lengths[1] <= region.prefix_max and
                                  region.query_min <= lengths[0] <= region.query_max for region in profile.regions))
 
-        def fallback(reason):
+        def fallback(reason, detail=""):
             # CPU mirrors only: no additional CUDA properties, copies, or sync.
             # One record per reason per worker route, rather than per layer.
             if diagnostic_region and reason not in diagnosed:
                 diagnosed.add(reason)
-                log.warning("AQUILLM_H100 prefill_fallback reason=%s cached_len=%s query_len=%s",
-                            reason, lengths[1], lengths[0])
+                log.warning("AQUILLM_H100 prefill_fallback reason=%s cached_len=%s query_len=%s%s",
+                            reason, lengths[1], lengths[0], detail)
             return None
 
         semantics = getattr(impl, "_aquillm_h100_semantics", None)
@@ -164,7 +164,10 @@ def _make_route(profile, runtime_key):
             return fallback("invalid_cache_spec")
         properties = _worker_properties(q.device)
         if not matches_runtime(spec, q.dtype, properties):
-            return fallback("runtime_geometry")
+            return fallback("runtime_geometry",
+                " actual_spec=%r actual_dtype=%s device=(%r,%s,%s,%s) "
+                "expected=(H10080GB,SM90,132SM,float16,k8v4,Q24,Hkv4,D256,page2128,key256,value128)" %
+                (spec, q.dtype, properties.name, properties.major, properties.minor, properties.multi_processor_count))
         raw_valid = (k.ndim == 3 and v.shape == k.shape and k.shape == (q.shape[0], spec.num_kv_heads, spec.head_dim)
                      and q.dtype in (torch.float16, torch.bfloat16) and k.dtype == q.dtype and v.dtype == q.dtype
                      and k.device == q.device and v.device == q.device)

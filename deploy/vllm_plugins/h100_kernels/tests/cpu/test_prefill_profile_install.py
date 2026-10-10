@@ -272,8 +272,18 @@ def test_actual_worker_route_preserves_fallback_and_logs_success_once(monkeypatc
                       "verification_request" if change == "verification" else
                       "destination_layout" if change in ("destination_shape", "destination_dtype", "device", "zero_stride") else
                       "runtime_geometry")
-            assert [record.message for record in caplog.records] == [
-                f"AQUILLM_H100 prefill_fallback reason={reason} cached_len=32768 query_len=1024"]
+            prefix = f"AQUILLM_H100 prefill_fallback reason={reason} cached_len=32768 query_len=1024"
+            assert len(caplog.records) == 1
+            if reason == "runtime_geometry":
+                message = caplog.records[0].message
+                assert message.startswith(prefix + " actual_spec=KVSpec(")
+                assert f"actual_dtype={q.dtype}" in message
+                assert f"device=('{properties.name}',9,0,{properties.multi_processor_count})" in message
+                assert f"block_size={cache.shape[1]}" in message
+                assert f"num_q_heads={q.shape[1]}" in message
+                assert "expected=(H10080GB,SM90,132SM,float16,k8v4,Q24,Hkv4,D256,page2128,key256,value128)" in message
+            else:
+                assert caplog.records[0].message == prefix
 
 
 @pytest.mark.parametrize("reason", ["missing_semantics", "model_revision_missing", "model_revision_mismatch",
