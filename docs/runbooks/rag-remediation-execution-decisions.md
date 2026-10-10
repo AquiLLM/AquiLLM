@@ -162,3 +162,11 @@ Valid default-mode direct, manual and document-tool answers receive the same app
 ### D7 clarification: bounded nonmonotone token fitting
 
 Binary prefix/suffix probing may find a checked valid fit, but cannot prove no fit exists for a BPE tokenizer. I2 adds exhaustive fallback only when the heuristic finds no nonempty fit. Across one chunk_extraction call, fallback is bounded to 4096 tokenizer calls and 1,000,000 full-input codepoints (context plus slice). These are offline chunker-work limits, not retrieval allowances. Exhaustion raises SourceContractError('chunker_work_limit'); only a completed no-fit search may report unrepresentable_source_element. Fitting policy and both limits are part of the chunker fingerprint. The function returns no partial tuple on failure. I5 must retain immutable input and mark the staged generation failed/limited without activating partial chunks; a capacity failure does not mean source text is impossible to represent.
+
+### D6 clarification: active messages after database reload
+
+The active context tracks its issued message UUIDs and write epoch across database reloads, which discard private receipt attributes. A newly generated active-epoch message without its matching receipt is rejected; it cannot silently become an ordinary historical message. Delta refresh verifies exact serialized assistant content immediately before send using the shared verifier. Existing historical messages are not given retroactive receipts.
+
+### D7 clarification: changed parser policies
+
+The corrected DOCX traversal and XLSX unsupported-chart classification use `native-docx-ordered-v2` and `native-xlsx-ordered-v2`. Changed canonical content or quality cannot reuse an older immutable extraction identity. No persisted revision is overwritten.
