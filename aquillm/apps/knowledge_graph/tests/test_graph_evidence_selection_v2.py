@@ -7,6 +7,7 @@ import pytest
 
 from apps.knowledge_graph.retrieval.graph_handoff import GraphCoverageV2
 from apps.knowledge_graph.retrieval.graph_query_contracts import (
+    GraphEvidenceAssociationV2,
     GraphEvidenceRefV2,
     GraphGroupRelationRequestV2,
 )
@@ -28,20 +29,58 @@ class SelectionFixture:
     identity = key("atlas")
     key = staticmethod(key)
 
+    def reference(self, label, relations, confidence):
+        associations = (
+            tuple(
+                sorted(
+                    (
+                        GraphEvidenceAssociationV2(
+                            key(label + predicate),
+                            "relation",
+                            self.identity,
+                            key("claim"),
+                            predicate,
+                            "directed",
+                        )
+                        for predicate in relations
+                    ),
+                    key=lambda a: a.provenance_key,
+                )
+            )
+            if relations
+            else (
+                GraphEvidenceAssociationV2(
+                    key(label + "-provenance"),
+                    "mention",
+                    self.identity,
+                    None,
+                    None,
+                    None,
+                ),
+            )
+        )
+        identities = (
+            tuple(sorted((self.identity, key("claim"))))
+            if relations
+            else (self.identity,)
+        )
+        return GraphEvidenceRefV2(
+            key(label),
+            key("generation"),
+            None,
+            key("group"),
+            identities,
+            tuple(a.provenance_key for a in associations),
+            relations,
+            confidence,
+            associations,
+        )
+
     def inputs(self, rows):
         module = selector()
         return tuple(
             module.GraphEvidenceSelectionInputV2(
-                GraphEvidenceRefV2(
-                    key(label),
-                    key("generation"),
-                    None,
-                    key("group"),
-                    (self.identity,),
-                    (key(label + "-provenance"),),
-                    relations,
-                    confidence,
-                ),
+                self.reference(label, relations, confidence),
                 text,
                 key(text),
                 key(document),

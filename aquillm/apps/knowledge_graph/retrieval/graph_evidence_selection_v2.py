@@ -44,6 +44,8 @@ class GraphEvidenceSelectionEnvelopeV2:
             raise TypeError("selection inputs must be exact")
         if len(self.inputs) > 5000 or sum(len(r.text) for r in self.inputs) > 250000:
             raise ValueError("selection inputs exceed bounded work")
+        if sum(len(r.ref.associations) for r in self.inputs) > 3000:
+            raise ValueError("selection associations exceed global evidence allowance")
         if type(self.coverage) is not GraphCoverageV2:
             raise TypeError("coverage must be exact")
         checksum(self.algorithm_signature, "algorithm_signature")
@@ -160,12 +162,17 @@ def select_graph_evidence_v2(
         claims = {}
         for pair in ranked:
             ref = pair[1].ref
-            classes = claims.setdefault(
-                (ref.authority_group_checksum, ref.identity_keys), {}
-            )
-            for relation in ("supports", "contradicts"):
-                if relation in ref.relation_types:
-                    classes.setdefault(relation, pair)
+            for association in ref.associations:
+                if association.relation_type in ("supports", "contradicts"):
+                    claim = (
+                        ref.authority_group_checksum,
+                        association.source_identity_key,
+                        association.target_identity_key,
+                        association.direction,
+                    )
+                    claims.setdefault(claim, {}).setdefault(
+                        association.relation_type, pair
+                    )
         for classes in claims.values():
             if {"supports", "contradicts"} <= set(classes):
                 preferred.extend(classes[r] for r in ("supports", "contradicts"))
@@ -175,21 +182,28 @@ def select_graph_evidence_v2(
         ref = row.ref
         if ref.chunk_key in retained:
             continue
-        identities = tuple((ref.authority_group_checksum, i) for i in ref.identity_keys)
-        transition_keys = tuple(
-            (ref.authority_group_checksum, ref.identity_keys, relation)
-            for relation in ref.relation_types
-        )
+        identities = {
+            (ref.authority_group_checksum, a.source_identity_key)
+            for a in ref.associations
+            if a.kind == "mention"
+        }
+        transition_keys = {
+            (
+                ref.authority_group_checksum,
+                a.source_identity_key,
+                a.relation_type,
+                a.target_identity_key,
+                a.direction,
+            )
+            for a in ref.associations
+            if a.kind == "relation"
+        }
         exceeds = (
             len(retained) >= max_candidates
             or documents[row.document_key] >= 3
+            or (any(mentions[i] >= max_mentions_per_identity for i in identities))
             or (
-                not ref.relation_types
-                and any(mentions[i] >= max_mentions_per_identity for i in identities)
-            )
-            or (
-                bool(ref.relation_types)
-                and any(
+                any(
                     transitions[t] >= max_evidence_per_transition
                     for t in transition_keys
                 )
@@ -209,10 +223,8 @@ def select_graph_evidence_v2(
             value,
         )
         documents[row.document_key] += 1
-        if ref.relation_types:
-            transitions.update(transition_keys)
-        else:
-            mentions.update(identities)
+        transitions.update(transition_keys)
+        mentions.update(identities)
     coverage = partial_coverage(envelope.coverage) if clipped else envelope.coverage
     return GraphHandoffV2(
         tuple(sorted(retained.values(), key=lambda r: (-r.score, r.chunk_key))),

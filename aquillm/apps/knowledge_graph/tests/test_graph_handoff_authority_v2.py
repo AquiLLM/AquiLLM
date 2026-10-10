@@ -8,7 +8,10 @@ from uuid import uuid4
 import pytest
 
 from apps.documents.services.source_loading import SourceRuntime, source_runtime_scope
-from apps.knowledge_graph.retrieval.graph_query_contracts import GraphEvidenceRefV2
+from apps.knowledge_graph.retrieval.graph_query_contracts import (
+    GraphEvidenceAssociationV2,
+    GraphEvidenceRefV2,
+)
 from apps.knowledge_graph.retrieval.ready_materialization_v2 import (
     materialize_graph_candidates_v2,
 )
@@ -136,6 +139,10 @@ def test_selection_repository_uses_original_body_ledger(monkeypatch):
         candidate_ref.evidence_provenance_keys,
         (),
         0.8,
+        tuple(
+            GraphEvidenceAssociationV2(p, "mention", "1" * 64, None, None, None)
+            for p in candidate_ref.evidence_provenance_keys
+        ),
     )
     budget = TurnBudget(TurnLimits())
     with source_runtime_scope(SourceRuntime(budget, f.authorization)):

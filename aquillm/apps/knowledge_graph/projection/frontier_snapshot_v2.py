@@ -7,10 +7,10 @@ from apps.knowledge_graph.retrieval import projected_types as t
 from apps.knowledge_graph.retrieval.frontier_ranking_validation_v2 import (
     frontier_algorithm,
 )
-from apps.knowledge_graph.retrieval.graph_query_contracts import GraphEvidenceRefV2
 from apps.knowledge_graph.retrieval.ppr import PPRAlgorithmConfig
 from apps.knowledge_graph.retrieval.projected_snapshot_codec import audit_order
 
+from .frontier_evidence_v2 import FrontierEvidenceV2
 from .topology_encoding import algorithm, chunk_evidence, evidence_signature, provenance
 
 
@@ -34,14 +34,21 @@ class FrontierAssemblyV2:
             caps,
             context,
         )
-        self.hops, self.members, self.groups, self.mentions, self.candidates = (
-            {},
+        self.hops, self.members, self.groups, self.mentions = (
             {},
             {},
             {},
             {},
         )
         self.physical, self.evidence = {}, {}
+        self.evidence_refs = FrontierEvidenceV2(
+            binding,
+            context.group_checksum,
+            frontier_config(
+                caps, session.ready.selected_generations[0].resolver_version
+            ).max_evidence_rows,
+        )
+        self.candidates = self.evidence_refs.chunks
 
     def add_copy(self, identity, hop, rows):
         members = [
@@ -56,21 +63,6 @@ class FrontierAssemblyV2:
         self.members.update((r.entity_key, r) for r in members)
         return True
 
-    def candidate(self, row, generation, identities, relation_types, provenance_key):
-        key = row.chunk_key
-        representation = self.binding.representation(generation, row.document_key)
-        signature = (generation, representation)
-        previous = self.candidates.get(key)
-        if previous is None:
-            previous = [signature, set(), set(), set(), row.confidence]
-            self.candidates[key] = previous
-        if previous[0] != signature:
-            raise ValueError("conflicting chunk representation binding")
-        previous[1].update(identities)
-        previous[2].add(provenance_key)
-        previous[3].update(relation_types)
-        previous[4] = max(previous[4], row.confidence)
-
     def add_relation(self, page, entry, generation, origin, hop):
         memberships = {m.entity_key: m for m in page.memberships}
         if len(set(self.members) | set(memberships)) > self.caps.max_nodes:
@@ -84,12 +76,19 @@ class FrontierAssemblyV2:
         if identity(source_entity) != origin:
             raise ValueError("frontier relation source differs from requested identity")
         target = identity(target_entity)
-        self.hops.setdefault(target, hop + 1)
-        self.members.update(memberships)
         key = (origin, relation.relation_type, target, direction)
         quality = unpack(
             ">d", bytes(255 - b for b in bytes.fromhex(entry["order"][0]))
         )[0]
+        self.evidence_refs.add_page(
+            page,
+            generation=generation,
+            ready=self.session.ready,
+            origin=origin,
+            entry=entry,
+        )
+        self.hops.setdefault(target, hop + 1)
+        self.members.update(memberships)
         current = self.groups.get(key)
         if current is None or (-quality, relation.relation_key) < (
             -current[0],
@@ -99,20 +98,14 @@ class FrontierAssemblyV2:
         current = self.groups[key]
         if current[1] == relation:
             current[2].update((r.evidence_key, r) for r in page.relation_evidence)
-        for row in page.relation_evidence:
-            self.candidate(
-                row,
-                generation,
-                (origin, target),
-                (relation.relation_type,),
-                row.evidence_key,
-            )
         return True
 
     def add_mention(self, page, generation, identity):
+        self.evidence_refs.add_page(
+            page, generation=generation, ready=self.session.ready, origin=identity
+        )
         for row in page.mention_evidence:
             self.mentions[generation, row.mention_key] = (identity, row)
-            self.candidate(row, generation, (identity,), (), row.provenance_key)
 
     def build(self, request):
         ready = self.session.ready
@@ -240,17 +233,4 @@ class FrontierAssemblyV2:
                 )
             ),
         )
-        candidates = tuple(
-            GraphEvidenceRefV2(
-                chunk,
-                values[0][0],
-                values[0][1],
-                self.context.group_checksum,
-                tuple(sorted(values[1])),
-                tuple(sorted(values[2])),
-                tuple(sorted(values[3])),
-                values[4],
-            )
-            for chunk, values in sorted(self.candidates.items())
-        )
-        return snapshot, candidates
+        return snapshot, self.evidence_refs.build()

@@ -87,7 +87,9 @@ def graph_algorithm_signature_v2(*, selected, requests, caps, budget, configs):
             ),
             "seed_policy": "global-prefix/group-equal-mass/global-round-robin-cap-v2",
             "selection_policy": (
-                "query-lexical-predicate-reliability/requested-same-claim-conflicts-v2"
+                "query-lexical-predicate-reliability/provenance-associations-v2/"
+                "scientific-endpoints/both-mention-transition-debits/"
+                "global-whole-reference-association-prefix/requested-same-claim-conflicts"
             ),
             "evidence_caps": {
                 "mentions_per_identity": 2,

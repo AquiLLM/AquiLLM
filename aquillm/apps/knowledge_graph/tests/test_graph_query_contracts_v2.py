@@ -15,10 +15,15 @@ def topology():
         key("generation"),
         None,
         key("group"),
-        (key("a"),),
+        tuple(sorted((key("a"), key("b")))),
         (key("evidence"),),
         ("supports",),
         0.9,
+        (
+            contracts.GraphEvidenceAssociationV2(
+                key("evidence"), "relation", key("a"), key("b"), "supports", "directed"
+            ),
+        ),
     )
     coverage = api("graph_handoff").GraphCoverageV2(1, 1, "complete", (), False)
     return contracts.BoundedGraphTopologyV2(

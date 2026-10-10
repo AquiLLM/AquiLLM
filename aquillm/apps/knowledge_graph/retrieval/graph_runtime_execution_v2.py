@@ -169,9 +169,22 @@ def execute_graph_v2(
     )
     try:
         frontier.check_active()
+        from .graph_evidence_associations_v2 import association_prefix
+
+        admitted = (
+            association_prefix(
+                references, maximum=min(c.max_evidence_rows for c in configs.values())
+            )
+            if configs
+            else ()
+        )
+        if len(admitted) != len(references):
+            from .graph_evidence_selection_v2 import partial_coverage
+
+            coverage = partial_coverage(coverage)
         inputs = load_selection_inputs_v2(
             selected=selected,
-            references=tuple(references),
+            references=admitted,
             authorization=authorization,
             budget=budget,
             max_rows=45,

@@ -12,6 +12,10 @@ from ._graph_v2_validation import (
     relation,
     score,
 )
+from .graph_evidence_associations_v2 import (
+    GraphEvidenceAssociationV2,
+    validate_associations,
+)
 from .graph_handoff import GraphCoverageV2
 from .projected_types import ProjectedAuthorizedGraphSnapshotV1
 
@@ -72,6 +76,7 @@ class GraphEvidenceRefV2:
     evidence_provenance_keys: tuple[str, ...]
     relation_types: tuple[str, ...]
     confidence: float
+    associations: tuple[GraphEvidenceAssociationV2, ...]
 
     def __post_init__(self):
         reference_keys(self)
@@ -83,6 +88,7 @@ class GraphEvidenceRefV2:
             required=True,
         )
         score(self.confidence, "confidence", maximum=1.0)
+        validate_associations(self)
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +115,14 @@ class BoundedGraphTopologyV2:
             )
         if len(candidates) > self.snapshot.caps.max_evidence_rows:
             raise ValueError("evidence_candidates exceeds the evidence bound")
+        if (
+            sum(len(c.associations) for c in candidates)
+            > self.snapshot.caps.max_evidence_rows
+        ):
+            raise ValueError("associations exceed the snapshot evidence bound")
+        provenance = tuple(a.provenance_key for c in candidates for a in c.associations)
+        if len(provenance) != len(set(provenance)):
+            raise ValueError("association provenance is repeated across chunks")
         keys = tuple(c.chunk_key for c in candidates)
         if keys != tuple(sorted(set(keys))):
             raise ValueError("evidence_candidates must be unique and chunk-key sorted")
@@ -128,5 +142,6 @@ __all__ = [
     "GraphRelationRequestV2",
     "GraphGroupRelationRequestV2",
     "GraphEvidenceRefV2",
+    "GraphEvidenceAssociationV2",
     "BoundedGraphTopologyV2",
 ]
