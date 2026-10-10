@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 EXPECTED = {
+    'apache-tvm-ffi': '0.1.10',
     'flashinfer-python': '0.6.18', 'flashinfer-cubin': '0.6.18',
     'flashinfer-jit-cache': '0.6.18+cu130', 'nvidia-cutlass-dsl': '4.6.2',
     'nvidia-cutlass-dsl-libs-base': '4.6.2', 'nvidia-cutlass-dsl-libs-core': '4.6.2',

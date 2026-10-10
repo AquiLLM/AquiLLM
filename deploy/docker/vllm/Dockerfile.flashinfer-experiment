@@ -6,6 +6,7 @@ USER root
 COPY deploy/docker/vllm/flashinfer_experiment_manifest.py /opt/flashinfer_experiment_manifest.py
 RUN python3 /opt/flashinfer_experiment_manifest.py before
 RUN python3 -m pip install --no-cache-dir --no-deps \
+      apache-tvm-ffi==0.1.10 \
       flashinfer-python==0.6.18 \
       nvidia-cutlass-dsl==4.6.2 \
       nvidia-cutlass-dsl-libs-base==4.6.2 \

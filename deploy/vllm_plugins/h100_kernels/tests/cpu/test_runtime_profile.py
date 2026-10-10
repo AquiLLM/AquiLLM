@@ -44,6 +44,7 @@ def candidate(runtime):
         "flashinfer-jit-cache": "0.6.18+cu130",
         "nvidia-cutlass-dsl": "4.6.2",
         "nvidia-cutlass-dsl-libs-cu13": "4.6.2",
+        "apache-tvm-ffi": "0.1.10",
     })
     return runtime
 
@@ -74,6 +75,7 @@ def test_exact_candidate_is_accepted_from_process_environment(monkeypatch, candi
     ("flashinfer-jit-cache", "0.6.18+cu129"),
     ("nvidia-cutlass-dsl", "4.5.2"),
     ("nvidia-cutlass-dsl-libs-cu13", "4.5.2"),
+    ("apache-tvm-ffi", "0.1.9"),
 ])
 def test_candidate_rejects_mixed_companion_versions(monkeypatch, candidate, name, wrong):
     monkeypatch.setenv("AQUILLM_H100_RUNTIME_PROFILE", "flashinfer-0.6.18")
@@ -83,7 +85,7 @@ def test_candidate_rejects_mixed_companion_versions(monkeypatch, candidate, name
 
 
 @pytest.mark.parametrize("name", ["flashinfer-cubin", "flashinfer-jit-cache",
-                                 "nvidia-cutlass-dsl", "nvidia-cutlass-dsl-libs-cu13"])
+                                 "nvidia-cutlass-dsl", "nvidia-cutlass-dsl-libs-cu13", "apache-tvm-ffi"])
 def test_candidate_requires_installed_companion_wheels(monkeypatch, candidate, name):
     monkeypatch.setenv("AQUILLM_H100_RUNTIME_PROFILE", "flashinfer-0.6.18")
     del candidate[name]

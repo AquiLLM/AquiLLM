@@ -8,6 +8,7 @@ GENESIS_COMMIT = "34e269301cc3df71ae4b0da00a0a159b16b4e5d8"
 PACKAGES = {"vllm": "0.23.1rc1.dev748+g2dfaae752", "torch": "2.11.0+cu130",
             "triton": "3.6.0", "flashinfer-python": "0.6.13"}
 CANDIDATE_PACKAGES = {**PACKAGES, "flashinfer-python": "0.6.18",
+                      "apache-tvm-ffi": "0.1.10",
                       "flashinfer-cubin": "0.6.18",
                       "flashinfer-jit-cache": "0.6.18+cu130",
                       "nvidia-cutlass-dsl": "4.6.2",
