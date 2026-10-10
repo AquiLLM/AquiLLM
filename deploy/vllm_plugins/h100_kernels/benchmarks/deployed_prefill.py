@@ -153,6 +153,8 @@ def configure_runtime(args):
     from vllm.v1.attention.backends.turboquant_attn import TurboQuantAttentionImpl
     config = VllmConfig()
     config.attention_config.tq_max_kv_splits_for_cuda_graph = args.kv_splits
+    # The serving TurboQuant configuration overrides H100's default FA3 to FA2.
+    config.attention_config.flash_attn_version = 2
     config.scheduler_config.max_num_batched_tokens = 4096
     if getattr(TurboQuantAttentionImpl, "_aquillm_h100_prefill_install", None) is not None:
         raise RuntimeError("experimental prefill already installed; benchmark requires a fresh baseline process")
@@ -234,7 +236,8 @@ def main():
                  "torch": torch.__version__, "triton": triton.__version__, "vllm": vllm.__version__,
                  "gpu": torch.cuda.get_device_name(), "sm_count": torch.cuda.get_device_properties(0).multi_processor_count,
                  "geometry": {"q_heads":24,"kv_heads":4,"head_dim":256,"dtype":"float16","cache":"turboquant_k8v4",
-                              "page_size":args.block_size,"kv_splits":args.kv_splits,"serving_chunk_budget":4096,"prefix_caching":False},
+                              "page_size":args.block_size,"kv_splits":args.kv_splits,"serving_chunk_budget":4096,
+                              "flash_attn_version":2,"prefix_caching":False},
                  "genesis_environment": {key:value for key,value in os.environ.items()
                                          if re.match(r"GENESIS_PN?\d+_",key) or key in
                                          ("GENESIS_BUFFER_MODE","GENESIS_BUFFER_MODE_P38","GENESIS_TQ_MAX_MODEL_LEN","GENESIS_TQ_MAX_BATCHED_TOKENS")},
