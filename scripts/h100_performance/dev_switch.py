@@ -19,15 +19,34 @@ FLAG_VALUES = {"AQUILLM_H100_MTP_KERNEL": {"baseline", "fused"},
                "AQUILLM_H100_GDN": {"baseline"}}
 
 
-def run(args, env=None):
+def run(args, env=None, input=None):
     try:
-        return subprocess.check_output(args, text=True, env=env, stderr=subprocess.PIPE)
+        return subprocess.check_output(args, text=True, env=env, input=input, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError:
         raise SystemExit("Docker/Compose failed; diagnostics suppressed to protect credentials") from None
 
 
 def digest(value):
     return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def parse_config(raw):
+    # Compose config escapes every dollar for safe reuse as a Compose input.
+    # Compare the actual values in memory, rather than their serialized escapes.
+    return json.loads(raw.replace("$$", "$"))
+
+
+def canonical_hash(state, raw_config, process_env):
+    """Hash the resolved model, matching the model stamped by Compose up.
+
+    Older Compose config --hash leaves env_file unresolved; up resolves it.
+    Feed config's reusable JSON directly to stdin, never to disk or logs.
+    """
+    command = compose_command(state, []) + ["-f", "-", "config", "--hash", "vllm"]
+    fields = run(command, env=process_env, input=raw_config).split()
+    if len(fields) != 2 or fields[0] != "vllm":
+        raise SystemExit("Unexpected resolved Compose hash output; refusing preparation")
+    return fields[1]
 
 
 def environment(current):
@@ -79,13 +98,15 @@ def validate_configuration(state, current, resolved, *, check_resolved_environme
         raise SystemExit("Protected command/mount/runtime configuration drift; refusing switch or rollback")
 
 
-def make_override(state, current, image, *, rollback=False, mtp="baseline"):
+def make_override(state, current, image, *, rollback=False, mtp="baseline", prefill="0"):
     if state.get("schema_version") != 2 or protected_environment(environment(current)) != state.get("environment_digests"):
         raise SystemExit("Protected baseline environment unavailable; cannot safely reconstruct rollback")
     values = environment(current)
     inherited = {name: "${" + PREFIX + name + "}" for name in values if name not in FLAGS}
     flags = state["baseline_flags"] if rollback else dict(AQUILLM_H100_MTP_KERNEL=mtp,
-        AQUILLM_H100_SPLIT_POLICY="baseline", AQUILLM_H100_PREFILL="0", AQUILLM_H100_GDN="baseline")
+        AQUILLM_H100_SPLIT_POLICY="baseline", AQUILLM_H100_PREFILL=prefill, AQUILLM_H100_GDN="baseline")
+    if any(value not in FLAG_VALUES[name] for name, value in flags.items()):
+        raise SystemExit("Unsupported experiment flag value; refusing operation")
     inherited.update({name: flags.get(name) for name in FLAGS})
     process_env = {name: value for name, value in os.environ.items() if name not in FLAGS}
     process_env.update({PREFIX + name: value for name, value in values.items()})
@@ -105,6 +126,7 @@ def main():
     parser.add_argument("action", choices=("prepare", "switch", "rollback"))
     parser.add_argument("--image")
     parser.add_argument("--mtp", choices=("baseline", "fused"), default="baseline")
+    parser.add_argument("--prefill", choices=("baseline", "0", "1"), default="baseline")
     parser.add_argument("--verify-current-baseline", action="store_true")
     args = parser.parse_args()
     if socket.gethostname() != "aquillm-dev2":
@@ -127,9 +149,9 @@ def main():
     if args.action == "prepare":
         command = compose_command(state, labels["com.docker.compose.project.config_files"].split(","))
         process_env = dict(os.environ, **{PREFIX + name: value for name, value in environment(current).items()})
-        resolved = json.loads(run(command + ["config", "--format", "json"], env=process_env))["services"]["vllm"]
-        hash_output = run(command + ["config", "--hash", "vllm"], env=process_env).split()
-        state = prepare_state(state, current, resolved, hash_output[-1] if hash_output else "", verified=args.verify_current_baseline)
+        raw_config = run(command + ["config", "--format", "json"], env=process_env)
+        resolved = parse_config(raw_config)["services"]["vllm"]
+        state = prepare_state(state, current, resolved, canonical_hash(state, raw_config, process_env), verified=args.verify_current_baseline)
         state_path.write_text(json.dumps(state, indent=2) + "\n")
         state_path.chmod(0o600)
         print(json.dumps(dict(action="prepare", image=state["image"], schema_version=2, verified=True)))
@@ -145,12 +167,13 @@ def main():
     keys = ("Cmd", "Entrypoint", "User", "WorkingDir", "Healthcheck", "ExposedPorts", "Volumes", "StopSignal", "Shell")
     if any(image_info["Config"].get(key) != baseline_info["Config"].get(key) for key in keys):
         raise SystemExit("Image runtime defaults changed; refusing an invalid image-only comparison")
-    override_data, process_env = make_override(state, current, image_id, rollback=args.action == "rollback", mtp=args.mtp)
+    override_data, process_env = make_override(state, current, image_id, rollback=args.action == "rollback", mtp=args.mtp,
+                                              prefill="0" if args.prefill == "baseline" else args.prefill)
     override = directory / "next.json"
     override.write_text(json.dumps(override_data, indent=2))
     override.chmod(0o600)
     command = compose_command(state) + ["-f", str(override)]
-    resolved = json.loads(run(command + ["config", "--format", "json"], env=process_env))["services"]["vllm"]
+    resolved = parse_config(run(command + ["config", "--format", "json"], env=process_env))["services"]["vllm"]
     validate_configuration(state, current, resolved)
     run(command + ["up", "-d", "--no-deps", "--no-build", "vllm"], env=process_env)
     restored = json.loads(run(["docker", "inspect", "compose-vllm-1"]))[0]

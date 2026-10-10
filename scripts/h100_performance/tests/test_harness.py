@@ -171,7 +171,7 @@ class SwitchTests(unittest.TestCase):
     def main_probe(self, state, current, resolved, action='rollback'):
         calls = []
         restored = json.loads(json.dumps(self.current))
-        def docker(args, env=None):
+        def docker(args, env=None, input=None):
             calls.append(args)
             if args[:2] == ['docker', 'inspect']:
                 return json.dumps([restored if any('up' in c for c in calls) else current])
@@ -216,6 +216,61 @@ class SwitchTests(unittest.TestCase):
         calls, error, _ = self.main_probe(self.legacy, self.current, self.service)
         self.assertIn('migrated', error)
         self.assertFalse(any('up' in call for call in calls))
+
+    def test_canonical_hash_resolves_env_file_without_writing_credentials(self):
+        raw = json.dumps({'services': {'vllm': dict(self.service, environment={'TOKEN': 'secret$$value'})}})
+        with patch.object(dev_switch, 'run', return_value='vllm verified\n') as command:
+            value = dev_switch.canonical_hash(self.legacy, raw, {'TOKEN': 'secret$value'})
+        self.assertEqual(value, 'verified')
+        args, kwargs = command.call_args
+        self.assertIn('-', args[0])
+        self.assertNotIn('compose.yml', args[0])
+        self.assertEqual(kwargs['input'], raw)
+        self.assertEqual(dev_switch.parse_config(raw)['services']['vllm']['environment']['TOKEN'], 'secret$value')
+
+    def test_prepare_main_accepts_verified_resolved_hash_but_rejects_drift(self):
+        raw = json.dumps({'services': {'vllm': self.service}})
+        for canonical in ('verified', 'changed'):
+            calls = []
+            def docker(args, env=None, input=None):
+                calls.append((args, input))
+                if args[:2] == ['docker', 'inspect']:
+                    return json.dumps([self.current])
+                if '--hash' in args:
+                    # Old raw config hash differs; only resolved stdin matches.
+                    return 'vllm ' + (canonical if input == raw else 'unresolved-env-file-hash') + '\n'
+                return raw
+            with tempfile.TemporaryDirectory() as directory:
+                home = Path(directory)
+                config = home / '.config/aquillm/h100-performance'
+                config.mkdir(parents=True)
+                state_path = config / 'baseline.json'
+                state_path.write_text(json.dumps(self.legacy))
+                with patch.object(dev_switch.Path, 'home', return_value=home), patch.object(dev_switch.socket, 'gethostname', return_value='aquillm-dev2'), patch.object(dev_switch, 'run', side_effect=docker), patch.object(sys, 'argv', ['dev_switch.py', 'prepare', '--verify-current-baseline']), patch('builtins.print') as output:
+                    if canonical == 'verified':
+                        dev_switch.main()
+                        self.assertEqual(json.loads(state_path.read_text())['schema_version'], 2)
+                    else:
+                        with self.assertRaises(SystemExit):
+                            dev_switch.main()
+                        self.assertEqual(json.loads(state_path.read_text()), self.legacy)
+                    self.assertNotIn('secret', str(output.call_args_list))
+                self.assertNotIn('secret', state_path.read_text())
+                self.assertFalse(any('up' in args for args, _ in calls))
+
+    def test_prefill_switch_independent_of_mtp_and_rollback_restores_original(self):
+        current = json.loads(json.dumps(self.current))
+        current['Config']['Env'].append('AQUILLM_H100_PREFILL=0')
+        state = dev_switch.prepare_state(self.legacy, current, self.service, 'verified', verified=True)
+        override, _ = dev_switch.make_override(state, current, 'candidate', prefill='1')
+        flags = override['services']['vllm']['environment']
+        self.assertEqual(flags['AQUILLM_H100_MTP_KERNEL'], 'baseline')
+        self.assertEqual(flags['AQUILLM_H100_PREFILL'], '1')
+        current['Config']['Env'][-1] = 'AQUILLM_H100_PREFILL=1'
+        rollback, _ = dev_switch.make_override(state, current, state['image'], rollback=True, prefill='1')
+        self.assertEqual(rollback['services']['vllm']['environment']['AQUILLM_H100_PREFILL'], '0')
+        with self.assertRaises(SystemExit):
+            dev_switch.make_override(state, current, 'candidate', prefill='arbitrary')
 
 
 if __name__ == '__main__':
