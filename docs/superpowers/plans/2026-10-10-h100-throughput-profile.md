@@ -16,7 +16,7 @@
 - Baseline image `sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7`.
 - Authoritative rollback `/home/exouser/.config/aquillm/flashinfer-upgrade/baseline.json`.
 - Keep four MTP draft tokens, FP16 activations, TurboQuant k8v4, 4096 scheduler tokens, 131072 context, prefill optimization and all plugins.
-- Change only the explicitly selected sequence limit or bounded profiler settings per arm; no package upgrade.
+- Change only the explicitly selected sequence limit or bounded profiler settings per arm; no package upgrade. A plugin-only candidate image may backport the confirmed mixed-GDN gate alignment fix, with unchanged image runtime defaults and exact baseline recovery.
 - Preserve unrelated service identities and exact baseline configuration, including absent environment keys.
 - Do not print secrets, full environment, full inspect or unfiltered startup logs. Private recovery data mode 0600.
 - No competing GPU workloads introduced during serving measurements.
@@ -28,6 +28,14 @@
 - [ ] Resolve pinned Torch profiler settings and endpoints, CUDA graph limitations, worker iteration boundaries.
 - [ ] Record evidence and constraints before attempting concurrent serving.
 
+### Confirmed prerequisite: mixed GDN gate ordering
+
+The deployed GDN method gathers speculative QKV rows in mixed batches but passes full-batch `a`/`b` gates to the speculative recurrence. The actual scheduler can place a one-token continuation prefill before a five-token MTP request. A CPU reproducer executing extracted installed source confirms misalignment in four mixed cases; pure-spec and spec-first controls pass. Upstream already gathers the gates with `spec_token_indx`.
+
+- [ ] Backport that narrow correction in `aquillm_vllm_h100/gdn_mixed.py`, installed alongside the existing H100 adapters. Preserve pure-spec aliases and pure-nonspec behavior. Validate the pinned source structure before rewriting and reject unknown source.
+- [ ] Add CPU regression cases executing the transformed method, including source drift/idempotence and B2/B4 layouts; root runs GPU/serving checks separately.
+- [ ] Build from the exact baseline image with only the H100 plugin changed. Verify packages, plugins, Genesis and image runtime configuration before registering the immutable candidate digest.
+
 ## Task 2: Narrow configuration switch and recovery
 
 **Files:** Create `scripts/h100_performance/throughput_switch.py` and `scripts/h100_performance/tests/test_throughput_switch.py`. Reuse `dev_switch.py` validation utilities without weakening the original image-only contract.
@@ -38,6 +46,7 @@
 - [ ] Verify failure, then implement. Preserve all original argument tokens except the unique sequence limit and explicit profiler config. Keep API keys in inherited environment, never interpolated into artifacts. Verify current and resolved Compose configuration before mutation and inspect the result afterward.
 - [ ] Store the original two affected environment values privately: `VLLM_EXTRA_ARGS`, `VLLM_CUSTOM_SCOPES_FOR_PROFILING`. Compare every other field with the established baseline. Rollback must reconstruct exact original values/presence and image even from a failed candidate startup.
 - [ ] Verify focused tests and existing switch tests. Root reviews before use; no agent SSH.
+- [ ] Extend the switch with explicit `authorize-image --image sha256:<64 hex>` while on the original baseline. Bind approved image/configuration digests into private recovery atomically. `switch --image` may select only an approved image; profiler remains baseline-only; rollback always selects the original baseline. Test drift rejection and exact rollback from a failed candidate startup.
 
 Example invariant test (final helper names chosen in implementation):
 

@@ -1,0 +1,9 @@
+# Development candidate: preserve the exact deployed runtime and all plugins.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY deploy/docker/vllm/throughput_baseline_manifest.py /opt/throughput_baseline_manifest.py
+RUN python3 /opt/throughput_baseline_manifest.py before
+COPY deploy/vllm_plugins/h100_kernels /opt/aquillm-h100
+RUN python3 -m pip install --no-deps --no-build-isolation /opt/aquillm-h100 \
+    && python3 -m aquillm_vllm_h100.build_hook /opt/genesis/sndr/plugin.py \
+    && python3 /opt/throughput_baseline_manifest.py after

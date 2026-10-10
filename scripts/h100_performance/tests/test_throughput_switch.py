@@ -206,7 +206,7 @@ def cli_runtime(baseline, tmp_path, monkeypatch, *, prepare=False, post_drift=No
     directory.mkdir()
     if not prepare:
         module.write_private(directory / 'throughput.json', prepared(baseline), exclusive=True)
-    runtime = dict(current=current, calls=[], fail=up_failure)
+    runtime = dict(current=current, calls=[], fail=up_failure, images={IMAGE: image})
     monkeypatch.setattr(module, 'ORIGINAL_STATE', original_path)
     monkeypatch.setattr(module.socket, 'gethostname', lambda: 'aquillm-dev2')
     monkeypatch.setattr(module.os, 'environ', {'SYNTHETIC_HOST': '1'})
@@ -217,8 +217,7 @@ def cli_runtime(baseline, tmp_path, monkeypatch, *, prepare=False, post_drift=No
             assert command == ['docker', 'inspect', 'compose-vllm-1']
             return json.dumps([runtime['current']])
         if command[:3] == ['docker', 'image', 'inspect']:
-            assert command[-1] == IMAGE
-            return json.dumps([image])
+            return json.dumps([runtime['images'][command[-1]]])
         if command[-3:] == ['config', '--format', 'json']:
             resolved = copy.deepcopy(service)
             override_path = directory / 'throughput-next.json'
@@ -238,7 +237,8 @@ def cli_runtime(baseline, tmp_path, monkeypatch, *, prepare=False, post_drift=No
             return json.dumps({'services': {'vllm': resolved}}).replace('$', '$$')
         if command[-3:] == ['config', '--hash', 'vllm']:
             assert input is not None
-            return 'vllm ' + ('verified' if prepare else 'after') + '\n'
+            changed = runtime['resolved'] != service
+            return 'vllm ' + ('after' if changed else runtime['current']['Config']['Labels']['com.docker.compose.config-hash']) + '\n'
         assert command[-5:] == ['up', '-d', '--no-deps', '--no-build', 'vllm']
         restored = copy.deepcopy(current)
         restored['Image'] = runtime['resolved']['image']
@@ -330,3 +330,267 @@ def test_rollback_dollar_text_survives_compose_interpolation(baseline, tmp_path,
     module.main(['switch', '--state-dir', str(directory), '--max-num-seqs', '2'])
     module.main(['rollback', '--state-dir', str(directory)])
     assert base.environment(runtime['current'])['VLLM_EXTRA_ARGS'] == text
+
+
+def test_recovery_creation_requests_private_permissions_before_writing(tmp_path, monkeypatch):
+    module = helper()
+    original_open, original_chmod = module.os.open, module.os.chmod
+    operations = []
+    def private_open(path, flags, mode):
+        operations.append(('open', mode, bool(flags & os.O_EXCL)))
+        return original_open(path, flags, mode)
+    def private_chmod(path, mode):
+        operations.append(('chmod', mode))
+        return original_chmod(path, mode)
+    monkeypatch.setattr(module.os, 'open', private_open)
+    monkeypatch.setattr(module.os, 'chmod', private_chmod)
+    path = tmp_path / 'recovery.json'
+    module.write_private(path, {'original': 'public text'}, exclusive=True)
+    assert operations == [('open', 0o600, True), ('chmod', 0o600)]
+    assert json.loads(path.read_text()) == {'original': 'public text'}
+    with pytest.raises(FileExistsError): module.write_private(path, {}, exclusive=True)
+    assert json.loads(path.read_text()) == {'original': 'public text'}
+
+
+def test_valid_original_but_missing_recovery_still_blocks_before_docker(baseline, tmp_path, monkeypatch):
+    module = helper()
+    original = tmp_path / 'authoritative.json'
+    original.write_text(json.dumps(baseline[0]))
+    monkeypatch.setattr(module, 'ORIGINAL_STATE', original)
+    monkeypatch.setattr(module.socket, 'gethostname', lambda: 'aquillm-dev2')
+    monkeypatch.setattr(module.base, 'run', lambda *a, **k: pytest.fail('missing recovery touched Docker'))
+    with pytest.raises(SystemExit): module.main(['rollback', '--state-dir', str(tmp_path)])
+
+
+def test_unknown_h100_control_is_preserved_and_drift_is_protected(baseline):
+    original, current, service, _ = baseline
+    values = dict(base.environment(current), AQUILLM_H100_EXTRA_CONTROL='unchanged')
+    envset(current, values)
+    service['environment'] = values.copy()
+    original['environment_digests'] = base.protected_environment(values)
+    original['baseline_flags']['AQUILLM_H100_EXTRA_CONTROL'] = 'unchanged'
+    state = prepared(baseline)
+    override, process = helper().make_override(state, original, current, max_num_seqs=2, process_env={})
+    assert override['services']['vllm']['environment']['AQUILLM_H100_EXTRA_CONTROL'] == '${AQUILLM_H100_CAPTURED_ENV_AQUILLM_H100_EXTRA_CONTROL}'
+    assert process['AQUILLM_H100_CAPTURED_ENV_AQUILLM_H100_EXTRA_CONTROL'] == 'unchanged'
+    values['AQUILLM_H100_EXTRA_CONTROL'] = 'changed'
+    envset(current, values)
+    with pytest.raises(SystemExit): helper().make_override(state, original, current, rollback=True, process_env={})
+
+
+CANDIDATE = 'sha256:' + 'b' * 64
+
+
+def candidate_image(baseline):
+    image = copy.deepcopy(baseline[3])
+    image['Id'] = CANDIDATE
+    return image
+
+
+def registered(baseline):
+    return helper().authorize_image(prepared(baseline), baseline[0], baseline[1],
+                                    baseline[3], candidate_image(baseline))
+
+
+def test_registration_retains_immutable_recovery_capture(baseline):
+    before = prepared(baseline)
+    state = helper().authorize_image(before, baseline[0], baseline[1], baseline[3], candidate_image(baseline))
+    assert state['approved_images'] == {IMAGE: base.digest(baseline[3]['Config']),
+                                        CANDIDATE: base.digest(candidate_image(baseline)['Config'])}
+    assert {key: value for key, value in state.items() if key != 'approved_images'} == {
+        key: value for key, value in before.items() if key != 'approved_images'}
+    assert before['approved_images'] == {IMAGE: base.digest(baseline[3]['Config'])}
+
+
+@pytest.mark.parametrize('image', ['tag:latest', 'sha256:' + 'b' * 63, 'sha256:' + 'B' * 64, IMAGE])
+def test_registration_requires_new_full_immutable_image(baseline, image):
+    candidate = candidate_image(baseline)
+    candidate['Id'] = image
+    with pytest.raises(SystemExit):
+        helper().authorize_image(prepared(baseline), baseline[0], baseline[1], baseline[3], candidate)
+
+
+@pytest.mark.parametrize('field', ['Cmd', 'Entrypoint', 'Env', 'User', 'WorkingDir', 'Healthcheck',
+                                  'ExposedPorts', 'Volumes', 'StopSignal', 'Shell'])
+def test_registration_rejects_image_runtime_default_drift(baseline, field):
+    candidate = candidate_image(baseline)
+    candidate['Config'][field] = 'changed'
+    with pytest.raises(SystemExit):
+        helper().authorize_image(prepared(baseline), baseline[0], baseline[1], baseline[3], candidate)
+
+
+@pytest.mark.parametrize('condition', ['exited', 'unhealthy', 'batch', 'profile', 'candidate', 'baseline-config'])
+def test_registration_requires_exact_healthy_unmodified_original_baseline(baseline, condition):
+    state = prepared(baseline)
+    original, current, _, image = copy.deepcopy(baseline)
+    if condition == 'exited': current['State']['Running'] = False
+    elif condition == 'unhealthy': current['State']['Health'] = {'Status': 'unhealthy'}
+    elif condition == 'candidate': current['Image'] = CANDIDATE
+    elif condition == 'baseline-config': image['Config']['Cmd'] = ['changed']
+    else:
+        values = base.environment(current)
+        values.update(helper().selected_environment(state, 2 if condition == 'batch' else 1,
+                                                    'decode' if condition == 'profile' else None))
+        envset(current, values)
+    with pytest.raises(SystemExit): helper().authorize_image(state, original, current, image, candidate_image(baseline))
+
+
+def test_registered_candidate_seq4_failed_container_restores_exact_base_and_environment(baseline):
+    state = registered(baseline)
+    original, current, _, _ = copy.deepcopy(baseline)
+    override, _ = helper().make_override(state, original, current, max_num_seqs=4, image=CANDIDATE, process_env={})
+    assert override['services']['vllm']['image'] == CANDIDATE
+    current['Image'] = CANDIDATE
+    values = base.environment(current)
+    values.update(helper().selected_environment(state, 4))
+    envset(current, values)
+    current['State'] = {'Running': False}
+    rollback, _ = helper().make_override(state, original, current, rollback=True, process_env={})
+    assert rollback['services']['vllm']['image'] == IMAGE
+    assert rollback['services']['vllm']['environment']['VLLM_EXTRA_ARGS'] == ARGS
+    assert rollback['services']['vllm']['environment']['VLLM_CUSTOM_SCOPES_FOR_PROFILING'] is None
+
+
+def test_unregistered_candidate_and_candidate_profile_are_rejected(baseline):
+    state = prepared(baseline)
+    with pytest.raises(SystemExit):
+        helper().make_override(state, baseline[0], baseline[1], image=CANDIDATE, process_env={})
+    state = registered(baseline)
+    with pytest.raises(SystemExit):
+        helper().make_override(state, baseline[0], baseline[1], image=CANDIDATE, profile='decode', process_env={})
+
+
+def test_legacy_state_migration_only_initializes_exact_baseline(baseline):
+    state = prepared(baseline)
+    state.pop('approved_images', None)
+    state['schema_version'] = 1
+    before = copy.deepcopy(state)
+    migrated = helper().migrate_state(state, baseline[3])
+    assert migrated['approved_images'] == {IMAGE: state['image_config_digest']}
+    assert state == before
+    with pytest.raises(SystemExit):
+        helper().make_override(migrated, baseline[0], baseline[1], image=CANDIDATE, process_env={})
+    altered = copy.deepcopy(baseline[3])
+    altered['Config']['Env'] = ['changed']
+    with pytest.raises(SystemExit): helper().migrate_state(state, altered)
+
+
+def test_cli_registration_candidate_failure_and_exact_rollback(baseline, tmp_path, monkeypatch, capsys):
+    module, directory, original, runtime = cli_runtime(baseline, tmp_path, monkeypatch)
+    runtime['images'][CANDIDATE] = candidate_image(baseline)
+    before = original.read_bytes()
+    module.main(['authorize-image', '--state-dir', str(directory), '--image', CANDIDATE])
+    assert not any('up' in call for call in runtime['calls'])
+    state = json.loads((directory / 'throughput.json').read_text())
+    assert CANDIDATE in state['approved_images']
+    runtime['fail'] = True
+    with pytest.raises(SystemExit, match='startup failed'):
+        module.main(['switch', '--state-dir', str(directory), '--image', CANDIDATE, '--max-num-seqs', '4'])
+    assert runtime['current']['Image'] == CANDIDATE
+    module.main(['rollback', '--state-dir', str(directory)])
+    assert runtime['current']['Image'] == IMAGE
+    assert base.environment(runtime['current']) == base.environment(baseline[1])
+    assert original.read_bytes() == before
+    assert 'synthetic-secret' not in capsys.readouterr().out
+
+
+def test_cli_candidate_config_change_blocks_before_compose(baseline, tmp_path, monkeypatch):
+    module, directory, _, runtime = cli_runtime(baseline, tmp_path, monkeypatch)
+    runtime['images'][CANDIDATE] = candidate_image(baseline)
+    module.main(['authorize-image', '--state-dir', str(directory), '--image', CANDIDATE])
+    runtime['images'][CANDIDATE]['Config']['Cmd'] = ['changed']
+    runtime['calls'].clear()
+    with pytest.raises(SystemExit):
+        module.main(['switch', '--state-dir', str(directory), '--image', CANDIDATE, '--max-num-seqs', '2'])
+    assert not any('config' in call or 'up' in call for call in runtime['calls'])
+
+
+def test_cli_unregistered_image_blocks_before_docker(baseline, tmp_path, monkeypatch):
+    module, directory, _, runtime = cli_runtime(baseline, tmp_path, monkeypatch)
+    with pytest.raises(SystemExit, match='not been explicitly authorized'):
+        module.main(['switch', '--state-dir', str(directory), '--image', CANDIDATE, '--max-num-seqs', '2'])
+    assert runtime['calls'] == []
+
+
+def test_registration_state_replace_failure_preserves_exact_prior_file(tmp_path, monkeypatch):
+    module = helper()
+    path = tmp_path / 'throughput.json'
+    module.write_private(path, {'baseline': 'immutable'}, exclusive=True)
+    prior = path.read_bytes()
+    def refuse(*args): raise OSError('synthetic failed atomic replacement')
+    monkeypatch.setattr(module.os, 'replace', refuse)
+    with pytest.raises(OSError): module.write_private_atomic(path, {'candidate': 'registered'})
+    assert path.read_bytes() == prior
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_registration_protects_exact_json_types_in_healthcheck(baseline):
+    baseline[3]['Config']['Healthcheck'] = {'Test': ['CMD', 'true'], 'Interval': 1}
+    candidate = candidate_image(baseline)
+    candidate['Config']['Healthcheck']['Interval'] = True
+    with pytest.raises(SystemExit):
+        helper().authorize_image(prepared(baseline), baseline[0], baseline[1], baseline[3], candidate)
+
+
+def test_candidate_metadata_labels_bound_after_authorization(baseline):
+    candidate = candidate_image(baseline)
+    candidate['Config']['Labels'] = {'aquillm.candidate': 'mixed-gate-fix'}
+    state = helper().authorize_image(prepared(baseline), baseline[0], baseline[1], baseline[3], candidate)
+    helper().validate_image(state, candidate)
+    candidate['Config']['Labels']['aquillm.candidate'] = 'other'
+    with pytest.raises(SystemExit): helper().validate_image(state, candidate)
+
+
+@pytest.mark.parametrize('drift', ['running-batch', 'running-profile', 'resolved', 'hash'])
+def test_cli_failed_authorization_never_updates_recovery_or_starts_container(baseline, tmp_path, monkeypatch, drift):
+    module, directory, _, runtime = cli_runtime(baseline, tmp_path, monkeypatch,
+                                                post_drift='resolved' if drift == 'resolved' else None)
+    runtime['images'][CANDIDATE] = candidate_image(baseline)
+    path = directory / 'throughput.json'
+    before = path.read_bytes()
+    if drift.startswith('running-'):
+        values = base.environment(runtime['current'])
+        values.update(module.selected_environment(json.loads(before), 2 if drift == 'running-batch' else 1,
+                                                  'decode' if drift == 'running-profile' else None))
+        envset(runtime['current'], values)
+    if drift == 'hash':
+        current_run = module.base.run
+        def wrong_hash(command, **kwargs):
+            if command[-3:] == ['config', '--hash', 'vllm']: return 'vllm wrong\n'
+            return current_run(command, **kwargs)
+        monkeypatch.setattr(module.base, 'run', wrong_hash)
+    with pytest.raises(SystemExit): module.main(['authorize-image', '--state-dir', str(directory), '--image', CANDIDATE])
+    assert path.read_bytes() == before
+    assert not any('up' in call for call in runtime['calls'])
+
+
+def test_legacy_cli_baseline_switch_and_registration_preserve_capture(baseline, tmp_path, monkeypatch):
+    module, directory, _, runtime = cli_runtime(baseline, tmp_path, monkeypatch)
+    path = directory / 'throughput.json'
+    old = json.loads(path.read_text())
+    old.pop('approved_images')
+    module.write_private(path, old)
+    module.main(['switch', '--state-dir', str(directory), '--max-num-seqs', '1', '--profile', 'decode'])
+    module.main(['rollback', '--state-dir', str(directory)])
+    runtime['images'][CANDIDATE] = candidate_image(baseline)
+    module.main(['authorize-image', '--state-dir', str(directory), '--image', CANDIDATE])
+    registered_state = json.loads(path.read_text())
+    assert {key: value for key, value in registered_state.items() if key != 'approved_images'} == old
+    assert CANDIDATE in registered_state['approved_images']
+
+
+def test_candidate_runtime_config_drift_blocks_rollback_before_compose(baseline, tmp_path, monkeypatch):
+    module, directory, _, runtime = cli_runtime(baseline, tmp_path, monkeypatch)
+    runtime['images'][CANDIDATE] = candidate_image(baseline)
+    module.main(['authorize-image', '--state-dir', str(directory), '--image', CANDIDATE])
+    module.main(['switch', '--state-dir', str(directory), '--max-num-seqs', '2', '--image', CANDIDATE])
+    runtime['images'][CANDIDATE]['Config']['Env'] = ['changed']
+    runtime['calls'].clear()
+    with pytest.raises(SystemExit): module.main(['rollback', '--state-dir', str(directory)])
+    assert not any('config' in call or 'up' in call for call in runtime['calls'])
+
+
+@pytest.mark.parametrize('image', ['', 0, False, 'candidate:latest'])
+def test_override_rejects_invalid_explicit_image_instead_of_defaulting(baseline, image):
+    with pytest.raises(SystemExit):
+        helper().make_override(prepared(baseline), baseline[0], baseline[1], image=image, process_env={})

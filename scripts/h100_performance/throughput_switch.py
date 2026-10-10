@@ -1,7 +1,8 @@
-"""Bounded development batching/profiling on the exact restored prefill image.
+"""Bounded development batching on explicitly registered immutable images.
 
-Only EXTRA_ARGS and custom-scope presence/values vary. Private recovery retains
-their original text; all other environment and runtime records remain protected.
+Only EXTRA_ARGS and custom-scope presence/values vary in the environment. Private
+recovery retains their original text; all other runtime records stay protected.
+Profiling and rollback always use the exact restored baseline image.
 """
 import argparse
 import copy
@@ -11,6 +12,7 @@ from pathlib import Path
 import re
 import shlex
 import socket
+import uuid
 
 import dev_switch as base
 
@@ -19,6 +21,72 @@ ORIGINAL_STATE = Path('/home/exouser/.config/aquillm/flashinfer-upgrade/baseline
 AFFECTED = frozenset(('VLLM_EXTRA_ARGS', 'VLLM_CUSTOM_SCOPES_FOR_PROFILING'))
 PREFILL_FLAGS = dict(AQUILLM_H100_PREFILL='1', AQUILLM_H100_MTP_KERNEL='baseline',
                      AQUILLM_H100_SPLIT_POLICY='baseline', AQUILLM_H100_GDN='baseline')
+IMAGE_DEFAULTS = ('Cmd', 'Entrypoint', 'Env', 'User', 'WorkingDir', 'Healthcheck',
+                  'ExposedPorts', 'Volumes', 'StopSignal', 'Shell')
+
+
+def immutable_image(image):
+    if not isinstance(image, str) or not re.fullmatch(r'sha256:[0-9a-f]{64}', image):
+        raise SystemExit('An explicit full immutable sha256 image ID is required')
+    return image
+
+
+def approved_images(state):
+    # Legacy recovery can select only its already captured baseline, never a
+    # candidate. Migration adds the mapping after inspecting that exact image.
+    images = state.get('approved_images')
+    if images is None and state.get('schema_version') == 1:
+        images = {PREFILL_IMAGE: state.get('image_config_digest')}
+    if (not isinstance(images, dict) or images.get(PREFILL_IMAGE) != state.get('image_config_digest')
+            or any(not isinstance(digest, str) or not re.fullmatch(r'[0-9a-f]{64}', digest)
+                   for digest in images.values())):
+        raise SystemExit('Approved immutable image recovery is malformed')
+    for image in images:
+        immutable_image(image)
+    return images
+
+
+def validate_image(state, image):
+    identifier = immutable_image(image.get('Id'))
+    if approved_images(state).get(identifier) != base.digest(image.get('Config')):
+        raise SystemExit('Unregistered image or approved image configuration drift')
+
+
+def migrate_state(state, baseline_image):
+    if baseline_image.get('Id') != PREFILL_IMAGE:
+        raise SystemExit('Migration requires the exact baseline image')
+    validate_image(state, baseline_image)
+    migrated = copy.deepcopy(state)
+    migrated['approved_images'] = dict(approved_images(state))
+    return migrated
+
+
+def authorize_image(state, original, current, baseline_image, candidate_image):
+    validate_configuration(state, original, current)
+    validate_image(state, baseline_image)
+    if (current.get('Image') != PREFILL_IMAGE or baseline_image.get('Id') != PREFILL_IMAGE
+            or not current.get('State', {}).get('Running')
+            or current.get('State', {}).get('Health', {}).get('Status', 'healthy') != 'healthy'
+            or affected_environment(base.environment(current)) != state['baseline_environment']):
+        raise SystemExit('Image authorization requires the exact running healthy original baseline')
+    identifier = immutable_image(candidate_image.get('Id'))
+    if identifier == PREFILL_IMAGE:
+        raise SystemExit('Candidate authorization requires a distinct immutable image')
+    config, baseline_config = candidate_image.get('Config'), baseline_image.get('Config')
+    if not isinstance(config, dict) or not isinstance(baseline_config, dict):
+        raise SystemExit('Image runtime defaults are unavailable')
+    if base.digest({field: config[field] for field in IMAGE_DEFAULTS if field in config}) != base.digest(
+            {field: baseline_config[field] for field in IMAGE_DEFAULTS if field in baseline_config}):
+        raise SystemExit('Candidate image protected runtime defaults differ from baseline')
+    digest = base.digest(config)
+    registered = migrate_state(state, baseline_image)
+    previous = registered['approved_images'].get(identifier)
+    if previous is not None and previous != digest:
+        raise SystemExit('Previously authorized candidate image configuration drift')
+    # Labels may describe candidate provenance. Every Config field, including
+    # labels, is bound by this digest; authorization does not qualify its code.
+    registered['approved_images'][identifier] = digest
+    return registered
 
 
 def profiler_config(profile):
@@ -162,7 +230,8 @@ def prepare_state(original, current, resolved, compose_hash, image):
         original_state_digest=base.digest(original), baseline_environment=affected_environment(values),
         environment_digests=protected_environment(values), baseline_flags=dict(original['baseline_flags']),
         service_digest=base.service_digest(resolved), runtime_digest_format='mount-order-v1',
-        runtime_digest=base.runtime_digest(current), image_config_digest=base.digest(image['Config']))
+        runtime_digest=base.runtime_digest(current), image_config_digest=base.digest(image['Config']),
+        approved_images={PREFILL_IMAGE: base.digest(image['Config'])})
 
 
 def selected_environment(state, max_num_seqs=1, profile=None, *, rollback=False):
@@ -199,10 +268,14 @@ def validate_configuration(state, original, current, resolved=None):
             or state.get('baseline_flags') != original.get('baseline_flags')):
         raise SystemExit('Throughput recovery does not match the authoritative baseline')
     validate_identity(original, current)
-    if current.get('Image') != PREFILL_IMAGE:
-        raise SystemExit('Image drift; only the exact baseline image is supported')
+    if current.get('Image') not in approved_images(state):
+        raise SystemExit('Image drift; only baseline or explicitly registered images are supported')
     normalized = copy.deepcopy(current)
     values = normalize_environment(state, base.environment(current))
+    if current['Image'] != PREFILL_IMAGE:
+        _, selected = _tokens(base.environment(current).get('VLLM_EXTRA_ARGS', ''))
+        if '--profiler-config' in selected:
+            raise SystemExit('Profiling is restricted to the baseline image')
     normalized['Config']['Env'] = [f'{name}={value}' for name, value in values.items()]
     if any(values.get(name) != value for name, value in state['baseline_flags'].items()):
         raise SystemExit('Baseline flag drift')
@@ -210,18 +283,25 @@ def validate_configuration(state, original, current, resolved=None):
         raise SystemExit('Protected runtime/command/mount drift')
     service = None
     if resolved is not None:
-        if resolved.get('image') != PREFILL_IMAGE or base.service_digest(resolved) != state['service_digest']:
+        if resolved.get('image') not in approved_images(state) or base.service_digest(resolved) != state['service_digest']:
             raise SystemExit('Resolved image/service configuration drift')
         service = copy.deepcopy(resolved)
         service['environment'] = normalize_environment(state, resolved.get('environment', {}))
+        if resolved['image'] != PREFILL_IMAGE and '--profiler-config' in _tokens(resolved.get('environment', {}).get('VLLM_EXTRA_ARGS', ''))[1]:
+            raise SystemExit('Profiling is restricted to the baseline image')
     if base.protected_environment(values) != original.get('environment_digests') or not base.runtime_matches(original, normalized):
         raise SystemExit('Authoritative original environment/runtime drift')
     if service is not None:
         base.validate_configuration(original, normalized, service)
 
 
-def make_override(state, original, current, *, max_num_seqs=1, profile=None, rollback=False, process_env=None):
+def make_override(state, original, current, *, max_num_seqs=1, profile=None, rollback=False, image=None, process_env=None):
     validate_configuration(state, original, current)
+    target = PREFILL_IMAGE if rollback or image is None else image
+    if immutable_image(target) not in approved_images(state):
+        raise SystemExit('Requested image has not been explicitly authorized')
+    if profile is not None and target != PREFILL_IMAGE:
+        raise SystemExit('Profiling is restricted to the baseline image')
     values = base.environment(current)
     inherited = {name: '${' + base.PREFIX + name + '}' for name in values if name not in AFFECTED}
     selected = selected_environment(state, max_num_seqs, profile, rollback=rollback)
@@ -230,7 +310,7 @@ def make_override(state, original, current, *, max_num_seqs=1, profile=None, rol
     inherited.update({name: selected[name].replace('$', '$$') if name in selected else None for name in AFFECTED})
     process = dict(os.environ if process_env is None else process_env)
     process.update({base.PREFIX + name: value for name, value in values.items()})
-    return {'services': {'vllm': {'image': PREFILL_IMAGE, 'environment': inherited}}}, process
+    return {'services': {'vllm': {'image': target, 'environment': inherited}}}, process
 
 
 def write_private(path, value, *, exclusive=False):
@@ -245,6 +325,17 @@ def write_private(path, value, *, exclusive=False):
     finally:
         if fd is not None:
             os.close(fd)
+
+
+def write_private_atomic(path, value):
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    try:
+        write_private(temporary, value, exclusive=True)
+        with temporary.open('r+b') as contents:
+            os.fsync(contents.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def read_state(path, *, private=False):
@@ -263,10 +354,11 @@ def read_state(path, *, private=False):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('action', choices=('prepare', 'switch', 'rollback'))
+    parser.add_argument('action', choices=('prepare', 'authorize-image', 'switch', 'rollback'))
     parser.add_argument('--state-dir', type=Path, required=True)
     parser.add_argument('--max-num-seqs', type=int, choices=(1, 2, 4))
     parser.add_argument('--profile', choices=('decode', 'prefill'))
+    parser.add_argument('--image')
     args = parser.parse_args(argv)
     if socket.gethostname() != 'aquillm-dev2':
         raise SystemExit('This experiment is restricted to the authorized 254 development host')
@@ -276,6 +368,14 @@ def main(argv=None):
         parser.error('sequence/profiler selections are switch-only')
     if args.profile is not None and args.max_num_seqs != 1:
         parser.error('profiler runs require --max-num-seqs 1')
+    if args.action == 'authorize-image' and args.image is None:
+        parser.error('authorize-image requires --image')
+    if args.image is not None:
+        immutable_image(args.image)
+        if args.action not in ('authorize-image', 'switch'):
+            parser.error('image selection is authorization/switch-only')
+        if args.profile is not None and args.image != PREFILL_IMAGE:
+            parser.error('profiler runs require the baseline image')
     if not args.state_dir.is_absolute():
         parser.error('--state-dir must be an absolute private recovery directory')
     state_path = args.state_dir / 'throughput.json'
@@ -286,6 +386,9 @@ def main(argv=None):
     if args.action == 'prepare' and state_path.exists():
         raise SystemExit('Recovery already exists; candidate recapture is forbidden')
     state = None if args.action == 'prepare' else read_state(state_path, private=True)
+    target = args.image or PREFILL_IMAGE
+    if state is not None and args.action == 'switch' and target not in approved_images(state):
+        raise SystemExit('Requested image has not been explicitly authorized')
     current = json.loads(base.run(['docker', 'inspect', 'compose-vllm-1']))[0]
     validate_identity(original, current)
     if state is not None:
@@ -293,6 +396,14 @@ def main(argv=None):
     image = json.loads(base.run(['docker', 'image', 'inspect', PREFILL_IMAGE]))[0]
     if image.get('Id') != PREFILL_IMAGE or (state is not None and base.digest(image['Config']) != state['image_config_digest']):
         raise SystemExit('Pinned baseline image configuration drift')
+    if state is not None:
+        state = migrate_state(state, image)
+        # Prove all current/target image Config digests before Compose mutation.
+        for identifier in {current['Image'], target if args.action == 'switch' else PREFILL_IMAGE} - {PREFILL_IMAGE}:
+            inspected = json.loads(base.run(['docker', 'image', 'inspect', identifier]))[0]
+            if inspected.get('Id') != identifier:
+                raise SystemExit('Inspected immutable image identity differs')
+            validate_image(state, inspected)
     args.state_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     if args.action == 'prepare':
         labels = current['Config']['Labels']
@@ -302,10 +413,27 @@ def main(argv=None):
         resolved = base.parse_config(raw)['services']['vllm']
         state = prepare_state(original, current, resolved, base.canonical_hash(original, raw, process), image)
         write_private(state_path, state, exclusive=True)
+    elif args.action == 'authorize-image':
+        candidate = json.loads(base.run(['docker', 'image', 'inspect', target]))[0]
+        if candidate.get('Id') != target:
+            raise SystemExit('Inspected candidate image identity differs')
+        registered = authorize_image(state, original, current, image, candidate)
+        labels = current['Config']['Labels']
+        command = base.compose_command(original, labels['com.docker.compose.project.config_files'].split(','))
+        process = dict(os.environ, **{base.PREFIX + name: value for name, value in base.environment(current).items()})
+        raw = base.run(command + ['config', '--format', 'json'], env=process)
+        resolved = base.parse_config(raw)['services']['vllm']
+        validate_configuration(state, original, current, resolved)
+        if (resolved.get('image') != PREFILL_IMAGE
+                or affected_environment(resolved.get('environment', {})) != state['baseline_environment']
+                or base.canonical_hash(original, raw, process) != labels.get('com.docker.compose.config-hash')):
+            raise SystemExit('Image authorization requires the verified original Compose baseline')
+        write_private_atomic(state_path, registered)
     else:
         rollback = args.action == 'rollback'
         override, process = make_override(state, original, current,
-            max_num_seqs=args.max_num_seqs or 1, profile=args.profile, rollback=rollback)
+            max_num_seqs=args.max_num_seqs or 1, profile=args.profile, rollback=rollback, image=target)
+        target = override['services']['vllm']['image']
         override_path = args.state_dir / 'throughput-next.json'
         write_private(override_path, override)
         command = base.compose_command(state) + ['-f', str(override_path)]
@@ -315,6 +443,8 @@ def main(argv=None):
         expected = selected_environment(state, args.max_num_seqs or 1, args.profile, rollback=rollback)
         if affected_environment(resolved.get('environment', {})) != expected:
             raise SystemExit('Resolved sequence/profiler selection differs from the requested operation')
+        if resolved.get('image') != target:
+            raise SystemExit('Resolved image differs from the requested operation')
         expected_hash = base.canonical_hash(state, raw, process)
         failure = None
         try:
@@ -325,12 +455,12 @@ def main(argv=None):
         # containers still retain the inherited protected environment for recovery.
         restored = json.loads(base.run(['docker', 'inspect', 'compose-vllm-1']))[0]
         validate_configuration(state, original, restored, resolved)
-        if (affected_environment(base.environment(restored)) != expected
+        if (restored.get('Image') != target or affected_environment(base.environment(restored)) != expected
                 or restored['Config']['Labels'].get('com.docker.compose.config-hash') != expected_hash):
             raise SystemExit('Post-operation exact configuration verification failed; invoke rollback')
         if failure is not None or not restored.get('State', {}).get('Running'):
             raise SystemExit('Model startup failed; retained recovery permits explicit rollback') from None
-    print(json.dumps(dict(action=args.action, image=PREFILL_IMAGE, verified=True,
+    print(json.dumps(dict(action=args.action, image=target, verified=True,
                          max_num_seqs=args.max_num_seqs, profile=args.profile)), flush=True)
 
 
