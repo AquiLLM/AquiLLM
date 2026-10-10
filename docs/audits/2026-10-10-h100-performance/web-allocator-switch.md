@@ -14,6 +14,14 @@ image `Cmd` (`["sh", "/app/deploy/scripts/run.sh"]`); Docker can otherwise clear
 an inherited command when adding an entrypoint. No other image defaults may
 change. The base filesystem layers and platform must be retained. The image
 builder remains responsible for the copied wrapper/library provenance.
+Cross-image comparison ignores deprecated Windows-only `ArgsEscaped` metadata
+only when both inspected images are Linux. Each pinned image's full Config
+digest still includes that field; command and all other defaults remain protected.
+The same narrow exception applies to web container runtime comparison using
+Linux evidence captured at preparation and rechecked against both pinned images.
+Docker may omit this field when recreating the container. The
+[OCI image configuration specification](https://github.com/opencontainers/image-spec/blob/main/config.md#properties)
+describes `ArgsEscaped` as deprecated compatibility metadata for Windows commands.
 
 Run from an operator-controlled temporary script directory on development;
 do not modify the checkout mounted into the web container. Pass a full image ID:
@@ -27,7 +35,9 @@ python web_allocator_switch.py rollback
 
 Preparation proves the running original web image and its resolved Compose
 hash. A configured image tag is inspected and must resolve to that exact base
-ID. Both experiment arms then use the same pinned image and set
+ID. A build-only service must have a build definition and the verified implicit
+`compose-web` container image reference, which must resolve to the same exact
+base ID. The original raw Compose config remains the hash source. Both experiment arms then use the same pinned image and set
 `PYTHONMALLOC=default`. Preparation refuses to overwrite an existing state.
 
 Separate files under `~/.config/aquillm/h100-performance/` are

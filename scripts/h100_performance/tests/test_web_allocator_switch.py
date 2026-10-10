@@ -258,3 +258,86 @@ def test_prepare_cli_verifies_resolved_base_reference_and_never_recaptures(captu
         module.main()
         assert json.loads(state_path.read_text())["image"] == WEB
         assert "secret-web-token" not in state_path.read_text() + capsys.readouterr().out
+
+
+@pytest.mark.parametrize("change", [None, "missing_build", "empty_build", "current_reference", "tag_drift"])
+def test_build_only_prepare_resolves_verified_implicit_web_image_without_changing_hash_input(captured, monkeypatch, tmp_path, capsys, change):
+    module = helper()
+    web, model, resolved, original, experiment = copy.deepcopy(captured)
+    web["Config"]["Image"] = "compose-web"
+    resolved.pop("image")
+    resolved["build"] = {"context": "/repo", "dockerfile": "Dockerfile"}
+    if change == "missing_build": resolved.pop("build")
+    if change == "empty_build": resolved["build"] = {}
+    if change == "current_reference": web["Config"]["Image"] = "unrelated-web"
+    raw = json.dumps({"services": {"web": resolved}})
+    hash_inputs = []
+    def run(command, env=None, input=None):
+        if command[:2] == ["docker", "inspect"]:
+            return json.dumps([web if command[-1] == "compose-web-1" else model])
+        if command[-3:] == ["config", "--format", "json"]: return raw
+        if command[-3:] == ["config", "--hash", "web"]:
+            hash_inputs.append(input)
+            return "web verified\n"
+        if command[:3] == ["docker", "image", "inspect"]:
+            assert command[-1] in (WEB, EXPERIMENT, "compose-web"), "unproved implicit image reference sent to Docker"
+            result = copy.deepcopy(experiment if command[-1] == EXPERIMENT else original)
+            if change == "tag_drift" and command[-1] == "compose-web": result["Id"] = "sha256:" + "d" * 64
+            return json.dumps([result])
+        pytest.fail("prepare attempted container replacement")
+    monkeypatch.setattr(module.base, "run", run)
+    monkeypatch.setattr(module.socket, "gethostname", lambda: "aquillm-dev2")
+    monkeypatch.setattr(module.Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["web_allocator_switch.py", "prepare", "--image", EXPERIMENT])
+    state_path = tmp_path / ".config/aquillm/h100-performance/web-allocator.json"
+    if change:
+        with pytest.raises(SystemExit): module.main()
+        assert not state_path.exists()
+    else:
+        module.main()
+        state = json.loads(state_path.read_text())
+        assert state["image"] == WEB and state["experiment_image"] == EXPERIMENT
+        assert state["service_digest"] == base.service_digest(resolved)
+        assert hash_inputs == [raw] and "image" not in json.loads(hash_inputs[0])["services"]["web"]
+        assert "secret-web-token" not in state_path.read_text() + capsys.readouterr().out
+
+
+@pytest.mark.parametrize("os_name", ["linux", "windows"])
+def test_legacy_argsescaped_presence_difference_is_ignored_only_for_two_linux_images(captured, os_name):
+    original, experiment = copy.deepcopy(captured[3:])
+    original["Os"] = experiment["Os"] = os_name
+    original["Config"]["ArgsEscaped"] = True
+    experiment["Config"].pop("ArgsEscaped", None)
+    if os_name == "linux": helper().validate_images(original, experiment)
+    else:
+        with pytest.raises(SystemExit): helper().validate_images(original, experiment)
+
+
+def test_linux_argsescaped_exception_never_allows_command_change(captured):
+    original, experiment = copy.deepcopy(captured[3:])
+    original["Config"]["ArgsEscaped"] = True
+    experiment["Config"]["Cmd"] = ["unexpected-command"]
+    with pytest.raises(SystemExit): helper().validate_images(original, experiment)
+
+
+def test_pinned_image_configuration_digest_still_protects_argsescaped(captured, monkeypatch):
+    state = prepare(captured)
+    original, experiment = copy.deepcopy(captured[3:])
+    experiment["Config"]["ArgsEscaped"] = True
+    monkeypatch.setattr(helper().base, "run", lambda command: json.dumps([original if command[-1] == WEB else experiment]))
+    with pytest.raises(SystemExit, match="digest/config mismatch"): helper().verify_images(state)
+
+
+@pytest.mark.parametrize("os_name", ["linux", "windows"])
+def test_container_argsescaped_representation_is_normalized_only_with_captured_linux_evidence(captured, os_name):
+    baseline = copy.deepcopy(captured)
+    baseline[0]["Config"]["ArgsEscaped"] = True
+    for image in baseline[3:]:
+        image["Os"] = os_name
+        image["Config"]["ArgsEscaped"] = True
+    state = prepare(baseline)
+    current, model, resolved = arm(baseline, "system")
+    current["Config"].pop("ArgsEscaped")
+    if os_name == "linux": helper().validate_configuration(state, current, model, resolved)
+    else:
+        with pytest.raises(SystemExit): helper().validate_configuration(state, current, model, resolved)

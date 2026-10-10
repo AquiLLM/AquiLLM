@@ -50,8 +50,11 @@ def validate_images(original, experiment):
     before, after = original["Config"], experiment["Config"]
     if before.get("Entrypoint") is not None or after.get("Entrypoint") != WRAPPER:
         raise SystemExit("Image Entrypoint differs from the expected web allocator wrapper")
-    if {key: value for key, value in before.items() if key not in ("Env", "Entrypoint")} != {
-            key: value for key, value in after.items() if key not in ("Env", "Entrypoint")}:
+    ignored = {"Env", "Entrypoint"}
+    if original.get("Os") == experiment.get("Os") == "linux":
+        ignored.add("ArgsEscaped")  # Deprecated Windows command-line metadata; retain in each pinned digest.
+    if {key: value for key, value in before.items() if key not in ignored} != {
+            key: value for key, value in after.items() if key not in ignored}:
         raise SystemExit("Image runtime defaults changed beyond the wrapper; preserve original Cmd")
     prior, new = base.environment(original), base.environment(experiment)
     reject_preloads(prior)
@@ -93,10 +96,15 @@ def prepare_state(current, model, resolved, compose_hash, original, experiment):
            for name, value in resolved.get("environment", {}).items()):
         raise SystemExit("Resolved web environment differs from running baseline")
     validate_images(original, experiment)
+    linux_argsescaped_ignored = original.get("Os") == experiment.get("Os") == "linux"
+    runtime = copy.deepcopy(current)
+    if linux_argsescaped_ignored:
+        runtime["Config"].pop("ArgsEscaped", None)
     return dict(state, schema_version=1, image=WEB_IMAGE, experiment_image=experiment["Id"],
         baseline_allocator_environment=public, environment_digests=protected_environment(values),
         captured_compose_hash=compose_hash, service_digest=base.service_digest(resolved),
-        runtime_digest_format="mount-order-v1", runtime_digest=base.runtime_digest(current),
+        runtime_digest_format="mount-order-v1", runtime_digest=base.runtime_digest(runtime),
+        linux_argsescaped_ignored=linux_argsescaped_ignored,
         base_image_digest=base.digest(original["Config"]), experiment_image_digest=base.digest(experiment["Config"]))
 
 
@@ -127,6 +135,8 @@ def validate_configuration(state, current, model, resolved=None):
         raise SystemExit("Running web Entrypoint drift")
     normalized = copy.deepcopy(current)
     normalized["Config"]["Entrypoint"] = None
+    if state.get("linux_argsescaped_ignored") is True:
+        normalized["Config"].pop("ArgsEscaped", None)
     if not base.runtime_matches(state, normalized):
         raise SystemExit("Protected web command/mount/runtime drift")
     if resolved is not None:
@@ -165,6 +175,8 @@ def verify_images(state):
     original = json.loads(base.run(["docker", "image", "inspect", state["image"]]))[0]
     experiment = json.loads(base.run(["docker", "image", "inspect", state["experiment_image"]]))[0]
     validate_images(original, experiment)
+    if state.get("linux_argsescaped_ignored", False) != (original.get("Os") == experiment.get("Os") == "linux"):
+        raise SystemExit("Captured web platform metadata normalization mismatch")
     if (experiment.get("Id") != state["experiment_image"]
             or base.digest(original["Config"]) != state["base_image_digest"]
             or base.digest(experiment["Config"]) != state["experiment_image_digest"]):
@@ -198,10 +210,20 @@ def main():
         process = dict(os.environ, **{base.PREFIX + name: value for name, value in base.environment(current).items()})
         raw = base.run(base.compose_command(locator) + ["config", "--format", "json"], env=process)
         resolved = base.parse_config(raw)["services"]["web"]
-        configured = json.loads(base.run(["docker", "image", "inspect", resolved.get("image")]))[0]
+        reference = resolved.get("image")
+        if reference is None:
+            implicit = locator["project"] + "-" + labels["com.docker.compose.service"]
+            build = resolved.get("build")
+            if (not isinstance(build, (dict, str)) or not build or implicit != "compose-web"
+                    or current["Config"].get("Image") != implicit):
+                raise SystemExit("Build-only web image identity is missing or ambiguous")
+            reference = implicit
+        if not isinstance(reference, str) or not reference:
+            raise SystemExit("Configured web image reference is invalid")
+        configured = json.loads(base.run(["docker", "image", "inspect", reference]))[0]
         if configured.get("Id") != WEB_IMAGE:
             raise SystemExit("Configured web image reference does not resolve to the exact authorized base")
-        resolved["image"] = configured["Id"]
+        resolved["image"] = configured["Id"]  # Normalize only this in-memory service; raw hash input stays intact.
         original = json.loads(base.run(["docker", "image", "inspect", WEB_IMAGE]))[0]
         experiment = json.loads(base.run(["docker", "image", "inspect", image]))[0]
         if experiment.get("Id") != image:
