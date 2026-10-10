@@ -111,7 +111,9 @@ async def test_named_document_search_loads_only_authorized_selected_documents(
         == "handled"
     )
     assert calls[0]["doc_id"] == DOC
-    assert "no relevant passages" in consumer.convo[-1].content
+    from lib.llm.answer_publication import LIMITED_ANSWER
+
+    assert consumer.convo[-1].content == LIMITED_ANSWER
 
 
 @pytest.mark.parametrize(

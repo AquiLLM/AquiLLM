@@ -31,11 +31,15 @@ async def end_spin_publish(consumer: Any, convo: Conversation) -> None:
     epoch = int(getattr(consumer, "_spin_epoch", 0))
     if epoch >= len(convo):
         return
+    from lib.llm.answer_publication import verify_message
+
     refresh_messages = [
         pydantic_message_to_frontend_dict(msg) for msg in convo.messages[epoch:]
     ]
     if not refresh_messages:
         return
+    for message, rendered in zip(convo.messages[epoch:], refresh_messages):
+        await verify_message(message, content=rendered["content"], sink="refresh")
     await consumer.send(text_data=dumps({"delta": {"messages": refresh_messages}}))
     logger.debug(
         "obs.chat.spin_finalize_publish",

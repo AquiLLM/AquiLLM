@@ -9,7 +9,7 @@ from lib.llm.providers.complete_turn import DIRECT_SYNTHESIS_GROUNDING
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
 from lib.llm.types.conversation import Conversation
-from lib.llm.types.messages import ToolMessage
+from lib.llm.types.messages import AssistantMessage, ToolMessage
 
 _ROW_FIELDS = frozenset(
     {
@@ -119,7 +119,17 @@ def prepare_evidence_handoff(
         messages=[*conversation.messages[:-1], selected_tool],
     )
     # Providers may mutate message content while applying their context budget.
-    request = persisted.model_copy(deep=True)
+    request_messages = []
+    for message in persisted.messages:
+        copied = message.model_copy()
+        if isinstance(copied, AssistantMessage):
+            copied._validated_answer = None
+            copied._answer_publication_context = None
+            copied._rag_answer = False
+        request_messages.append(copied)
+    request = Conversation(
+        system=persisted.system, messages=request_messages
+    ).model_copy(deep=True)
     request.system = f"{persisted.system}\n\n{DIRECT_SYNTHESIS_GROUNDING}"
     for message in request.messages[:-1]:
         if isinstance(message, ToolMessage):

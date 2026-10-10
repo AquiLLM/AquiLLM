@@ -1,13 +1,13 @@
 """LLM message types for conversation handling."""
 import json
-import structlog
-from typing import Literal, Optional, Any
-from os import getenv
 import re
-from pydantic import BaseModel, Field, model_validator
-from abc import ABC
-from typing import override
 import uuid
+from abc import ABC
+from os import getenv
+from typing import Any, Literal, Optional, override
+
+import structlog
+from pydantic import BaseModel, Field, PrivateAttr, model_validator
 
 from .tools import LLMTool, ToolChoice, ToolResultDict
 
@@ -145,6 +145,9 @@ class AssistantMessage(__LLMMessage):
     tool_call_name: Optional[str] = None
     tool_call_input: Optional[dict] = None
     usage: int = 0
+    _validated_answer: object = PrivateAttr(default=None)
+    _answer_publication_context: object = PrivateAttr(default=None)
+    _rag_answer: bool = PrivateAttr(default=False)
 
     @classmethod
     @model_validator(mode='after')

@@ -32,6 +32,7 @@ from .rag_citation_extracts import (
 )
 
 _CITATION_RE = re.compile(r"\[doc:[^\]\s]+\s+chunk:\d+\]")
+_CITATION_LIKE_RE = re.compile(r"\[doc:[^\]\r\n]*(?:\]|$)")
 _BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*]\s+|\s*\d+\.\s+)")
 
 
@@ -89,7 +90,8 @@ def extract_citations(answer_text: str | None) -> list[str]:
 def find_invalid_citations(answer_text: str | None, allowed_citations: set[str]) -> list[str]:
     seen: set[str] = set()
     invalid: list[str] = []
-    for citation in extract_citations(answer_text):
+    for match in _CITATION_LIKE_RE.finditer(answer_text or ""):
+        citation = match.group(0)
         if citation in seen:
             continue
         seen.add(citation)

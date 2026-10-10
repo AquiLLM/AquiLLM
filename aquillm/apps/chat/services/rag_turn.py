@@ -69,10 +69,29 @@ async def preservation_turn(consumer, *, max_func_calls):
     consumer._active_evidence_turn = (task, budget)
     try:
         if not active:
+            from apps.chat.services.rag_answer_publication import legacy_tool_handoff
+
+            historical_ids = frozenset(
+                m.message_uuid
+                for m in getattr(getattr(consumer, "convo", None), "messages", ())
+            )
+
+            async def publication_handoff(llm, convo, max_tokens, stream_func):
+                if current_turn().answer_publication is not None:
+                    from lib.llm.answer_publication import AnswerPublicationRejected
+
+                    raise AnswerPublicationRejected("evidence_changed")
+                if convo[-1].message_uuid in historical_ids:
+                    return None
+                return await legacy_tool_handoff(
+                    consumer, llm, convo, max_tokens, stream_func
+                )
+
             # Acquisition fencing is independent of preservation/planner/synthesis.
             with bind_turn(
                 TurnContext(
                     budget,
+                    handoff=publication_handoff,
                     max_func_calls=max_func_calls,
                     worker_cleanup=connections.close_all,
                 )
@@ -94,17 +113,11 @@ async def preservation_turn(consumer, *, max_func_calls):
                     consumer, llm, convo, max_tokens, stream_func
                 )
             except Exception:
-                from apps.chat.services.rag_source_synthesis import LIMITED_MESSAGE
-                from lib.llm.types.messages import AssistantMessage
+                from apps.chat.services.rag_answer_publication import limited_rag_result
 
                 budget.check_active()
                 return (
-                    convo
-                    + [
-                        AssistantMessage(
-                            content=LIMITED_MESSAGE, stop_reason="end_turn"
-                        )
-                    ],
+                    await limited_rag_result(convo, stream_func=stream_func),
                     "changed",
                 )
 

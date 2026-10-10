@@ -29,7 +29,6 @@ from apps.chat.services.rag_source_continuity_turn import (
     continuity_candidates,
     requires_clarification,
 )
-from apps.chat.services.rag_source_synthesis import LIMITED_MESSAGE
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.documents.services.source_loading import current_source_runtime
 from lib.llm.providers.request_observability import (
@@ -43,6 +42,7 @@ from lib.llm.turn_context import (
 )
 from lib.llm.types.messages import AssistantMessage
 
+from .rag_answer_publication import limited_rag_result
 from .rag_normal_handoff import normal_source_handoff as normal_source_handoff
 
 
@@ -65,17 +65,13 @@ async def finish_preservation(
 ):
     runtime = current_source_runtime()
     if runtime is None:
-        return convo + [
-            AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
-        ]
+        return await limited_rag_result(convo, stream_func=stream_func)
     config = rag_preservation_config()
     started = perf_counter()
     budget = runtime.budget
     if not runtime.observation.get("question_charged"):
         if question and not budget.reserve_text(len(question), kind="materialized"):
-            return convo + [
-                AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
-            ]
+            return await limited_rag_result(convo, stream_func=stream_func)
         runtime.observation["question_charged"] = True
     allowed = {
         str(v) for v in getattr(runtime.authorization, "selected_document_ids", ())
@@ -111,9 +107,7 @@ async def finish_preservation(
     runtime.observation["acquisition"] = acquired
     retrieved = perf_counter()
     if not acquired.results:
-        return convo + [
-            AssistantMessage(content=notice or LIMITED_MESSAGE, stop_reason="end_turn")
-        ]
+        return await limited_rag_result(convo, stream_func=stream_func)
     from apps.chat.services.tool_wiring.source_documents import (
         prepare_source_tool_handoff,
     )
@@ -134,6 +128,11 @@ async def finish_preservation(
     assessment = recheck_support(acquired.assessment, packet.source_evidence)
     packet.coverage_assessment = assessment
     packet.auxiliary_handoff = auxiliary_handoff
+    selected_collections = frozenset(runtime.authorization.selected_collection_ids)
+    packet._publication_scope_check = lambda: (
+        frozenset(int(value) for value in consumer.col_ref.collections)
+        == selected_collections
+    )
     selected = perf_counter()
     if (
         notice
@@ -166,20 +165,7 @@ async def finish_preservation(
                 llm, working, packet, stream_func=stream_func
             )
         except Exception:
-            from apps.chat.services.rag_synthesis import _extractive_summary
-
-            frozen = runtime.observation.get("delivered_packet")
-            if frozen is None or budget._synthesis is None:
-                raise
-            check_turn_active()
-            result = working + [
-                AssistantMessage(
-                    content="Answer synthesis was unavailable. "
-                    "Available authorized excerpts follow:\n\n"
-                    + _extractive_summary(frozen),
-                    stop_reason="end_turn",
-                )
-            ]
+            result = await limited_rag_result(working, stream_func=stream_func)
     check_turn_active()
     from apps.chat.services.rag_metrics import log_preservation_turn
 
@@ -235,9 +221,7 @@ async def run_preservation_rag(
             synthesis_fn=synthesis_fn,
         )
     except Exception:
-        result = convo + [
-            AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
-        ]
+        result = await limited_rag_result(convo, stream_func=stream_func)
     check_turn_active()
     consumer.convo = result
     return "handled"

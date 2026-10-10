@@ -155,6 +155,11 @@ async def _run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
             ),
         ]
         packet = build_evidence_packet(raw, query=query, search_scope=scope)
+        from apps.chat.services.rag_answer_publication import bind_legacy_answer_packet
+
+        await bind_legacy_answer_packet(
+            consumer, packet, document_id=arguments.get("doc_id")
+        )
         with observability_scope(correlation_id, "direct_synthesis"):
             consumer.convo = await synthesize_from_evidence(
                 llm_if,

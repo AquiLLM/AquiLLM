@@ -8,6 +8,7 @@ import pytest
 
 from apps.chat.services.rag_evidence import EvidencePacket
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
+from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import ToolMessage, UserMessage
 
@@ -104,7 +105,7 @@ async def test_unknown_context_returns_limited_without_model_dispatch(monkeypatc
     )
     convo, packet = inputs()
     result = await synthesize_from_evidence(llm, convo, packet)
-    assert "context" in result[-1].content.lower()
+    assert result[-1].content == LIMITED_ANSWER
     assert "no relevant" not in result[-1].content.lower()
     llm.complete.assert_not_called()
 
@@ -158,5 +159,5 @@ async def test_last_moment_revalidation_can_remove_changed_packet(monkeypatch):
     llm = SimpleNamespace(complete=AsyncMock())
     with authorized_source_scope(packet, monkeypatch):
         result = await synthesize_from_evidence(llm, convo, packet)
-    assert "limits" in result[-1].content
+    assert result[-1].content == LIMITED_ANSWER
     llm.complete.assert_not_called()

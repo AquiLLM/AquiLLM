@@ -63,6 +63,8 @@ def _feedback_matches(convo: Conversation, rows: list[Message]) -> bool:
 
 
 def _frontend_message_content(msg: LLM_Message) -> str:
+    if getattr(msg, "_rag_answer", False):
+        return msg.content
     if msg.content == "** Empty Message, tool call **":
         return ""
     if isinstance(msg, AssistantMessage):
@@ -88,6 +90,8 @@ def pydantic_message_to_django(
         if isinstance(msg, AssistantMessage)
         else msg.content
     )
+    if getattr(msg, "_rag_answer", False):
+        content = msg.content
     common = {
         "conversation": conversation,  # FK linking this message to its conversation
         "message_uuid": msg.message_uuid,  # frontend message identity
@@ -182,7 +186,9 @@ def load_conversation_from_db(db_convo: WSConversation) -> Conversation:
     return convo
 
 
-def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, selected_collections=None) -> None:
+def save_conversation_to_db(
+    convo: Conversation, db_convo: WSConversation, *, selected_collections=None
+) -> None:
     """Replace the transcript only if this writer's loaded revision is current.
 
     Existing populated conversations require load_conversation_from_db first.
@@ -190,7 +196,10 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, se
     handle's revision, allowing repeated appends and explicit shorter replacements.
     Conflicts never merge transcripts or write metadata; callers must reload.
     """
-    with transaction.atomic():
+    from apps.chat.services.rag_turn_publication import conversation_publication
+    from lib.llm.execution_context import execution_publication
+
+    with execution_publication(), conversation_publication(), transaction.atomic():
         locked = WSConversation.objects.select_for_update().get(pk=db_convo.pk)
         if execution_token := getattr(db_convo, "_execution_token", None):
             from apps.chat.services.execution import verify_execution
@@ -231,6 +240,27 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, se
             incoming_uuids.append(msg.message_uuid)
             incoming = pydantic_message_to_django(msg, db_convo, seq)
             current = existing_by_uuid.get(msg.message_uuid)
+            from lib.llm.turn_context import current_turn
+
+            active_publication = getattr(current_turn(), "answer_publication", None)
+            if isinstance(msg, AssistantMessage) and (
+                current is None
+                or incoming.content != current.content
+                or (
+                    active_publication is not None
+                    and (
+                        msg._answer_publication_context is active_publication
+                        or msg.message_uuid not in active_publication.historical_ids
+                    )
+                )
+            ):
+                from asgiref.sync import async_to_sync
+
+                from lib.llm.answer_publication import verify_message
+
+                async_to_sync(verify_message)(
+                    msg, content=incoming.content, sink="persist"
+                )
             if current is None:
                 rows_to_create.append(incoming)
                 continue

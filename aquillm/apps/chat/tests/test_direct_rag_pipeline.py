@@ -122,10 +122,23 @@ async def test_candidate_pool_is_larger_than_final_packet(monkeypatch):
 
     def search(_consumer, _query, top_k):
         observed.append(top_k)
-        rows = [dict(_results_payload()["result"][0], chunk_id=i,
-                     citation=f"[doc:doc-a chunk:{i}]") for i in range(1, 6)]
-        rows.append(dict(rows[0], doc_id="doc-b", chunk_id=6,
-                         title="Paper B", citation="[doc:doc-b chunk:6]"))
+        rows = [
+            dict(
+                _results_payload()["result"][0],
+                chunk_id=i,
+                citation=f"[doc:doc-a chunk:{i}]",
+            )
+            for i in range(1, 6)
+        ]
+        rows.append(
+            dict(
+                rows[0],
+                doc_id="doc-b",
+                chunk_id=6,
+                title="Paper B",
+                citation="[doc:doc-b chunk:6]",
+            )
+        )
         return {"result": rows[:top_k]}
 
     async def synth(_llm_if, convo, packet, **kwargs):
@@ -242,6 +255,23 @@ def test_direct_rag_metrics_omit_poisoned_graph_fields(monkeypatch):
 
 
 async def test_end_to_end_real_synthesis_single_llm_call(monkeypatch):
+    from apps.chat.services import rag_answer_publication
+    from lib.llm.turn_context import current_turn
+
+    async def synthetic_binding(consumer, packet):
+        async def authorize():
+            return True
+
+        state = current_turn()
+        state.answer_publication = rag_answer_publication.RagAnswerPublication(
+            packet=packet,
+            authorize=authorize,
+            turn=state,
+        )
+
+    monkeypatch.setattr(
+        rag_answer_publication, "bind_legacy_answer_packet", synthetic_binding
+    )
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     monkeypatch.setenv("RAG_ENFORCE_CHUNK_CITATIONS", "1")
     order: list[str] = []
@@ -316,7 +346,9 @@ async def test_direct_rag_no_results_returns_notice_without_llm(monkeypatch):
 
     assert outcome == "handled"
     assert llm_if.calls == []
-    assert "no relevant passages" in consumer.convo[-1].content.lower()
+    from lib.llm.answer_publication import LIMITED_ANSWER
+
+    assert consumer.convo[-1].content == LIMITED_ANSWER
 
 
 async def test_handled_appends_synthetic_tool_messages(monkeypatch):
@@ -352,7 +384,6 @@ async def test_handled_appends_synthetic_tool_messages(monkeypatch):
     assert captured["packet"].chunks
 
 
-
 async def test_history_tool_choice_is_not_preempted_by_selected_collection(monkeypatch):
     from apps.chat.refs import ChatRef
     from apps.chat.services.tool_wiring.memory import search_past_chats_tool
@@ -368,7 +399,6 @@ async def test_history_tool_choice_is_not_preempted_by_selected_collection(monke
         monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
         assert await run_direct_rag_turn(consumer, object(), convo) == "skipped"
         search.assert_not_called()
-
 
 
 async def test_multi_part_direct_rag_searches_variants_before_one_synthesis(
@@ -427,7 +457,6 @@ async def test_multi_part_direct_rag_searches_variants_before_one_synthesis(
     assert len(synthesized[0].citation_tokens) == 3
 
 
-
 async def test_multi_query_retrieval_uses_successful_variants_when_one_fails(
     monkeypatch,
 ):
@@ -464,7 +493,6 @@ async def test_multi_query_retrieval_uses_successful_variants_when_one_fails(
     assert synthesized[0].citation_tokens == ["[doc:doc-a chunk:1]"]
 
 
-
 async def test_no_collections_prompts_selection(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     called: list = []
@@ -485,7 +513,6 @@ async def test_no_collections_prompts_selection(monkeypatch):
     assert "collection" in last.content.lower()
 
 
-
 async def test_retrieval_failure_falls_back_to_skipped(monkeypatch):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
 
@@ -504,7 +531,6 @@ async def test_retrieval_failure_falls_back_to_skipped(monkeypatch):
     # consumer.convo must be untouched so the normal tool loop can run.
     assert consumer.convo is convo
     assert isinstance(consumer.convo[-1], UserMessage)
-
 
 
 async def test_retry_reuses_last_direct_vector_query(monkeypatch):
@@ -560,7 +586,6 @@ async def test_retry_reuses_last_direct_vector_query(monkeypatch):
 
     assert outcome == "handled"
     assert searched_queries == ["attensity"]
-
 
 
 async def test_stream_disconnect_does_not_turn_direct_rag_into_tool_fallback(

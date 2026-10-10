@@ -4,13 +4,8 @@ import asyncio
 import json
 
 from apps.chat.services.rag_context_budget import provider_context_capacity
+from lib.llm.answer_publication import LIMITED_ANSWER as LIMITED_MESSAGE
 from lib.llm.evidence_guard import ContextLimited, EvidenceProtection, protect_evidence
-
-LIMITED_MESSAGE = (
-    "I could not deliver the selected evidence within this request's context or "
-    "retrieval limits. Please narrow the question or selected documents. "
-    "This limit does not mean the documents contain no supporting information."
-)
 
 
 async def complete_source_request(llm, request, budget, stream_func, *, packet=None):
@@ -71,7 +66,17 @@ async def complete_source_request(llm, request, budget, stream_func, *, packet=N
         turn_budget=runtime.budget,
         synthesis_lease=lease,
     )
-    with protect_evidence(protection):
+    from apps.chat.services.rag_answer_publication import bind_packet_publication
+
+    if packet is not None:
+        publication = bind_packet_publication(packet, lease=lease)
+        if publication is not None:
+            publication.historical_ids = frozenset(
+                m.message_uuid for m in request.messages
+            )
+    from lib.llm.turn_context import suppress_evidence_handoff
+
+    with protect_evidence(protection), suppress_evidence_handoff():
 
         async def guarded_stream(payload):
             lease.check_active()
@@ -135,6 +140,7 @@ async def revalidate_source_packet(packet):
     fresh.selection = selection
     fresh.coverage_assessment = packet.coverage_assessment
     fresh.auxiliary_handoff = packet.auxiliary_handoff
+    fresh._publication_scope_check = getattr(packet, "_publication_scope_check", None)
     fresh.diagnostic_message = packet.diagnostic_message
     if packet.retrieval_status == "partial":
         fresh.retrieval_status = "partial"
@@ -184,4 +190,7 @@ async def finalize_source_support(packet):
             packet.retrieval_status = "partial" if packet.chunks else "context_limited"
     if runtime:
         runtime.observation["delivered_packet"] = packet
+    from apps.chat.services.rag_answer_publication import capture_publication_images
+
+    await capture_publication_images(packet)
     return packet

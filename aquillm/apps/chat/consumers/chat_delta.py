@@ -18,6 +18,15 @@ logger = structlog.stdlib.get_logger(__name__)
 
 
 async def send_conversation_snapshot(consumer: Any) -> None:
+    from lib.llm.answer_publication import verify_message
+    from lib.llm.turn_context import current_turn
+
+    messages = [pydantic_message_to_frontend_dict(msg) for msg in consumer.convo]
+    publication = getattr(current_turn(), "answer_publication", None)
+    if publication is not None:
+        for msg, rendered in zip(consumer.convo, messages):
+            if msg.message_uuid not in publication.historical_ids:
+                await verify_message(msg, content=rendered["content"], sink="refresh")
     consumer.last_sent_sequence = len(consumer.convo) - 1
     await consumer.send(
         text_data=dumps(
@@ -27,9 +36,7 @@ async def send_conversation_snapshot(consumer: Any) -> None:
                     "selected_collections": consumer.db_convo.selected_collection_ids
                     or [],
                     "skill_overrides": consumer.db_convo.skill_overrides or {},
-                    "messages": [
-                        pydantic_message_to_frontend_dict(msg) for msg in consumer.convo
-                    ],
+                    "messages": messages,
                 }
             }
         )
@@ -68,6 +75,10 @@ async def send_conversation_delta(
     }
     if usage is not None:
         delta["usage"] = usage
+    from lib.llm.answer_publication import verify_message
+
+    for msg, rendered in zip(new_messages, delta["messages"]):
+        await verify_message(msg, content=rendered["content"], sink="refresh")
     sent = await best_effort_send(
         consumer,
         text_data=dumps({"delta": delta}),

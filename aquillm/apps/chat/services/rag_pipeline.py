@@ -261,6 +261,9 @@ async def _run_direct_rag_turn(consumer, llm_if, convo, *, stream_func=None):
         working_convo = _append_retrieval_messages(convo, query, raw_result, top_k)
 
         t_synthesis_start = time.perf_counter()
+        from apps.chat.services.rag_answer_publication import bind_legacy_answer_packet
+
+        await bind_legacy_answer_packet(consumer, packet)
         with observability_scope(correlation_id, "direct_synthesis"):
             result_convo = await synthesize_from_evidence(
                 llm_if, working_convo, packet, stream_func=stream_func

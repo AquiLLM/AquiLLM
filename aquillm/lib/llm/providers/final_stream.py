@@ -1,4 +1,5 @@
 """Final-answer streaming helpers for provider orchestration."""
+
 from __future__ import annotations
 
 from os import getenv
@@ -22,10 +23,24 @@ async def send_final_answer_stream(
     content: str,
     stop_reason: str | None,
     usage: int,
+    message=None,
 ) -> None:
     """Publish the validated assistant answer as the sole visible stream event."""
     if not content.strip():
         return
+    from lib.llm.turn_context import current_turn
+
+    if (
+        message is None
+        and getattr(current_turn(), "answer_publication", None) is not None
+    ):
+        from lib.llm.answer_publication import AnswerPublicationRejected
+
+        raise AnswerPublicationRejected("unbound_receipt")
+    if message is not None:
+        from lib.llm.answer_publication import verify_message
+
+        await verify_message(message, content=content, sink="stream")
     await stream_func(
         {
             "message_uuid": message_uuid,
