@@ -34,4 +34,17 @@ At `2026-10-10T16:12:42Z`, the selected image was healthy, all four controls mat
 
 All 32 short exact quality cases and all six long recall/tool cases passed after this deployment. Other service container IDs remained unchanged. See the [runtime and activation record](serving/h100-development-rollout.json), [short cases](serving/h100-development-rollout-strict.jsonl), and [long cases](serving/h100-development-rollout-long.jsonl).
 
-Mimalloc comparison is additional work in progress, using [PR #240](https://github.com/AquiLLM/AquiLLM/pull/240). The requested order is model API, then full chat and RAG. Its new Compose CI test has an environment-resolution assertion defect; the pinned allocator source and serving dependencies are unchanged by that test correction.
+The additional [mimalloc comparison](mimalloc-experiment.md) using
+[PR #240](https://github.com/AquiLLM/AquiLLM/pull/240) is complete, in the requested
+order: model API, then authenticated chat and RAG. The Compose test correction
+leaves the allocator build and launcher unchanged. No allocator latency promotion
+qualified, and PR #240 remains unmerged.
+
+Independent verification at `2026-10-10T18:16:15Z` confirmed this prefill image and
+the original web image healthy, original allocator environment restored, an exact
+model response, HTTP 200 from the web login, and deletion of the disposable fixture.
+Unrelated service IDs remained unchanged. See the
+[restoration record](mimalloc/application/retry/h100-allocator-restoration-verified.json).
+Both allocator arms used bounded prefill; that replay does not supply a separate
+baseline-versus-prefill application comparison or change the original kernel
+qualification limitations above.

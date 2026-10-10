@@ -1,0 +1,284 @@
+{
+  "answer_proof_passed": true,
+  "conversations": [
+    {
+      "conversation_id": 371,
+      "label": "system-block1",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 372,
+      "label": "system-block1",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 373,
+      "label": "system-block1",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 374,
+      "label": "system-block1",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 375,
+      "label": "system-block1",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 376,
+      "label": "system-block1",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 377,
+      "label": "system-block1",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 378,
+      "label": "system-block1",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 379,
+      "label": "system-block1",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 380,
+      "label": "system-block1",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 381,
+      "label": "system-block1",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 382,
+      "label": "system-block1",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    }
+  ],
+  "fixture": {
+    "ready": true,
+    "document_id": "ef11f88d-5ba1-47ac-ac28-b2273ef46e10",
+    "full_text_sha256": "fa7114870548c15392b4088b3b0b37ce65347cea784c832b40b9d7969bb57d02",
+    "chunks": [
+      {
+        "chunk_id": 15737,
+        "has_fact": true,
+        "vector_dimensions": 1024,
+        "valid_provenance": true,
+        "provenance_sha256": "8a548ed78c32dfc76307c2a21e660b56576b1f9481fc990cda8b4d5d7e931333",
+        "content_sha256": "fa7114870548c15392b4088b3b0b37ce65347cea784c832b40b9d7969bb57d02",
+        "provider": "local-openai",
+        "route": "openai-embeddings"
+      }
+    ]
+  },
+  "background": {
+    "owned_chats": [
+      {
+        "conversation_id": 371,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 372,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 373,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 374,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 375,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 376,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 377,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 378,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 379,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 380,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 381,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 382,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      }
+    ],
+    "current_memory_and_index": false,
+    "all_celery_tasks_quiescent_verified": false
+  },
+  "profile": {
+    "profile_fact_count": 0,
+    "profile_facts_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "profile_facts_empty": true,
+    "queued_profile_promotion_terminal_verified": false
+  },
+  "knowledge_graph": {
+    "build_enabled": true,
+    "configured_extractor_provider": "gliner2_local",
+    "configured_extractor_model": "fastino/gliner2-base-v1",
+    "configured_extractor_device": "cpu",
+    "owned_build_runs": [
+      {
+        "id": 5023,
+        "scope_type": "document",
+        "scope_id": "ef11f88d-5ba1-47ac-ac28-b2273ef46e10",
+        "status": "succeeded",
+        "stage": "active"
+      }
+    ],
+    "observed_nonterminal_runs": 0,
+    "queued_graph_tasks_quiescent_verified": false
+  },
+  "route_configuration_only": true,
+  "configured_interface": "OpenAIInterface",
+  "configured_model": "qwen3.6:27b-mtp-awq",
+  "configured_base_url": "http://vllm:8000/v1/",
+  "actual_serving_process_allocator_and_dispatch_verified": false
+}

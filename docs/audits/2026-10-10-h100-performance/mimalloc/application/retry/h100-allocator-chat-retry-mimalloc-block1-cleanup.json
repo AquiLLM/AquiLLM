@@ -1,0 +1,29 @@
+{
+  "cleared_conversation_ids": [
+    395,
+    396,
+    397,
+    398,
+    399,
+    400,
+    401,
+    402,
+    403,
+    404,
+    405,
+    406
+  ],
+  "live_mem0_vectors_empty": true,
+  "live_mem0_graph_nodes_empty": true,
+  "mem0_sqlite_history_erased": false,
+  "user_and_fixture_deleted": false,
+  "all_celery_tasks_quiescent_verified": false,
+  "profile_before": {
+    "profile_fact_count": 0,
+    "profile_facts_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "profile_facts_empty": true,
+    "queued_profile_promotion_terminal_verified": false
+  },
+  "profile_facts_empty_after": true,
+  "queued_profile_promotion_terminal_verified": false
+}

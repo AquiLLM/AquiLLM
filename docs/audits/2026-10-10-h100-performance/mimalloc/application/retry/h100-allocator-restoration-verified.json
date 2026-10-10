@@ -1,0 +1,59 @@
+{
+  "vllm": {
+    "image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+    "healthy": true,
+    "allocator_environment": {},
+    "h100_flags": {
+      "AQUILLM_H100_PREFILL": "1",
+      "AQUILLM_H100_MTP_KERNEL": "baseline",
+      "AQUILLM_H100_SPLIT_POLICY": "baseline",
+      "AQUILLM_H100_GDN": "baseline"
+    }
+  },
+  "web": {
+    "image": "sha256:224d3155904e0fbb061c396e64808c2e4a0a4a7c56e58442359135041bb67bd8",
+    "healthy": true,
+    "allocator_environment": {},
+    "h100_flags": null
+  },
+  "protected_runtime_and_environment_validated": true,
+  "model_response": {
+    "model": "qwen3.6:27b-mtp-awq",
+    "exact_answer_passed": true,
+    "finish_reason": "stop"
+  },
+  "web_login_http_status": 200,
+  "independent_fixture_cleanup": {
+    "user_absent": true,
+    "collection_absent": true,
+    "document_absent": true,
+    "chunks_absent": true,
+    "conversations_absent": true,
+    "other_owned_conversations_absent": true
+  },
+  "development_commit": "c774b1af803f90778521269c9df88f2598f7616c",
+  "development_checkout_clean": true,
+  "host": "aquillm-dev2",
+  "unrelated_services_unchanged_since_rollout": true,
+  "unrelated_service_ids": {
+    "compose-worker-1": "9319f9320974",
+    "compose-worker_memory_promotion-1": "88277f63758a",
+    "compose-scheduler_application_maintenance-1": "0ac47940f3a9",
+    "compose-worker_knowledge_graph-1": "6d0bb16a8a1c",
+    "compose-worker_knowledge_graph_schema-1": "51288418f2ef",
+    "compose-knowledge_graph_query_extractor-1": "93d0db2376cb",
+    "compose-knowledge_graph_query_gateway-1": "8e3bf0e4742e",
+    "compose-scheduler_knowledge_graph_maintenance-1": "8c6c87f81c17",
+    "compose-worker_knowledge_graph_projection-1": "824f64eb6045",
+    "compose-redis-1": "9de3b8fc008c",
+    "compose-db-1": "82e96f15e1ec",
+    "compose-vllm_rerank-1": "54a5535d2d68",
+    "compose-vllm_embed-1": "8912321b09bd",
+    "compose-storage-1": "9ed0570c727b",
+    "compose-memgraph_knowledge_graph-1": "51c79ff5669a",
+    "compose-nginx-1": "207675ab4d4e",
+    "compose-memgraph-1": "28d908af04aa",
+    "compose-qdrant-1": "612bf4755f02"
+  },
+  "at": "2026-10-10T18:16:15.963165+00:00"
+}

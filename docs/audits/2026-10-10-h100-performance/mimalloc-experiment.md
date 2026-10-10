@@ -25,3 +25,36 @@ Use two system/mimalloc pairs, each with one warmup and five measured requests f
 Measure user-append to first visible answer, final stream completion and persisted assistant message separately. Verify exact synthetic answers, retrieved/cited fixture chunks, actual local-model routing and successful synthesis; mocked evaluation and extractive fallback are not live model evidence. Record background work and memory activity as potential contention. Clean up only the created chats, collection, principal and its memory namespace.
 
 This tests main inference alone first, then main inference plus web through the application. It does not establish an all-service mimalloc speedup or authorize production rollout. PR #240's broader image/default changes remain a separate deployment decision.
+
+## Completed development experiment
+
+Both stages completed on `aquillm-dev2` (`149.165.150.254`). The original prefill
+model image and original web image were restored, with their original allocator
+environment, and independently verified healthy at `2026-10-10T18:16:15Z`.
+The model answered the final exact smoke prompt; the web login returned HTTP 200.
+The disposable principal, source, chunks and 48 conversations were independently
+confirmed absent. Unrelated service container IDs match the earlier H100 rollout.
+
+- [Model API results](mimalloc/api/results.md): 264/264 valid requests, 240 measured.
+  Paired mixed throughput difference +0.1024%, t 95% interval [-0.8923%, +1.1072%].
+  No meaningful latency/throughput improvement qualified. Both arms passed the
+  32 strict and six long quality cases; timed free-form output pairing varied.
+- [Application results](mimalloc/application/results.md): 48/48 valid requests,
+  40 measured. Pooled median visible/final latency was 2.840 to 2.740 seconds for
+  chat and 2.529 to 2.415 seconds for RAG. Only two fixed-order pairs were run,
+  and provider completion-token work differed. RAG used a failing graph path and
+  final-selection scoring fallback. These descriptive reductions do not qualify
+  an allocator speedup or healthy graph/scoring behavior.
+
+Keep the system allocator selected. The bounded H100 prefill upgrade remains
+enabled on development. PR #240 remains unmerged; its dedicated mimalloc CI
+passed, while the existing broader repository checks remain failing. The replay
+changed only main inference and web allocation, so it does not qualify the PR's
+other service defaults. This is not a baseline-versus-prefill application A/B:
+both allocator arms had prefill enabled, and no saturation throughput was tested.
+
+The [reproduction archive](mimalloc/reproduction/README.md) preserves executed
+coordinators, builders and recovery scripts. The aborted first application run
+is [archived separately](mimalloc/application/attempt1/README.md) and excluded
+from all paired results. Final request, cleanup and restoration evidence is
+bound by the [application manifest](mimalloc/application/manifest.json).

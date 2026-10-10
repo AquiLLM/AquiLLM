@@ -1,0 +1,291 @@
+{
+  "answer_proof_passed": true,
+  "conversations": [
+    {
+      "conversation_id": 419,
+      "label": "mimalloc-block2",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 420,
+      "label": "mimalloc-block2",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 421,
+      "label": "mimalloc-block2",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 422,
+      "label": "mimalloc-block2",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 423,
+      "label": "mimalloc-block2",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 424,
+      "label": "mimalloc-block2",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 425,
+      "label": "mimalloc-block2",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 426,
+      "label": "mimalloc-block2",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 427,
+      "label": "mimalloc-block2",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 428,
+      "label": "mimalloc-block2",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 429,
+      "label": "mimalloc-block2",
+      "kind": "chat",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    },
+    {
+      "conversation_id": 430,
+      "label": "mimalloc-block2",
+      "kind": "rag",
+      "model": "qwen3.6:27b-mtp-awq",
+      "stop_reason": "stop",
+      "persisted_output_matches": true,
+      "exact_answer": true,
+      "model_matches": true,
+      "successful_finish": true
+    }
+  ],
+  "fixture": {
+    "ready": true,
+    "document_id": "cca85b84-6eaa-4ccb-8264-5548f86a9616",
+    "full_text_sha256": "19a7b0cd798ebaf466d4efc7e6cbbd14b701b0c0bdaa2fcceb4232e6a07763c9",
+    "chunks": [
+      {
+        "chunk_id": 15738,
+        "has_fact": true,
+        "vector_dimensions": 1024,
+        "valid_provenance": true,
+        "provenance_sha256": "09e0b76531bf3cdacca936637618cd057b4fc91008d792acf1eafa4976d45bbc",
+        "content_sha256": "19a7b0cd798ebaf466d4efc7e6cbbd14b701b0c0bdaa2fcceb4232e6a07763c9",
+        "provider": "local-openai",
+        "route": "openai-embeddings"
+      }
+    ]
+  },
+  "background": {
+    "owned_chats": [
+      {
+        "conversation_id": 419,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 420,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 421,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 422,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 423,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 424,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 425,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 426,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 427,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 428,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 429,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      },
+      {
+        "conversation_id": 430,
+        "memory_writer_absent": true,
+        "memory_state": "queued",
+        "memory_current": false,
+        "index_current": false,
+        "foreground_idle": true
+      }
+    ],
+    "current_memory_and_index": false,
+    "all_celery_tasks_quiescent_verified": false
+  },
+  "profile": {
+    "profile_fact_count": 0,
+    "profile_facts_sha256": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "profile_facts_empty": true,
+    "queued_profile_promotion_terminal_verified": false
+  },
+  "knowledge_graph": {
+    "build_enabled": true,
+    "configured_extractor_provider": "gliner2_local",
+    "configured_extractor_model": "fastino/gliner2-base-v1",
+    "configured_extractor_device": "cpu",
+    "owned_build_runs": [
+      {
+        "id": 5027,
+        "scope_type": "document",
+        "scope_id": "cca85b84-6eaa-4ccb-8264-5548f86a9616",
+        "status": "succeeded",
+        "stage": "active"
+      },
+      {
+        "id": 5028,
+        "scope_type": "collection",
+        "scope_id": "259",
+        "status": "succeeded",
+        "stage": "active"
+      }
+    ],
+    "observed_nonterminal_runs": 0,
+    "queued_graph_tasks_quiescent_verified": false
+  },
+  "route_configuration_only": true,
+  "configured_interface": "OpenAIInterface",
+  "configured_model": "qwen3.6:27b-mtp-awq",
+  "configured_base_url": "http://vllm:8000/v1/",
+  "actual_serving_process_allocator_and_dispatch_verified": false
+}

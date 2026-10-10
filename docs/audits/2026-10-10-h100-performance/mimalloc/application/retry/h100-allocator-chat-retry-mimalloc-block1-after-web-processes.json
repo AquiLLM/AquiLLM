@@ -1,0 +1,22 @@
+[
+  {
+    "pid": 1,
+    "role": "web",
+    "configured_allocator": "mimalloc",
+    "observed_env_allocator": "mimalloc",
+    "observed_env_pythonmalloc": "default",
+    "libraries": [
+      "/opt/mimalloc/lib/libmimalloc.so.3.5"
+    ],
+    "status": {
+      "VmHWM": "924868 kB",
+      "VmRSS": "914312 kB",
+      "Threads": "17"
+    },
+    "memory": {
+      "Rss": "914312 kB",
+      "Pss": "894797 kB",
+      "Private_Dirty": "724624 kB"
+    }
+  }
+]

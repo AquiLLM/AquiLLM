@@ -1,0 +1,20 @@
+[
+  {
+    "pid": 1,
+    "role": "web",
+    "configured_allocator": "system",
+    "observed_env_allocator": "system",
+    "observed_env_pythonmalloc": "default",
+    "libraries": [],
+    "status": {
+      "VmHWM": "368840 kB",
+      "VmRSS": "368840 kB",
+      "Threads": "1"
+    },
+    "memory": {
+      "Rss": "368840 kB",
+      "Pss": "351687 kB",
+      "Private_Dirty": "295172 kB"
+    }
+  }
+]
