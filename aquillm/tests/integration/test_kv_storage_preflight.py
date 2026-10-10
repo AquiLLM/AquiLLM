@@ -1,5 +1,8 @@
 """Preflight catches native/transport failures and cannot authorize registration."""
 import importlib
+import json
+import re
+import shlex
 import socket
 import subprocess
 import sys
@@ -102,3 +105,43 @@ def test_registration_rejects_mismatching_real_tensor_stride(preflight):
     tensors = {0: [torch.empty((8, 4, 16, 388), dtype=torch.uint8).transpose(1, 2)]}
     with pytest.raises(ValueError, match="stride"):
         preflight.inspect_allocations(record, tensors)
+
+
+def build_python_blocks():
+    script = ROOT / "deploy/docker/vllm/build_lmcache.sh"
+    return re.findall(r"<<'PY'[^\n]*\n(.*?)\nPY", script.read_text(), flags=re.DOTALL)
+
+
+def test_sdk_include_paths_skip_unused_missing_directory(tmp_path):
+    include = tmp_path / "headers"
+    include.mkdir()
+    (include / "real_client.h").write_text("// fixture\n")
+    missing = tmp_path / "legacy-proto"
+    record = [{"directory": str(tmp_path), "file": "/fixture/real_client.cpp",
+               "command": shlex.join(["g++", "-Iheaders", "-isystem", str(missing), "-Iheaders"])}]
+    commands = tmp_path / "compile_commands.json"
+    commands.write_text(json.dumps(record))
+    # Map the old fixed external file location to our real fixture, without
+    # changing extraction logic; the revised block accepts the file as argv.
+    bootstrap = """
+import pathlib, sys
+original_path = pathlib.Path
+def fixture_path(value, *parts):
+    return original_path(sys.argv[1] if str(value) == '/opt/Mooncake/build/compile_commands.json' else value, *parts)
+pathlib.Path = fixture_path
+"""
+    result = subprocess.run([sys.executable, "-c", bootstrap + build_python_blocks()[0], str(commands)],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(include)
+    assert str(missing) in result.stderr
+
+
+def test_sdk_runtime_rpath_drops_only_stub_directory():
+    blocks = build_python_blocks()
+    assert len(blocks) >= 2, "SDK runtime path sanitization missing"
+    namespace = {"__name__": "rpath_test"}
+    exec(blocks[1], namespace)
+    sanitize = namespace["runtime_paths_without_stubs"]
+    assert sanitize("/usr/local/cuda/lib64:/usr/local/cuda/lib64/stubs:$ORIGIN:/keep/stubs2") == "/usr/local/cuda/lib64:$ORIGIN:/keep/stubs2"
+    assert sanitize("$ORIGIN") == "$ORIGIN"
