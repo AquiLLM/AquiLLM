@@ -157,7 +157,7 @@ I2 supplies `persist_extraction_revision(occurrence, extraction, *, using: str) 
 
 ### D6 clarification: default retrieval publication
 
-Valid default-mode direct, manual and document-tool answers receive the same app-owned publication binding around their current selected packet, exact user/scope/source, and existing R1 TurnContext. This does not enable preservation, SourceRuntime or planning. Historical/unbound evidence cannot mint a receipt. Bounded metadata checks may compute SHA-256 in PostgreSQL without returning source bodies; a current hash alone never proves that arbitrary delivered text came from that source. Delivered slices and media require captured exact provenance.
+Valid default-mode direct, manual and document-tool answers receive the same app-owned publication binding around their current selected packet, exact user/scope/source, and existing R1 TurnContext. This does not activate source/window feature routing or planning. A private SourceRuntime carrier retains the original authority, snapshot and budget without binding the public source-mode context. Historical/unbound evidence cannot mint a receipt. Bounded metadata checks may compute SHA-256 in PostgreSQL without returning source bodies; a current hash alone never proves that arbitrary delivered text came from that source. Delivered slices and media require captured exact provenance.
 
 ### D7 clarification: bounded nonmonotone token fitting
 
@@ -370,6 +370,16 @@ The first retrieval or source-tool operation captures all originally selected do
 Apply the active-generation predicate before source metadata, cache and body reads, including whole-document, adjacent, figure and default-mode paths. Historical citation endpoints remain the deliberate retained-source lookup. Final answer authorization validates the retained snapshot alongside existing owner locks, permissions, body fingerprints and publication receipts. The snapshot digest and original object identity bind the publication scope. A generation change can therefore produce a limited answer even if the retired chunk's text is unchanged. No new source body is acquired at publication.
 
 A graph build in legacy mode must reject an owner with generation history it cannot bind. Generation-aware builds use the existing V2 gate and durable captured target. This may leave graph retrieval unavailable until a compatible rebuild; it must not enumerate retained chunks as current evidence.
+
+### D19 default and explicit manual acquisition
+
+Default text/media retrieval uses the original private carrier and never captures a replacement scope at publication. An unavailable original selection uses a distinct unavailable-parent value, not an authorized SourceRuntime. Ordinary chat can continue, while automatic source acquisition remains unavailable. Only an actual parsed human `/search` request may create an exact currently VIEW-authorized document child under the original turn budget. Its parent selection is unchanged, and automatic tools cannot reuse that child as expanded authority. Final sinks accept only the privately registered packet/context binding from the same active turn.
+
+Empty or invalid manual evidence retains an ordinary fact-free limited publication context. It receives no manual child capability. Nonnull packet bindings still require the exact original authority and snapshot; malformed bindings are not suppressed as empty evidence.
+
+Auxiliary figures must have both current immutable media provenance and exact selected packet membership. A mutable URL, a related parent or permission alone is insufficient. Omit unsupported auxiliary media with the existing omission notice while preserving usable main text; do not acquire bytes already known ineligible for handoff. Selected standalone figures retain their verified bytes, original budget and final permission/generation checks. Image request position, title and citation must match the actual selected evidence row, including text rows interleaved between images.
+
+Dense preflight freezes scalar generation metadata and validates a unique matching manifest entry. Variable receipt, serving-binding and matched-entry text is charged before payload hydration; the payload query repeats the identity, cardinality, length, digest and eligibility checks. Native schema-fixed 1024-dimensional numeric vectors remain under the existing 45-candidate ceiling. Neither full generation manifests nor hypothetical vector-to-text serialization can substitute for the actual bounded-read contract.
 
 ### D15 per-provenance graph evidence bindings
 
