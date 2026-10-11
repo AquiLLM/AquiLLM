@@ -110,10 +110,20 @@ async def test_prepared_named_source_constraints_reach_actual_acquisition(
 @pytest.mark.django_db(transaction=True)
 @pytest.mark.asyncio
 @pytest.mark.parametrize("followup", [False, True])
-@pytest.mark.parametrize("historical_title", ["Red", "Red Giants"])
-@pytest.mark.parametrize("requested_title", ["Red Giants", "red giants", "Red giants"])
+@pytest.mark.parametrize("prefix", ["the paper ", ""])
+@pytest.mark.parametrize("historical_title,requested_title", [
+    (history, request) for history in ("Red", "Red Giants")
+    for request in ("Red Giants", "red giants", "Red giants")
+] + [
+    ("Red", "Red: Giants"), ("Red", "Red/Giants"),
+    ("Red: Giants", "Red: Giants"), ("Red/Giants", "Red/Giants"),
+    ("Red", "Red"), ("Red: Giants", '"Red: Giants"'), ("Red", '"Red: Giants"'),
+    ("Red", "Big Red"), ("Big Red", "Big Red"),
+    ("Red", "Red—Giants"), ("Red—Giants", "Red—Giants"),
+    ("Stars", "Named Stars"), ("Named Stars", "Named Stars"), ("Stars", 'named "Stars"'),
+])
 async def test_explicit_longer_title_does_not_borrow_partial_historical_identity(
-    followup, historical_title, requested_title, monkeypatch,
+    followup, prefix, historical_title, requested_title, monkeypatch,
 ):
     actor, collection, auth = await database_sync_to_async(setup_scope)()
     doc_id = next(iter(auth.selected_document_ids))
@@ -121,8 +131,8 @@ async def test_explicit_longer_title_does_not_borrow_partial_historical_identity
         TextChunk(doc_id=doc_id, chunk_number=0, content="A different paper.",
                   start_position=0, end_position=18)]))[0]
     citation = f"[doc:{doc_id} chunk:{chunk.pk}]"
-    question = f"Summarize the paper {requested_title}"
-    rewrite = f"Explain the paper {requested_title}"
+    question = f"Summarize {prefix}{requested_title}"
+    rewrite = f"Explain {prefix}{requested_title}"
     convo = Conversation(system="sys", messages=[
         ToolMessage(tool_name="vector_search", for_whom="assistant", content="{}",
             result_dict={"result": [{"doc_id": str(doc_id), "chunk_id": chunk.pk,
@@ -156,5 +166,7 @@ async def test_explicit_longer_title_does_not_borrow_partial_historical_identity
     assert await rag_pipeline.run_direct_rag_turn(consumer,
         SimpleNamespace(base_args={"model": "synthetic"}, get_message=get_message), convo) == "handled"
     assert searches == [question, rewrite]
-    expected_identity = (str(doc_id),) if historical_title == "Red Giants" else ()
+    exact_title = (historical_title.casefold() == requested_title.strip('"').casefold()
+                   or bool(prefix and requested_title == 'named "Stars"'))
+    expected_identity = (str(doc_id),) if exact_title else ()
     assert identities == [expected_identity, expected_identity]

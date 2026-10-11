@@ -35,6 +35,30 @@ def test_source_noun_and_ordinal_one_require_displayed_antecedents():
     assert missing.unresolved_references == ("that paper", "second one")
 
 
+@pytest.mark.parametrize("label", ["Named", "named", "Called", "called", "Titled", "titled"])
+@pytest.mark.parametrize("prefix", ["the paper ", ""])
+@pytest.mark.parametrize("complete", [False, True])
+def test_literal_label_prefix_is_not_removed(label, prefix, complete):
+    requested = f"{label} Stars"
+    history = _history(titles=(requested if complete else "Stars", "Other"))
+    anchors = resolve_source_anchors(f"Summarize {prefix}{requested}", history)
+    assert anchors.document_ids == (("paper-z",) if complete else ())
+
+
+@pytest.mark.parametrize("label", ["Named", "named", "Called", "called", "Titled", "titled"])
+@pytest.mark.parametrize("prefix", ["the paper ", ""])
+def test_quoted_label_requires_source_noun_introduction(label, prefix):
+    anchors = resolve_source_anchors(
+        f'Summarize {prefix}{label} "Stars"', _history(titles=("Stars", "Other")))
+    assert anchors.document_ids == (("paper-z",) if prefix else ())
+
+
+def test_join_without_prior_source_reference_cannot_supply_name_start():
+    anchors = resolve_source_anchors(
+        "Investigate Red with Stars", _history(titles=("Stars", "Other")))
+    assert anchors.document_ids == ()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("followup", [False, True])
 @pytest.mark.parametrize("question", [

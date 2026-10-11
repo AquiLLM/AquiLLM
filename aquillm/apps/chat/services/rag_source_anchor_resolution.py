@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from apps.chat.services.rag_retrieval import _verified_row_coordinates
+from apps.chat.services.rag_source_name_spans import source_name_events
 from lib.llm.types.messages import AssistantMessage, ToolMessage
 
 _CITATION = re.compile(r"\[doc:([^\s\]]+) chunk:([1-9][0-9]*)\]")
@@ -21,12 +22,6 @@ _PLURAL = re.compile(r"\b(both|their|them|these|those)\b", re.I)
 _SINGULAR = re.compile(
     r"\b((?:this|that|the)\s+(?:paper|report|document|source)|it|its|this|that)\b", re.I
 )
-_GENERIC_TITLES = frozenset({"paper", "report", "document", "source"})
-_NAMED_SOURCE = re.compile(
-    r'\s+(?:(?i:titled|named|called)\s+)?(?P<title>"[^"\n]+"|“[^”\n]+”|'
-    r"[A-Z][\w’'-]*(?:\s+[\w’'-]+)*)"
-)
-_KNOWN_NAMED_SOURCE = re.compile(_NAMED_SOURCE.pattern, re.I)
 
 
 @dataclass(frozen=True, slots=True)
@@ -142,52 +137,7 @@ def _reference_events(question, titles):
         if not _overlaps(*match.span(), occupied):
             events.append((match.start(), match.end(), "document", match.group(0)))
             occupied.append(match.span())
-    matches = []
-    for title in titles:
-        if title in _GENERIC_TITLES:
-            continue
-        for match in re.finditer(
-            r"(?<!\w)" + re.escape(title) + r"(?!\w)", question, re.I
-        ):
-            matches.append((match.start(), match.end(), title))
-    for start, end, title in sorted(
-        matches, key=lambda item: (item[0], item[0] - item[1])
-    ):
-        if not _overlaps(start, end, occupied):
-            events.append((start, end, "title", title))
-            occupied.append((start, end))
-    for cue in _SINGULAR.finditer(question):
-        if " " not in cue.group(0) or _overlaps(*cue.span(), occupied):
-            continue
-        known = next((event for event in events if event[2] == "title"
-            and event[0] >= cue.end() and not question[cue.end():event[0]].strip()), None)
-        # A known prefix is only a name cue; identity needs the complete span.
-        pattern = _KNOWN_NAMED_SOURCE if known is not None else _NAMED_SOURCE
-        named = pattern.match(question, cue.end())
-        if named is not None:
-            start, end = named.span("title")
-            if question[start] not in '"“':
-                following = [m.start() for p in (_ORDINAL, _PLURAL, _SINGULAR)
-                    for m in p.finditer(question, start + 1, end)
-                    if p is _ORDINAL or _source_pronoun(question, m)]
-                if following:
-                    end = start + len(re.sub(
-                        r"\s+(?:and|with|versus|vs)(?:\s+the)?\s*$", "",
-                        question[start:min(following)], flags=re.I).rstrip())
-            literal = question[start:end].strip('"“”').casefold()
-            partial = {event[:2] for event in events if event[2] == "title"
-                and _overlaps(start, end, (event[:2],)) and event[3] != literal}
-            events = [event for event in events if event[:2] not in partial]
-            occupied = [span for span in occupied if span not in partial]
-            exact = any(event[2] == "title" and event[3] == literal
-                        and _overlaps(start, end, (event[:2],)) for event in events)
-            if exact:
-                occupied.append((cue.start(), end))
-            elif not _overlaps(start, end, occupied):
-                events.append((start, end, "named_source", question[start:end]))
-                occupied.append((cue.start(), end))
-        elif known is not None:
-            occupied.append((cue.start(), known[1]))
+    references = []
     for pattern, kind in (
         (_ORDINAL, "ordinal"),
         (_PLURAL, "plural"),
@@ -196,9 +146,15 @@ def _reference_events(question, titles):
         for match in pattern.finditer(question):
             if kind != "ordinal" and not _source_pronoun(question, match):
                 continue
-            if not _overlaps(*match.span(), occupied):
-                events.append((match.start(), match.end(), kind, match.group(0)))
-                occupied.append(match.span())
+            references.append((match.start(), match.end(), kind, match.group(0)))
+    for event, span in source_name_events(question, titles, [*events, *references]):
+        if not _overlaps(*span, occupied):
+            events.append(event)
+            occupied.append(span)
+    for start, end, kind, value in references:
+        if not _overlaps(start, end, occupied):
+            events.append((start, end, kind, value))
+            occupied.append((start, end))
     return sorted(events, key=lambda item: item[0])
 
 
