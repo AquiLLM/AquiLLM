@@ -152,6 +152,8 @@ class Trace:
                 self.done.set()
 
     def result(self, answer):
+        from .evidence_graph_capture import graph_lane_observations
+
         sdk = [e for e in self.events if e["event"] == "sdk_start"]
         http = [e for e in self.events if e["event"] == "rerank_http"]
         cache = [e for e in self.events if e["event"] == "cache_operation"]
@@ -195,5 +197,8 @@ class Trace:
                 "window_scores": self.window_scores,
                 "coverage": self.coverage,
                 **{k: v for k, v in self.final.items() if k != "at"},
+                "lane_observations": graph_lane_observations(
+                    self.events, self.final.get("lane_observations")
+                ),
             }
         )

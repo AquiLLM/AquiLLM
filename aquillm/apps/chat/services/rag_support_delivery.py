@@ -100,14 +100,25 @@ def render_supported_answer(packet):
                 + "."
             )
     else:
+        from .rag_complete_excerpts import partition_complete_source
+
         header = (
             "Support for an answer is uncertain in the selected evidence. "
             "These are attributed excerpts, not a conclusion about the question:"
         )
+        remaining_slots, remaining_codepoints = 5, 6000
         for row in packet.chunks:
             citation = _chunk_citation_from_row(row)
             if citation in packet.citation_tokens:
-                excerpts.append((row.get("text", row.get("x", "")), citation))
+                spans = partition_complete_source(
+                    row.get("text", row.get("x", "")),
+                    slots=remaining_slots,
+                    codepoints=remaining_codepoints,
+                )
+                if spans is not None:
+                    excerpts.extend((span, citation) for span in spans)
+                    remaining_slots -= len(spans)
+                    remaining_codepoints -= sum(map(len, spans))
     points = []
     for text, citation in excerpts:
         if _safe_excerpt(text):
