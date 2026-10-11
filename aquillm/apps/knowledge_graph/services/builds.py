@@ -28,6 +28,9 @@ from apps.knowledge_graph.resolution.commit_state import (
     _document_resolution_commit_state,
 )
 from apps.knowledge_graph.resolution.source_exclusions import resolvable_mentions
+from apps.knowledge_graph.resolution.vocabulary_builds import bind_collection_config, document_capsule
+from apps.knowledge_graph.resolution.vocabulary_capture import metadata as vocabulary_metadata
+from apps.knowledge_graph.resolution.vocabulary_policy import bind_digest
 
 from .collection_context_policy import (
     context_failure_code,
@@ -404,6 +407,7 @@ class _DocumentContext:
     ontology: object
     settings: object
     representation_snapshot: object = None
+    vocabulary: object = None
 
 
 def _active_ontology(collection_id: int | None = None):
@@ -515,6 +519,7 @@ def _document_context(
     ontology = _active_ontology(collection_id) if ontology is None else ontology
     settings = load_extraction_settings() if settings is None else settings
     resolver_version = resolver_version_for_policy("document", load_identity_policy())
+    vocabulary = document_capsule(document_id)
     identity = DocumentBuildIdentity(
         document_id=document_id,
         source_hash=source_hash,
@@ -549,9 +554,9 @@ def _document_context(
         ontology_version=_text(ontology.version, "ontology version", maximum=128),
         ontology_checksum=_hash(ontology.checksum, "ontology checksum"),
         resolver_version=resolver_version,
-        resolver_checksum=graph_identity_checksum(
+        resolver_checksum=bind_digest(graph_identity_checksum(
             "document-resolver", resolver_version
-        ),
+        ), vocabulary.policy if vocabulary else None),
         filter_version="pending-v1",
         filter_checksum=graph_identity_checksum("document-filter-policy", "pending-v1"),
         assembly_version=ASSEMBLY_NOT_APPLICABLE_VERSION,
@@ -565,6 +570,7 @@ def _document_context(
         ontology=ontology,
         settings=settings,
         representation_snapshot=representation,
+        vocabulary=vocabulary,
     )
 
 
@@ -2282,6 +2288,7 @@ def _document_artifact_values(context: _DocumentContext, build_key: str):
         context.identity.ontology_version,
         context.identity.ontology_checksum,
         settings=context.settings,
+        vocabulary=context.vocabulary.policy if context.vocabulary else None,
         identity_policy=(
             "contextual_v2"
             if context.identity.resolver_version == "document-coreference-v4-contextual"
@@ -3233,6 +3240,7 @@ def _bootstrap_document_build(
         resolve_ontology_definition,
     )
     from apps.knowledge_graph.models import (
+        graph_identity_checksum,
         GraphArtifact,
         GraphBuildRun,
         GraphRebuildRequest,
@@ -3435,6 +3443,8 @@ def _bootstrap_document_build(
                     "ontology_activation_signature": (
                         context.identity.ontology_activation_signature
                     ),
+                    **vocabulary_metadata(context.vocabulary, graph_identity_checksum(
+                        "document-resolver", context.identity.resolver_version)),
                 },
                 **_document_artifact_values(context, build_key),
             )
@@ -3863,6 +3873,8 @@ def build_document_graph(
                     result = resolve_document_mentions(
                         resolvable_mentions(mentions),
                         context.ontology,
+                        vocabulary=context.vocabulary.policy if context.vocabulary else None,
+                        collection_id=context.collection_id,
                         identity_policy=(
                             "contextual_v2"
                             if context.identity.resolver_version
@@ -3972,6 +3984,7 @@ class _CollectionContext:
     resolution_config: object
     assembly_config: object
     representation_snapshot: object = None
+    vocabulary: object = None
 
 
 def _collection_extractor_version(artifacts: tuple[object, ...]) -> str:
@@ -4189,6 +4202,7 @@ def _collection_context(
         for artifact in artifacts
     ):
         raise StaleBuildError("collection awaits contextual document graph artifacts")
+    resolution_config, vocabulary = bind_collection_config(resolution_config, collection_id, artifacts)
     if resolution_config.identity_policy == "legacy" and any(
         artifact.resolver_version
         == resolver_version_for_policy("document", "contextual_v2")
@@ -4306,6 +4320,7 @@ def _collection_context(
         resolution_config=resolution_config,
         assembly_config=assembly_config,
         representation_snapshot=representation,
+        vocabulary=vocabulary,
     )
 
 

@@ -491,6 +491,17 @@ def _assert_unambiguous_document_refs(
 class _BoundedDeleteCollector(Collector):
     """Collector variant that caps materialization before Django builds sets."""
 
+    def can_fast_delete(self, objs, from_field=None):
+        model = getattr(objs, "model", None)
+        meta = getattr(model or objs, "_meta", None)
+        if meta is not None and meta.label_lower in {
+            "apps_collections.vocabularyset", "apps_collections.vocabularydraft",
+            "apps_collections.vocabularyversion", "apps_collections.vocabularyentry",
+            "apps_collections.vocabularyattachment",
+        }:
+            return False
+        return super().can_fast_delete(objs, from_field=from_field)
+
     def __init__(self, *, using: str, origin: object):
         super().__init__(using=using, origin=origin)
         self._bounded_source_count = 0

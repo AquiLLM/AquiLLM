@@ -254,10 +254,10 @@ async def test_direct_followup_selects_current_answer_ordered_sources(
             == "handled"
         )
     if revoke or expected == 0:
+        from lib.llm.answer_publication import LIMITED_ANSWER
+
         assert captured == []
-        assert ("limits" if revoke else "can no longer access") in consumer.convo[
-            -1
-        ].content
+        assert consumer.convo[-1].content == LIMITED_ANSWER
         assert convo.model_dump() == snapshot
         return
     assert len(captured[0]["result"]) == expected

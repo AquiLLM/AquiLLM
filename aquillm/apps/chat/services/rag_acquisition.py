@@ -39,12 +39,13 @@ async def acquire_evidence(
     initial_results=(),
     initial_acquired=False,
     assess=assess_coverage,
+    query_proposals=(),
 ):
     results = list(initial_results)
     assessment = CoverageAssessment()
     reason = "initial"
 
-    async def run(action):
+    async def run(action, proposal=None):
         from lib.llm.turn_context import tool_timeout
         from lib.retrieval.operation import operation_scope
 
@@ -61,21 +62,19 @@ async def acquire_evidence(
         if timeout <= 0:
             raise TimeoutError("acquisition reserve")
         with operation_scope(budget):
+            from .retrieval_query_runtime import action_observation
+
+            observation = action_observation(action, proposal, budget)
             publish(
                 "action_start",
-                {
-                    "kind": action.kind,
-                    "query": action.query,
-                    "signature": action.signature,
-                    "ledger_id": str(id(budget)),
-                },
+                observation,
             )
             result = await asyncio.wait_for(execute(action), timeout=timeout / 1000)
             if active():
                 publish(
                     "action_end",
                     {
-                        "signature": action.signature,
+                        "signature": observation["signature"],
                         "ledger_id": str(id(budget)),
                         "sources": [str(s.identity) for s in evidence_views([result])],
                     },
@@ -84,7 +83,27 @@ async def acquire_evidence(
 
     try:
         if not initial_acquired and budget.actions_used < budget.limits.actions:
-            results.append(await run(AcquisitionAction("vector", question)))
+            from apps.documents.services.source_loading import current_source_runtime
+            from .retrieval_query_runtime import run_optional_proposal
+
+            runtime = current_source_runtime()
+            prepared = getattr(runtime, "_query_proposals", ())
+            if prepared and prepared == query_proposals:
+                if prepared[0].text != question or prepared[0].kind != "original":
+                    raise ValueError("original query changed")
+                results.append(await run_optional_proposal(prepared[0], anchors=anchors, run=run))
+            else:
+                results.append(await run(AcquisitionAction("vector", question)))
+        for proposal in query_proposals[1:3]:
+            if budget.actions_used >= budget.limits.actions:
+                break
+            if not budget.can_start_optional(ACTION_TIMEOUT_MS, COMPLETION_RESERVE_MS):
+                break
+            from .retrieval_query_runtime import run_optional_proposal
+
+            result = await run_optional_proposal(proposal, anchors=anchors,
+                run=lambda action: run(action, proposal))
+            results.append(result)
         for _ in range(budget.limits.planner_calls if iterative else 0):
             views = evidence_views(results)
             if not needs_coverage_assessment(question, views, anchors):

@@ -69,6 +69,7 @@ def additional_controls():
     from lib.llm.turn_context import tool_timeout
     from lib.llm.utils import prompt_budget
     from lib.llm.utils.context_packer import load_context_packer_config
+    from apps.chat.services.retrieval_query_runtime import configured_proposal_controls
 
     endpoint = urlsplit(rerank.rerank_base_url())
     rerank_names = (
@@ -87,6 +88,7 @@ def additional_controls():
     )
     return {
         "graph_policy": graph_effective_controls(),
+        "query_proposals": configured_proposal_controls(),
         "completion": completion_policy_snapshot(
             output_tokens=rag_config.synthesis_max_tokens()
         ),

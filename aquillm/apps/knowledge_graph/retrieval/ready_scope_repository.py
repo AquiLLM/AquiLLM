@@ -27,6 +27,8 @@ def _load_authorities(*, authorization, settings, source_using: str):
     )
 
     collections = tuple(sorted(authorization.selected_collection_ids))
+    from apps.knowledge_graph.resolution.vocabulary_capture import capture_retrieval_vocabulary, validate_artifact
+    vocabulary = capture_retrieval_vocabulary(authorization)
     documents = tuple(sorted(authorization.selected_document_ids, key=str))
     projection_rows = tuple(
         CollectionGraphProjection.objects.using(source_using)
@@ -83,6 +85,7 @@ def _load_authorities(*, authorization, settings, source_using: str):
             "ontology_version",
             "ontology_checksum",
             "embedding_model_signature",
+            "metadata", "scope_type", "resolver_version", "resolution_config_checksum",
         )
     }
     inputs: dict[int, list[tuple[UUID, int]]] = {
@@ -97,8 +100,12 @@ def _load_authorities(*, authorization, settings, source_using: str):
             document_artifact__scope_type="document",
             document_artifact__status__in=("active", "superseded"),
         )
-        .values("artifact_id", "document_id", "document_artifact_id")
+        .values("artifact_id", "document_id", "document_artifact_id", "collection_id",
+                "document_artifact__metadata", "document_artifact__scope_type",
+                "document_artifact__resolver_version", "document_artifact__resolution_config_checksum")
     ):
+        validate_artifact({k.removeprefix("document_artifact__"): v for k, v in row.items()
+                           if k.startswith("document_artifact__")}, vocabulary, collection_id=row["collection_id"])
         inputs[row["artifact_id"]].append(
             (row["document_id"], row["document_artifact_id"])
         )
@@ -161,6 +168,7 @@ def _load_authorities(*, authorization, settings, source_using: str):
                 ),
             )
             raise ReadyScopeError(ReadyScopeFailureReason.READINESS_MISMATCH)
+        validate_artifact(artifact, vocabulary, collection_id=row["collection_id"])
         result.append(
             ReadyProjectionAuthorityV1(
                 row["id"],

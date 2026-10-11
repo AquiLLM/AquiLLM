@@ -58,7 +58,8 @@ def _rebuild_canonical_snapshot(
                 scope_type=GraphArtifact.ScopeType.COLLECTION,
                 status=GraphArtifact.Status.ACTIVE,
             )
-            .only("pk", "collection_scope_id", "scope_id", "embedding_model_signature")
+            .only("pk", "collection_scope_id", "scope_id", "embedding_model_signature",
+                  "metadata", "scope_type", "resolver_version", "resolution_config_checksum")
             .order_by("pk")
         )
         if tuple(row.pk for row in locked_artifacts) != artifact_ids:
@@ -88,10 +89,13 @@ def _rebuild_canonical_snapshot(
             maximum=MAX_CANONICAL_REBUILD_ENTITIES,
             label="active collection entities",
         )
+        from .vocabulary_builds import capture_canonical_artifacts
+        vocabulary = capture_canonical_artifacts(locked_artifacts, using=using)
         inputs = _load_locked_canonical_inputs(
             entity_rows=entity_rows,
             active_artifact_ids=artifact_ids,
             using=using,
+            vocabulary=vocabulary,
         )
         if (
             _active_collection_artifact_snapshot(
@@ -103,6 +107,7 @@ def _rebuild_canonical_snapshot(
         resolution = resolve_canonical_entities(
             inputs,
             identity_policy=identity_policy,
+            vocabulary=vocabulary,
             embedding_candidates=_derive_locked_embedding_candidates(
                 entity_rows,
                 artifact_embedding_signatures={
@@ -111,6 +116,8 @@ def _rebuild_canonical_snapshot(
             ),
         )
 
+        if capture_canonical_artifacts(locked_artifacts, using=using) != vocabulary:
+            raise _CanonicalSnapshotChanged("canonical vocabulary changed")
         _lock_canonical_registry(using=using)
         return _reconcile_locked_registry(
             resolution=resolution,

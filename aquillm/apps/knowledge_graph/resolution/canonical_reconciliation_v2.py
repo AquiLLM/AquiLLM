@@ -71,6 +71,7 @@ def reconcile_canonical_v2(
         resolution = c.resolve_canonical_entities(
             snapshot.inputs,
             identity_policy=snapshot.identity_policy,
+            vocabulary=snapshot.vocabulary,
             embedding_candidates=c._derive_locked_embedding_candidates(
                 snapshot.entities,
                 artifact_embedding_signatures=dict(snapshot.artifact_signatures),

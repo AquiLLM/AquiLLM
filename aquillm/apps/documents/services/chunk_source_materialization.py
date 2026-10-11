@@ -6,6 +6,11 @@ from .chunk_search_validation import candidate_identifier
 
 
 def materialize_graph_rows(model_cls, novel_ids, allowed_doc_ids):
+    from apps.knowledge_graph.resolution.vocabulary_authority import validate_legacy
+    try:
+        validate_legacy(allowed_doc_ids)
+    except ValueError:
+        return (), len(novel_ids)
     from .chunk_search_scope import current_scope
     from .chunk_search_scoped_rows import scoped_rows
 
@@ -32,5 +37,9 @@ def materialize_graph_rows(model_cls, novel_ids, allowed_doc_ids):
             continue
         by_identifier[identifier] = row
     if invalid or set(novel_ids).difference(by_identifier):
+        return (), len(novel_ids)
+    try:
+        validate_legacy(allowed_doc_ids)
+    except ValueError:
         return (), len(novel_ids)
     return tuple(by_identifier[identifier] for identifier in novel_ids), 0

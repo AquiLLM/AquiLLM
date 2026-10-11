@@ -33,6 +33,7 @@ class CanonicalSourceSnapshotV2:
     inputs: tuple[c.CanonicalEntityInput, ...]
     identity_policy: str
     revision_digest: str
+    vocabulary: object = None
 
 
 def capture_source(*, using, identity_policy, expected_artifacts=None):
@@ -70,9 +71,13 @@ def capture_source(*, using, identity_policy, expected_artifacts=None):
             "resolution_config_checksum",
             "embedding_model_signature",
             "representation_digest",
+            "metadata",
+            "scope_type",
         )
     )
     fields = tuple(CanonicalSourceEntityV2.__dataclass_fields__)
+    from .vocabulary_builds import capture_canonical_artifacts
+    vocabulary = capture_canonical_artifacts(artifact_rows, using=using)
     raw = c._bounded_locked_rows(
         CollectionEntity.objects.using(using)
         .filter(
@@ -99,7 +104,7 @@ def capture_source(*, using, identity_policy, expected_artifacts=None):
         for row in raw
     )
     inputs = c._load_locked_canonical_inputs(
-        entity_rows=entities, active_artifact_ids=ids, using=using
+        entity_rows=entities, active_artifact_ids=ids, using=using, vocabulary=vocabulary
     )
     if (
         c._active_collection_artifact_snapshot(
@@ -108,12 +113,13 @@ def capture_source(*, using, identity_policy, expected_artifacts=None):
         != artifacts
     ):
         raise c._CanonicalSnapshotChanged("source changed during capture")
+    from .vocabulary_terms import input_payload
     payload = {
         "version": "canonical-source-v2",
         "policy": identity_policy,
-        "artifacts": artifact_rows,
+        "artifacts": [{k: v for k, v in row.items() if k not in {"metadata", "scope_type"}} for row in artifact_rows],
         "entities": [asdict(e) for e in entities],
-        "inputs": [asdict(i) for i in inputs],
+        "inputs": [input_payload(asdict(i)) for i in inputs],
     }
     digest = sha256(
         json.dumps(
@@ -124,6 +130,8 @@ def capture_source(*, using, identity_policy, expected_artifacts=None):
             ensure_ascii=True,
         ).encode()
     ).hexdigest()
+    from .vocabulary_policy import bind_digest
+    digest = bind_digest(digest, vocabulary)
     return CanonicalSourceSnapshotV2(
         artifacts,
         tuple((r["pk"], r["embedding_model_signature"]) for r in artifact_rows),
@@ -131,6 +139,7 @@ def capture_source(*, using, identity_policy, expected_artifacts=None):
         inputs,
         identity_policy,
         digest,
+        vocabulary,
     )
 
 

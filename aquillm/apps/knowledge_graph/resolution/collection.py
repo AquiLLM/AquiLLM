@@ -13,6 +13,8 @@ import uuid
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from .vocabulary_policy import ScopedVetoV1, bind_digest, component_veto, endpoint_terms
+from .vocabulary_terms import endpoint_labels, terms_for, validate_terms
 from hashlib import sha256
 from heapq import merge
 from itertools import islice
@@ -228,8 +230,10 @@ class DocumentEntityInput:
     description: str = ""
     extraction_confidence: float = 1.0
     document_resolution_confidence: float = 1.0
+    vocabulary_terms: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        validate_terms(self.vocabulary_terms)
         _positive_int(self.entity_id, "document entity id")
         _require_hash(self.document_cluster_key, "document cluster key")
         _positive_int(self.document_artifact_id, "document artifact id")
@@ -344,9 +348,14 @@ class CollectionResolutionConfig:
     # Independent output envelope: a larger input cap never truncates links.
     max_links: int = MAX_COLLECTION_LINKS
     identity_policy: str = "legacy"
+    vocabulary: ScopedVetoV1 | None = None
 
     def __post_init__(self) -> None:
         resolver_version_for_policy("collection", self.identity_policy)
+        if self.vocabulary is not None:
+            if type(self.vocabulary) is not ScopedVetoV1:
+                raise ValueError("exact scoped vocabulary required")
+            self.vocabulary.__post_init__()
         if type(self.thresholds) is not ResolutionThresholds:
             raise ValueError("thresholds must be exact ResolutionThresholds")
         self.thresholds.__post_init__()
@@ -394,7 +403,7 @@ def resolution_config_checksum(config: CollectionResolutionConfig) -> str:
     if type(config) is not CollectionResolutionConfig:
         raise ValueError("config must be exact CollectionResolutionConfig")
     config.__post_init__()
-    return _hash(
+    return bind_digest(_hash(
         {
             "resolver_version": resolver_version_for_policy(
                 "collection", config.identity_policy
@@ -416,7 +425,7 @@ def resolution_config_checksum(config: CollectionResolutionConfig) -> str:
             "max_relations": config.max_relations,
             "max_links": config.max_links,
         }
-    )
+    ), config.vocabulary)
 
 
 @dataclass(frozen=True, slots=True)
@@ -885,8 +894,15 @@ class _DisjointSet:
         identifiers: Mapping[int, frozenset[str]] | None = None,
         versions: Mapping[int, frozenset[str]] | None = None,
         entity_types: Mapping[int, frozenset[str]] | None = None,
+        vocabulary=None, vocabulary_endpoints=None,
     ) -> None:
         self.parent = {value: value for value in values}
+        self.vocabulary = vocabulary
+        self.vocabulary_members = {
+            value: endpoint_terms(vocabulary, vocabulary_endpoints[value])
+            if vocabulary_endpoints is not None else frozenset()
+            for value in self.parent
+        }
         self.identifiers = {
             value: frozenset() if identifiers is None else identifiers[value]
             for value in self.parent
@@ -919,6 +935,7 @@ class _DisjointSet:
         self.identifiers[root] = self.identifiers[root] | self.identifiers[child]
         self.versions[root] = self.versions[root] | self.versions[child]
         self.entity_types[root] = self.entity_types[root] | self.entity_types[child]
+        self.vocabulary_members[root] |= self.vocabulary_members[child]
         return root
 
     def try_union(self, left: int, right: int) -> tuple[int | None, str | None]:
@@ -936,6 +953,9 @@ class _DisjointSet:
         entity_types = self.entity_types[left_root] | self.entity_types[right_root]
         if len(entity_types) > 1:
             return None, "component_ontology_type_conflict"
+        if component_veto(self.vocabulary,
+            self.vocabulary_members[left_root] | self.vocabulary_members[right_root]):
+            return None, "component_vocabulary_veto"
         return self.union(left_root, right_root), None
 
     def groups(self) -> dict[int, tuple[int, ...]]:
@@ -1236,6 +1256,7 @@ def _source_entity_content(entity: DocumentEntityInput) -> dict[str, object]:
         "description": entity.description,
         "extraction_confidence": entity.extraction_confidence,
         "document_resolution_confidence": entity.document_resolution_confidence,
+        **({"vocabulary_terms": entity.vocabulary_terms} if entity.vocabulary_terms else {}),
     }
 
 
@@ -1703,6 +1724,9 @@ def resolve_collection_entities(
 
     dsu = _DisjointSet(
         entity_ids,
+        vocabulary=config.vocabulary,
+        vocabulary_endpoints={item.entity_id: tuple((snapshot.collection_id, label)
+            for label in endpoint_labels(item)) for item in ordered},
         identifiers={
             item.entity_id: (
                 frozenset({item.identifier}) if item.identifier else frozenset()
@@ -1751,7 +1775,11 @@ def resolve_collection_entities(
                     reason_codes=("stable_identifier_equal",),
                 )
                 _root, conflict = dsu.try_union(left, right)
-                if conflict is not None:
+                if conflict == "component_vocabulary_veto":
+                    decisions[(left, right)] = _decision(left, right,
+                        outcome=ResolutionOutcome.REJECTED, tier=ResolutionTier.STABLE_IDENTIFIER,
+                        confidence=0.0, identifier_score=1.0, reason_codes=(conflict,))
+                elif conflict is not None:
                     raise ValueError(
                         "stable identifier block violated component cannot-link"
                     )
@@ -2580,6 +2608,10 @@ def build_collection_snapshot(
                 "document artifact snapshot changed before locking"
             )
         source_rows: list[tuple[GraphArtifact, uuid.UUID, str, str]] = []
+        from .vocabulary_builds import bind_collection_config, collection_metadata
+        resolution_config, vocabulary_capsule = bind_collection_config(
+            resolution_config, collection.pk, sources)
+        resolver_checksum = resolution_config_checksum(resolution_config)
         for source in sources:
             source_eligible = (
                 source.status == GraphArtifact.Status.SUPERSEDED
@@ -2661,6 +2693,7 @@ def build_collection_snapshot(
             metadata={
                 "manifest_version": 2,
                 "assembly_config": _config_payload(assembly_config),
+                **collection_metadata(vocabulary_capsule, resolution_config),
             },
         )
         rows = [
@@ -2942,6 +2975,7 @@ def _load_resolution_source_rows(
         memberships_by_entity[membership.document_entity_id].append(membership)
         mention_owner[membership.mention_id] = membership.document_entity_id
     projected: list[DocumentEntityInput] = []
+    vocabulary_bytes = [0]
     for entity in source_entities:
         manifest = manifest_by_artifact.get(entity.artifact_id)
         if manifest is None or entity.document_id != manifest.document_id:
@@ -2984,6 +3018,8 @@ def _load_resolution_source_rows(
                 identifier=entity.identifier,
                 version_signature=entity.version_signature,
                 alias_evidence=aliases,
+                vocabulary_terms=terms_for(config.vocabulary,
+                    (m.mention.raw_text for m in entity_memberships), budget=vocabulary_bytes),
                 description=description,
                 extraction_confidence=extraction_confidence,
                 document_resolution_confidence=entity.resolution_confidence,
@@ -3296,6 +3332,8 @@ def _validate_result_against_source(
         raise CollectionResolutionPersistenceError(
             "result must be exact CollectionResolutionResult"
         )
+    from .vocabulary_builds import validate_collection_result
+    validate_collection_result(artifact, result.config)
     try:
         result.__post_init__()
     except (AttributeError, TypeError, ValueError) as exc:
