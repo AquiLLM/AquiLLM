@@ -134,3 +134,9 @@ def prepare_document(chunk, *, space):
             raise EmbeddingContractError("text_media_mismatch")
         prepared = text
     return prepared, input_digest(prepared)
+
+
+def prepared_input_bytes(wire):
+    """Count prepared text plus the complete encoded image data URI, if present."""
+    values = (wire,) if isinstance(wire, str) else (wire["text"], wire["image"])
+    return sum(len(value.encode("utf-8")) for value in values)

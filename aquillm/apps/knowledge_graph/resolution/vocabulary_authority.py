@@ -20,8 +20,8 @@ def _database(using):
 
 
 def _runtime():
-    from apps.documents.services.source_loading import current_source_runtime
-    runtime = current_source_runtime()
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
+    runtime = graph_source_runtime()
     if runtime is None:
         raise VocabularyGraphUnavailable("original vocabulary runtime unavailable")
     return runtime

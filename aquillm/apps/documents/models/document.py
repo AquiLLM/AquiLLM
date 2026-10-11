@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, List, Optional, Any
 
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, router, transaction
 
@@ -60,6 +61,10 @@ class Document(models.Model):
     ingested_by = models.ForeignKey(User, on_delete=models.RESTRICT)
     ingestion_date = models.DateTimeField(auto_now_add=True)
     ingestion_complete = models.BooleanField(default=True)
+    representation_states = GenericRelation(
+        "apps_documents.DocumentRepresentationState", content_type_field="owner_content_type",
+        object_id_field="document_pkid", for_concrete_model=True,
+    )
     class Meta:
         abstract = True
         constraints = [
@@ -77,7 +82,8 @@ class Document(models.Model):
     @property
     def chunks(self):
         from .chunks import TextChunk
-        return TextChunk.objects.filter(doc_id=self.id)
+        from apps.documents.services.representation_scope import current_document_chunks
+        return current_document_chunks(self)
 
     @staticmethod
     def filter(*args, **kwargs) -> List[DocumentChild]:
@@ -150,7 +156,7 @@ class Document(models.Model):
         if (
             not self._state.adding
             and self.pkid is not None
-            and writes_collection
+            and (writes_collection or writes_text)
             and not document_lifecycle_row_is_locked(self, using=database_alias)
         ):
             observed = (
@@ -233,6 +239,16 @@ class Document(models.Model):
                     if previous is not None:
                         self.full_text_hash = previous["full_text_hash"]
 
+                from apps.knowledge_graph.projection.representation_transition import matching_representation_save
+                representation_save = matching_representation_save(self, using=database_alias)
+                representation_state = None
+                owner_moved = previous is not None and writes_collection and previous["collection_id"] != self.collection_id
+                if previous is not None and (content_changed or owner_moved) and not representation_save:
+                    from apps.documents.services.representation_history import capture_legacy, locked_state as lock_representation_state
+                    old = document_model._base_manager.using(database_alias).get(pkid=self.pkid, id=self.id)
+                    representation_state = lock_representation_state(old, using=database_alias)
+                    capture_legacy(old, representation_state, using=database_alias)
+
                 if content_changed and not dont_rechunk:
                     self.ingestion_complete = False
                     if requested_fields is not None:
@@ -247,9 +263,12 @@ class Document(models.Model):
                 if requested_fields is not None:
                     save_kwargs["update_fields"] = sorted(requested_fields)
                 super().save(*args, **save_kwargs)
+                if owner_moved and representation_state is not None:
+                    representation_state.collection_id = self.collection_id
+                    representation_state.save(using=database_alias, update_fields=["collection_id", "updated_at"])
 
                 pending = consume_document_save_lifecycle(self)
-                if pending is not None:
+                if pending is not None and not representation_save:
                     lifecycle_kind, event, lifecycle_alias = pending
                     if lifecycle_kind == "content":
                         if dont_rechunk:

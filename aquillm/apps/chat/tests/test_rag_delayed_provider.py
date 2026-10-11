@@ -4,6 +4,12 @@ from types import SimpleNamespace
 
 import pytest
 
+from lib.llm.answer_publication import LIMITED_ANSWER
+
+# Equally long complete sentences permit whole-source A2 partitioning.
+# The deadline test must not ask A2 to clip one indivisible >1200-char sentence.
+DELAYED_TEXT = "Background context remains unchanged. " * 60 + "Tail exception: do not retain without consent."
+
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
@@ -31,8 +37,7 @@ async def test_delayed_openai_complete_preserves_frozen_evidence_through_recover
     from lib.llm.providers.request_observability import observability_scope
 
     now, dispatched = [0.0], []
-    convo, packet = inputs()
-    citation = packet.chunks[0]["citation"]
+    convo, packet = inputs(text=DELAYED_TEXT)
 
     async def create(**kwargs):
         protection = current_protection()
@@ -86,19 +91,20 @@ async def test_delayed_openai_complete_preserves_frozen_evidence_through_recover
         )
     monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "16000")
     monkeypatch.setenv("LLM_CITATION_SOURCES_APPEND", "0")
-    with (
-        authorized_source_scope(packet, monkeypatch),
-        observability_scope("test", "direct_synthesis"),
-    ):
-        budget = current_source_runtime().budget
-        budget._clock = lambda: now[0]
-        budget._deadline = 15.0
-        result = await synthesize_from_evidence(provider, convo, packet)
-        assert budget._synthesis.calls == len(dispatched)
-        assert not budget.can_publish()
-        assert budget.text_used["tokenized"] > 0
+    async with authorized_source_scope(packet, monkeypatch, convo):
+        citation = packet.chunks[0]["citation"]
+        with observability_scope("test", "direct_synthesis"):
+            budget = current_source_runtime().budget
+            budget._clock = lambda: now[0]
+            budget._deadline = 15.0
+            result = await synthesize_from_evidence(provider, convo, packet)
+            assert budget._synthesis.calls == len(dispatched)
+            assert not budget.can_publish()
+            assert budget.text_used["tokenized"] > 0
     assert len(dispatched) >= 2
     assert citation in result[-1].content
+    assert "Tail exception: do not retain without consent." in result[-1].content
+    assert all(DELAYED_TEXT in payload for _, payload in dispatched)
     assert "could not deliver" not in result[-1].content
     assert len({payload for _, payload in dispatched}) == 1
 
@@ -121,7 +127,7 @@ async def test_expiry_then_cancellation_or_token_limit_stops_actual_repair(
     from lib.llm.providers.request_observability import observability_scope
 
     calls, output, now = [], [], [0.0]
-    convo, packet = inputs()
+    convo, packet = inputs(text=DELAYED_TEXT)
 
     async def create(**kwargs):
         calls.append(kwargs)
@@ -154,20 +160,18 @@ async def test_expiry_then_cancellation_or_token_limit_stops_actual_repair(
         ),
         "test",
     )
-    with (
-        authorized_source_scope(packet, monkeypatch),
-        observability_scope("test", "direct_synthesis"),
-    ):
-        budget = current_source_runtime().budget
-        budget._clock, budget._deadline = lambda: now[0], 15
-        if denial == "cancel":
-            with pytest.raises(asyncio.CancelledError):
-                await synthesize_from_evidence(
-                    provider, convo, packet, stream_func=stream
-                )
-        else:
-            result = await synthesize_from_evidence(provider, convo, packet)
-            assert "limits" in result[-1].content
-        assert len(calls) == 1
-        assert not budget.can_publish()
+    async with authorized_source_scope(packet, monkeypatch, convo):
+        with observability_scope("test", "direct_synthesis"):
+            budget = current_source_runtime().budget
+            budget._clock, budget._deadline = lambda: now[0], 15
+            if denial == "cancel":
+                with pytest.raises(asyncio.CancelledError):
+                    await synthesize_from_evidence(
+                        provider, convo, packet, stream_func=stream
+                    )
+            else:
+                result = await synthesize_from_evidence(provider, convo, packet)
+                assert result[-1].content == LIMITED_ANSWER
+            assert len(calls) == 1
+            assert not budget.can_publish()
     assert output == []

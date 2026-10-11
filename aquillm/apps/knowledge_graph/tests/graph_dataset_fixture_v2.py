@@ -1,10 +1,6 @@
 """Three persisted mentions; only the lower-confidence third answers the query."""
 
-from hashlib import sha256
-
 from apps.documents.models import TextChunk
-from apps.documents.services.representation_contracts import DocumentRefV1
-from apps.documents.services.representation_store import freeze_active_representations
 from apps.knowledge_graph.models import (
     DocumentEntity,
     DocumentEntityMention,
@@ -14,22 +10,6 @@ from apps.knowledge_graph.models import (
 from apps.knowledge_graph.projection.identifiers import ProjectionIdentifierDomain
 
 TEXTS = ("Atlas is a model", "Atlas is a model", "Atlas uses the Cedar dataset")
-
-
-def prepare_dataset_document(fixture):
-    document = fixture.documents["A"]
-    document.full_text = "\n".join(TEXTS)
-    document.full_text_hash = sha256(document.full_text.encode()).hexdigest()
-    document.save(dont_rechunk=True)
-    fixture.snapshot = freeze_active_representations(
-        tuple(
-            DocumentRefV1(
-                d._meta.label_lower, d.pkid, d.id, d.collection_id, d.full_text_hash
-            )
-            for d in fixture.documents.values()
-        ),
-        using="default",
-    )
 
 
 def add_dataset_mentions(fixture, projection):

@@ -110,6 +110,8 @@ class AssociationFixture:
             evidence = replace(
                 b.evidence[0],
                 evidence_key=key(label + source + predicate + target),
+                provenance_key=key("provenance:" + label + source + predicate + target),
+                semantic_signature=key("semantic:" + label + source + predicate + target),
                 relation_key=relation.relation_key,
                 relation_type=predicate,
                 chunk_key=chunk.chunk_key,

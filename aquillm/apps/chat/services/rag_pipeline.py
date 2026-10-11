@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any, Literal
 
@@ -27,7 +26,7 @@ from apps.chat.services.rag_pipeline_messages import (
     _latest_user_message,
     _retry_needs_visual_tools,
 )
-from apps.chat.services.rag_pipeline_retrieval import successful_search_results
+from apps.chat.services.rag_pipeline_retrieval import run_parallel_searches, successful_search_results
 from apps.chat.services.rag_query import build_retrieval_queries
 from apps.chat.services.rag_retrieval import merge_ranked_tool_results
 from apps.chat.services.rag_selection_coordinator import (
@@ -204,48 +203,20 @@ async def _run_direct_rag_turn(consumer, llm_if, convo, *, stream_func=None):
         prepared_queries(queries, top_k, candidate_top_k)
 
         t_retrieval_start = time.perf_counter()
-        from django.db import connections
-
-        from lib.llm.turn_context import bounded_retrieval, current_turn
-
-        def search_worker(search_query):
-            try:
-                return _run_vector_search(consumer, search_query, candidate_top_k)
-            finally:
-                connections.close_all()
-
-        search_outcomes = await bounded_retrieval(
-            asyncio.gather(
-                *(
-                    asyncio.to_thread(search_worker, search_query)
-                    for search_query in queries
-                ),
-                return_exceptions=True,
-            ),
-            current_turn().budget,
-        )
+        search_outcomes = await run_parallel_searches(
+            consumer, queries, candidate_top_k, vector_runner=_run_vector_search)
         observe_search_outcomes(queries, search_outcomes)
         search_results = successful_search_results(search_outcomes, logger)
-        raw_result = (
-            {}
-            if preservation.active
-            else merge_ranked_tool_results(search_results, limit=top_k)
-        )
+        raw_result = merge_ranked_tool_results(search_results, limit=top_k)
         t_retrieval_end = time.perf_counter()
         retrieval_diagnostics = raw_result.get("_retrieval_diagnostics")
         if not isinstance(retrieval_diagnostics, dict):
             retrieval_diagnostics = {}
 
         t_evidence_start = time.perf_counter()
-        packet = (
-            None
-            if preservation.active
-            else build_evidence_packet(
-                raw_result, query=query, search_scope=_SEARCH_SCOPE
-            )
-        )
+        packet = build_evidence_packet(raw_result, query=query, search_scope=_SEARCH_SCOPE)
         selection_turn = None
-        if preservation.active or selection_config.mode in ("shadow", "adaptive"):
+        if selection_config.mode in ("shadow", "adaptive"):
             (
                 selection_turn,
                 selected_packet,
@@ -322,11 +293,6 @@ async def _run_direct_rag_turn(consumer, llm_if, convo, *, stream_func=None):
             correlation_id=correlation_id,
             error_type=type(exc).__name__,
         )
-        if preservation.active:
-            consumer.convo = convo + [
-                AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
-            ]
-            return "handled"
         return "skipped"
 
 

@@ -10,7 +10,7 @@ from apps.documents.services import chunk_rerank, chunk_search
 from apps.documents.services.chunk_rerank_results import rank_only_result_for_chunks
 from apps.documents.services.chunk_search_scope import current_scope
 from apps.documents.services.source_loading import source_runtime_scope
-from apps.documents.tests.test_embedding_generation import legacy as legacy
+from .lexical_owner_support import unchunked as legacy
 from apps.documents.tests.test_embedding_generation_query import runtime_for
 from apps.documents.tests.test_lexical_publication import publish
 from apps.documents.tests.test_lexical_relevance import replace_chunks

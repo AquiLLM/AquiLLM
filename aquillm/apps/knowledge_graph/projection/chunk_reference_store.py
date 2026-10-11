@@ -38,29 +38,34 @@ def private_row(row: object) -> PrivateProjectionChunkReferenceV1:
 
 
 def validate_current_chunk_row(row: object) -> None:
-    if getattr(row, "chunk_id", None) is None:
-        raise ValueError("projection chunk mapping is stale or deleted")
-    chunk = getattr(row, "chunk", None)
-    if (
-        chunk is None
-        or chunk.pk != getattr(row, "integer_chunk_pk")
-        or chunk.doc_id != getattr(row, "document_uuid")
-        or chunk.chunk_number != getattr(row, "chunk_number")
-    ):
-        raise ValueError("projection chunk mapping conflicts with current chunk")
+    validate_current_chunk_rows((row,))
+
+
+def validate_current_chunk_rows(rows) -> None:
     from .representation_binding import validate_record_binding
 
-    projection = getattr(row, "projection", None)
-    if projection is not None:
-        snapshot = validate_record_binding(projection)
-        selections = (
-            {} if snapshot is None else {s.document.id: s for s in snapshot.selections}
-        )
-        selected = selections.get(chunk.doc_id)
-        expected = None if selected is None else selected.generation_key
-        if (
-            snapshot is not None and selected is None
-        ) or chunk.representation_generation != expected:
+    bindings = {}
+    for row in rows:
+        if getattr(row, "chunk_id", None) is None:
+            raise ValueError("projection chunk mapping is stale or deleted")
+        chunk = getattr(row, "chunk", None)
+        if (chunk is None or chunk.pk != getattr(row, "integer_chunk_pk")
+                or chunk.doc_id != getattr(row, "document_uuid")
+                or chunk.chunk_number != getattr(row, "chunk_number")):
+            raise ValueError("projection chunk mapping conflicts with current chunk")
+        projection = getattr(row, "projection", None)
+        if projection is None:
+            continue
+        key = id(projection)
+        if key not in bindings:
+            snapshot = validate_record_binding(projection)
+            bindings[key] = None if snapshot is None else {
+                selected.document.id: selected.generation_key for selected in snapshot.selections
+            }
+        selections = bindings[key]
+        expected = None if selections is None else selections.get(chunk.doc_id)
+        if ((selections is not None and chunk.doc_id not in selections)
+                or chunk.representation_generation_id != expected):
             raise ValueError("projection chunk representation is stale")
 
 
@@ -76,12 +81,14 @@ class DjangoChunkReferenceStore:
         )
         if keys is not None:
             query = query.filter(projection_chunk_key__in=keys)
-        return tuple(
-            query.select_related("chunk")
-            .only(*CHUNK_REFERENCE_READ_FIELDS)
-            .order_by("projection_chunk_key")
-            .iterator(chunk_size=_MAX_PAGE)
-        )
+        projection = CollectionGraphProjection.objects.using(self.using).only(
+            "id", "representation_snapshot", "representation_digest", "collection_pk_snapshot"
+        ).get(pk=projection_id)
+        rows = tuple(query.select_related("chunk").only(*CHUNK_REFERENCE_READ_FIELDS)
+                     .order_by("projection_chunk_key").iterator(chunk_size=_MAX_PAGE))
+        for row in rows:
+            row._state.fields_cache["projection"] = projection
+        return rows
 
     def create(
         self,
@@ -130,7 +137,8 @@ class DjangoChunkReferenceStore:
                 .order_by("projection_chunk_key")
             )
             for row in stored:
-                validate_current_chunk_row(row)
+                row._state.fields_cache["projection"] = projection
+            validate_current_chunk_rows(stored)
             persisted = tuple(
                 sorted(
                     (private_row(row) for row in stored),

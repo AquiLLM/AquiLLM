@@ -39,13 +39,18 @@ def _current_packet_authority(packet, seconds):
                 .values_list("pk", flat=True)
             )
         scope = revalidate_retrieval_authorization_context(context=authority)
+        from .rag_representation_publication import current_packet_snapshot
+        from apps.documents.services.representation_store import active_chunk_scope
+        snapshot = current_packet_snapshot(packet)
+        from .retrieval_query_publication import validate_packet_query_binding
+        validate_packet_query_binding(packet)
         candidates = selection.candidates
         if set(packet.citation_tokens) != {
             f"[doc:{c.doc_id} chunk:{c.chunk_id}]" for c in candidates
         }:
             return False
         rows = (
-            TextChunk.objects.using(authority.database_alias)
+            active_chunk_scope(TextChunk.objects.using(authority.database_alias).all(), snapshot=snapshot)
             .select_for_update()
             .filter(pk__in=[c.chunk_id for c in candidates])
             .annotate(revision=_SourceSHA256("content"))

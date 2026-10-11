@@ -13,7 +13,6 @@ from apps.documents.services.representation_contracts import RepresentationSnaps
 from apps.documents.services.source_deadline import source_preparation_scope
 from apps.documents.services.source_loading import (
     bounded_source_database,
-    current_source_runtime,
 )
 from lib.retrieval.turn_budget import TurnBudget
 
@@ -138,11 +137,12 @@ def run_graph_v2(
 
 def run_bound_graph_v2(**kwargs):
     """All SQL phases and final selection share the original absolute deadline."""
-    runtime = current_source_runtime()
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
+    runtime = graph_source_runtime()
     if (
         runtime is None
         or runtime.budget is not kwargs["budget"]
-        or runtime.authorization != kwargs["authorization"]
+        or runtime.authorization is not kwargs["authorization"]
     ):
         raise ValueError("V2 requires the original source runtime")
     settings, clock = kwargs["settings"], kwargs["runtime"].clock

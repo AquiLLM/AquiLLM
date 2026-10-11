@@ -663,10 +663,12 @@ def persist_document_resolution(
             try:
                 if ontology is None or ontology.checksum != result.ontology_checksum:
                     raise ValueError("captured ontology snapshot is required")
+                from .vocabulary_builds import document_replay_context
                 replayed = resolve_document_mentions(
                     resolvable_mentions(mentions),
                     ontology,
                     identity_policy="contextual_v2",
+                    **document_replay_context(artifact),
                 )
                 if replayed != result:
                     raise ValueError("decisions differ from captured contextual policy")

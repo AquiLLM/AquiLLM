@@ -25,7 +25,7 @@ from apps.knowledge_graph.tests.test_ready_scope import _DOC_A, _DOC_B, _authori
 
 
 class ScopeFixture:
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch, *, source_texts=None):
         self.settings = SimpleNamespace(
             projection_schema_version="collection-graph-v1",
             projection_format_version="projection-v1",
@@ -49,14 +49,15 @@ class ScopeFixture:
         )
         refs = []
         for label, cid, did in (("A", 7, _DOC_A), ("B", 9, _DOC_B)):
+            text = (source_texts or {}).get(label, label)
             collection = Collection.objects.create(pk=cid, name=label)
             document = RawTextDocument(
                 id=did,
                 collection=collection,
                 ingested_by=user,
                 title=label,
-                full_text=label,
-                full_text_hash=sha256(label.encode()).hexdigest(),
+                full_text=text,
+                full_text_hash=sha256(text.encode()).hexdigest(),
             )
             document.save(dont_rechunk=True)
             self.documents[label] = document

@@ -116,6 +116,8 @@ def postgres_projection_repository(
     source = DjangoProjectionRowSource(
         selected.source,
         state_using=selected.source,
+        lease_owner=state_repository.owner,
+        operation=state_repository.operation,
         identifier_key=settings.projection_identifier_hmac_key.get_secret_value().encode(
             "utf-8"
         ),

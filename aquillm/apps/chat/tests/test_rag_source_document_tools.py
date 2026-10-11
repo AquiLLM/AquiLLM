@@ -27,25 +27,19 @@ def docs(db):
     CollectionPermission.objects.bulk_create(
         [CollectionPermission(user=user, collection=collection, permission="VIEW")]
     )
-    doc = RawTextDocument.objects.bulk_create(
-        [
-            RawTextDocument(
-                title="Doc",
-                full_text="never hydrate this document body " * 10000,
-                full_text_hash="a" * 64,
-                collection=collection,
-                ingested_by=user,
-            )
-        ]
-    )[0]
+    bodies = [f"Aspect {i}. Qualified tail: only below 1 Pa." for i in range(3)]
+    canonical = "\n".join(bodies) + "\n" + "never hydrate this document body " * 10000
+    doc = RawTextDocument(title="Doc", full_text=canonical, collection=collection, ingested_by=user)
+    doc.save(dont_rechunk=True)
+    starts = [sum(len(body) + 1 for body in bodies[:i]) for i in range(3)]
     chunks = TextChunk.objects.bulk_create(
         [
             TextChunk(
                 doc_id=doc.id,
                 chunk_number=i,
-                start_position=i * 100,
-                end_position=(i + 1) * 100,
-                content=f"Aspect {i}. Qualified tail: only below 1 Pa.",
+                start_position=starts[i],
+                end_position=starts[i] + len(bodies[i]),
+                content=bodies[i],
             )
             for i in range(3)
         ]
@@ -155,17 +149,24 @@ def test_explicit_document_scope_shares_budget_and_restores_selected_scope(
 
     user, doc, chunks, auth = docs
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
-    parent = SourceRuntime(TurnBudget(TurnLimits()), auth)
-    with source_runtime_scope(parent):
+    from lib.llm.turn_context import TurnContext, bind_turn
+    from apps.documents.services.representation_media_acquisition import initialize_media_runtime
+    turn = TurnContext(TurnBudget(TurnLimits()))
+    consumer = SimpleNamespace(user=user, col_ref=CollectionsRef([doc.collection_id]))
+    parent = initialize_media_runtime(consumer, turn)
+    snapshot = parent._frozen_retrieval_scope.representation
+    with bind_turn(turn), source_runtime_scope(parent):
         with explicit_document_source_scope(user, doc.id) as explicit:
             assert explicit.budget is parent.budget
             assert explicit.cache is parent.cache
             assert explicit.authorization.selected_document_ids == frozenset((doc.id,))
             assert current_source_runtime() is explicit
         assert current_source_runtime() is parent
+        assert parent._frozen_retrieval_scope.representation is snapshot
 
 
-async def test_source_manual_turn_is_limited_until_shared_handoff_is_bound(monkeypatch):
+@pytest.mark.django_db(transaction=True)
+async def test_source_manual_turn_is_limited_until_shared_handoff_is_bound(docs, monkeypatch):
     from unittest.mock import Mock
 
     from apps.chat.services import manual_search_turn
@@ -175,11 +176,14 @@ async def test_source_manual_turn_is_limited_until_shared_handoff_is_bound(monke
     retrieve = Mock(side_effect=AssertionError("must not enter legacy acquisition"))
     monkeypatch.setattr(manual_search_turn, "_retrieve", retrieve)
     consumer = _consumer("/collection question")
+    consumer.user = docs[0]
+    consumer.col_ref = CollectionsRef([docs[1].collection_id])
     assert (
         await manual_search_turn.run_manual_search_turn(
             consumer, object(), consumer.convo
         )
         == "handled"
     )
-    assert "limits" in consumer.convo[-1].content
+    from lib.llm.answer_publication import LIMITED_ANSWER
+    assert consumer.convo[-1].content == LIMITED_ANSWER
     retrieve.assert_not_called()

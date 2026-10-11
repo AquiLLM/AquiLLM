@@ -7,6 +7,7 @@ from django.db import transaction
 
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.knowledge_graph.tests.ready_subset_support import ScopeFixture
+from apps.documents.tests.representation_support import retained as retained, upload as upload
 
 pytestmark = pytest.mark.django_db
 
@@ -125,25 +126,14 @@ def test_schema_fields_default_to_legacy_null():
         assert model._meta.get_field("representation_digest").default is None
 
 
-def test_v2_extraction_excludes_retained_inactive_chunks(monkeypatch):
+def test_v2_extraction_excludes_retained_inactive_chunks(monkeypatch, retained):
     from apps.documents.models import TextChunk
+    from apps.documents.tests.lexical_owner_support import staged_projection
     from apps.knowledge_graph.extraction.pipeline import _ordered_chunks
 
-    fixture = ScopeFixture(monkeypatch)
-    document = fixture.documents["A"]
-    fields = dict(
-        doc_id=document.id,
-        content="A",
-        start_position=0,
-        end_position=1,
-        embedding=[0.0] * 1024,
-    )
-    current = TextChunk.objects.create(chunk_number=0, **fields)
-    TextChunk.objects.create(
-        chunk_number=1,
-        representation_generation=uuid4(),
-        **{**fields, "start_position": 1, "end_position": 2},
-    )
+    document, _, current = retained
+    lease, _, _ = staged_projection(retained)
+    assert TextChunk.objects.filter(representation_generation_id=lease.generation_key).exists()
     monkeypatch.setenv("KG_GRAPH_REMEDIATION_MODE", "v2")
     assert tuple(c.pk for c in _ordered_chunks(document.id)) == (current.pk,)
 

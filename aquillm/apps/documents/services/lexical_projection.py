@@ -89,7 +89,7 @@ def structural_projection(chunk, canonical_text, extraction):
     covering = [
         e
         for e in extraction.elements
-        if e.start <= chunk.start_position and e.end >= chunk.end_position
+        if e.kind != "figure" and e.start <= chunk.start_position and e.end >= chunk.end_position
     ]
     if len(covering) != 1:
         raise ValueError("unbound_lexical_section")

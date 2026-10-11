@@ -9,12 +9,15 @@ from django.core.management.base import CommandError
 
 from apps.documents.models import TextChunk
 from apps.documents.tests.test_embedding_generation import legacy as legacy
+from .lexical_owner_support import unchunked as unchunked
+from .representation_support import retained as retained, upload as upload, activate
 from apps.documents.tests.test_lexical_relevance import replace_chunks
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def test_backfill_cursor_bounds_work_and_preserves_source_rows(legacy):
+def test_backfill_cursor_bounds_work_and_preserves_source_rows(unchunked):
+    legacy = unchunked
     rows = replace_chunks(legacy, ["source one", "source two", "source three"])
     out = StringIO()
     call_command(
@@ -54,12 +57,22 @@ def test_backfill_rejects_unbounded_controls(option, value):
         )
 
 
-def test_retired_rows_are_not_refreshed(legacy):
-    from uuid import uuid4
-
-    TextChunk.objects.update(representation_generation=uuid4())
+def test_retired_rows_are_not_refreshed(retained):
+    from apps.documents.models import DocumentRepresentationState
+    document, output, old = retained
+    assert activate(document, output) == "activated"
+    document.refresh_from_db()
+    state = DocumentRepresentationState.objects.get(document_id=document.id)
+    retired_key = state.active_generation_id
+    assert activate(document, output, parser="parser-v3") == "activated"
+    retired = TextChunk.objects.filter(representation_generation_id=retired_key)
+    assert retired.exists()
+    retired.update(search_vector=None, search_vector_binding=None)
     call_command("backfill_chunk_search_vectors", stdout=StringIO())
-    assert TextChunk.objects.get().search_vector_binding is None
+    assert not retired.filter(search_vector_binding__isnull=False).exists()
+    assert TextChunk.objects.get(pk=old.pk).search_vector_binding is None
+    document.refresh_from_db()
+    assert document.chunks.exists() and not document.chunks.filter(search_vector_binding__isnull=True).exists()
 
 
 def test_backfill_keeps_stricter_operator_statement_timeout(legacy, monkeypatch):

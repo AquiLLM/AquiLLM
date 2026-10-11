@@ -48,6 +48,10 @@ def _freeze_legacy_packet(consumer, packet, collections, budget, document_id=Non
         )
         if authority is None:
             return False
+        from .rag_representation_publication import capture_legacy_snapshot
+        from apps.documents.services.representation_store import active_chunk_scope
+        authority = capture_legacy_snapshot(packet, authority, documents)
+        current_chunks = active_chunk_scope(TextChunk.objects.all(), snapshot=packet._publication_representation)
         candidates = []
         for raw in packet.chunks:
             pk, doc = raw.get("chunk_id", raw.get("i")), raw.get("doc_id", raw.get("d"))
@@ -61,7 +65,7 @@ def _freeze_legacy_packet(consumer, packet, collections, budget, document_id=Non
             suffix = "\n...[truncated for context window]..."
             excerpt = text[: -len(suffix)] if text.endswith(suffix) else text
             meta = (
-                TextChunk.objects.filter(pk=pk, doc_id=doc)
+                current_chunks.filter(pk=pk, doc_id=doc)
                 .annotate(
                     revision=_SourceSHA256("content"),
                     excerpt_digest=_SourceSHA256(
@@ -125,11 +129,13 @@ async def bind_legacy_answer_packet(consumer, packet, *, document_id=None):
             if not valid:
                 packet.source_authorization = None
                 packet.selection = None
+                packet.retrieval_status = "context_limited"
             if packet.source_authorization is not None:
                 await capture_publication_images(packet)
     except Exception:
         packet.source_authorization = None
         packet.selection = None
+        packet.retrieval_status = "context_limited"
     return bind_packet_publication(
         packet, scope_check=lambda: tuple(consumer.col_ref.collections) == collections
     )
@@ -156,6 +162,7 @@ async def legacy_tool_handoff(consumer, llm, convo, max_tokens, stream_func):
     raw = last.result_dict
     if not isinstance(raw.get("result"), list):
         delivered = raw.get("result")
+        image_payload = delivered if isinstance(delivered, dict) else None
         if isinstance(delivered, dict):
             delivered = delivered.get("text", "")
         citations = raw.get("citation_chunks", [])
@@ -187,6 +194,9 @@ async def legacy_tool_handoff(consumer, llm, convo, max_tokens, stream_func):
                     }
                 )
                 cursor = stop + 2
+        if image_payload and image_payload.get("type") == "image_document":
+            from .rag_immutable_images import attach_captured_image_to_rows
+            attach_captured_image_to_rows(rows, image_payload.get("image_url"))
         raw = {"result": rows}
     packet = build_evidence_packet(
         raw, query=question, search_scope="selected documents"

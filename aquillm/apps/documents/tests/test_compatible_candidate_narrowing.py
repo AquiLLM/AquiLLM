@@ -148,17 +148,39 @@ def test_all_then_subset_keeps_exact_original_snapshots_and_cache_partition(
         assert [r.doc_id for r in result[0]] == [other.id]
 
 
-def test_initial_subset_cannot_expand_later(legacy, transport):
+def test_initial_subset_can_select_original_owners_without_scope_expansion(
+    legacy, transport
+):
     other, _, runtime = two_documents(legacy, transport)
+    outside = RawTextDocument(
+        title="Outside original selection", full_text="outside",
+        collection=other.collection, ingested_by=other.ingested_by,
+    )
+    outside.save(dont_rechunk=True)
     with (
         override_settings(DOCUMENT_EMBEDDING_SPACE_KEY=transport[0].space_key),
         source_runtime_scope(runtime),
     ):
-        lifetime, _ = enter_search(
+        lifetime, first = enter_search(
             TextChunk, [other], runtime.authorization, "query", False
         )
-        lifetime.close()
+        with lifetime:
+            assert first.requested_document_ids == frozenset((other.id,))
+            first_key = first.cache_key()
+        original = runtime._frozen_retrieval_scope
+        lifetime, second = enter_search(
+            TextChunk, [legacy[0], other], runtime.authorization, "query", False
+        )
+        with lifetime:
+            assert second.requested_document_ids == frozenset((legacy[0].id, other.id))
+            assert second.representation is first.representation
+            assert second.dense is first.dense
+            assert second.space is first.space
+            assert second.runtime is runtime and second.runtime.budget is runtime.budget
+            assert second.cache_key() != first_key
+            assert runtime._frozen_retrieval_scope is original
         with pytest.raises(SourceScopeUnavailable):
             enter_search(
-                TextChunk, [legacy[0], other], runtime.authorization, "query", False
+                TextChunk, [outside], runtime.authorization, "query", False
             )
+        assert runtime._frozen_retrieval_scope is original

@@ -7,6 +7,9 @@ from asgiref.sync import async_to_sync
 from django.contrib.auth import get_user_model
 
 from apps.chat.services.rag_evidence import EvidencePacket
+from apps.documents.tests.representation_support import upload as upload
+from apps.documents.tests.test_representation_media import figure as figure
+from .legacy_publication_support import publication_source
 from aquillm.message_adapters import save_conversation_to_db
 from aquillm.models import WSConversation
 from lib.llm.turn_context import TurnContext, bind_turn
@@ -23,40 +26,17 @@ pytestmark = pytest.mark.django_db(transaction=True)
     "route", ["direct", "whole_document", "figure_caption", "figure_chunks"]
 )
 def test_legacy_direct_synthesis_binds_actual_selected_database_source(
-    change, route, monkeypatch
+    change, route, monkeypatch, request
 ):
     from apps.chat.services.rag_answer_publication import bind_legacy_answer_packet
     from apps.chat.services.rag_synthesis import synthesize_from_evidence
-    from aquillm.models import (
-        Collection,
-        CollectionPermission,
-        RawTextDocument,
-        TextChunk,
-    )
     from lib.llm.answer_publication import LIMITED_ANSWER
     from lib.llm.providers.complete_turn import complete_conversation_turn
     from lib.llm.types.messages import ToolMessage, UserMessage
     from lib.llm.types.response import LLMResponse
 
-    user = get_user_model().objects.create_user(username="legacy-publication")
-    collection = Collection.objects.create(name="Synthetic")
-    permission = CollectionPermission.objects.create(
-        user=user, collection=collection, permission="VIEW"
-    )
-    source = "Capacity is 18 litres."
-    doc = RawTextDocument.objects.create(
-        title="Synthetic source",
-        full_text=source,
-        collection=collection,
-        ingested_by=user,
-    )
-    chunk = TextChunk.objects.create(
-        content=source,
-        start_position=0,
-        end_position=len(source),
-        chunk_number=0,
-        doc_id=doc.id,
-    )
+    user, collection, permission, doc, chunk = publication_source(request, route)
+    source = chunk.content
     citation = f"[doc:{doc.id} chunk:{chunk.pk}]"
     row = {
         "doc_id": str(doc.id),
@@ -68,50 +48,6 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
     packet = EvidencePacket(
         [row], [], [citation], "capacity", "selected documents", "results_found", "", 10
     )
-    figure = figure_chunk = None
-    if route.startswith("figure_"):
-        from apps.documents.models import DocumentFigure
-        from lib.llm.answer_publication import content_digest
-
-        figure = DocumentFigure(
-            title="Synthetic caption",
-            collection=collection,
-            ingested_by=user,
-            image_file="synthetic/unread.png",
-            extracted_caption=source,
-            full_text=source,
-            figure_index=0,
-        )
-        figure.parent_document = doc
-        figure.save()
-        chunk_ids = []
-        if route == "figure_chunks":
-            figure_chunk = TextChunk.objects.create(
-                content=source,
-                start_position=0,
-                end_position=len(source),
-                chunk_number=0,
-                doc_id=figure.id,
-            )
-            chunk_ids = [figure_chunk.pk]
-        packet.image_urls = [f"/aquillm/document_image/{figure.id}/"]
-        packet.auxiliary_figures = (
-            {"image_url": packet.image_urls[0], "text": source},
-        )
-        packet.auxiliary_handoff = (
-            {
-                "_figure_provenance": [
-                    {
-                        "figure_id": str(figure.id),
-                        "parent_id": str(doc.id),
-                        "field": "extracted_caption",
-                        "source_fingerprint": content_digest(source),
-                        "chunk_ids": chunk_ids,
-                    }
-                ]
-            },
-            user,
-        )
     state = TurnContext(TurnBudget(TurnLimits()))
     consumer = SimpleNamespace(
         user=user, col_ref=SimpleNamespace(collections=[collection.pk])
@@ -129,6 +65,7 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
         ],
     )
     events = []
+    calls = []
 
     class Model:
         base_args = {}
@@ -136,21 +73,14 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
         async def get_message(self, **kwargs):
             from channels.db import database_sync_to_async
 
+            calls.append(kwargs)
             if change == "revoke":
                 await database_sync_to_async(permission.delete)()
             if change == "revision":
-                if figure is not None and figure_chunk is None:
-                    await database_sync_to_async(
-                        lambda: DocumentFigure.objects.filter(pk=figure.pk).update(
-                            extracted_caption="Changed caption."
-                        )
-                    )()
-                else:
-                    await database_sync_to_async(
-                        lambda: TextChunk.objects.filter(
-                            pk=(figure_chunk or chunk).pk
-                        ).update(content="Changed source.")
-                    )()
+                def edit_owner():
+                    doc.full_text = "Changed source."
+                    doc.save(dont_rechunk=True)
+                await database_sync_to_async(edit_owner)()
             if change == "scope":
                 consumer.col_ref.collections = []
             if change == "db_timeout":
@@ -163,7 +93,7 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
                     rag_publication_database, "monotonic", lambda: next(ticks)
                 )
             return LLMResponse(
-                text=f"Capacity is 18 litres {citation}.",
+                text=f"{source} {citation}",
                 tool_call={},
                 stop_reason="stop",
                 input_usage=1,
@@ -179,6 +109,13 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
         events.append(payload)
 
     with bind_turn(state):
+        from apps.documents.services.representation_media_acquisition import initialize_media_runtime, chunk_media_url
+        initialize_media_runtime(consumer, state)
+        if route.startswith("figure_"):
+            url = chunk_media_url(chunk)
+            assert url == f"/aquillm/document_image/{doc.id}/?chunk_id={chunk.pk}"
+            row["image_url"] = url
+            packet.image_urls = [url]
         if change is None and route == "direct":
             from apps.chat.services.rag_answer_publication import _freeze_legacy_packet
 
@@ -207,10 +144,11 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
             )
         if change is None:
             assert "uncertain" in result[-1].content
-            assert f"> Capacity is 18 litres. {citation}" in result[-1].content
+            assert f"> {source} {citation}" in result[-1].content
             assert result[-1]._validated_answer.outcome == "partial"
         else:
             assert result[-1].content == LIMITED_ANSWER
+        assert len(calls) == (0 if change == "forged" else 1)
         db = WSConversation.objects.create(owner=user)
         save_conversation_to_db(result, db)
         assert (
@@ -243,7 +181,7 @@ def test_legacy_historical_tool_is_not_rebound(monkeypatch):
             )
         ],
     )
-    consumer = SimpleNamespace(convo=convo)
+    consumer = SimpleNamespace(convo=convo, user=get_user_model().objects.create_user(username="historical-user"), col_ref=SimpleNamespace(collections=[]))
 
     async def check():
         async with preservation_turn(consumer, max_func_calls=3):
@@ -262,7 +200,7 @@ def test_existing_publication_never_authorizes_later_foreign_tool(monkeypatch):
     from lib.llm.types.messages import ToolMessage
 
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "legacy")
-    consumer = SimpleNamespace(convo=Conversation(system="s", messages=[]))
+    consumer = SimpleNamespace(convo=Conversation(system="s", messages=[]), user=get_user_model().objects.create_user(username="foreign-user"), col_ref=SimpleNamespace(collections=[]))
     foreign = consumer.convo + [
         ToolMessage(
             tool_name="whole_document",

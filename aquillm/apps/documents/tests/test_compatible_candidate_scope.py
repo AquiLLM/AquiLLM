@@ -12,6 +12,7 @@ from apps.documents.tests.test_embedding_generation import legacy as legacy
 from apps.documents.tests.test_embedding_generation import stage
 from apps.documents.tests.test_embedding_generation_query import runtime_for
 from lib.embeddings.tests.test_document_provider import transport as transport
+from .lexical_owner_support import unchunked as unchunked
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -34,11 +35,21 @@ def test_raw_same_shaped_vector_cannot_enter_dense_but_lexical_survives(legacy):
 
 
 def test_retired_representation_never_enters_lexical(legacy):
-    from uuid import uuid4
-
-    TextChunk.objects.update(representation_generation=uuid4())
-    assert collect(legacy).baseline_candidates == ()
-    assert collect(legacy, query='"source"').exact_chunk_ids == ()
+    from apps.documents.services.representation_history import reference
+    from apps.documents.services.representation_snapshot_build import build_canonical_snapshot_representation
+    doc, _ = legacy
+    assert build_canonical_snapshot_representation(reference(doc), using="default") == "activated"
+    historical_ids = tuple(doc.chunks.values_list("pk", flat=True))
+    doc.full_text = "Replacement evidence"
+    doc.save(dont_rechunk=True)
+    assert build_canonical_snapshot_representation(reference(doc), using="default") == "activated"
+    assert TextChunk.objects.filter(pk__in=historical_ids).count() == len(historical_ids)
+    assert not doc.chunks.filter(pk__in=historical_ids).exists()
+    current_ids = set(doc.chunks.values_list("pk", flat=True))
+    baseline_ids = {row.pk for row in collect((doc, reference(doc))).baseline_candidates}
+    assert baseline_ids and baseline_ids <= current_ids
+    assert not baseline_ids.intersection(historical_ids)
+    assert collect((doc, reference(doc)), query='"source"').exact_chunk_ids == ()
 
 
 def test_ambiguous_private_owner_rejects_lexical_without_disclosure(legacy):
@@ -58,8 +69,7 @@ def test_ambiguous_private_owner_rejects_lexical_without_disclosure(legacy):
         collect(legacy)
 
 
-def test_compatible_dense_order_survives_body_hydration(legacy, transport, monkeypatch):
-    from dataclasses import replace
+def test_compatible_dense_order_survives_body_hydration(unchunked, transport, monkeypatch):
     from types import SimpleNamespace
 
     from apps.documents.services import embedding_index_store as store
@@ -67,12 +77,16 @@ def test_compatible_dense_order_survives_body_hydration(legacy, transport, monke
     from apps.documents.services.source_loading import source_runtime_scope
     from lib.embeddings import document_provider as provider
 
-    doc, ref = legacy
+    from apps.documents.services.representation_history import reference
+    doc, _ = unchunked
+    assert doc.pk is None and not TextChunk.objects.exists()
     doc.full_text = "source second"
     doc.save(dont_rechunk=True)
-    legacy = (doc, replace(ref, source_hash=doc.full_text_hash))
+    legacy = (doc, reference(doc))
     TextChunk.objects.bulk_create(
         [
+            TextChunk(doc_id=doc.id, content="source", start_position=0,
+                      end_position=6, chunk_number=0),
             TextChunk(
                 doc_id=legacy[0].id,
                 content="second",
@@ -170,7 +184,8 @@ def test_changed_authority_at_final_handoff_never_returns_stale_dense(
 
     def mutate(model, rows, k):
         if mutation == "source":
-            RawTextDocument.objects.filter(pk=legacy[0].pk).update(full_text="changed")
+            legacy[0].full_text = "changed"
+            legacy[0].save(dont_rechunk=True)
         elif mutation == "chunk":
             TextChunk.objects.update(content="changed")
         elif mutation == "profile":

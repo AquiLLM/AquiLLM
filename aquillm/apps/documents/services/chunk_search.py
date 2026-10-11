@@ -276,6 +276,7 @@ def text_chunk_search(
                 authorization_context,
                 retrieval_scope,
                 freeze_authorized_document_scope,
+                dependencies=hybrid_graph_dependencies,
             )
         )
 

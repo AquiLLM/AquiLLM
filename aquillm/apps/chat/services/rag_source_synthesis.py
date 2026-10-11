@@ -69,7 +69,20 @@ async def complete_source_request(llm, request, budget, stream_func, *, packet=N
     from apps.chat.services.rag_answer_publication import bind_packet_publication
 
     if packet is not None:
-        publication = bind_packet_publication(packet, lease=lease)
+        if getattr(packet, "_media_bindings", None):
+            from lib.llm.turn_context import current_turn
+            from lib.llm.answer_publication import AnswerPublicationRejected
+            publication = current_turn().answer_publication
+            if publication is None:
+                publication = bind_packet_publication(packet, lease=lease)
+            elif publication.packet is not packet:
+                raise AnswerPublicationRejected("evidence_changed")
+            publication._active()
+            if publication.lease is not None and publication.lease is not lease:
+                raise AnswerPublicationRejected("evidence_changed")
+            publication.lease = lease
+        else:
+            publication = bind_packet_publication(packet, lease=lease)
         if publication is not None:
             publication.historical_ids = frozenset(
                 m.message_uuid for m in request.messages
@@ -83,6 +96,9 @@ async def complete_source_request(llm, request, budget, stream_func, *, packet=N
             return await stream_func(payload)
 
         async with asyncio.timeout(lease.remaining_seconds()):
+            if packet is not None:
+                from .rag_immutable_images import authorize_media_dispatch
+                await authorize_media_dispatch(packet)
             completed, status = await llm.complete(
                 request, budget, stream_func=guarded_stream if stream_func else None
             )
@@ -191,6 +207,9 @@ async def finalize_source_support(packet):
     if runtime:
         runtime.observation["delivered_packet"] = packet
     from apps.chat.services.rag_answer_publication import capture_publication_images
+    if packet.source_authorization is not None:
+        from .rag_representation_publication import retain_acquired_snapshot
+        retain_acquired_snapshot(packet)
 
     await capture_publication_images(packet)
     from .rag_support_delivery import refresh_answer_support

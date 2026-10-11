@@ -13,13 +13,23 @@ from lib.retrieval.evidence import SourceEvidence, fingerprint_source
 
 
 def can_view_document(user, doc):
-    if not source_mode_enabled():
+    from apps.documents.services.representation_media_acquisition import media_runtime
+    public = current_source_runtime()
+    runtime = public or media_runtime()
+    if runtime is None and not source_mode_enabled():
         return doc.collection.user_can_view(user)
     from apps.documents.services.source_loading import bounded_source_database
-
-    runtime = required_source_runtime()
+    runtime = runtime or required_source_runtime()
+    from apps.documents.services.representation_media_acquisition import _check_runtime
+    if public is None:
+        _check_runtime(runtime)
     with bounded_source_database(runtime, runtime.authorization.database_alias):
-        return doc.collection.user_can_view(user)
+        from apps.documents.services.representation_tool_scope import tool_scope
+        scope = tool_scope(runtime, using=runtime.authorization.database_alias)
+        exact = (doc._meta.label_lower, doc.pk, doc.id, doc.collection_id, doc.full_text_hash)
+        selected = any(exact == (s.document.model_label, s.document.pkid, s.document.id,
+            s.document.collection_id, s.document.source_hash) for s in scope.representation.selections)
+        return selected and doc.collection.user_can_view(user)
 
 
 def required_source_runtime():
@@ -44,91 +54,31 @@ def explicit_document_source_scope(user, doc_id):
     Automatic planners must retain the original selected scope. The child's
     lifetime is one manual operation; all reservations stay on the outer ledger.
     """
-    from apps.collections.services.django_retrieval_authorization import (
-        build_selected_scope_authorization_context,
-    )
-    from apps.documents.services.source_loading import (
-        SourceRuntime,
-        bounded_source_database,
-        source_runtime_scope,
-    )
-
-    parent = required_source_runtime()
-    alias = getattr(parent.authorization, "database_alias", "default")
-    with bounded_source_database(parent, alias):
-        doc = document_metadata(doc_id)
-        authorization = (
-            None
-            if doc is None
-            else build_selected_scope_authorization_context(
-                principal=user,
-                selected_collection_ids=(doc.collection_id,),
-                selected_documents=(doc,),
-                database_alias=alias,
-            )
-        )
-    if authorization is None:
-        raise SourcePreparationLimited("requested document is not authorized")
-    child = SourceRuntime(
-        parent.budget,
-        authorization,
-        parent.cache,
-        parent.windows,
-        parent.lock,
-        parent.observation,
-    )
+    from apps.documents.services.representation_manual_scope import create_manual_document_runtime
+    from apps.documents.services.source_loading import source_runtime_scope
+    from apps.documents.services.representation_media_acquisition import media_runtime
+    child = create_manual_document_runtime(user, doc_id, parent=media_runtime())
     with source_runtime_scope(child):
         yield child
 
 
 def selected_document_metadata(user, col_ref):
     from apps.collections.models import Collection
-
-    if not source_mode_enabled():
-        return Collection.get_user_accessible_documents(
-            user, Collection.objects.filter(id__in=col_ref.collections)
-        )
-    from apps.documents.models.document import _get_document_types
-    from apps.documents.services.source_loading import bounded_source_database
-
-    runtime = required_source_runtime()
-    alias = getattr(runtime.authorization, "database_alias", "default")
-    with bounded_source_database(runtime, alias):
-        collections = (
-            Collection.objects.using(alias)
-            .filter(id__in=col_ref.collections)
-            .filter_by_user_perm(user, "VIEW")
-        )
-        return [
-            doc
-            for model in _get_document_types()
-            for doc in model.objects.using(alias)
-            .filter(collection__in=collections)
-            .defer(*deferred_document_bodies(model))
-        ]
+    from .current_document_metadata import acquisition_metadata
+    documents = acquisition_metadata()
+    if documents is not None:
+        return documents
+    return Collection.get_user_accessible_documents(
+        user, Collection.objects.filter(id__in=col_ref.collections))
 
 
 def document_metadata(doc_id):
     from apps.documents.models import Document
-
-    if not source_mode_enabled():
-        return Document.get_by_id(doc_id)
-    from apps.documents.models.document import _get_document_types
-    from apps.documents.services.source_loading import bounded_source_database
-
-    runtime = required_source_runtime()
-    alias = getattr(runtime.authorization, "database_alias", "default")
-    with bounded_source_database(runtime, alias):
-        for model in _get_document_types():
-            doc = (
-                model.objects.using(alias)
-                .filter(id=doc_id)
-                .defer(*deferred_document_bodies(model))
-                .first()
-            )
-            if doc is not None:
-                return doc
-    return None
+    from .current_document_metadata import acquisition_metadata
+    documents = acquisition_metadata(doc_id)
+    if documents is not None:
+        return documents[0] if documents else None
+    return Document.get_by_id(doc_id)
 
 
 def document_source_evidence(results):

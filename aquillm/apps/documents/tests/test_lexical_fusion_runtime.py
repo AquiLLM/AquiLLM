@@ -12,6 +12,7 @@ from apps.documents.services.chunk_search_candidates import (
 )
 from apps.documents.services.source_loading import source_runtime_scope
 from apps.documents.tests.test_embedding_generation import legacy as legacy
+from .lexical_owner_support import unchunked as unchunked
 from apps.documents.tests.test_embedding_generation import stage
 from apps.documents.tests.test_embedding_generation_query import runtime_for
 from apps.documents.tests.test_lexical_publication import publish
@@ -29,10 +30,11 @@ pytestmark = pytest.mark.django_db(transaction=True)
     RAG_TRIGRAM_SIMILARITY_MIN=1,
 )
 def test_protected_answer_survives_actual_dense_collection_and_score_failure(
-    legacy, transport, monkeypatch, capture
+    unchunked, transport, monkeypatch, capture
 ):
     from apps.documents.services import embedding_index_store as store
 
+    legacy = unchunked
     rows = replace_chunks(legacy, ["ATP distractor"] * 12 + ["ATP BRCA1 answer"])
     legacy = (legacy[0], replace(legacy[1], source_hash=legacy[0].full_text_hash))
     _, lease, _, _ = stage(legacy, transport)
@@ -114,7 +116,8 @@ def test_title_change_at_final_rerank_rejects_fts_only_row_and_cache(
 
 
 @override_settings(RAG_FULL_TEXT_ENABLED=True)
-def test_full_text_shares_existing_trigram_candidate_allowance(legacy):
+def test_full_text_shares_existing_trigram_candidate_allowance(unchunked):
+    legacy = unchunked
     replace_chunks(legacy, ["measurement source"] * 20)
     publish(legacy)
     snapshot = collect_hybrid_candidate_snapshot(
@@ -128,7 +131,8 @@ def test_full_text_shares_existing_trigram_candidate_allowance(legacy):
 
 
 @override_settings(RAG_FULL_TEXT_ENABLED=True)
-def test_incomplete_full_text_keeps_independent_exact_evidence(legacy):
+def test_incomplete_full_text_keeps_independent_exact_evidence(unchunked):
+    legacy = unchunked
     rows = replace_chunks(legacy, ["ATP BRCA1 source"])
     snapshot = collect_hybrid_candidate_snapshot(
         TextChunk, "ATP BRCA1", 10, [legacy[0]], query_embedding=None

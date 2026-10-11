@@ -90,12 +90,13 @@ async def test_outer_scope_creates_distinct_turns_and_closes(monkeypatch):
     monkeypatch.setattr(
         rag_turn, "create_runtime", lambda consumer, budget: SourceRuntime(budget, None)
     )
-    consumer = SimpleNamespace()
+    consumer = SimpleNamespace(user=SimpleNamespace(pk=1), col_ref=SimpleNamespace(collections=[]))
     ids = []
     for _ in range(2):
         async with rag_turn.preservation_turn(consumer, max_func_calls=3) as runtime:
-            ids.append(runtime.budget)
-            assert current_turn().budget is current_source_runtime().budget
-        assert not runtime.budget.can_publish()
+            ids.append(current_turn().budget)
+            assert runtime is None and current_source_runtime() is None
+            assert current_turn()._media_source_runtime.budget is ids[-1]
+        assert not ids[-1].can_publish()
         assert current_source_runtime() is current_turn() is None
     assert ids[0] is not ids[1]

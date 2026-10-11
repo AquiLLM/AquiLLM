@@ -7,7 +7,7 @@ from uuid import UUID
 from .chunk_reference_store import (
     DjangoChunkReferenceStore,
     private_row,
-    validate_current_chunk_row,
+    validate_current_chunk_rows,
 )
 from .django_projection_source import DjangoProjectionRowSource
 from .identifiers import OpaqueProjectionKey, ProjectionIdentifierDomain
@@ -173,8 +173,7 @@ class PostgresProjectionRepository:
                 batch_size=size,
             )
         persisted_objects = self._chunk_store.load(projection_id=identifier)
-        for row in persisted_objects:
-            validate_current_chunk_row(row)
+        validate_current_chunk_rows(persisted_objects)
         persisted = tuple(
             sorted(
                 (private_row(row) for row in persisted_objects),
@@ -229,9 +228,9 @@ class PostgresProjectionRepository:
             != keys
         ):
             raise ValueError("projection chunk mapping is stale or deleted")
+        validate_current_chunk_rows(observed)
         resolved = []
         for row in observed:
-            validate_current_chunk_row(row)
             if row.document_uuid in authorized_document_ids:
                 resolved.append(private_row(row))
         return tuple(sorted(resolved, key=lambda row: row.projection_chunk_key))

@@ -89,8 +89,8 @@ def capture_retrieval_vocabulary(authorization):
     if not enabled():
         return None
     from apps.collections.services.vocabulary import _authorization
-    from apps.documents.services.source_loading import current_source_runtime
-    runtime = current_source_runtime()
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
+    runtime = graph_source_runtime()
     if runtime is None or runtime.authorization is not authorization:
         raise VocabularyGraphUnavailable("original vocabulary runtime unavailable")
     with runtime.lock:
@@ -148,6 +148,9 @@ def current_artifact_policy(artifact, *, collection_id, using="default"):
 
 
 def effective_observation():
-    from apps.documents.services.source_loading import current_source_runtime
-    runtime = current_source_runtime()
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
+    try:
+        runtime = graph_source_runtime()
+    except ValueError:
+        runtime = None
     return dict(runtime.observation.get("scoped_vocabulary", {"state": "unknown"})) if runtime else {"state": "unknown"}

@@ -186,7 +186,8 @@ def revoke_rerank_protocol(base_url, binding):
 
 
 def discover_rerank_protocol(
-    base_url, model_key, *, deadline, max_attempts=3, headers=None, budget=None
+    base_url, model_key, *, deadline, max_attempts=3, headers=None, budget=None,
+    on_registered=None,
 ):
     """Explicit bounded worker/preflight discovery, never a serving fallback."""
     from time import monotonic
@@ -197,6 +198,7 @@ def discover_rerank_protocol(
     from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
     from .rerank_request_lifetime import TurnRerankState
+    from .rerank_protocol_publication import publish_owned_protocol
 
     if current_turn() is not None:
         raise RuntimeError("protocol discovery is outside request work")
@@ -258,7 +260,9 @@ def discover_rerank_protocol(
 
         result = state.run(1, probe, timeout=min(3, max(0, deadline - monotonic())))
         if isinstance(result, RerankProtocolV1):
-            if not state.publish(lambda: register_rerank_protocol(base_url, result)):
+            if not state.publish(
+                lambda: publish_owned_protocol(base_url, result, on_registered)
+            ):
                 return None
             return result
         if result != ("next",):

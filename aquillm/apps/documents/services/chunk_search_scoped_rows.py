@@ -13,7 +13,7 @@ def fingerprint(row):
         row.doc_id,
         row.chunk_number,
         md5(row.content.encode()).hexdigest(),
-        row.representation_generation,
+        row.representation_generation_id,
     )
 
 
@@ -21,7 +21,7 @@ def scoped_rows(queryset, scope, *, lexical=False):
     if scope is None:
         return source_query_rows(queryset)
     with scope.database():
-        rows = source_query_rows(queryset)
+        rows = source_query_rows(queryset, runtime=scope.runtime)
         scope.validate()
         if lexical == "full_text":
             bindings = dict(
@@ -82,27 +82,38 @@ def dense_rows(model_cls, observation, scope, limit):
         )
 
 
+def _current_row_queryset(scope, ids):
+    """Private metadata query; never returned from the closed row operation."""
+    from apps.documents.models import TextChunk
+    from .representation_store import _active_chunk_predicates
+
+    return _active_chunk_predicates(
+        TextChunk.objects.using(scope.using).filter(
+            pk__in=ids, doc_id__in=scope.requested_document_ids,
+        ),
+        snapshot=scope.representation,
+    )
+
+
 def validate_rows(rows, *, scope=None, dense_only=False):
     scope = scope or current_scope()
     rows = tuple(rows)
     if scope is None or not rows:
         return rows
-    from apps.documents.models import TextChunk
-
     with scope.database():
         valid_dense = set(scope.validate())
-        from .lexical_readiness import valid_full_text_ids
+        from .lexical_readiness import _matching_full_text_ids
 
-        valid_fts = valid_full_text_ids(scope, rows)
+        fts_ids = tuple(row.pk for row in rows if row.pk in scope.fts_rows)
+        valid_fts = (
+            _matching_full_text_ids(scope, _current_row_queryset(scope, fts_ids))
+            if fts_ids else set()
+        )
         from .chunk_search_revalidation import withdraw_full_text
 
         withdraw_full_text(scope, rows, valid_fts)
         metadata = (
-            scope.queryset(
-                TextChunk.objects.using(scope.using).filter(
-                    pk__in=[r.pk for r in rows],
-                )
-            )
+            _current_row_queryset(scope, tuple(row.pk for row in rows))
             .annotate(_revision=MD5("content"))
             .values_list(
                 "pk",

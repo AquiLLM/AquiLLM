@@ -9,6 +9,9 @@ from apps.chat.refs import CollectionsRef
 from apps.chat.tests.test_rag_preservation_routes import configure
 from apps.chat.tests.test_rag_source_document_tools import docs as docs
 from apps.chat.tests.test_rag_source_figures import figure_for
+from apps.documents.tests.representation_support import upload as upload
+from apps.documents.tests.test_representation_media import figure as figure
+from .manual_routing_support import current_figure as current_figure, close_routing_worker as close_routing_worker
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
@@ -29,7 +32,7 @@ pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
         ("adjacent", "none"),
     ],
 )
-async def test_normal_current_tool_handoff(docs, monkeypatch, kind, mutation):
+async def test_normal_current_tool_handoff(docs, current_figure, monkeypatch, kind, mutation):
     from apps.chat.services.rag_turn import preservation_turn
     from apps.chat.services.tool_wiring.documents import (
         more_context_tool,
@@ -47,23 +50,12 @@ async def test_normal_current_tool_handoff(docs, monkeypatch, kind, mutation):
         await database_sync_to_async(figure_for)(
             user, doc, "Original caption: only below 1 Pa."
         )
-        if kind in {"whole", "image"}
+        if kind == "whole"
         else None
     )
     if kind == "image":
-        doc = figure
-        chunks = await database_sync_to_async(TextChunk.objects.bulk_create)(
-            [
-                TextChunk(
-                    doc_id=doc.id,
-                    chunk_number=0,
-                    start_position=0,
-                    end_position=40,
-                    content="OCR evidence: only below 1 Pa.",
-                    modality=TextChunk.Modality.IMAGE,
-                )
-            ]
-        )
+        user, doc, selected_chunk = current_figure
+        chunks = [selected_chunk]
     calls = []
     provider = OpenAIInterface(None, "test")
 
@@ -110,11 +102,10 @@ async def test_normal_current_tool_handoff(docs, monkeypatch, kind, mutation):
                 lambda: CollectionPermission.objects.filter(user=user).delete()
             )()
         if mutation == "edit":
-            await database_sync_to_async(
-                lambda: TextChunk.objects.filter(pk=chunks[0].pk).update(
-                    content="changed"
-                )
-            )()
+            def edit_owner():
+                doc.full_text = "Changed canonical source"
+                doc.save(dont_rechunk=True)
+            await database_sync_to_async(edit_owner)()
         if mutation == "figure":
             await database_sync_to_async(
                 lambda: DocumentFigure.objects.filter(id=figure.id).update(
@@ -134,11 +125,14 @@ async def test_normal_current_tool_handoff(docs, monkeypatch, kind, mutation):
         assert runtime.budget.actions_used == 1
     if mutation in {"revoke", "edit"}:
         assert calls == []
-        assert "limits" in result[-1].content
+        from lib.llm.answer_publication import LIMITED_ANSWER
+        assert result[-1].content == LIMITED_ANSWER
     else:
         assert len(calls) == 1
         text = str(calls[0]["messages"])
-        assert ("Original caption" in text) is (kind == "whole" and mutation == "none")
+        # The whole-parent packet has no selected figure chunk; its unbound
+        # auxiliary is omitted without discarding the parent's cited text.
+        assert "Original caption" not in text
         assert "Changed caption" not in text
         if kind == "image":
             assert (f"/aquillm/document_image/{doc.id}/" in text) is (

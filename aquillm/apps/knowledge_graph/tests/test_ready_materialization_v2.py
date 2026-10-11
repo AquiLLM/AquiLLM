@@ -100,9 +100,13 @@ def test_real_current_chunk_provenance_and_late_fences(monkeypatch, race):
         materializer, "projection_identifier_codec", lambda settings: fixture.codec
     )
     if race == "generation":
-        TextChunk.objects.filter(pk=fixture.chunks["A"].pk).update(
-            representation_generation=uuid4()
-        )
+        from apps.documents.services.representation_history import reference
+        from apps.documents.services.representation_snapshot_build import build_canonical_snapshot_representation
+        document = fixture.documents["A"]
+        assert build_canonical_snapshot_representation(reference(document), using="default") == "activated"
+        assert TextChunk.objects.filter(pk=fixture.chunks["A"].pk).exists()
+        assert not document.chunks.filter(pk=fixture.chunks["A"].pk).exists()
+        assert document.chunks.exclude(representation_generation_id=None).exists()
     elif race == "provenance":
         ref = replace(ref, evidence_provenance_keys=("0" * 64,))
     elif race == "revoked":
@@ -112,9 +116,9 @@ def test_real_current_chunk_provenance_and_late_fences(monkeypatch, race):
 
         def changed(**kwargs):
             result = original(**kwargs)
-            RawTextDocument.objects.filter(pk=fixture.documents["A"].pk).update(
-                full_text="changed"
-            )
+            document = fixture.documents["A"]
+            document.full_text = "changed"
+            document.save(dont_rechunk=True)
             return result
 
         monkeypatch.setattr(materializer, "provenance_for_chunk", changed)

@@ -650,7 +650,7 @@ def _chunk_snapshot(chunks) -> tuple[tuple[object, ...], ...]:
             chunk.end_position,
             chunk.modality,
             chunk.content,
-            getattr(chunk, "representation_generation", None),
+            getattr(chunk, "representation_generation_id", None),
         )
         for chunk in chunks
     )

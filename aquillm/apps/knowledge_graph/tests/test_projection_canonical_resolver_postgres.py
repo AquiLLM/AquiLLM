@@ -151,6 +151,7 @@ relations:
 def _source():
     return DjangoProjectionRowSource(
         using="default",
+        lease_owner="synthetic-test-worker",
         identifier_key=b"synthetic-projection-key",
         identifier_key_version="key-v1",
     )
@@ -163,7 +164,7 @@ def test_distinct_valid_resolvers_preserve_registry_checksum_and_projection(
     assert link.resolver_version == canonical.resolver_version == CANONICAL_RESOLVER
     assert link.resolver_version != COLLECTION_RESOLVER
 
-    snapshot = DjangoProjectionOrmLoader("default").load(
+    snapshot = DjangoProjectionOrmLoader("default", lease_owner="synthetic-test-worker").load(
         projection_id=projection.pk, batch_size=10
     )
     assert snapshot["memberships"] == (

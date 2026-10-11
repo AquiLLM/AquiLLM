@@ -1,7 +1,7 @@
 """One preservation lifetime per consumer user turn, never per tool/fallback."""
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
 
 from channels.db import database_sync_to_async
@@ -90,24 +90,19 @@ async def preservation_turn(consumer, *, max_func_calls):
                 )
 
             # Acquisition fencing is independent of preservation/planner/synthesis.
-            with bind_turn(
-                TurnContext(
+            turn = TurnContext(
                     budget,
                     handoff=publication_handoff,
                     max_func_calls=max_func_calls,
                     worker_cleanup=connections.close_all,
                 )
-            ):
+            from apps.documents.services.representation_media_acquisition import initialize_media_runtime
+            await asyncio.wait_for(database_sync_to_async(initialize_media_runtime, thread_sensitive=False)(
+                consumer, turn), budget.remaining_ms() / 1000)
+            with bind_turn(turn):
                 yield None
             return
         from apps.chat.services.rag_preservation_turn import normal_source_handoff
-
-        runtime = parent or await asyncio.wait_for(
-            database_sync_to_async(create_runtime, thread_sensitive=False)(
-                consumer, budget
-            ),
-            budget.remaining_ms() / 1000,
-        )
 
         async def handoff(llm, convo, max_tokens, stream_func):
             try:
@@ -123,18 +118,23 @@ async def preservation_turn(consumer, *, max_func_calls):
                     "changed",
                 )
 
-        with (
-            source_runtime_scope(runtime),
-            bind_turn(
-                TurnContext(
+        turn = TurnContext(
                     budget,
                     handoff,
                     max_func_calls=max_func_calls,
                     worker_cleanup=connections.close_all,
                 )
-            ),
+        from apps.documents.services.representation_media_acquisition import initialize_media_runtime
+        runtime = parent or await asyncio.wait_for(
+            database_sync_to_async(initialize_media_runtime, thread_sensitive=False)(consumer, turn),
+            budget.remaining_ms() / 1000,
+        )
+        authorized = isinstance(runtime, SourceRuntime) and runtime.authorization is not None
+        with (
+            source_runtime_scope(runtime) if authorized else nullcontext(),
+            bind_turn(turn),
         ):
-            yield runtime
+            yield runtime if authorized else None
     except asyncio.CancelledError:
         budget.close("cancelled")
         raise

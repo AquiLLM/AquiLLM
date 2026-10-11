@@ -105,10 +105,19 @@ def validate_vocabulary(snapshot, *, authorization):
     if binding.authorization_signature != authorization.authorization_context_signature or snapshot.checksum != snapshot_digest(snapshot):
         raise ValueError("vocabulary binding changed")
     with vocabulary_database(authorization.database_alias):
-        actor = _authorization(authorization, binding.selected_collection_ids)
-        pins, paths = read_pins(binding.selected_collection_ids, authorization.database_alias, actor)
-        if pins != binding.pins or paths != binding.paths:
-            raise ValueError("captured vocabulary pins changed")
-        if _snapshot(authorization, binding.selected_collection_ids, pins, paths) != snapshot:
-            raise ValueError("captured vocabulary content changed")
+        return _validate_vocabulary_metadata(snapshot, authorization=authorization)
+
+
+def _validate_vocabulary_metadata(snapshot, *, authorization):
+    if type(snapshot) is not VocabularySnapshotV1 or type(snapshot.binding) is not VocabularyBindingV1:
+        raise ValueError("unbound vocabulary")
+    binding = snapshot.binding
+    if binding.authorization_signature != authorization.authorization_context_signature or snapshot.checksum != snapshot_digest(snapshot):
+        raise ValueError("vocabulary binding changed")
+    actor = _authorization(authorization, binding.selected_collection_ids)
+    pins, paths = read_pins(binding.selected_collection_ids, authorization.database_alias, actor)
+    if pins != binding.pins or paths != binding.paths:
+        raise ValueError("captured vocabulary pins changed")
+    if _snapshot(authorization, binding.selected_collection_ids, pins, paths) != snapshot:
+        raise ValueError("captured vocabulary content changed")
     return True

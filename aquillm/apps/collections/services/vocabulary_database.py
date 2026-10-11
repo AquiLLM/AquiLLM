@@ -23,6 +23,15 @@ def vocabulary_database(using):
     deadline = min(_DEADLINE.get() or float("inf"), monotonic() + 3)
     if runtime:
         deadline = min(deadline, monotonic() + runtime.budget.remaining_ms() / 1000)
+    with _bounded_vocabulary_database(using, deadline):
+        yield
+
+
+@contextmanager
+def _bounded_vocabulary_database(using, deadline):
+    """Private mechanics; only validated acquisition/publication entries call this."""
+    check_read_deadline()
+    deadline = min(deadline, _DEADLINE.get() or float("inf"), monotonic() + 3)
     connection = connections[using]
     with transaction.atomic(using=using):
         with connection.cursor() as cursor:

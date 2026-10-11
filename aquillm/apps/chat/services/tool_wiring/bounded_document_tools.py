@@ -39,6 +39,8 @@ def limited_document_result():
 def bounded_document_result(doc, query, *, chat_ref=None, adjacent=False):
     runtime = required_source_runtime()
     with bounded_source_database(runtime, query.db):
+        from apps.documents.services.representation_tool_scope import current_tool_rows
+        query = current_tool_rows(query, runtime=runtime)
         expected = query.count()
         chunks = source_query_rows(query)
     if not chunks or len(chunks) != expected:
@@ -97,7 +99,14 @@ def _bounded_whole_document(doc, chat_ref, *, user, include_images=False):
     ceiling = synthesis_evidence_budget(chat_ref.chat.convo, chat_ref.chat.llm_if, [])
     runtime = required_source_runtime()
     if getattr(doc, "image_file", None):
-        url = f"/aquillm/document_image/{doc.id}/"
+        from apps.documents.services.representation_media_acquisition import chunk_media_url
+        first = next(iter(result.get("citation_chunks", ())), None)
+        from types import SimpleNamespace
+        selected = SimpleNamespace(pk=first["chunk_id"]) if first else None
+        url = chunk_media_url(selected) if selected else None
+        if url is None:
+            _mark_figure_omission(result)
+            return result
         result["result"] = image_document_tool_payload(
             full_text=text,
             title=doc.title,

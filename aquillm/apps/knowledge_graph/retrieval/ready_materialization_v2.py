@@ -52,13 +52,13 @@ def materialize_graph_candidates_v2(*, selected, refs, authorization):
     from apps.documents.services.source_deadline import check_source_deadline
     from apps.documents.services.source_loading import (
         bounded_source_database,
-        current_source_runtime,
     )
 
-    runtime = current_source_runtime()
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
+    runtime = graph_source_runtime()
     if runtime is None:
         return _materialize(selected=selected, refs=refs, authorization=authorization)
-    if runtime.authorization != authorization:
+    if runtime.authorization is not authorization:
         raise ValueError("materialization replaced original source authorization")
     with bounded_source_database(runtime, authorization.database_alias):
         check_source_deadline()
@@ -71,6 +71,7 @@ def materialize_graph_candidates_v2(*, selected, refs, authorization):
 
 def _materialize(*, selected, refs, authorization):
     from apps.documents.models import TextChunk
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
     from apps.knowledge_graph.models import ProjectionChunkReference
 
     from .ready_materialization import (
@@ -123,6 +124,7 @@ def _materialize(*, selected, refs, authorization):
             ):
                 from apps.documents.services.source_loading import source_query_rows
 
+                runtime = graph_source_runtime()
                 return source_query_rows(
                     active_chunk_scope(
                         TextChunk.objects.using(database_alias).filter(
@@ -130,7 +132,9 @@ def _materialize(*, selected, refs, authorization):
                             doc_id__in=authorized_document_ids,
                         ),
                         snapshot=selected.representation_snapshot,
-                    ).order_by("pk")
+                    ).order_by("pk"),
+                    runtime=runtime,
+                    require_existing=getattr(runtime, "_frozen_retrieval_scope", None) is not None,
                 )
 
         result = {}
@@ -171,7 +175,7 @@ def _materialize(*, selected, refs, authorization):
                     or selection is None
                     or chunk.doc_id not in group.scope.selected_document_ids
                     or selection.generation_key != ref.representation_generation_key
-                    or chunk.representation_generation
+                    or chunk.representation_generation_id
                     != ref.representation_generation_key
                 ):
                     return ()

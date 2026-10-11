@@ -45,7 +45,7 @@ def page_associations(page, *, generation, ready, origin, entry=None):
     rows = page.relation_evidence
     return rows, tuple(
         GraphEvidenceAssociationV2(
-            r.evidence_key,
+            r.provenance_key,
             "relation",
             source,
             target,

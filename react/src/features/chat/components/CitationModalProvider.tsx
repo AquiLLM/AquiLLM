@@ -185,7 +185,7 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
         markCitationCompactReady();
         setSummary(compactChunk);
 
-        if (compactChunk.modality === 'image' || compactChunk.document.has_pdf) return;
+        if (compactChunk.image_url || compactChunk.modality === 'image' || compactChunk.document.has_pdf) return;
 
         const detailResponse = await fetch(detailUrl, {
           credentials: 'include',
@@ -236,7 +236,7 @@ const CitationDispatcher: React.FC<{ target: CitationTarget; onClose: () => void
     );
   }
 
-  if (summary?.modality === 'image') {
+  if (summary?.image_url || summary?.modality === 'image') {
     return (
       <Suspense fallback={null}>
         <ImageCitationModal

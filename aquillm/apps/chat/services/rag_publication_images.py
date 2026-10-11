@@ -12,6 +12,9 @@ from .rag_publication_database import _bounded_database, _SourceSHA256
 
 def _current_images(packet):
     """Capture/recheck image identities and text revisions without body reads."""
+    if getattr(packet, "_media_bindings", None) is not None:
+        from .rag_immutable_images import media_summary
+        return media_summary(packet, current=True)
     import re
 
     from apps.collections.services.django_retrieval_authorization import (
@@ -149,6 +152,10 @@ async def capture_publication_images(packet):
                     packet.source_authorization.database_alias,
                     min(3, turn.budget.remaining_ms() / 1000),
                 ):
+                    from .rag_representation_publication import retain_acquired_snapshot
+                    from .rag_immutable_images import retain_packet_media
+                    retain_acquired_snapshot(packet)
+                    retain_packet_media(packet)
                     return _current_images(packet)
 
             packet._publication_images = await database_sync_to_async(capture)()

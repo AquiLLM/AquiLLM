@@ -158,6 +158,7 @@ def test_indexed_alias_fixture_resolves_to_the_opaque_automatic_component() -> N
         ready=_ready(),
         settings=_settings(),
         deadline=10.0,
+        clock=lambda: 0.0,
     )
 
     assert outcome.matches[0].tier is DirectResolutionTier.ALIAS

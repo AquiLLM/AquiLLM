@@ -75,20 +75,26 @@ def bounded_source_database(runtime, alias):
                 cursor.execute("SELECT current_setting('statement_timeout')")
                 previous = cursor.fetchone()[0]
                 cursor.execute(
-                    "SELECT set_config('statement_timeout', %s, true)",
-                    [f"{milliseconds}ms"],
+                    "SELECT set_config('statement_timeout', LEAST(%s, COALESCE(NULLIF("
+                    "(SELECT setting::bigint FROM pg_settings WHERE name='statement_timeout'),"
+                    "0), %s))::text || 'ms', true)",
+                    [milliseconds, milliseconds],
                 )
+        completed = False
         try:
             yield
+            completed = True
         finally:
-            if connection.vendor == "postgresql" and not connection.needs_rollback:
+            # An escaped error must reach atomic rollback without another query
+            # against a potentially aborted transaction masking its exception.
+            if completed and connection.vendor == "postgresql" and not connection.needs_rollback:
                 with connection.cursor() as cursor:
                     cursor.execute(
                         "SELECT set_config('statement_timeout', %s, true)", [previous]
                     )
 
 
-def source_query_rows(queryset, *, runtime=None, refresh=False):
+def source_query_rows(queryset, *, runtime=None, refresh=False, require_existing=False):
     """Read at most 45 ranked bodies after length/revision/current-scope checks.
 
     Database digest + length predicates close both same-length and growing-body
@@ -101,6 +107,9 @@ def source_query_rows(queryset, *, runtime=None, refresh=False):
             raise SourcePreparationLimited("source mode requires shared turn budget")
         return tuple(queryset)
     with runtime.lock, bounded_source_database(runtime, queryset.db):
+        from .representation_tool_scope import tool_scope, scoped_queryset
+        frozen = tool_scope(runtime, using=queryset.db, require_existing=require_existing)
+        queryset = scoped_queryset(frozen, queryset)
         scope = revalidate_retrieval_authorization_context(
             context=runtime.authorization
         )
@@ -144,7 +153,7 @@ def source_query_rows(queryset, *, runtime=None, refresh=False):
             if not runtime.budget.can_publish():
                 break
             loaded = (
-                queryset.model.objects.using(queryset.db)
+                frozen.queryset(queryset.model.objects.using(queryset.db).all())
                 .annotate(
                     _source_length=Length("content"), _source_revision=MD5("content")
                 )
@@ -166,4 +175,5 @@ def source_query_rows(queryset, *, runtime=None, refresh=False):
                 lambda: runtime.cache.__setitem__(cache_key, copy(loaded))
             ):
                 rows.append(loaded)
+        frozen.validate()
         return tuple(rows)

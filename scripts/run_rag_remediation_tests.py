@@ -192,6 +192,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--project", required=True)
     parser.add_argument("--playwright")
+    parser.add_argument("--typecheck", action="store_true", help="run fixed frontend TypeScript checking")
     parser.add_argument("--vitest", nargs="+", help="run only the named react/src/*.test.ts[x] files")
     parser.add_argument("--base-url", default="http://app:8000")
     parser.add_argument("--storage-state")
@@ -201,6 +202,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         validate_project(args.project)
+        if args.typecheck and (args.cleanup or args.playwright or args.vitest is not None or args.manage is not None or args.pytest_args):
+            raise IsolationError("Typecheck cannot be combined with another command")
         if args.vitest is not None and (args.cleanup or args.playwright or args.manage is not None or args.pytest_args):
             raise IsolationError("Vitest cannot be combined with another command")
         vitest_specs = resolve_vitest_specs(args.vitest, root=ROOT) if args.vitest is not None else None
@@ -246,13 +249,15 @@ def main(argv=None):
             docker(*compose, "exec", "-T", "app", "python", "scripts/rag_remediation_provision.py")
             artifact = ROOT / ".superpowers/sdd/rag-harness" / args.project / ("run-" + str(uuid.uuid4()))
             artifact.mkdir(parents=True, exist_ok=False)
-            if spec or vitest_specs:
+            if spec or vitest_specs or args.typecheck:
                 docker(*compose, "--profile", "browser", "up", "--build", "-d", "frontend")
                 frontend_containers, _, _ = inspect_project(args.project)
                 frontend = [c for c in frontend_containers if c['Config']['Labels']['com.docker.compose.service'] == 'frontend']
                 if len(frontend) != 1 or frontend[0]['Config']['WorkingDir'] != '/app/react':
                     raise IsolationError('owned frontend identity/workdir unavailable')
-            if vitest_specs:
+            if args.typecheck:
+                command = ["docker", *compose, "exec", "-T", "frontend", "npm", "run", "typecheck"]
+            elif vitest_specs:
                 command = ["docker", *compose, "exec", "-T", "frontend", "node", "scripts/rag-remediation-vitest.cjs", json.dumps(vitest_specs)]
             elif spec:
                 docker(*compose, "exec", "-T", "app", "python", "scripts/rag_remediation_seed_browser.py", state)

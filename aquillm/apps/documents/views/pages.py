@@ -135,13 +135,10 @@ def _filesystem_pdf_response(pdf_field, storage, *, asynchronous=False):
 
 def get_doc(request, doc_id):
     """Helper function to get a document by ID and verify access permissions."""
-    doc = None
-    for t in DESCENDED_FROM_DOCUMENT:
-        doc = t.objects.filter(id=doc_id).first()
-        if doc:
-            break
-    if not doc:
+    found = [doc for model in DESCENDED_FROM_DOCUMENT for doc in model.objects.filter(id=doc_id).defer("full_text")[:2]]
+    if len(found) != 1:
         raise Http404("Requested document does not exist")
+    doc = found[0]
     if not doc.collection.user_can_view(request.user):
         raise PermissionDenied(
             "You don't have access to the collection containing this document"
@@ -157,6 +154,9 @@ def pdf(request, doc_id):
     PDFDocument uses `pdf_file`; TeXDocument uses `pdf_file` when compiled;
     RawTextDocument uses `rendered_pdf` populated by the web crawler.
     """
+    if "chunk_id" in request.GET:
+        from .historical_media import chunk_media_response
+        return chunk_media_response(request, doc_id, kind="pdf")
     doc = get_doc(request, doc_id)
     pdf_field = getattr(doc, 'pdf_file', None) or getattr(doc, 'rendered_pdf', None)
     if not pdf_field:
@@ -173,6 +173,9 @@ def pdf(request, doc_id):
 @login_required
 def document_image(request, doc_id):
     """Serve the image file for an ImageUploadDocument or HandwrittenNotesDocument."""
+    if "chunk_id" in request.GET:
+        from .historical_media import chunk_media_response
+        return chunk_media_response(request, doc_id, kind="image")
     doc = get_doc(request, doc_id)
 
     image_file = getattr(doc, 'image_file', None)

@@ -10,6 +10,6 @@ COPY scripts ./scripts
 COPY tests ./tests
 COPY deploy ./deploy
 COPY docs ./docs
-COPY pytest.ini compose.rag-remediation-test.yml ./
+COPY pytest.ini compose.rag-remediation-test.yml .env.example ./
 RUN uv pip install -r deploy/vllm_plugins/nemotron_asr/requirements-test.txt
 CMD ["sleep", "infinity"]

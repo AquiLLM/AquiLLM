@@ -4,7 +4,7 @@ import structlog
 
 from django.contrib.auth.decorators import login_required
 from django.core.cache import cache
-from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 from django.http import JsonResponse
 from django.views.decorators.http import require_http_methods
 
@@ -88,15 +88,8 @@ FULL_TEXT_WINDOW_PADDING = 5_000
 
 
 def _get_chunk_document(chunk, *, include_full_text):
-    if include_full_text:
-        return chunk.document
-
-    for doc_type in DESCENDED_FROM_DOCUMENT:
-        doc = doc_type.objects.defer("full_text").filter(id=chunk.doc_id).first()
-        if doc:
-            return doc
-
-    raise ValidationError(f"TextChunk {chunk.pk} is not associated with a document!")
+    from apps.documents.services.representation_history import exact_chunk_document
+    return exact_chunk_document(chunk, using=chunk._state.db or "default", include_full_text=False)
 
 
 @require_http_methods(["GET"])
@@ -119,7 +112,7 @@ def chunk_detail(request, chunk_id):
     }
     try:
         doc = _get_chunk_document(chunk, include_full_text=include_full_text)
-    except ValidationError:
+    except (ValidationError, ObjectDoesNotExist):
         return JsonResponse({"error": "Chunk's document not found"}, status=404)
 
     if not doc.collection.user_can_view(request.user):
@@ -128,9 +121,10 @@ def chunk_detail(request, chunk_id):
             status=403,
         )
 
-    has_pdf = bool(
-        getattr(doc, "pdf_file", None) or getattr(doc, "rendered_pdf", None)
-    )
+    from .historical_media import citation_context_and_media
+    source, media = citation_context_and_media(chunk, doc, include_text=include_full_text,
+        threshold=FULL_TEXT_WINDOW_THRESHOLD, padding=FULL_TEXT_WINDOW_PADDING)
+    has_pdf = "pdf" in media
 
     document_payload = {
         "id": str(doc.id),
@@ -140,22 +134,26 @@ def chunk_detail(request, chunk_id):
         "source_url": getattr(doc, "source_url", None),
     }
     if include_full_text:
-        full_text = doc.full_text or ""
-        text_offset = 0
-        # Window very long docs around the chunk so the response stays bounded.
-        if len(full_text) > FULL_TEXT_WINDOW_THRESHOLD:
-            window_start = max(0, chunk.start_position - FULL_TEXT_WINDOW_PADDING)
-            window_end = min(len(full_text), chunk.end_position + FULL_TEXT_WINDOW_PADDING)
-            full_text = full_text[window_start:window_end]
-            text_offset = window_start
-        document_payload["full_text"] = full_text
-        document_payload["text_offset"] = text_offset
+        document_payload["full_text"] = source.text if source else ""
+        document_payload["text_offset"] = source.offset if source else 0
 
     # Image chunks point at a DocumentFigure (a Document subclass) whose binary
     # is served by the document_image view; the modal renders it directly.
     image_url = None
-    if chunk.modality == TextChunk.Modality.IMAGE:
-        image_url = f"/aquillm/document_image/{doc.id}/"
+    if "image" in media:
+        image_url = f"/aquillm/document_image/{doc.id}/?chunk_id={chunk.pk}"
+
+    try:
+        current = _get_chunk_document(chunk, include_full_text=False)
+    except (ValidationError, ObjectDoesNotExist):
+        return JsonResponse({"error": "Chunk's document not found"}, status=404)
+    if not current.collection.user_can_view(request.user):
+        return JsonResponse({"error": "Forbidden"}, status=403)
+    if not chunk.representation_generation_id and not chunk.legacy_source_snapshot_id and current.full_text_hash != doc.full_text_hash:
+        source, image_url = None, None
+        document_payload["has_pdf"] = False
+        if include_full_text:
+            document_payload.update(full_text="", text_offset=0)
 
     return JsonResponse({
         "content": chunk.content,
@@ -165,6 +163,7 @@ def chunk_detail(request, chunk_id):
         "start_time": chunk.start_time,
         "modality": chunk.modality,
         "image_url": image_url,
+        "source_context_status": "verified" if source else "unavailable",
         "document": document_payload,
     })
 
@@ -210,8 +209,8 @@ def citation_narrow(request):
     if not chunk:
         return JsonResponse({"error": "Chunk not found"}, status=404)
     try:
-        doc = chunk.document
-    except ValidationError:
+        doc = _get_chunk_document(chunk, include_full_text=False)
+    except (ValidationError, ObjectDoesNotExist):
         return JsonResponse({"error": "Chunk's document not found"}, status=404)
     if not doc.collection.user_can_view(request.user):
         return JsonResponse({"error": "Forbidden"}, status=403)
@@ -270,8 +269,8 @@ def citation_sources(request):
     doc_visible: dict = {}
     for chunk in TextChunk.objects.filter(pk__in=set(chunk_ids)):
         try:
-            doc = chunk.document
-        except ValidationError:
+            doc = _get_chunk_document(chunk, include_full_text=False)
+        except (ValidationError, ObjectDoesNotExist):
             continue
         visible = doc_visible.get(doc.id)
         if visible is None:

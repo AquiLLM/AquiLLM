@@ -64,26 +64,50 @@ def _frozen_vocabulary(runtime):
 
 
 def _validate_anchors(runtime, anchors):
-    if anchors is None:
-        return
-    if anchors.unresolved_references:
-        raise ValueError("unresolved proposal source reference")
-    if anchors.chunk_identities:
-        from .rag_source_continuity import rehydrate_prior_evidence
-        sources = rehydrate_prior_evidence(anchors,
-            user=runtime.authorization.reauthorization_capability._principal,
-            selected_scope=runtime.authorization.selected_collection_ids, budget=runtime.budget)
-        if {(s.chunk_id, s.document_id, s.chunk_number) for s in sources} != set(anchors.chunk_identities):
-            raise ValueError("proposal source unavailable")
+    from .retrieval_query_binding import validate_anchors
+    validate_anchors(runtime, anchors)
 
 
-def validate_bound(bound):
+def _validate_bound_metadata(bound):
     from apps.documents.services.source_loading import current_source_runtime
     if current_source_runtime() is not bound.runtime:
         raise ValueError("proposal runtime mismatch")
+    from .retrieval_query_binding import admission
+    witness = admission(bound.runtime)
     if bound.vocabulary is not None:
         validate_vocabulary(bound.vocabulary, authorization=bound.runtime.authorization)
+    return witness
+
+
+def validate_bound(bound):
+    _validate_bound_metadata(bound)
     _validate_anchors(bound.runtime, bound.anchors)
+
+
+def validate_bound_before_current_scope(bound, scope):
+    """First anchor sweep; the caller immediately performs the latest sweep."""
+    from apps.documents.services.chunk_search_scope import FrozenRetrievalScope
+    from apps.documents.services.representation_contracts import SourceScopeUnavailable
+    from .retrieval_query_binding import admission, anchor_rows
+    witness = _validate_bound_metadata(bound)
+    if (type(scope) is not FrozenRetrievalScope or scope.proposal_binding is not bound
+        or scope.runtime is not witness.runtime or scope.authorization is not witness.authorization
+        or scope.representation is not witness.representation
+        or scope.dense is not witness.scope.dense or scope.space is not witness.scope.space
+        or scope.using != witness.scope.using or witness.scope.proposal_binding is not None):
+        raise SourceScopeUnavailable("source_scope_unavailable")
+    anchors = bound.anchors
+    if anchors is None:
+        return
+    if anchors.unresolved_references:
+        raise SourceScopeUnavailable("source_scope_unavailable")
+    if not anchors.chunk_identities:
+        return
+    with witness.runtime.lock, witness.scope.database():
+        admission(witness.runtime)
+        witness.scope.validate()
+        anchor_rows(witness, anchors)
+        admission(witness.runtime)
 
 
 @contextmanager
@@ -151,11 +175,13 @@ async def prepare_query_proposals(question, *, llm, runtime, anchors=None):
                 runtime, "_query_original", None) == question else original
         runtime._query_proposal_attempted = True
         runtime._query_original = question
-    snapshot, rewrite = None, None
+    from .retrieval_query_binding import ensure_admission, retain_original
+    await _database_call(ensure_admission, runtime)
+    await _database_call(_validate_anchors, runtime, anchors)
+    snapshot, rewrite, failed = None, None, False
     try:
         if runtime.budget.actions_used >= runtime.budget.limits.actions:
-            return original
-        await _database_call(_validate_anchors, runtime, anchors)
+            raise ValueError("optional action allowance")
         if vocabulary_on:
             snapshot = await _database_call(_frozen_vocabulary, runtime)
         if rewrite_on:
@@ -163,12 +189,14 @@ async def prepare_query_proposals(question, *, llm, runtime, anchors=None):
     except asyncio.CancelledError:
         raise
     except Exception:
-        return original
+        failed = True
     constraints = getattr(anchors, "source_constraints", ())
     if anchors is not None and anchors.chunk_identities and not constraints:
         rewrite = None  # Identity without a retained literal cannot admit a rewrite.
-    rows = build_query_proposals(question, vocabulary=snapshot, rewrite=rewrite,
+    rows = original if failed else build_query_proposals(question, vocabulary=snapshot, rewrite=rewrite,
                                 source_constraints=constraints)
+    with runtime.lock:
+        retain_original(runtime, BoundProposal(runtime, question, rows[0].policy_key, snapshot, anchors))
     runtime._query_proposal_anchors = anchors
     runtime._query_proposals = rows
     observation = {"configured": configured_proposal_controls(),

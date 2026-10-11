@@ -139,6 +139,10 @@ def prepare_evidence_handoff(
             message.content = _OMITTED_EVIDENCE
             message.result_dict = {}
             message.files = None
+    from .rag_immutable_images import request_images
+    images = request_images(packet)
+    if images:
+        request[-1].result_dict["_images"] = images
     return persisted, request
 
 

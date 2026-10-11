@@ -3,18 +3,21 @@
 from types import SimpleNamespace
 
 import pytest
+from channels.db import database_sync_to_async
+from django.db import connections
 from django.contrib.auth import get_user_model
 
 from apps.chat.services.rag_answer_publication import bind_legacy_answer_packet
 from apps.chat.services.rag_evidence import build_evidence_packet
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
+from apps.chat.services.rag_turn import preservation_turn
+from apps.documents.services.source_loading import source_query_rows
 from aquillm.models import Collection, CollectionPermission, RawTextDocument, TextChunk
 from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.providers import visibility
-from lib.llm.turn_context import TurnContext, bind_turn
+from lib.llm.turn_context import current_turn
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
-from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 pytestmark = pytest.mark.django_db(transaction=True)
 SOURCE = "Calibration uses flat fields and dark frames to remove signatures."
@@ -98,16 +101,34 @@ async def synthesize(model, selected, *, bound=True, empty=False, image=False):
 
     if not bound:
         return await synthesize_from_evidence(model, convo, packet), events
-    state = TurnContext(TurnBudget(TurnLimits()))
-    with bind_turn(state):
-        await bind_legacy_answer_packet(selected.consumer, packet)
-        result = await synthesize_from_evidence(
-            model, convo, packet, stream_func=stream, max_tokens=1024
-        )
-        answer = result[-1]._validated_answer
-        await state.answer_publication.verify(
-            answer, content=result[-1].content, sink="persist"
-        )
+    selected.consumer.convo = convo
+    try:
+        async with preservation_turn(selected.consumer, max_func_calls=3):
+            state = current_turn()
+            runtime = state._media_source_runtime
+            scope = runtime._frozen_retrieval_scope
+
+            def acquire():
+                rows = source_query_rows(
+                    TextChunk.objects.filter(pk=selected.row["chunk_id"]),
+                    runtime=runtime, require_existing=True,
+                )
+                assert len(rows) == 1 and rows[0].content == SOURCE
+                assert runtime._frozen_retrieval_scope is scope
+                assert runtime.budget.text_used["materialized"] >= len(SOURCE)
+
+            await database_sync_to_async(acquire)()
+            await bind_legacy_answer_packet(selected.consumer, packet)
+            result = await synthesize_from_evidence(
+                model, convo, packet, stream_func=stream, max_tokens=1024
+            )
+            answer = result[-1]._validated_answer
+            await state.answer_publication.verify(
+                answer, content=result[-1].content, sink="persist"
+            )
+            assert runtime._frozen_retrieval_scope is scope
+    finally:
+        await database_sync_to_async(connections.close_all)()
     assert len(events) == 1
     assert events[0]["content"] == result[-1].content
     return result, events

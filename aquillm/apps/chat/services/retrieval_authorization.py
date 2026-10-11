@@ -26,9 +26,11 @@ def resolve_document_retrieval_authorization(user, col_ref, documents, provided)
         else nullcontext()
     )
     with boundary:
+        from apps.documents.services.representation_manual_scope import manual_acquisition_collections
+        manual_collections = manual_acquisition_collections(documents)
         return build_selected_scope_authorization_context(
             principal=user,
-            selected_collection_ids=tuple(col_ref.collections),
+            selected_collection_ids=tuple(col_ref.collections) if manual_collections is None else manual_collections,
             selected_documents=tuple(documents),
         )
 

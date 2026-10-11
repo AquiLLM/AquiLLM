@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from contextlib import nullcontext
 
 import structlog
 
@@ -68,14 +69,23 @@ def _retrieve(consumer, command, query, prior_messages):
         )
         name, scope = "search_single_document", "requested document"
         tool = search_single_document_tool(consumer.user, consumer.col_ref)
-    raw_result = dict(tool(**arguments))
+    from apps.documents.services.representation_manual_scope import (
+        create_manual_document_runtime, private_manual_acquisition,
+    )
+    from apps.documents.services.representation_media_acquisition import media_runtime
+    child = None
+    if command.command != "collection":
+        child = create_manual_document_runtime(
+            consumer.user, arguments["doc_id"], parent=media_runtime())
+    with private_manual_acquisition(child) if child is not None else nullcontext():
+        raw_result = dict(tool(**arguments))
     if raw_result.get("exception"):
         raise ManualSearchError(
             "I couldn't search the requested documents. Check your "
             "document or "
             "collection selection and access, then try again."
         )
-    return name, scope, arguments, raw_result
+    return name, scope, arguments, raw_result, child
 
 
 def _reply(consumer, convo, text):
@@ -135,9 +145,11 @@ async def _run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
             finally:
                 connections.close_all()
 
-        name, scope, arguments, raw = await bounded_retrieval(
+        retrieved = await bounded_retrieval(
             asyncio.to_thread(retrieve_worker), current_turn().budget
         )
+        name, scope, arguments, raw = retrieved[:4]
+        child = retrieved[4] if len(retrieved) == 5 else None
         working_convo = convo + [
             AssistantMessage(
                 content="",
@@ -157,16 +169,15 @@ async def _run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
         packet = build_evidence_packet(raw, query=query, search_scope=scope)
         from apps.chat.services.rag_answer_publication import bind_legacy_answer_packet
 
-        await bind_legacy_answer_packet(
-            consumer, packet, document_id=arguments.get("doc_id")
-        )
-        with observability_scope(correlation_id, "direct_synthesis"):
-            consumer.convo = await synthesize_from_evidence(
-                llm_if,
-                working_convo,
-                packet,
-                stream_func=stream_func,
+        from apps.documents.services.representation_manual_scope import private_manual_acquisition
+        with private_manual_acquisition(child) if child is not None else nullcontext():
+            await bind_legacy_answer_packet(
+                consumer, packet, document_id=arguments.get("doc_id")
             )
+            with observability_scope(correlation_id, "direct_synthesis"):
+                consumer.convo = await synthesize_from_evidence(
+                    llm_if, working_convo, packet, stream_func=stream_func,
+                )
         return "handled"
     except ManualSearchError as exc:
         return _reply(consumer, working_convo, str(exc))

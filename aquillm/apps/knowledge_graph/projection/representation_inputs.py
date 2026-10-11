@@ -27,6 +27,9 @@ def capture_build_snapshot(document_ids, *, using="default"):
         }
     )
     if settings.graph_remediation_mode != "v2":
+        from apps.documents.models import DocumentRepresentationState
+        if DocumentRepresentationState.objects.using(using).filter(document_id__in=document_ids).exists():
+            raise SourceScopeUnavailable("source_scope_unavailable")
         return None
     return freeze_document_ids(document_ids, using=using)
 

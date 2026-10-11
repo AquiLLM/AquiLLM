@@ -20,6 +20,7 @@ from apps.documents.models import DocumentChild, TextChunk
 from apps.documents.services.source_loading import (
     bounded_source_enabled as source_mode_enabled,
 )
+from apps.documents.services.representation_media_acquisition import chunk_media_url
 from aquillm.llm import LLMTool, ToolResultDict, llm_tool
 from lib.llm.providers.image_context import serialize_tool_result_for_llm
 from lib.tools.documents import whole_document as whole_document_tools
@@ -123,6 +124,7 @@ def vector_search_tool(
             retrieval_diagnostics=diagnostics,
             score_set=score_set,
             source_evidence=document_source_evidence(results),
+            media_url_resolver=chunk_media_url,
         )
 
     return vector_search
@@ -191,33 +193,29 @@ def whole_document_tool(
                 doc, chat_ref, user=user, include_images=include_images
             )
         chunks = (
-            TextChunk.objects.filter(doc_id=doc.id)
+            doc.chunks
             .only("id", "chunk_number", "content")
             .order_by("chunk_number", "id")
         )
+        from .current_document_rows import current_document_rows
+        from apps.documents.services.representation_contracts import SourceScopeUnavailable
+        try:
+            chunks = current_document_rows(chunks, complete=True)
+        except SourceScopeUnavailable:
+            from .bounded_document_tools import limited_document_result
+            return limited_document_result()
         cited_text, citation_chunks = _format_whole_document_citations(doc.id, chunks)
+        if not citation_chunks and doc.representation_states.exists():
+            from .bounded_document_tools import limited_document_result
+            return limited_document_result()
         document_text = cited_text or doc.full_text
         ret: ToolResultDict = {"result": document_text}
         if citation_chunks:
             ret["citation_chunks"] = citation_chunks
 
-        if include_images and getattr(doc, "image_file", None):
-            display_url = f"/aquillm/document_image/{doc.id}/"
-            ret["result"] = image_document_tool_payload(
-                full_text=document_text, title=doc.title, display_url=display_url
-            )
-            ret["_image_instruction"] = image_document_instruction(
-                title=doc.title, display_url=display_url
-            )
-        elif include_images:
-            figures = _related_figure_payloads(doc, user=user)
-            if figures:
-                ret["result"] = {
-                    "type": "document_with_figures",
-                    "text": document_text,
-                    "figures": figures,
-                }
-                ret["_image_instruction"] = IMAGE_MARKDOWN_INSTRUCTION
+        if include_images:
+            from .whole_document_media import attach_whole_document_media
+            attach_whole_document_media(ret, doc, chunks, user=user, related_figures=_related_figure_payloads)
 
         serialized_result = serialize_tool_result_for_llm(ret)
         token_count = async_to_sync(chat_ref.chat.llm_if.token_count)(
@@ -312,6 +310,7 @@ def search_single_document_tool(
             retrieval_diagnostics=diagnostics,
             score_set=score_set,
             source_evidence=document_source_evidence(results),
+            media_url_resolver=chunk_media_url,
         )
 
     return search_single_document

@@ -85,19 +85,29 @@ def test_foreign_owner_collision_fails_closed_even_when_hash_matches(legacy):
 
 
 def test_nonnull_legacy_representation_is_never_a_wildcard(legacy):
-    from uuid import uuid4
+    from django.db import DatabaseError, transaction
+    from apps.documents.models import DocumentRepresentationGeneration
+    from apps.documents.services.representation_activation import stage_representation
+    from apps.documents.services.representation_snapshot_build import begin_canonical_snapshot_representation
 
     _, ref = legacy
     frozen = representations.freeze_active_representations((ref,), using="default")
-    TextChunk.objects.update(representation_generation=uuid4())
-    assert not representations.active_chunk_scope(
+    old_ids = tuple(TextChunk.objects.values_list("pk", flat=True))
+    lease, chunks, _ = begin_canonical_snapshot_representation(ref, using="default")
+    stage_representation(lease, chunks=chunks, using="default")
+    staged = DocumentRepresentationGeneration.objects.get(pk=lease.generation_key)
+    assert TextChunk.objects.filter(representation_generation_id=lease.generation_key).exists()
+    assert tuple(representations.active_chunk_scope(
         TextChunk.objects.all(), snapshot=frozen
-    ).exists()
+    ).values_list("pk", flat=True)) == old_ids
+    with pytest.raises(DatabaseError), transaction.atomic():
+        TextChunk.objects.filter(pk__in=old_ids).update(representation_generation_id=lease.generation_key)
     with pytest.raises(SourceScopeUnavailable):
         representations.validate_representation_snapshot(
             replace(
                 frozen,
-                selections=(replace(frozen.selections[0], generation_key=uuid4()),),
+                selections=(replace(frozen.selections[0], generation_key=lease.generation_key,
+                    source_revision_sha256=staged.source_revision_sha256),),
             ),
             using="default",
         )

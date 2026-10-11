@@ -281,14 +281,13 @@ async def test_synthesis_through_complete_turn_reaches_sdk_with_exact_tool_paylo
     monkeypatch.setenv("CONTEXT_PACKER_ENABLED", "1")
     monkeypatch.setenv("TOKEN_EFFICIENCY_ENABLED", "1")
     convo, packet = inputs()
-    expected = prepare_evidence_handoff(convo, packet)[1][-1].content
-    with (
-        authorized_source_scope(packet, monkeypatch),
-        observability_scope("test", "direct_synthesis"),
-    ):
-        result = await synthesize_from_evidence(provider, convo, packet)
+    async with authorized_source_scope(packet, monkeypatch, convo):
+        expected = prepare_evidence_handoff(convo, packet)[1][-1].content
+        with observability_scope("test", "direct_synthesis"):
+            result = await synthesize_from_evidence(provider, convo, packet)
     assert result[-1].content == LIMITED_ANSWER
     assert len(captured) == 1
+    call.assert_awaited_once()
     if provider_name == "gemini":
         actual = (
             captured[0]["contents"][-1].parts[0].function_response.response["output"]

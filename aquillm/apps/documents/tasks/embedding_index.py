@@ -21,6 +21,7 @@ from apps.documents.services.embedding_index_store import (
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from lib.embeddings.document_contracts import build_budget
 from lib.embeddings.document_provider import embed_document_batch, prepare_document
+from lib.embeddings.document_preparation import prepared_input_bytes
 from lib.embeddings.errors import EmbeddingUpstreamUnavailableError
 from lib.embeddings.utils import EmbeddingContractError
 from apps.documents.services.embedding_index_deadline import (
@@ -120,7 +121,7 @@ def _build(lease, *, budget, using):
     check_embedding_deadline(budget)
     # Exact successful rows survive retry; no cross-document reuse.
     completed = set(generation.embeddings.values_list("chunk_id", flat=True))
-    batch, ids, hashes, size = [], [], [], 0
+    batch, ids, hashes, wire_size, text_size = [], [], [], 0, 0
 
     def flush():
         if not batch:
@@ -149,19 +150,24 @@ def _build(lease, *, budget, using):
         check_embedding_deadline(budget)
         if sha != item["prepared_input_sha256"]:
             raise EmbeddingContractError("embedding_input_mismatch")
-        amount = len((wire if isinstance(wire, str) else wire["text"]).encode("utf-8"))
+        wire_amount = prepared_input_bytes(wire)
+        text_amount = len((wire if isinstance(wire, str) else wire["text"]).encode("utf-8"))
+        if wire_amount > budget.max_input_bytes:
+            raise EmbeddingContractError("document_batch_bytes")
+        if text_amount > space.max_input_tokens:
+            raise EmbeddingContractError("prepared_input_token_limit")
         if batch and (
             len(batch) == budget.max_items
-            or size + amount > min(budget.max_input_bytes, space.max_batch_tokens)
+            or wire_size + wire_amount > budget.max_input_bytes
+            or text_size + text_amount > space.max_batch_tokens
         ):
             flush()
-            batch, ids, hashes, size = [], [], [], 0
-        if amount > min(budget.max_input_bytes, space.max_input_tokens):
-            raise EmbeddingContractError("prepared_input_token_limit")
+            batch, ids, hashes, wire_size, text_size = [], [], [], 0, 0
         batch.append(chunk)
         ids.append(row.pk)
         hashes.append(sha)
-        size += amount
+        wire_size += wire_amount
+        text_size += text_amount
     flush()
     if budget.remaining_seconds() <= 0:
         raise TimeoutError("embedding_deadline")

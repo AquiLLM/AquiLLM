@@ -80,6 +80,7 @@ def pack_chunk_search_results(
     retrieval_diagnostics: dict[str, Any] | None = None,
     score_set: dict[str, Any] | None = None,
     source_evidence: tuple[SourceEvidence, ...] = (),
+    media_url_resolver: Callable[[Any], str | None] | None = None,
 ) -> dict[str, Any]:
     """
     Build the tool `result` dict for multi-chunk search (collections or single doc).
@@ -139,15 +140,16 @@ def pack_chunk_search_results(
             }
 
         doc_for_chunk = docs_by_doc_id.get(chunk.doc_id)
-        if chunk.doc_id not in image_renderable_by_doc_id:
+        resolved_url = media_url_resolver(chunk) if include_images and media_url_resolver is not None else None
+        if media_url_resolver is None and chunk.doc_id not in image_renderable_by_doc_id:
             image_renderable_by_doc_id[chunk.doc_id] = (
                 include_images and _doc_has_renderable_image(doc_for_chunk)
             )
-        has_renderable_image = image_renderable_by_doc_id[chunk.doc_id]
+        has_renderable_image = bool(resolved_url) if media_url_resolver is not None else image_renderable_by_doc_id[chunk.doc_id]
 
         if chunk.modality == image_modality:
             if has_renderable_image:
-                display_url = f"{image_url_prefix}{chunk.doc_id}/"
+                display_url = resolved_url or f"{image_url_prefix}{chunk.doc_id}/"
                 has_image_results = True
 
                 if use_compact:
@@ -176,7 +178,7 @@ def pack_chunk_search_results(
         else:
             if has_renderable_image:
                 has_image_results = True
-                u = f"{image_url_prefix}{chunk.doc_id}/"
+                u = resolved_url or f"{image_url_prefix}{chunk.doc_id}/"
                 if use_compact:
                     items.append(
                         {

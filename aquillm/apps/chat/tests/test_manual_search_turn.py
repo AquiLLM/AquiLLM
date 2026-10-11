@@ -9,6 +9,10 @@ from apps.chat.refs import CollectionsRef
 from apps.chat.services import manual_search_turn, rag_pipeline
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
+from .manual_routing_support import (
+    real_manual_authority as real_manual_authority,
+    close_routing_worker as close_routing_worker,
+)
 
 DOC = "11111111-1111-4111-8111-111111111111"
 
@@ -90,12 +94,28 @@ async def test_manual_command_overrides_disabled_auto_rag_and_local_tool_heurist
     llm.get_message.assert_not_called()
 
 
+@pytest.mark.parametrize("invalid", [False, True])
 async def test_named_document_search_loads_only_authorized_selected_documents(
-    monkeypatch,
+    monkeypatch, invalid,
 ):
     consumer = _consumer("/search [Paper A] calibration")
     docs = [SimpleNamespace(id=DOC, title="Paper A")]
     calls = []
+    bindings = []
+    from apps.chat.services import rag_answer_publication
+    from lib.llm.turn_context import current_turn
+    original_bind = rag_answer_publication.bind_packet_publication
+
+    def bind(packet, **kwargs):
+        context = original_bind(packet, **kwargs)
+        bindings.append((packet.source_authorization,
+            dict(getattr(current_turn(), "_manual_publication_bindings", {}))))
+        return context
+
+    monkeypatch.setattr(rag_answer_publication, "bind_packet_publication", bind)
+    payload = _payload() if invalid else {"result": []}
+    if invalid:
+        payload["result"][0]["text"] = "Unverified substituted source"
     monkeypatch.setattr(
         manual_search_turn,
         "load_search_documents",
@@ -104,16 +124,34 @@ async def test_named_document_search_loads_only_authorized_selected_documents(
     monkeypatch.setattr(
         manual_search_turn,
         "search_single_document_tool",
-        lambda user, cols: lambda **kw: calls.append(kw) or {"result": []},
+        lambda user, cols: lambda **kw: calls.append(kw) or payload,
     )
-    assert (
-        await rag_pipeline.run_direct_rag_turn(consumer, object(), consumer.convo)
-        == "handled"
-    )
+    stream = AsyncMock()
+    llm = SimpleNamespace(complete=AsyncMock(side_effect=AssertionError("no evidence provider")))
+    from channels.db import database_sync_to_async
+    from apps.chat.services.rag_turn import preservation_turn
+    from apps.chat.consumers.chat_publish import end_spin_publish
+    from aquillm.message_adapters import save_conversation_to_db
+    from aquillm.models import WSConversation
+    transcript = await database_sync_to_async(WSConversation.objects.create)(owner=consumer.user)
+    refresh = AsyncMock()
+    async with preservation_turn(consumer, max_func_calls=3):
+        assert await rag_pipeline.run_direct_rag_turn(
+            consumer, llm, consumer.convo, stream_func=stream) == "handled"
+        await end_spin_publish(SimpleNamespace(convo=consumer.convo, _spin_epoch=0, send=refresh), consumer.convo)
+        await database_sync_to_async(save_conversation_to_db)(consumer.convo, transcript)
     assert calls[0]["doc_id"] == DOC
     from lib.llm.answer_publication import LIMITED_ANSWER
 
     assert consumer.convo[-1].content == LIMITED_ANSWER
+    assert bindings and all(authority is None and not registry for authority, registry in bindings)
+    assert "Unverified substituted source" not in str(stream.call_args_list)
+    assert "image_url" not in str(stream.call_args_list)
+    assert LIMITED_ANSWER in str(stream.call_args_list)
+    llm.complete.assert_not_called()
+    assert "Unverified substituted source" not in str(refresh.call_args_list)
+    stored = await database_sync_to_async(lambda: list(transcript.db_messages.values()))()
+    assert stored and "Unverified substituted source" not in str(stored)
 
 
 @pytest.mark.parametrize(

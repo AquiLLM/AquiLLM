@@ -7,16 +7,46 @@ class RerankProtocolController:
         self.thread = self.task = self.budget = self.binding = None
         self.stopping = False
         self.base = self.model = None
+        from threading import RLock
+
+        self._binding_lock = RLock()
+        self._binding_base = None
+        self._attempt_active = False
+
+    def _record_binding(self, base, binding):
+        from .rerank_transport_policy import revoke_rerank_protocol
+
+        with self._binding_lock:
+            previous = self._binding_base, self.binding
+            self._binding_base, self.binding = base, binding
+        if previous[1] is not None and previous != (base, binding):
+            revoke_rerank_protocol(*previous)
+
+    def _release_binding(self):
+        from .rerank_transport_policy import revoke_rerank_protocol
+
+        with self._binding_lock:
+            base, binding = self._binding_base, self.binding
+            self._binding_base = self.binding = None
+        if binding is not None:
+            revoke_rerank_protocol(base, binding)
 
     async def attempt(self):
+        if self.stopping or self._attempt_active or (self.thread and self.thread.is_alive()):
+            return None
+        self._attempt_active = True
+        try:
+            return await self._attempt()
+        finally:
+            self._attempt_active = False
+
+    async def _attempt(self):
         from . import pair_worker_lifecycle as worker
         from .rerank_transport_policy import (
             discover_rerank_protocol,
             resolve_rerank_protocol,
         )
 
-        if self.stopping or (self.thread and self.thread.is_alive()):
-            return None
         try:
             timeout = min(
                 15,
@@ -30,10 +60,13 @@ class RerankProtocolController:
             )
         except ValueError:
             timeout, attempts = 15, 3
-        self.base, self.model = worker.config.rerank_base_url(), worker.config.rerank_model()
-        cached = resolve_rerank_protocol(self.base, self.model)
+        base, model = worker.config.rerank_base_url(), worker.config.rerank_model()
+        if (self.base, self.model) != (base, model):
+            self._release_binding()
+        self.base, self.model = base, model
+        cached = resolve_rerank_protocol(base, model)
         if cached is not None and cached.expires_at - worker.time() > 60:
-            self.binding = cached
+            self._record_binding(base, cached)
             return cached
         self.budget = budget = worker.TurnBudget(
             worker.TurnLimits(
@@ -50,12 +83,13 @@ class RerankProtocolController:
         def work():
             try:
                 binding = discover_rerank_protocol(
-                    self.base,
-                    self.model,
+                    base,
+                    model,
                     deadline=deadline,
                     max_attempts=attempts,
                     headers=worker.config.rerank_headers(),
                     budget=budget,
+                    on_registered=lambda binding: self._record_binding(base, binding),
                 )
                 if binding and budget.can_publish():
                     results.append(binding)
@@ -71,11 +105,12 @@ class RerankProtocolController:
                 await worker.asyncio.sleep(0.01)
             if not done.is_set() or self.stopping:
                 budget.close("warm_deadline")
+                self._release_binding()
                 return None
-            self.binding = results[0] if results else None
-            return self.binding
+            return results[0] if results else None
         except worker.asyncio.CancelledError:
             budget.close("warm_cancelled")
+            self._release_binding()
             raise
 
     async def run(self):
@@ -94,13 +129,9 @@ class RerankProtocolController:
             self.revoke()
 
     def revoke(self):
-        from .rerank_transport_policy import revoke_rerank_protocol
-
         if self.budget:
             self.budget.close("worker_stopped")
-        if self.binding:
-            revoke_rerank_protocol(self.base, self.binding)
-        self.binding = None
+        self._release_binding()
 
     async def stop(self):
         from . import pair_worker_lifecycle as worker

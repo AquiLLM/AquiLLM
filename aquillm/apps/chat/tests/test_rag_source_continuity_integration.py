@@ -1,272 +1,154 @@
-"""Follow-up references preserve presented identities, then use current sources."""
+"""Presented identities resolve only against the original current owner scope."""
 
 from types import SimpleNamespace
-from uuid import UUID
+from unittest.mock import AsyncMock
 
 import pytest
 from channels.db import database_sync_to_async
 
-from apps.chat.services.rag_source_continuity import (
-    SourceAnchors,
-    rehydrate_prior_evidence,
+from apps.chat.services import rag_pipeline
+from apps.chat.services.rag_source_continuity import SourceAnchors, rehydrate_prior_evidence
+from apps.chat.services.rag_turn import preservation_turn
+from apps.chat.tests.continuity_owner_support import (
+    change_owner, close_continuity_worker as close_continuity_worker,
+    consumer_for, continuity_owners as continuity_owners, conversation,
+    deleted_citation, historical_rows, rebuild_current,
 )
-from apps.chat.tests.test_rag_selection_scoring import Policy, _authorization
-from apps.collections.services.retrieval_authorization import (
-    bind_retrieval_reauthorization_capability,
-    freeze_retrieval_authorization_context,
-)
-from apps.documents.models.chunks import TextChunk
-from apps.documents.services.source_loading import SourceRuntime, source_runtime_scope
-from lib.llm.types.conversation import Conversation
-from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
-from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+from apps.documents.models import TextChunk
+from apps.documents.services.representation_contracts import SourceScopeUnavailable
+from lib.llm.answer_publication import LIMITED_ANSWER
+from lib.llm.types.messages import AssistantMessage
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
-@pytest.mark.django_db(transaction=True)
-def test_rehydration_uses_current_revision_and_excludes_deleted_moved_revoked():
-    doc = UUID("11111111-1111-4111-8111-111111111111")
-    moved = UUID("22222222-2222-4222-8222-222222222222")
-    policy = Policy()
-    runtime = SourceRuntime(TurnBudget(TurnLimits()), _authorization(policy))
-    user = runtime.authorization.reauthorization_capability._principal
-    chunk = TextChunk.objects.bulk_create(
-        [
-            TextChunk(
-                doc_id=doc,
-                chunk_number=0,
-                content="Old 91 units",
-                start_position=0,
-                end_position=12,
-            )
-        ]
-    )[0]
-    anchors = SourceAnchors(
-        (str(doc),), ((chunk.pk, str(doc), 0),), "explicit_citation"
+async def rehydrate(anchors, owners, runtime):
+    return await database_sync_to_async(rehydrate_prior_evidence)(
+        anchors, user=owners.user, selected_scope=(owners.collection.pk,),
+        budget=runtime.budget,
     )
-    with source_runtime_scope(runtime):
-        assert (
-            rehydrate_prior_evidence(
-                anchors, user=user, selected_scope=(1,), budget=runtime.budget
-            )[0].text
-            == "Old 91 units"
-        )
-        TextChunk.objects.filter(pk=chunk.pk).update(content="Corrected 93 units")
-        assert (
-            rehydrate_prior_evidence(
-                anchors, user=user, selected_scope=(1,), budget=runtime.budget
-            )[0].text
-            == "Corrected 93 units"
-        )
-        TextChunk.objects.filter(pk=chunk.pk).update(doc_id=moved)
-        assert (
-            rehydrate_prior_evidence(
-                anchors, user=user, selected_scope=(1,), budget=runtime.budget
-            )
-            == ()
-        )
-        TextChunk.objects.filter(pk=chunk.pk).update(doc_id=doc)
-        policy.allowed = ()
-        assert (
-            rehydrate_prior_evidence(
-                anchors, user=user, selected_scope=(1,), budget=runtime.budget
-            )
-            == ()
-        )
-        policy.allowed = ((1, doc),)
-        TextChunk.objects.filter(pk=chunk.pk).delete()
-        assert (
-            rehydrate_prior_evidence(
-                anchors, user=user, selected_scope=(1,), budget=runtime.budget
-            )
-            == ()
-        )
 
 
 @pytest.mark.asyncio
-@pytest.mark.django_db(transaction=True)
-@pytest.mark.parametrize(
-    "kind,question,expected,revoke,stale",
-    [
-        ("paper", "Compare their measurements", 2, False, False),
-        ("paper", "Explain the second paper", 1, False, False),
-        ("report", "Compare their totals", 2, False, False),
-        ("report", "Explain the second report", 1, False, False),
-        ("paper", "Compare their measurements", 0, True, False),
-        ("paper", "Explain Z Paper", 1, False, True),
-        ("paper", "__stale_citation__", 0, False, True),
-    ],
-)
-async def test_direct_followup_selects_current_answer_ordered_sources(
-    kind, question, expected, revoke, stale, monkeypatch
-):
-    from apps.chat.refs import CollectionsRef
-    from apps.chat.services import rag_pipeline
-    from apps.chat.services.tool_wiring import source_documents
-
-    doc_z = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
-    doc_a = UUID("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
-    chunks = await database_sync_to_async(TextChunk.objects.bulk_create)(
-        [
-            TextChunk(
-                doc_id=doc_z,
-                chunk_number=0,
-                content="Current Z 93 units",
-                start_position=0,
-                end_position=18,
-            ),
-            TextChunk(
-                doc_id=doc_a,
-                chunk_number=0,
-                content="Current A 12 units",
-                start_position=0,
-                end_position=18,
-            ),
-        ]
-    )
-    rows = [
-        {
-            "doc_id": str(doc_z),
-            "chunk_id": chunks[0].pk,
-            "chunk": 0,
-            "title": f"Z {kind.title()}",
-            "text": "STALE Z 91 units",
-            "citation": f"[doc:{doc_z} chunk:{chunks[0].pk}]",
-        },
-        {
-            "doc_id": str(doc_a),
-            "chunk_id": chunks[1].pk,
-            "chunk": 0,
-            "title": f"A {kind.title()}",
-            "text": "STALE A 11 units",
-            "citation": f"[doc:{doc_a} chunk:{chunks[1].pk}]",
-        },
-    ]
-    if stale:
-        stale_chunk = (
-            await database_sync_to_async(TextChunk.objects.bulk_create)(
-                [
-                    TextChunk(
-                        doc_id=doc_z,
-                        chunk_number=1,
-                        content="Unrelated old text",
-                        start_position=19,
-                        end_position=37,
-                    )
-                ]
-            )
-        )[0]
-        stale_row = {
-            "doc_id": str(doc_z),
-            "chunk_id": stale_chunk.pk,
-            "chunk": 1,
-            "title": "Z Paper",
-            "text": "Unrelated old text",
-            "citation": f"[doc:{doc_z} chunk:{stale_chunk.pk}]",
-        }
-        rows.append(stale_row)
-        await database_sync_to_async(
-            TextChunk.objects.filter(pk=stale_chunk.pk).delete
-        )()
-        if question == "__stale_citation__":
-            question = f"Check {stale_row['citation']}"
-    convo = Conversation(
-        system="sys",
-        messages=[
-            UserMessage(content=f"Read two {kind}s"),
-            ToolMessage(
-                tool_name="vector_search",
-                for_whom="assistant",
-                content="{}",
-                result_dict={
-                    "result": list(reversed(rows)),
-                    "retrieved_documents": [f"A {kind.title()}", f"Z {kind.title()}"],
-                },
-            ),
-            AssistantMessage(
-                content=(
-                    f"Z first {rows[0]['citation']}; A second {rows[1]['citation']}."
-                ),
-                stop_reason="end_turn",
-            ),
-            UserMessage(content=question),
-        ],
-    )
-    snapshot = convo.model_dump()
-    policy = Policy()
-    policy.allowed = ((1, doc_z), (1, doc_a))
-    principal = object()
-    authorization = freeze_retrieval_authorization_context(
-        principal=principal,
-        database_alias="default",
-        policy=policy,
-        selected_collection_ids=(1,),
-        selected_document_ids=(doc_z, doc_a),
-        reauthorization_capability=bind_retrieval_reauthorization_capability(
-            principal=principal, policy=policy
-        ),
-    )
-    runtime = SourceRuntime(TurnBudget(TurnLimits()), authorization)
-    monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
-    monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "1")
-    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
-    monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "1")
-    monkeypatch.setenv("RAG_DOCUMENT_CAPACITY_MODE", "budgeted")
-    monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "16000")
+@pytest.mark.parametrize("change", ["edit", "move", "delete", "revoke"])
+async def test_original_capture_rejects_owner_transitions(continuity_owners, monkeypatch, change):
+    owners = continuity_owners
+    chunk = owners.chunks[0]
+    rows = historical_rows(owners)
+    convo = conversation(rows, "Explain the first paper")
+    original = convo.model_dump()
+    consumer = consumer_for(owners, convo)
+    llm = SimpleNamespace(complete=AsyncMock())
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", lambda *_: {"result": []})
-    monkeypatch.setattr(
-        source_documents,
-        "document_metadata",
-        lambda doc: SimpleNamespace(
-            title=f"Current {('Z' if str(doc) == str(doc_z) else 'A')} {kind.title()}"
-        ),
-    )
+    anchors = SourceAnchors((rows[0]["doc_id"],),
+        ((chunk.pk, rows[0]["doc_id"], 0),), "explicit_citation")
+    async with preservation_turn(consumer, max_func_calls=3) as runtime:
+        assert [s.text for s in await rehydrate(anchors, owners, runtime)] == [chunk.content]
+        frozen = runtime._frozen_retrieval_scope.representation
+        await database_sync_to_async(change_owner)(owners, change)
+        if change == "edit":
+            with pytest.raises(SourceScopeUnavailable):
+                await rehydrate(anchors, owners, runtime)
+            with pytest.raises(SourceScopeUnavailable):
+                await rag_pipeline.run_direct_rag_turn(consumer, llm, convo)
+        else:
+            assert await rehydrate(anchors, owners, runtime) == ()
+            assert await rag_pipeline.run_direct_rag_turn(consumer, llm, convo) == "handled"
+            assert consumer.convo[-1].content == LIMITED_ANSWER
+        assert runtime._frozen_retrieval_scope.representation is frozen
+        llm.complete.assert_not_called()
+    assert convo.model_dump() == original
+    retained = await database_sync_to_async(
+        lambda: list(TextChunk.objects.filter(pk=chunk.pk).values("content", "doc_id"))
+    )()
+    assert retained == ([] if change == "delete" else [dict(content=chunk.content, doc_id=chunk.doc_id)])
+
+
+@pytest.mark.asyncio
+async def test_new_turn_after_rebuild_reads_new_coordinates_and_retains_old_text(continuity_owners):
+    owners = continuity_owners
+    old = owners.chunks[0]
+    convo = conversation(historical_rows(owners), "Explain the first paper")
+    consumer = consumer_for(owners, convo)
+    old_anchor = SourceAnchors((str(old.doc_id),), ((old.pk, str(old.doc_id), 0),), "explicit_citation")
+    async with preservation_turn(consumer, max_func_calls=3) as first:
+        assert (await rehydrate(old_anchor, owners, first))[0].text == old.content
+        frozen = first._frozen_retrieval_scope.representation
+        await database_sync_to_async(change_owner)(owners, "edit")
+        current = await database_sync_to_async(rebuild_current)(owners.documents[0])
+        with pytest.raises(SourceScopeUnavailable):
+            await rehydrate(old_anchor, owners, first)
+        assert first._frozen_retrieval_scope.representation is frozen
+    async with preservation_turn(consumer, max_func_calls=3) as fresh:
+        assert fresh is not first and fresh.budget is not first.budget
+        assert await rehydrate(old_anchor, owners, fresh) == ()
+        anchors = SourceAnchors((str(current.doc_id),),
+            ((current.pk, str(current.doc_id), current.chunk_number),), "explicit_citation")
+        assert (await rehydrate(anchors, owners, fresh))[0].text == owners.documents[0].full_text
+    assert current.pk != old.pk
+    assert await database_sync_to_async(
+        TextChunk.objects.filter(pk=old.pk, content=old.content, doc_id=old.doc_id).exists
+    )()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind,question,expected,revoke,stale", [
+    ("paper", "Compare their measurements", 2, False, False),
+    ("paper", "Explain the second paper", 1, False, False),
+    ("report", "Compare their totals", 2, False, False),
+    ("report", "Explain the second report", 1, False, False),
+    ("paper", "Compare their measurements", 0, True, False),
+    ("paper", "Explain Z Paper", 1, False, True),
+    ("paper", "__stale_citation__", 0, False, True),
+])
+async def test_direct_followup_selects_current_answer_ordered_sources(
+    continuity_owners, kind, question, expected, revoke, stale, monkeypatch,
+):
+    owners = continuity_owners
+    for name, document in zip(("Z", "A"), owners.documents, strict=True):
+        document.title = f"Current {name} {kind.title()}"
+        await database_sync_to_async(document.save)(dont_rechunk=True, update_fields=["title"])
+    rows = historical_rows(owners, kind)
+    if stale:
+        deleted = await database_sync_to_async(deleted_citation)(owners)
+        rows.append(deleted)
+        if question == "__stale_citation__":
+            question = f"Check {deleted['citation']}"
+    convo = conversation(rows, question, kind)
+    snapshot = convo.model_dump()
+    consumer = consumer_for(owners, convo)
+    monkeypatch.setattr(rag_pipeline, "_run_vector_search", lambda *_: {"result": []})
     captured = []
 
-    async def complete(request, *_args, **_kw):
+    async def complete(request, *_args, **_kwargs):
         captured.append(request[-1].result_dict)
-        return request + [
-            AssistantMessage(
-                content="Current comparison "
-                + " ".join(
-                    row["citation"] for row in request[-1].result_dict["result"]
-                ),
-                stop_reason="end_turn",
-            )
-        ], "changed"
+        return request + [AssistantMessage(
+            content="Current comparison " + " ".join(
+                row["citation"] for row in request[-1].result_dict["result"]),
+            stop_reason="end_turn",
+        )], "changed"
 
+    llm = SimpleNamespace(complete=AsyncMock(side_effect=complete))
     if revoke:
         original_synthesize = rag_pipeline.synthesize_from_evidence
 
         async def revoke_at_synthesis(*args, **kwargs):
-            policy.allowed = ()
+            await database_sync_to_async(owners.permission.delete)()
             return await original_synthesize(*args, **kwargs)
 
-        monkeypatch.setattr(
-            rag_pipeline, "synthesize_from_evidence", revoke_at_synthesis
-        )
-
-    consumer = SimpleNamespace(user=principal, col_ref=CollectionsRef([1]), convo=convo)
-    with source_runtime_scope(runtime):
-        assert (
-            await rag_pipeline.run_direct_rag_turn(
-                consumer, SimpleNamespace(complete=complete), convo
-            )
-            == "handled"
-        )
+        monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", revoke_at_synthesis)
+    assert await rag_pipeline.run_direct_rag_turn(consumer, llm, convo) == "handled"
+    assert convo.model_dump() == snapshot
     if revoke or expected == 0:
-        from lib.llm.answer_publication import LIMITED_ANSWER
-
+        llm.complete.assert_not_called()
         assert captured == []
         assert consumer.convo[-1].content == LIMITED_ANSWER
-        assert convo.model_dump() == snapshot
         return
-    assert len(captured[0]["result"]) == expected
-    assert {row["doc_id"] for row in captured[0]["result"]} == (
-        {str(doc_z), str(doc_a)}
-        if expected == 2
-        else {str(doc_z) if stale else str(doc_a)}
-    )
-    assert all("Current" in row["text"] for row in captured[0]["result"])
-    assert all(row["title"].startswith("Current ") for row in captured[0]["result"])
+    llm.complete.assert_awaited_once()
+    assert len(captured) == 1 and len(captured[0]["result"]) == expected
+    indices = (0, 1) if expected == 2 else ((0,) if stale else (1,))
+    selected = captured[0]["result"]
+    assert [row["doc_id"] for row in selected] == [str(owners.documents[i].id) for i in indices]
+    assert [row["title"] for row in selected] == [owners.documents[i].title for i in indices]
+    assert [row["text"] for row in selected] == [owners.chunks[i].content for i in indices]
     assert "STALE" not in str(captured)
-    assert convo.model_dump() == snapshot

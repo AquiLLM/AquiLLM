@@ -9,7 +9,6 @@ from apps.collections.services.retrieval_authorization import (
 from apps.documents.services.chunk_search_scope import current_scope
 from apps.documents.services.source_loading import (
     bounded_source_database,
-    current_source_runtime,
 )
 from apps.knowledge_graph.projection.identifiers import ProjectionIdentifierDomain
 from apps.knowledge_graph.projection.runtime import (
@@ -50,17 +49,18 @@ def load_selection_inputs_v2(
         raise TypeError("bounded exact evidence references required")
     if type(max_rows) is not int or not 1 <= max_rows <= 45:
         raise ValueError("hydration row allowance must be within 45")
-    runtime = current_source_runtime()
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
+    runtime = graph_source_runtime()
     if (
         runtime is None
         or runtime.budget is not budget
-        or runtime.authorization != authorization
+        or runtime.authorization is not authorization
     ):
         raise ValueError("graph hydration requires original source runtime")
     scope = current_scope()
     if scope is not None and (
         scope.runtime is not runtime
-        or scope.representation != selected.representation_snapshot
+        or scope.representation is not selected.representation_snapshot
     ):
         raise ValueError("graph hydration replaced original source scope")
     groups = {g.group_checksum: g for g in selected.groups}

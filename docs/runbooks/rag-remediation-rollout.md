@@ -35,10 +35,12 @@ Use Django's migration dependency plan. The program adds these chains:
 
 - Documents: embedding generations 0009, concurrent HNSW 0010, lexical projection
   0011, concurrent GIN 0012, retained representations 0013 and history guards 0014.
-  Documents 0013 also depends on ingestion 0004 and contenttypes 0002.
+  Documents 0015 records the bounded deletion lifecycle ORM state. Documents
+  0013 also depends on ingestion 0004 and contenttypes 0002.
 - Ingestion: immutable source artifacts 0003, then the output ledger 0004.
 - Knowledge graph: contextual candidate methods 0012, then nullable captured
-  representation bindings 0013.
+  representation bindings 0013 and restricted projection representation validation
+  0014. Knowledge graph 0014 depends on documents 0014.
 - Collections: immutable vocabulary versions and explicit attachments 0004.
 - Memory: profile-fact provenance 0003.
 

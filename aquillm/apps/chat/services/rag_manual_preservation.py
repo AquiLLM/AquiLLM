@@ -63,7 +63,8 @@ def _manual_acquire(consumer, command, query, history):
 
 
 async def run_manual_preservation(consumer, llm, convo, command, *, stream_func):
-    runtime = current_source_runtime()
+    from apps.documents.services.representation_media_acquisition import media_runtime
+    runtime = media_runtime()
     try:
         if runtime is None:
             raise ValueError("missing manual ledger")

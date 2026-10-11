@@ -7,6 +7,7 @@ from uuid import UUID
 from django.utils import timezone
 
 from .memgraph_repository import MemgraphProjectionRepository
+from .database_deadline import current_operation, projection_operation
 from .projection_lease import (
     _backend_transient,
     _ProjectionLeaseHeartbeat,
@@ -116,8 +117,13 @@ def _expected_manifest(bundle, private_mapping_checksum: str):
 def project_generation(
     *, projection_id: UUID, lease_owner: str
 ) -> ProjectionRunOutcomeV1:
-    identifier = _identifier(projection_id)
     settings = _projection_settings()
+    with projection_operation(settings.projection_timeout_ms):
+        return _project_generation(projection_id=projection_id, lease_owner=lease_owner, settings=settings)
+
+
+def _project_generation(*, projection_id, lease_owner, settings):
+    identifier = _identifier(projection_id)
     using = _state_using()
     state_repository = FunctionProjectionStateRepository(
         state_using=using,
@@ -170,14 +176,14 @@ def project_generation(
                 bundle=bundle,
                 private_mapping_checksum=private_checksum,
                 batch_size=settings.projection_batch_size,
-                timeout_seconds=timeout,
+                timeout_seconds=min(timeout, current_operation().remaining_ms() / 1000),
                 frontier_index=True,
             )
             heartbeat.check()
             expected = _expected_manifest(bundle, private_checksum)
             validation = graph.validate_generation(
                 expected=expected,
-                timeout_seconds=timeout,
+                timeout_seconds=min(timeout, current_operation().remaining_ms() / 1000),
             )
             heartbeat.check()
             if not validation.valid:
@@ -188,7 +194,7 @@ def project_generation(
                     bundle.generation.generation_key
                 ),
                 validation_checksum=validation.validation_checksum,
-                timeout_seconds=timeout,
+                timeout_seconds=min(timeout, current_operation().remaining_ms() / 1000),
             )
         # The heartbeat is joined before a fresh renewal and the authoritative
         # CAS. A successful CAS clears the lease and must never race another pulse.

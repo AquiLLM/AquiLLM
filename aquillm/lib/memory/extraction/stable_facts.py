@@ -21,7 +21,7 @@ from ._intent_scope import directive_is_example
 INTENT_POLICY_VERSION = 'affirmative-source-v1'
 _DIRECTIVE = re.compile(
     r'(?i)(?:^|(?<=[.!?;\n]))\s*(?:also\s+)?(?:(?:could|can|would|will)\s+you\s+)?'
-    r'(?:please\s+)?remember(?:\s+this)?(?:\s+going\s+forward)?\s*[:,-]?\s*(?:that\s+)?'
+    r'(?:please\s+)?remember\b(?:\s+this)?(?:\s+going\s+forward)?\s*[:,-]?\s*(?:that\s+)?'
 )
 _POLICY_DIRECTIVE = re.compile(
     r'(?i)\b(?:ignore|bypass|override|disable|skip|disregard|omit|never|without|do not|don\x27t)\b'
@@ -82,7 +82,7 @@ def validate_fact_candidates(user_content: str, candidates: list[str]) -> list[s
 
 logger = structlog.stdlib.get_logger(__name__)
 _REMEMBER_PREFIX_RE = re.compile(
-    r"^\s*(please\s+)?remember(\s+this)?(\s+going\s+forward)?\s*[:,-]?\s*",
+    r"^\s*(please\s+)?remember\b(\s+this)?(\s+going\s+forward)?\s*[:,-]?\s*",
     flags=re.IGNORECASE,
 )
 _REMEMBER_THAT_RE = re.compile(r"^\s*that\s+", flags=re.IGNORECASE)

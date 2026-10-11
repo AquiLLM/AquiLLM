@@ -112,6 +112,13 @@ async def finish_preservation(
         else iterative,
     )
     runtime.observation["acquisition"] = acquired
+    if hasattr(runtime, "_query_admission_attempt"):
+        from .retrieval_query_binding import original_binding
+        from .retrieval_query_runtime import _database_call, validate_bound
+        try:
+            await bounded_retrieval(_database_call(validate_bound, original_binding(runtime)), budget)
+        except Exception:
+            return await limited_rag_result(convo, stream_func=stream_func)
     retrieved = perf_counter()
     if not acquired.results:
         return await limited_rag_result(convo, stream_func=stream_func)

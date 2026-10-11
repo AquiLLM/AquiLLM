@@ -95,9 +95,15 @@ def valid_full_text_ids(scope, rows):
     ids = tuple(row.pk for row in rows if row.pk in scope.fts_rows)
     if not ids:
         return set()
+    return _matching_full_text_ids(
+        scope, scope.queryset(TextChunk.objects.using(scope.using).filter(pk__in=ids))
+    )
+
+
+def _matching_full_text_ids(scope, queryset):
+    """Read current bindings; the caller supplies its exact scoped predicate."""
     current = (
-        scope.queryset(TextChunk.objects.using(scope.using).filter(pk__in=ids))
-        .filter(current_projection_predicate(scope))
+        queryset.filter(current_projection_predicate(scope))
         .values_list("pk", "search_vector_binding")
     )
     return {

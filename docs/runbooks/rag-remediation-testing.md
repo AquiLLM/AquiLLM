@@ -28,10 +28,14 @@ prints setting names without their values. Never bypass a refusal with a shared
 Compose file or load shared environment values to make a test pass.
 
 All installed Django apps remain loaded. Test DB is `test_rag_test` on the owned
-PostgreSQL16 service. Projection roles are provisioned exactly as CI (NOLOGIN);
-the test settings mirror both projection aliases to the default database. This
-does not test production separation of role permissions. Transaction, migration,
-FTS/index and ORM tests use PostgreSQL. The isolation suite also proves a real
+PostgreSQL16 service. The wrapper provisions fixed synthetic LOGIN credentials
+for the restricted projection roles without adding table/function grants or ownership. Ordinary
+test settings mirror both projection aliases to the default database; those
+tests do not establish role separation. Explicit restricted-role fixtures open
+source/state aliases with the actual role logins against the same owned test
+database and verify each connection identity. Their observed runtime results
+must be reported separately; provisioned roles alone prove no permission boundary.
+Transaction, migration, FTS/index and ORM tests use PostgreSQL. The isolation suite also proves a real
 Memgraph connection; graph readiness/cap/bridge lane suites should use this
 service as their integration adapter when they require a live backend.
 
@@ -51,6 +55,17 @@ APIs (including streaming) explicitly fail; it is not a model quality benchmark.
 No model weights or corpus data are downloaded at runtime.
 
 ## Browser tests
+
+Run TypeScript checking in the same rebuilt, inspected owned frontend image:
+
+```powershell
+rtk proxy python scripts/run_rag_remediation_tests.py --project aquillm-rag-review --typecheck
+```
+
+This mode runs only `npm run typecheck` (`tsc --noEmit`), with no caller-supplied
+command or arguments. Mixed wrapper modes and extra arguments are refused. It
+retains the output and exit code in the local run-artifact directory. The Vite
+bundle build is a separate check and does not establish TypeScript correctness.
 
 Run unit and component tests in the same isolated frontend image with explicit
 test files:

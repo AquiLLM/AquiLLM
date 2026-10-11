@@ -78,9 +78,9 @@ class FrozenRetrievalScope:
 
     def validate(self):
         if self.proposal_binding is not None:
-            from apps.chat.services.retrieval_query_runtime import validate_bound
+            from apps.chat.services.retrieval_query_runtime import validate_bound_before_current_scope
 
-            validate_bound(self.proposal_binding)
+            validate_bound_before_current_scope(self.proposal_binding, self)
         from apps.collections.services.retrieval_authorization import (
             revalidate_retrieval_authorization_context,
         )
@@ -99,8 +99,9 @@ class FrozenRetrievalScope:
                 for s in self.representation.selections
             ):
                 raise SourceScopeUnavailable("source_scope_unavailable")
-        validate_representation_snapshot(self.representation, using=self.using)
         keys = ()
+        if self.dense is None:
+            validate_representation_snapshot(self.representation, using=self.using)
         if self.dense is not None:
             keys = validate_dense_snapshot(
                 self.representation, self.dense, using=self.using
@@ -211,6 +212,21 @@ def validate_requested_authorization(runtime, incoming, documents):
 
 def freeze_search_scope(documents, *, using, authorization=None):
     runtime = current_source_runtime()
+    if runtime is None:
+        from lib.llm.turn_context import current_turn
+        turn = current_turn()
+        from .representation_manual_scope import private_acquisition_runtime
+        runtime = private_acquisition_runtime()
+        if runtime is not None:
+            if (runtime.budget is not turn.budget or not runtime.budget.can_publish()
+                or runtime.authorization is not getattr(runtime, "_media_authorization", None)
+                or getattr(runtime, "_frozen_retrieval_scope", None) is None):
+                raise SourceScopeUnavailable("source_scope_unavailable")
+    with runtime.lock if runtime else nullcontext():
+        return _freeze_search_scope(documents, using=using, authorization=authorization, runtime=runtime)
+
+
+def _freeze_search_scope(documents, *, using, authorization=None, runtime=None):
     authorization = authorization or (runtime.authorization if runtime else None)
     if runtime:
         with bounded_source_database(runtime, using):
@@ -222,12 +238,17 @@ def freeze_search_scope(documents, *, using, authorization=None):
     if len(ids) != len(documents):
         raise SourceScopeUnavailable("source_scope_unavailable")
     if old is not None:
+        if old.runtime is not runtime or old.authorization is not runtime.authorization:
+            raise SourceScopeUnavailable("source_scope_unavailable")
         if not ids <= frozenset(s.document.id for s in old.representation.selections):
             raise SourceScopeUnavailable("source_scope_unavailable")
         with old.database():
             old.validate()
         return replace(old, requested_document_ids=ids)
     with bounded_source_database(runtime, using) if runtime else nullcontext():
+        if runtime:
+            from .representation_tool_scope import original_document_metadata
+            documents = original_document_metadata(runtime, using=using)
         refs = tuple(
             DocumentRefV1(
                 d._meta.label_lower, d.pkid, d.id, d.collection_id, d.full_text_hash
@@ -259,7 +280,8 @@ def freeze_search_scope(documents, *, using, authorization=None):
         )
         scope.validate()
     if holder is not None:
-        holder._frozen_retrieval_scope = scope
+        holder._frozen_retrieval_scope = replace(scope, requested_document_ids=frozenset(
+            selected.document.id for selected in representation.selections))
     return scope
 
 

@@ -1,27 +1,27 @@
 """Real candidate collection must rank whole scientific terms before LIMIT."""
 
-from hashlib import sha256
-
 import pytest
 from django.test import override_settings
 
-from apps.documents.models import TextChunk
+from apps.documents.models import DocumentRepresentationState, TextChunk
 from apps.documents.services.chunk_search_candidates import (
     collect_hybrid_candidate_snapshot,
 )
-from apps.documents.tests.test_embedding_generation import legacy as legacy
+from .lexical_owner_support import unchunked as legacy
+from .representation_support import reference
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
 def replace_chunks(legacy, bodies):
+    """Build initial exact slices only; never replace an existing representation."""
     doc, _ = legacy
+    assert not TextChunk.objects.filter(doc_id=doc.id).exists()
+    assert not DocumentRepresentationState.objects.filter(document_id=doc.id).exists()
     text = "\n".join(bodies)
-    type(doc).objects.filter(pk=doc.pk).update(
-        full_text=text, full_text_hash=sha256(text.encode()).hexdigest()
-    )
-    doc.refresh_from_db()
-    TextChunk.objects.filter(doc_id=doc.id).delete()
+    doc.full_text = text
+    doc.save(dont_rechunk=True)
+    legacy[1] = reference(doc)
     start, rows = 0, []
     for number, body in enumerate(bodies):
         rows.append(

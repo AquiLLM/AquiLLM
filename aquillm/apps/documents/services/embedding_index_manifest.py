@@ -64,6 +64,17 @@ def load_embedding_space(space_key, *, using):
 
 def selection_for(generation):
     owner = generation.owner
+    revision = None
+    if owner.representation_key is not None:
+        from apps.documents.models import DocumentRepresentationGeneration
+        representation = DocumentRepresentationGeneration.objects.using(generation._state.db).filter(
+            pk=owner.representation_key, owner__model_label=owner.model_label,
+            owner__document_pkid=owner.document_pkid, owner__document_id=owner.document_id,
+            collection_id=owner.collection_id, canonical_sha256=generation.canonical_sha256,
+        ).first()
+        if representation is None:
+            raise EmbeddingContractError("representation_identity_changed")
+        revision = representation.source_revision_sha256
     return RepresentationSelectionV1(
         DocumentRefV1(
             owner.model_label,
@@ -74,7 +85,7 @@ def selection_for(generation):
         ),
         owner.representation_key,
         generation.canonical_sha256,
-        None,
+        revision,
     )
 
 
@@ -95,6 +106,26 @@ def _lock_selection(selection, *, using):
 
 
 def source_chunk(row):
+    if row.representation_generation_id is not None:
+        from .representation_inputs import content_hash, manifest_hash
+        generation = row.representation_generation
+        if manifest_hash(generation.manifest) != generation.manifest_sha256:
+            raise EmbeddingContractError("representation_manifest_changed")
+        try:
+            entry = generation.manifest["chunks"][row.chunk_number]
+            if (row.doc_id, row.start_position, row.end_position, row.content, content_hash(row.content)) != (
+                generation.owner.document_id, entry["start"], entry["end"], entry["source_text"], entry["source_sha256"]
+            ):
+                raise ValueError("chunk_identity_changed")
+            raw = entry["media_artifact"]
+            artifact = None if raw is None else SourceArtifactRefV1(**raw)
+            if artifact is not None:
+                validate_artifact_ref(artifact)
+            return SourceChunkV1(entry["start"], entry["end"], entry["source_text"], entry["embedding_text"],
+                                 tuple(entry["element_keys"]), entry["source_sha256"], entry["input_sha256"],
+                                 entry["modality"], artifact)
+        except (KeyError, IndexError, TypeError, ValueError):
+            raise EmbeddingContractError("representation_chunk_changed") from None
     artifact = None
     raw = row.metadata.get("media_artifact") if type(row.metadata) is dict else None
     if raw is not None:

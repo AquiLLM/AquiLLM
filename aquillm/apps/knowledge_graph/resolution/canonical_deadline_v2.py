@@ -5,6 +5,8 @@ from math import isfinite
 
 from django.db import connections, transaction
 
+from apps.knowledge_graph.database_cursor_deadline import bounded_cursor_calls
+
 
 class ReconciliationDeadlineExceeded(TimeoutError):
     pass
@@ -19,6 +21,14 @@ def check_deadline(deadline, clock):
     return remaining
 
 
+class _OriginalDeadline:
+    def __init__(self, deadline, clock):
+        self.deadline, self.clock = deadline, clock
+
+    def remaining_ms(self):
+        return check_deadline(self.deadline, self.clock)
+
+
 @contextmanager
 def bounded_transaction(*, using, deadline, clock):
     connection = connections[using]
@@ -26,31 +36,31 @@ def bounded_transaction(*, using, deadline, clock):
         raise RuntimeError("bounded reconciliation requires PostgreSQL")
     check_deadline(deadline, clock)
     with transaction.atomic(using=using):
-        with connection.cursor() as cursor:
+        with connection.wrap_database_errors, connection.connection.cursor() as cursor:
             cursor.execute(
                 "SELECT name, setting::bigint FROM pg_settings "
                 "WHERE name IN ('lock_timeout', 'statement_timeout')"
             )
             operator = dict(cursor.fetchall())
 
-        def bounded_execute(execute, sql, params, many, context):
-            remaining = check_deadline(deadline, clock)
-            limits = [
-                min(remaining, operator[name]) if operator[name] else remaining
-                for name in ("lock_timeout", "statement_timeout")
-            ]
-            # A query may use a named server cursor, which can execute only once.
-            # A separate unnamed control cursor also avoids wrapper recursion.
-            with connection.connection.cursor() as control:
-                control.execute(
-                    "SELECT set_config('lock_timeout', %s, true), "
-                    "set_config('statement_timeout', %s, true)",
-                    [f"{limits[0]}ms", f"{limits[1]}ms"],
-                )
-            result = execute(sql, params, many, context)
-            check_deadline(deadline, clock)
-            return result
-
-        with connection.execute_wrapper(bounded_execute):
-            yield
-            check_deadline(deadline, clock)
+        complete = False
+        try:
+            active = _OriginalDeadline(deadline, clock)
+            with bounded_cursor_calls(connection, active, operator) as bounded_execute:
+                with connection.execute_wrapper(bounded_execute):
+                    yield
+                    check_deadline(deadline, clock)
+                    complete = True
+        finally:
+            # Atomic rollback restores SET LOCAL after failure. Success inside a
+            # caller's transaction must restore it explicitly before release.
+            if complete and not connection.needs_rollback:
+                try:
+                    with connection.wrap_database_errors, connection.connection.cursor() as control:
+                        control.execute("SELECT set_config('lock_timeout',%s,true),"
+                                        "set_config('statement_timeout',%s,true)",
+                                        [f"{operator['lock_timeout']}ms",
+                                         f"{operator['statement_timeout']}ms"])
+                except Exception:
+                    connection.close()
+                    raise

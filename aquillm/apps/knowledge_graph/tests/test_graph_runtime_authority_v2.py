@@ -77,9 +77,26 @@ def test_real_runtime_hydration_and_captured_final_materialization(monkeypatch, 
                 generation_key=uuid4()
             )
         elif race == "representation":
-            TextChunk.objects.filter(pk=f.chunks["A"].pk).update(
-                representation_generation=uuid4()
-            )
+            from django.db import DatabaseError, transaction
+            from apps.documents.services.representation_contracts import SourceScopeUnavailable
+            from apps.documents.services.representation_history import reference
+            from apps.documents.services.representation_snapshot_build import build_canonical_snapshot_representation
+            from apps.documents.services.representation_store import validate_representation_snapshot
+
+            old = f.chunks["A"]
+            assert old.representation_generation_id is None
+            with pytest.raises(DatabaseError, match="legacy_chunk_cannot_be_rebound"), transaction.atomic():
+                TextChunk.objects.filter(pk=old.pk).update(representation_generation=uuid4())
+            # Transition the real nonledger owner; never rewrite an immutable chunk.
+            assert build_canonical_snapshot_representation(reference(f.documents["A"]), using="default") == "activated"
+            current = f.documents["A"].chunks.get()
+            assert current.representation_generation_id is not None and current.pk != old.pk
+            old.refresh_from_db()
+            assert old.content == "A" and old.representation_generation_id is None
+            assert old.legacy_source_snapshot_id is not None
+            assert envelope.selection.representation_snapshot is f.snapshot
+            with pytest.raises(SourceScopeUnavailable):
+                validate_representation_snapshot(f.snapshot, using="default")
         elif race == "authorization":
             f.policy.rows = ()
         rows = materialize_graph_candidates_v2(

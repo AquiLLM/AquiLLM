@@ -37,14 +37,12 @@ def persisted_runtime(monkeypatch, *, dataset=False):
     from apps.knowledge_graph.retrieval import ready_materialization_v2 as materializer
     from apps.knowledge_graph.services.ontology import load_ontology_yaml
 
-    f = ScopeFixture(monkeypatch)
+    from .graph_dataset_fixture_v2 import TEXTS
+
+    f = ScopeFixture(monkeypatch, source_texts={"A": "\n".join(TEXTS)} if dataset else None)
     f.policy.current_authorized_selected_document_scope = lambda **kwargs: tuple(
         r for r in f.policy.rows if r[1] in kwargs["selected_document_ids"]
     )
-    if dataset:
-        from .graph_dataset_fixture_v2 import prepare_dataset_document
-
-        prepare_dataset_document(f)
     bundles = []
     source = DjangoProjectionRowSource(
         "default", identifier_key=b"secret", identifier_key_version="key-v1"

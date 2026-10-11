@@ -126,7 +126,9 @@ def test_project_generation_replays_partial_staging_and_ready_cas(monkeypatch):
     )
 
     assert outcome.ready is True
-    assert graph_timeouts == [12.0, 12.0, 12.0]
+    assert len(graph_timeouts) == 3
+    assert all(0 < value <= 12.0 for value in graph_timeouts)
+    assert graph_timeouts == sorted(graph_timeouts, reverse=True)
     assert calls == [
         "load_bundle",
         "load_private",

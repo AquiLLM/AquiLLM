@@ -1,6 +1,5 @@
 """Metadata-first frozen dense membership and exact filtered ranking."""
 
-from math import isfinite
 from uuid import UUID
 
 from django.db.models import ExpressionWrapper, F, FloatField, Value
@@ -25,7 +24,7 @@ from lib.embeddings.document_provider import compatible_receipt
 from lib.embeddings.utils import EmbeddingContractError
 from lib.retrieval.turn_budget import TurnBudget
 
-from .embedding_index_query_scope import _authorized_runtime, requested_dense_scope
+from .embedding_index_query_scope import _authorized_runtime, _dense_runtime, requested_dense_scope
 from .embedding_index_store import load_embedding_space
 from .representation_contracts import RepresentationSnapshotV1, SourceScopeUnavailable
 from .representation_store import (
@@ -38,7 +37,6 @@ from .representation_store import (
 from .source_loading import (
     SourcePreparationLimited,
     bounded_source_database,
-    current_source_runtime,
 )
 
 
@@ -85,7 +83,7 @@ def dense_generation_snapshot_digest(
         entries.append(
             {
                 "document": document_payload(original.document),
-                "representation_key": original.generation_key,
+                "representation_key": str(original.generation_key) if original.generation_key else None,
                 "generation_key": str(selected.generation_key) if selected else None,
                 "manifest_sha256": selected.manifest_sha256 if selected else None,
             }
@@ -119,6 +117,10 @@ def freeze_dense_generations(
                 space_id=space_key,
             )
             .select_related("active_generation")
+            .only("pk", "active_generation", "active_generation__key", "active_generation__owner_id",
+                  "active_generation__state", "active_generation__failure_kind",
+                  "active_generation__source_hash", "active_generation__canonical_sha256",
+                  "active_generation__manifest_sha256")
             .first()
         )
         generation = owner.active_generation if owner else None
@@ -158,7 +160,6 @@ def validate_dense_snapshot(
     using: str,
 ) -> tuple[UUID, ...]:
     """Recheck before cache/body publication; never acquire newer generations."""
-    validate_representation_snapshot(snapshot, using=using)
     expected = dense_generation_snapshot_digest(
         snapshot, dense_snapshot.selections, space_key=dense_snapshot.space_key
     )
@@ -191,11 +192,9 @@ def rank_compatible_chunks(
 ) -> tuple[RankedChunkV1, ...]:
     if type(limit) is not int or not 0 < limit <= 45:
         raise ValueError("invalid_dense_limit")
-    runtime = current_source_runtime()
-    if runtime is None or runtime.budget is not budget:
-        raise SourcePreparationLimited("source_runtime_unavailable")
+    runtime = _dense_runtime(snapshot, budget, using)
     with bounded_source_database(runtime, using):
-        _authorized_runtime(snapshot, budget, using)
+        _authorized_runtime(snapshot, budget, using, runtime=runtime)
         keys = validate_dense_snapshot(snapshot, dense_snapshot, using=using)
         requested, keys = requested_dense_scope(
             snapshot,
@@ -231,51 +230,48 @@ def rank_compatible_chunks(
             .order_by("distance", "chunk_id")[:limit]
         )
         ranked = []
-        for row in rows.select_related("generation__owner"):
-            if not isfinite(row.distance):
-                continue
-            generation = row.generation
-            item = next(
-                (m for m in generation.manifest if m["chunk_id"] == row.chunk_id), None
-            )
+        from .embedding_query_payloads import bounded_dense_payloads
+        for row in bounded_dense_payloads(rows, budget=budget):
+            item = row["matched_manifest_entry"]
             if (
-                item is None
-                or item["prepared_input_sha256"] != row.input_sha256
-                or item["source_md5"] != row.source_md5
-                or item["modality"] != row.modality
-                or (item["media_artifact"] or {}).get("sha256") != row.media_sha256
+                not isinstance(item, dict)
+                or item.get("prepared_input_sha256") != row["input_sha256"]
+                or item.get("source_md5") != row["source_md5"]
+                or item.get("modality") != row["modality"]
+                or not isinstance(item.get("media_artifact") or {}, dict)
+                or (item.get("media_artifact") or {}).get("sha256") != row["media_sha256"]
             ):
                 continue
             try:
                 validate_stored_binding(
-                    row.serving_binding,
-                    row.vector,
-                    row.receipt,
+                    row["serving_binding"],
+                    row["vector"],
+                    row["receipt"],
                     space=space,
-                    modality=row.modality,
-                    media_sha256=row.media_sha256,
+                    modality=row["modality"],
+                    media_sha256=row["media_sha256"],
                 )
                 key = compatible_receipt(
-                    list(row.vector),
-                    row.receipt,
+                    list(row["vector"]),
+                    row["receipt"],
                     space=space,
                     role="search_document",
-                    prepared_input_sha256=row.input_sha256,
+                    prepared_input_sha256=row["input_sha256"],
                 )
             except EmbeddingContractError:
                 continue
             if key == space.space_key:
                 ranked.append(
                     RankedChunkV1(
-                        row.chunk_id,
-                        float(row.distance),
-                        generation.key,
-                        generation.owner.representation_key,
-                        row.source_md5,
+                        row["chunk_id"],
+                        float(row["distance"]),
+                        row["generation_id"],
+                        row["generation__owner__representation_key"],
+                        row["source_md5"],
                     )
                 )
         valid = set(validate_dense_snapshot(snapshot, dense_snapshot, using=using))
-        _authorized_runtime(snapshot, budget, using)
+        _authorized_runtime(snapshot, budget, using, runtime=runtime)
         result = tuple(r for r in ranked if r.embedding_generation_key in valid)
     if not budget.can_publish():
         raise SourcePreparationLimited("source deadline")

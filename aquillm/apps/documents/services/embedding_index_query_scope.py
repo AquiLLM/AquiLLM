@@ -29,14 +29,34 @@ def requested_dense_scope(snapshot, dense_snapshot, keys, requested_document_ids
     return requested_document_ids, tuple(key for key in keys if key in selected_keys)
 
 
-def _authorized_runtime(snapshot, budget, using):
+def _dense_runtime(snapshot, budget, using):
     runtime = current_source_runtime()
+    if runtime is None:
+        from .representation_manual_scope import private_acquisition_runtime
+        from .representation_media_acquisition import _check_runtime
+        runtime = private_acquisition_runtime()
+        if runtime is None:
+            raise SourcePreparationLimited("source_runtime_unavailable")
+        _check_runtime(runtime)
+        frozen = getattr(runtime, "_frozen_retrieval_scope", None)
+        if (frozen is None or frozen.runtime is not runtime
+            or frozen.authorization is not runtime.authorization
+            or runtime.authorization is not getattr(runtime, "_media_authorization", None)
+            or frozen.representation is not snapshot):
+            raise SourceScopeUnavailable("source_scope_unavailable")
     if (
         runtime is None
         or runtime.budget is not budget
+        or runtime.authorization is None
         or runtime.authorization.database_alias != using
     ):
         raise SourcePreparationLimited("source_runtime_unavailable")
+    return runtime
+
+
+def _authorized_runtime(snapshot, budget, using, *, runtime):
+    if runtime is not _dense_runtime(snapshot, budget, using):
+        raise SourceScopeUnavailable("source_scope_unavailable")
     if not budget.can_publish():
         raise SourcePreparationLimited("source deadline")
     current = revalidate_retrieval_authorization_context(context=runtime.authorization)

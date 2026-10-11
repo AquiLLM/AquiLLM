@@ -9,6 +9,7 @@ from .document_preparation import (
     verified_profile as verified_profile,
     prepare_query as prepare_query,
     prepare_document as prepare_document,
+    prepared_input_bytes,
 )
 from .errors import EmbeddingUpstreamUnavailableError, require_transient
 from .local import _get_local_openai_client, _response_vectors
@@ -141,13 +142,15 @@ def embed_document_batch(chunks, *, space, budget):
     _remaining(budget)
     if type(chunks) is not tuple or not 0 < len(chunks) <= budget.max_items:
         raise EmbeddingContractError("document_batch_limit")
-    prepared = tuple(prepare_document(chunk, space=space)[0] for chunk in chunks)
-    size = sum(
-        len((p if isinstance(p, str) else p["text"]).encode("utf-8")) for p in prepared
-    )
-    if size > budget.max_input_bytes:
-        raise EmbeddingContractError("document_batch_bytes")
-    results = _observe(prepared, space=space, budget=budget, role="search_document")
+    prepared, size = [], 0
+    for chunk in chunks:
+        _remaining(budget)
+        wire = prepare_document(chunk, space=space)[0]
+        size += prepared_input_bytes(wire)
+        if size > budget.max_input_bytes:
+            raise EmbeddingContractError("document_batch_bytes")
+        prepared.append(wire)
+    results = _observe(tuple(prepared), space=space, budget=budget, role="search_document")
     return tuple(
         bind_response(
             result,

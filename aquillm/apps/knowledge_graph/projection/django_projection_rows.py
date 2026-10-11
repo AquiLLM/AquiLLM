@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import ExitStack
 from uuid import UUID
 
 from django.db.models import F
 
-from apps.documents.models import TextChunk
 from apps.knowledge_graph.models import (
     CanonicalEntityLink,
     CollectionArtifactInput,
@@ -31,21 +31,29 @@ from .projection_source_fields import (
     PURPOSE_STATES,
     artifact_source_row,
 )
-from .representation_inputs import (
-    active_build_chunks,
-    projection_input_snapshot,
-    validate_projection_current,
-)
+from .database_deadline import projection_database
+from .representation_source import projection_chunk_rows, validate_current
 
 
 class DjangoProjectionOrmLoader:
-    def __init__(self, using: str, *, state_using: str | None = None) -> None:
+    def __init__(self, using: str, *, state_using: str | None = None,
+                 lease_owner=None, operation=None) -> None:
         self.using = using
+        self.lease_owner, self.operation = lease_owner, operation
         self.state_using = using if state_using is None else state_using
 
     def load(
         self, *, projection_id: UUID, batch_size: int, purpose: str = "build"
     ) -> Mapping[str, object]:
+        if purpose == "prune":
+            return self._load(projection_id=projection_id, batch_size=batch_size, purpose=purpose)
+        with ExitStack() as stack:
+            active = stack.enter_context(projection_database(self.using, operation=self.operation))
+            if self.state_using != self.using:
+                stack.enter_context(projection_database(self.state_using, operation=active))
+            return self._load(projection_id=projection_id, batch_size=batch_size, purpose=purpose)
+
+    def _load(self, *, projection_id, batch_size, purpose):
         if type(purpose) is not str or purpose not in PURPOSE_STATES:
             raise ValueError("projection load purpose must be build, audit, or prune")
         projection = self._projection(projection_id, purpose)
@@ -67,19 +75,9 @@ class DjangoProjectionOrmLoader:
         document_artifact_ids = tuple(row["document_artifact_id"] for row in inputs)
         entities = self._entities(artifact_id, collection_id, batch_size, purpose)
         entity_ids = tuple(row["id"] for row in entities)
-        chunks = _bounded(
-            TextChunk.objects.using(self.using).filter(doc_id__in=document_ids)
-            if purpose == "prune"
-            else active_build_chunks(
-                TextChunk.objects.using(self.using).filter(doc_id__in=document_ids),
-                document_ids,
-                snapshot=projection_input_snapshot(artifact_id, using=self.using)
-                if projection.get("representation_snapshot") is not None
-                else None,
-            ),
-            ("id", "doc_id", "chunk_number"),
-            batch_size,
-        )
+        chunks = projection_chunk_rows(projection, document_ids, using=self.using,
+                                       purpose=purpose, lease_owner=self.lease_owner,
+                                       batch_size=batch_size)
         artifact_ids = (artifact_id, *document_artifact_ids)
         artifacts = _bounded(
             GraphArtifact.objects.using(self.using).filter(pk__in=artifact_ids),
@@ -183,7 +181,8 @@ class DjangoProjectionOrmLoader:
         if purpose != "prune":
             from types import SimpleNamespace
 
-            validate_projection_current(SimpleNamespace(**row), using=self.using)
+            validate_current(SimpleNamespace(**row), using=self.using,
+                             purpose=purpose, lease_owner=self.lease_owner)
             membership = (
                 CollectionGraphMembershipState.objects.using(self.state_using)
                 .filter(collection_id=row["collection_id"])

@@ -5,6 +5,7 @@ from django.db import transaction
 
 from apps.documents.models import TextChunk
 from apps.documents.tests.test_embedding_generation import legacy as legacy
+from .representation_support import retained as retained, upload as upload
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -124,136 +125,80 @@ def test_projection_tampering_cannot_reuse_nonnull_fts(legacy, mutation):
     )
 
 
-def test_failed_projection_rolls_back_chunk_publication(legacy, monkeypatch):
+def test_failed_projection_rolls_back_chunk_publication(retained, monkeypatch):
+    from apps.documents.models import ChunkPublication, DocumentRepresentationState
     from apps.documents.services import lexical_publication
-    from apps.documents.tasks.chunking import _commit_chunks
-    from apps.documents.tests.test_lexical_relevance import replace_chunks
+    from apps.documents.tasks.chunking import create_chunks
+    from .test_representation_tasks import delivery
 
-    old = replace_chunks(legacy, ["source"])[0]
-    type(legacy[0]).objects.filter(pk=legacy[0].pk).update(ingestion_complete=False)
-    legacy[0].refresh_from_db()
-    replacement = TextChunk(
-        doc_id=legacy[0].id,
-        content="source",
-        chunk_number=0,
-        start_position=0,
-        end_position=6,
-    )
+    document, _, old = retained
+    envelope = delivery(document)
+    original_source = (document.full_text, document.full_text_hash)
+    original_binding = old.search_vector_binding
 
     def fail(*args, **kwargs):
         raise ValueError("synthetic projection failure")
 
     monkeypatch.setattr(lexical_publication, "publish_chunk_search_vectors", fail)
     with pytest.raises(ValueError, match="projection failure"):
-        _commit_chunks(
-            legacy[0],
-            [replacement],
-            expected_source_hash=legacy[0].full_text_hash,
-            using="default",
-        )
-    assert TextChunk.objects.get().pk == old.pk
-    assert TextChunk.objects.get().search_vector_binding is None
-    assert not TextChunk.objects.filter(pk=replacement.pk).exists()
-    legacy[0].refresh_from_db()
-    assert not legacy[0].ingestion_complete
+        create_chunks.run(**envelope)
+    document.refresh_from_db()
+    state = DocumentRepresentationState.objects.get(document_id=document.id)
+    assert state.active_generation_id is None
+    assert (document.full_text, document.full_text_hash) == original_source
+    assert list(document.chunks.values_list("pk", flat=True)) == [old.pk]
+    saved = TextChunk.objects.get(pk=old.pk)
+    assert saved.content == old.content and saved.search_vector_binding == original_binding
+    failed = state.generations.get()
+    assert failed.status == "failed" and failed.textchunk_set.exists()
+    assert not failed.textchunk_set.filter(search_vector_binding__isnull=False).exists()
+    intent = ChunkPublication.objects.get(pk=envelope["publication_id"])
+    assert intent.failure_kind and intent.attempts == envelope["publication_attempt"]
+    assert not document.ingestion_complete
 
 
 def test_future_staged_projection_uses_validated_structure_without_pointer_activation(
-    legacy,
+    retained,
 ):
-    from uuid import uuid4
-
     from apps.documents.services.lexical_publication import publish_chunk_search_vectors
-    from lib.parsers.source_contracts import (
-        ExtractionV1,
-        SourceElementV1,
-        source_artifact_ref,
-    )
-
-    canonical = "Measured\nATP BRCA1"
-    artifact = source_artifact_ref(
-        canonical.encode(), member_path=None, container_sha256=None
-    )
-    extraction = ExtractionV1(
-        "synthetic-v1",
-        artifact,
-        canonical,
-        (
-            SourceElementV1("heading", "heading", 0, 9, None, None, None, None),
-            SourceElementV1(
-                "body", "paragraph", 9, len(canonical), None, None, None, "heading"
-            ),
-        ),
-        "complete",
-        (),
-    )
-    generation = uuid4()
-    TextChunk.objects.all().delete()
-    chunk = TextChunk(
-        doc_id=legacy[0].id,
-        content=canonical[9:],
-        chunk_number=0,
-        start_position=9,
-        end_position=len(canonical),
-        representation_generation=generation,
-    )
+    from .lexical_owner_support import staged_projection
+    document, _, old = retained
+    original_text = document.full_text
+    _, generation, extraction = staged_projection(retained)
+    chunk = generation.textchunk_set.get(start_position=9)
     with transaction.atomic():
-        TextChunk.objects.bulk_create([chunk])
         publish_chunk_search_vectors(
-            document=legacy[0],
+            document=document,
             chunks=(chunk,),
             using="default",
-            canonical_text=canonical,
-            representation_key=generation,
-            source_revision_sha256="a" * 64,
+            canonical_text=extraction.canonical_text,
+            representation_key=generation.pk,
+            source_revision_sha256=generation.source_revision_sha256,
             extraction=extraction,
         )
     chunk.refresh_from_db()
     assert chunk.source_kind == "body"
     assert chunk.section_path == ["Measured"]
-    assert chunk.search_vector_binding["representation_key"] == str(generation)
-    assert chunk.search_vector_binding["source_revision_sha256"] == "a" * 64
-    assert chunk.content == canonical[9:]
-    legacy[0].refresh_from_db()
-    assert legacy[0].full_text == "source"
+    assert chunk.search_vector_binding["representation_key"] == str(generation.pk)
+    assert chunk.search_vector_binding["source_revision_sha256"] == generation.source_revision_sha256
+    assert chunk.content == extraction.canonical_text[9:]
+    document.refresh_from_db()
+    assert document.full_text == original_text
+    assert generation.owner.active_generation_id is None
+    assert list(document.chunks.values_list("pk", flat=True)) == [old.pk]
 
 
-def test_staged_binding_uses_post_update_owner_hash_and_separate_input_revision(legacy):
-    from uuid import uuid4
-
+def test_staged_binding_uses_post_update_owner_hash_and_separate_input_revision(retained):
     from apps.documents.services.lexical_projection import text_hash
-    from apps.documents.services.lexical_publication import publish_chunk_search_vectors
-
-    doc = legacy[0]
+    from apps.documents.services.representation_activation import activate_representation
+    from .lexical_owner_support import staged_projection
+    doc, _, old = retained
     original_hash = doc.full_text_hash
-    canonical, generation = "Parsed canonical body", uuid4()
-    with transaction.atomic():
-        locked = type(doc).objects.select_for_update().get(pk=doc.pk)
-        assert locked.full_text_hash == original_hash
-        TextChunk.objects.filter(doc_id=doc.id).delete()
-        chunk = TextChunk(
-            doc_id=doc.id,
-            content=canonical,
-            chunk_number=0,
-            start_position=0,
-            end_position=len(canonical),
-            representation_generation=generation,
-        )
-        TextChunk.objects.bulk_create([chunk])
-        type(doc).objects.filter(pk=doc.pk).update(
-            full_text=canonical, full_text_hash=text_hash(canonical)
-        )
-        locked.refresh_from_db()
-        publish_chunk_search_vectors(
-            document=locked,
-            chunks=(chunk,),
-            using="default",
-            canonical_text=canonical,
-            representation_key=generation,
-            source_revision_sha256=original_hash,
-        )
-    chunk.refresh_from_db()
-    assert chunk.search_vector_binding["document"]["source_hash"] == text_hash(
-        canonical
-    )
-    assert chunk.search_vector_binding["source_revision_sha256"] == original_hash
+    lease, generation, extraction = staged_projection(retained)
+    assert activate_representation(lease, expected_active_key=None, using="default") == "activated"
+    chunk = generation.textchunk_set.get(start_position=9)
+    assert generation.predecessor_source_hash == original_hash
+    assert chunk.search_vector_binding["document"]["source_hash"] == text_hash(extraction.canonical_text)
+    assert chunk.search_vector_binding["source_revision_sha256"] == generation.extraction_revision.manifest_sha256
+    assert chunk.search_vector_binding["source_revision_sha256"] != original_hash
+    assert TextChunk.objects.get(pk=old.pk).content == old.content

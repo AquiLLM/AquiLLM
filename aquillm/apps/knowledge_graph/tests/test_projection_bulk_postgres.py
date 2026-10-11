@@ -90,12 +90,20 @@ def test_complete_sql_source_and_chunk_mapping_have_exact_checksum(bulk_mapping)
     with CaptureQueriesContext(connection) as captured:
         private_rows = store.load(projection_id=projection.pk)
         assert len(private_rows) == len(values)
+    bindings = [q["sql"] for q in captured if 'FROM "apps_knowledge_graph_collectiongraphprojection"' in q["sql"]]
+    references = [q["sql"] for q in captured if 'FROM "apps_knowledge_graph_projectionchunkreference"' in q["sql"]]
+    assert len(bindings) == len(references) == 1
+    assert '"representation_snapshot"' in bindings[0]
+    assert "LIMIT 250001" in references[0]
+    assert len({id(row.projection) for row in private_rows}) == 1
+    # Transaction and timeout-control statements are distinct from data reads.
+    with CaptureQueriesContext(connection) as lazy:
         for row in private_rows:
             assert row.chunk.id == row.integer_chunk_pk
             assert row.chunk.doc_id == row.document_uuid
             assert row.chunk.chunk_number == row.chunk_number
             assert {"content", "embedding"}.issubset(row.chunk.get_deferred_fields())
-    assert len(captured) == 1
+    assert len(lazy) == 0
     with CaptureQueriesContext(connection) as captured:
         DjangoChunkReferenceStore("default").fence(
             projection_id=projection.pk, checksum=checksum, row_count=len(values)

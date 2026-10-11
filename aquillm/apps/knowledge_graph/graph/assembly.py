@@ -1056,7 +1056,6 @@ def _validate_task9_lineage_node(
     config: AssemblyConfig | None = None,
 ) -> tuple[str, dict[str, object], int | None]:
     from apps.knowledge_graph.resolution.collection import (
-        CollectionResolutionConfig,
         CollectionResolutionPersistenceError,
         _collection_entity_row_audit,
         _collection_link_row_audit,
@@ -1103,17 +1102,13 @@ def _validate_task9_lineage_node(
             "Task 9 lineage marker does not match locked rows"
         )
     if is_resolution:
+        from apps.knowledge_graph.resolution.vocabulary_builds import collection_replay_config
         try:
             source_entities, source_relations = _load_resolution_source_rows(
                 artifact,
                 manifest,
                 for_update=True,
-                config=CollectionResolutionConfig(
-                    max_entities=marker["max_entities"],
-                    max_memberships=marker["max_memberships"],
-                    max_relations=marker["max_relations"],
-                    max_links=marker["max_links"],
-                ),
+                config=collection_replay_config(artifact, marker),
             )
             raw_relation_count, raw_relation_fingerprint = _raw_relation_snapshot(
                 manifest,

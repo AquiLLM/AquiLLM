@@ -1,0 +1,149 @@
+{
+  "schema": "rag-physical-vector-observation-v1",
+  "status": "observed_synthetic_diagnostic",
+  "decision": "inconclusive",
+  "activation": "off",
+  "measured_git_head": "c8a61ad8ec09fcc3b4466724a7007e0cc2afb83b",
+  "measured_tree": "dirty exact source snapshot; not a final merged candidate claim",
+  "wrapper_run": "b760bba8-6686-4d26-bb6f-e8d9e83386a6",
+  "raw_artifact_directory_id": "0e900b0c-9d3e-4e7e-ba56-1b9c5b79f8db",
+  "source_and_index_pre_post_equal": true,
+  "raw_export_manifest_verified": true,
+  "timed_invocations": 1600,
+  "plan_invocations": 320,
+  "explained_sql_statements": 640,
+  "ordinary_controls": 2,
+  "empty_controls": 2,
+  "unavailable_invocations": 0,
+  "unattempted_invocations": 0,
+  "paired_comparisons": 800,
+  "scope_sizes": [
+    1,
+    8,
+    64,
+    512,
+    4096
+  ],
+  "paired_raw_and_validated_recall_at_1_5_10": 1.0,
+  "maximum_candidate_underfill": 0,
+  "observed_ineligible_output": 0,
+  "valid_hnsw_index_present": true,
+  "hnsw_plan_occurrences": 0,
+  "rank_latency_ms": [
+    {
+      "arm": "experimental_direct_distance",
+      "max_ms": 81.85423497343436,
+      "median_ms": 49.05934596899897,
+      "min_ms": 45.18608201760799,
+      "n": 160,
+      "p95_ms": 58.22602199623361,
+      "scope": 1
+    },
+    {
+      "arm": "production_exact",
+      "max_ms": 76.49182801833376,
+      "median_ms": 49.6070189983584,
+      "min_ms": 44.90408900892362,
+      "n": 160,
+      "p95_ms": 59.86462003784254,
+      "scope": 1
+    },
+    {
+      "arm": "experimental_direct_distance",
+      "max_ms": 400.32569703180343,
+      "median_ms": 75.19186951685697,
+      "min_ms": 68.81389598129317,
+      "n": 160,
+      "p95_ms": 84.03865300351754,
+      "scope": 8
+    },
+    {
+      "arm": "production_exact",
+      "max_ms": 121.88214302295819,
+      "median_ms": 76.2429335154593,
+      "min_ms": 68.95656301639974,
+      "n": 160,
+      "p95_ms": 91.69256198219955,
+      "scope": 8
+    },
+    {
+      "arm": "experimental_direct_distance",
+      "max_ms": 483.02181100007147,
+      "median_ms": 180.06700396654196,
+      "min_ms": 168.6707659973763,
+      "n": 160,
+      "p95_ms": 205.51185199292377,
+      "scope": 64
+    },
+    {
+      "arm": "production_exact",
+      "max_ms": 634.8324669525027,
+      "median_ms": 181.028391525615,
+      "min_ms": 169.73781900014728,
+      "n": 160,
+      "p95_ms": 213.74688600189984,
+      "scope": 64
+    },
+    {
+      "arm": "experimental_direct_distance",
+      "max_ms": 694.226942025125,
+      "median_ms": 256.3646044873167,
+      "min_ms": 238.91635198378935,
+      "n": 160,
+      "p95_ms": 290.4181340127252,
+      "scope": 512
+    },
+    {
+      "arm": "production_exact",
+      "max_ms": 671.3456530123949,
+      "median_ms": 258.6315250082407,
+      "min_ms": 240.29295798391104,
+      "n": 160,
+      "p95_ms": 300.9843320469372,
+      "scope": 512
+    },
+    {
+      "arm": "experimental_direct_distance",
+      "max_ms": 921.072498022113,
+      "median_ms": 494.53320051543415,
+      "min_ms": 453.0040990212001,
+      "n": 160,
+      "p95_ms": 840.6459810212255,
+      "scope": 4096
+    },
+    {
+      "arm": "production_exact",
+      "max_ms": 966.5116939577274,
+      "median_ms": 493.8374074990861,
+      "min_ms": 463.0650450126268,
+      "n": 160,
+      "p95_ms": 836.0445650178008,
+      "scope": 4096
+    }
+  ],
+  "original_retrieval_deadline_ms": 15000,
+  "minimum_recorded_remaining_ms": 13687,
+  "postgres": "16.15",
+  "pgvector": "0.8.6",
+  "embedding_rows_in_fixture": 4224,
+  "limitations": [
+    "Deterministic synthetic geometry; semantic quality unmeasured.",
+    "No HNSW plan exercised; no ANN speedup established.",
+    "Instrumented local timings and mixed uncontrolled cache; no production latency or independent-sample confidence interval.",
+    "No optional treatment or model replacement authorized."
+  ],
+  "artifact_sha256": {
+    "invocations.jsonl": "5f3d87d770b593cb57d2b008c0a19895e8a7ac556c7fb1d3dd87893b18c12207",
+    "summary.json": "1a0c8f9ca14a13faf3afcc4340d82268fe38b526b9929b9d60256e6cbcd204a6",
+    "test-output.log": "d2a82e5f02d38f1121a40112e7d4a6475539b883512b8e8945f92c812b9a5780"
+  },
+  "host_source_manifest_sha256": "eba263b76c5281d2c2061d161672a264d4e962f5b4787ebe7eaa9cf13c07b502",
+  "observed_docker_host_capacity": {
+    "logical_cpus": 24,
+    "memory_GiB_approx": 31.3,
+    "other_remediation_stacks": "stopped for exclusive measurement; unrelated local web service remained present",
+    "resource_scope": "Docker host-visible capacity; shared and unreserved, not a dedicated measurement allocation",
+    "container_limits": "No explicit per-container CPU or memory reservation/limits in the retained attestation",
+    "background_activity": "Host/editor/background activity was not eliminated; unrelated local web service remained present"
+  }
+}

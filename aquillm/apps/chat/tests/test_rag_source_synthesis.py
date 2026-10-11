@@ -1,6 +1,5 @@
 """Source-mode synthesis protects full exact text and returns explicit limits."""
 
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -15,12 +14,12 @@ from lib.llm.types.messages import ToolMessage, UserMessage
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-def inputs():
+def inputs(*, text=None):
     row = {
         "doc_id": "11111111-1111-4111-8111-111111111111",
         "chunk_id": 1,
         "chunk": 0,
-        "text": "background " * 200 + "Tail exception: do not retain without consent.",
+        "text": text if text is not None else "background " * 200 + "Tail exception: do not retain without consent.",
     }
     packet = EvidencePacket(
         [row], [], [], "consent", "selected", "results_found", "", 500, source_mode=True
@@ -30,11 +29,9 @@ def inputs():
         SelectionCandidate,
         SelectionProfile,
     )
-    from apps.chat.tests.test_rag_selection_scoring import Policy, _authorization
     from lib.retrieval.evidence import fingerprint_source
 
     row["citation"] = f"[doc:{row['doc_id']} chunk:1]"
-    packet.source_authorization = _authorization(Policy())
     packet.selection = EvidenceSelection(
         (
             SelectionCandidate(
@@ -76,22 +73,7 @@ def inputs():
     return convo, packet
 
 
-@contextmanager
-def authorized_source_scope(packet, monkeypatch):
-    from apps.chat.services import rag_source_hydration
-    from apps.chat.tests.test_rag_selection_scoring import _chunk
-    from apps.documents.services.source_loading import (
-        SourceRuntime,
-        source_runtime_scope,
-    )
-    from lib.retrieval.turn_budget import TurnBudget, TurnLimits
-
-    chunk = _chunk(1, packet.chunks[0]["text"])
-    monkeypatch.setattr(rag_source_hydration, "source_query_rows", lambda *_: (chunk,))
-    with source_runtime_scope(
-        SourceRuntime(TurnBudget(TurnLimits()), packet.source_authorization)
-    ):
-        yield
+from apps.chat.tests.source_synthesis_authority_support import authorized_source_scope
 
 
 @pytest.mark.asyncio
@@ -130,7 +112,7 @@ async def test_synthesis_guard_keeps_history_and_exact_payload(monkeypatch):
             AssistantMessage(content="Supported answer", stop_reason="end_turn")
         ], "changed"
 
-    with authorized_source_scope(packet, monkeypatch):
+    async with authorized_source_scope(packet, monkeypatch, convo):
         result = await synthesize_from_evidence(
             SimpleNamespace(complete=complete), convo, packet
         )
@@ -141,23 +123,15 @@ async def test_synthesis_guard_keeps_history_and_exact_payload(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_last_moment_revalidation_can_remove_changed_packet(monkeypatch):
-    from apps.chat.services import rag_source_hydration
-    from apps.chat.services.rag_selection_types import (
-        EvidenceSelection,
-        SelectionProfile,
-    )
+    from channels.db import database_sync_to_async
 
     monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "16000")
     convo, packet = inputs()
-    packet.source_authorization = object()
-    packet.selection = EvidenceSelection(
-        (), 0, SelectionProfile("test", 1, 0, "v1"), "rank_fallback"
-    )
-    monkeypatch.setattr(
-        rag_source_hydration, "revalidate_source_candidates", lambda *_a, **_kw: ()
-    )
     llm = SimpleNamespace(complete=AsyncMock())
-    with authorized_source_scope(packet, monkeypatch):
+    async with authorized_source_scope(packet, monkeypatch, convo) as acquired:
+        original = acquired.runtime._frozen_retrieval_scope
+        await database_sync_to_async(acquired.permission.delete)()
+        assert acquired.runtime._frozen_retrieval_scope is original
         result = await synthesize_from_evidence(llm, convo, packet)
     assert result[-1].content == LIMITED_ANSWER
     llm.complete.assert_not_called()

@@ -2,6 +2,5 @@
 
 
 def delete_document_chunks(sender, instance, using, **kwargs):
-    from .models import TextChunk
-
-    TextChunk.objects.using(using).filter(doc_id=instance.id).delete()
+    from .services.representation_history import delete_legacy_remainder
+    delete_legacy_remainder(instance, using=using)

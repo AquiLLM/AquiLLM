@@ -140,7 +140,8 @@ def test_batch_overflow_is_atomic_before_any_candidate_mutation():
     with pytest.raises(FrontierBudgetExceeded):
         new_page = replace(
             page,
-            relation_evidence=(replace(rows[0], evidence_key=key("new-provenance")),),
+            relation_evidence=(replace(rows[0], evidence_key=key("new-row"),
+                                      provenance_key=key("new-provenance")),),
         )
         accumulator.add_page(
             new_page, generation=f.generation, ready=f.ready, origin=origin, entry=entry
@@ -188,3 +189,20 @@ def test_real_loader_reports_association_overflow_as_partial(monkeypatch):
         and "frontier_budget" in result.coverage.reasons
     )
     assert budget.source_rows > 1 and budget.queries > 1
+
+
+def test_semantic_association_keys_preserve_physical_snapshot_and_ranking():
+    f = AssociationFixture(("one",))
+    f.add("one", relations=(("a", "supports", "b"),))
+    row = f.pages[0][0].relation_evidence[0]
+    topology = f.topology()
+    ref, = topology.evidence_candidates
+    assert row.provenance_key != row.evidence_key
+    assert ref.evidence_provenance_keys == (row.provenance_key,)
+    assert ref.associations[0].provenance_key == row.provenance_key
+    physical, = topology.snapshot.relation_groups[0].evidence
+    assert physical.provenance_key == row.evidence_key
+    selected, = f.select().candidates
+    assert selected.chunk_key == row.chunk_key
+    assert selected.evidence_provenance_keys == (row.provenance_key,)
+    assert selected.relation_types == ("supports",)

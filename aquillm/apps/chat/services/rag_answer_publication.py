@@ -29,6 +29,9 @@ def bind_packet_publication(packet, *, lease=None, scope_check=None):
     turn = current_turn()
     if turn is None:
         return None
+    if packet.source_authorization is not None:
+        from .rag_representation_publication import retain_acquired_snapshot
+        retain_acquired_snapshot(packet)
     context = None
 
     async def authorize():
@@ -49,6 +52,10 @@ def bind_packet_publication(packet, *, lease=None, scope_check=None):
         scope_check=scope_check or getattr(packet, "_publication_scope_check", None),
     )
     turn.answer_publication = context
+    from apps.documents.services.representation_manual_scope import bind_manual_publication
+    from .rag_representation_publication import publication_runtime
+    if packet.source_authorization is not None:
+        bind_manual_publication(packet, context, publication_runtime())
     return context
 
 
@@ -58,6 +65,9 @@ async def finalize_rag_answer(text, *, packet, authorize, limited_reason=None):
         raise AnswerPublicationRejected("unbound_receipt")
     context = turn.answer_publication
     if context is None:
+        if packet.source_authorization is not None:
+            from .rag_representation_publication import retain_acquired_snapshot
+            retain_acquired_snapshot(packet)
         context = RagAnswerPublication(
             packet=packet, authorize=authorize, turn=turn, lease=turn.budget._synthesis
         )

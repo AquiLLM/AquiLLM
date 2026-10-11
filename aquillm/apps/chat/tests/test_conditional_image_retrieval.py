@@ -10,6 +10,11 @@ from django.test.utils import CaptureQueriesContext
 from apps.chat.refs import CollectionsRef
 from apps.chat.tests.test_rag_source_document_tools import docs as docs
 from apps.chat.tests.test_rag_source_figures import figure_for
+from apps.documents.tests.representation_support import upload as upload
+from apps.documents.tests.test_representation_media import figure as figure
+from .manual_routing_support import current_figure as current_figure
+from apps.documents.services.representation_media_acquisition import initialize_media_runtime
+from lib.llm.turn_context import TurnContext, bind_turn
 from apps.documents.services.source_loading import SourceRuntime, source_runtime_scope
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import UserMessage
@@ -93,27 +98,29 @@ def test_whole_document_only_loads_figures_when_opted_in(
     assert "exception" not in result
     if not include_images:
         assert isinstance(result["result"], str)
-    text = result["result"]["text"] if include_images else result["result"]
+    emitted = include_images and not source_mode
+    text = result["result"]["text"] if emitted else result["result"]
     assert all(chunk.content in text for chunk in chunks)
     assert len(result["citation_chunks"]) == 3
-    if include_images:
+    if emitted:
         assert result["result"]["figures"][0]["image_url"] == (
             f"/aquillm/document_image/{figure.id}/"
         )
-        if source_mode:
-            assert result["_figure_provenance"]
-    else:
+    elif not include_images:
         assert "_image_instruction" not in result
         assert result.get("retrieval_status") != "partial"
         assert not any(
             '"aquillm_documentfigure"."parent_object_id" =' in q["sql"] for q in queries
         )
+    else:
+        assert result["retrieval_status"] == "partial"
+        assert "image_url" not in str(result)
 
 
 @pytest.mark.parametrize("single_document", [False, True])
 @pytest.mark.parametrize("include_images", [False, True])
 def test_search_tools_expose_images_only_after_opt_in(
-    docs, monkeypatch, single_document, include_images
+    current_figure, monkeypatch, single_document, include_images
 ):
     from apps.chat.services.tool_wiring.documents import (
         search_single_document_tool,
@@ -121,49 +128,45 @@ def test_search_tools_expose_images_only_after_opt_in(
     )
     from apps.documents.models import TextChunk
 
-    user, doc, _, _ = docs
-    figure = figure_for(user, doc, "A useful calibration plot.")
-    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "preview")
-    chunk = SimpleNamespace(
-        id=7,
-        doc_id=figure.id,
-        chunk_number=1,
-        modality=TextChunk.Modality.IMAGE,
-        content="Caption evidence.",
-    )
+    user, figure, chunk = current_figure
+    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "legacy")
+    monkeypatch.setenv("RAG_EVIDENCE_TOKEN_BUDGET", "10000")
     monkeypatch.setattr(
         TextChunk,
         "text_chunk_search",
         lambda *args, **kwargs: (None, None, [chunk], {}),
     )
-    monkeypatch.setattr(figure.image_file.storage, "exists", lambda *args: True)
     factory = search_single_document_tool if single_document else vector_search_tool
-    tool = factory(user, CollectionsRef([doc.collection_id]))
+    consumer = SimpleNamespace(user=user, col_ref=CollectionsRef([figure.collection_id]))
+    turn = TurnContext(TurnBudget(TurnLimits()))
+    initialize_media_runtime(consumer, turn)
+    tool = factory(user, consumer.col_ref)
     arguments = {"search_string": "calibration plot", "top_k": 5}
     if single_document:
         arguments["doc_id"] = str(figure.id)
     if include_images:
         arguments["include_images"] = True
 
-    result = tool(**arguments)
+    with bind_turn(turn):
+        result = tool(**arguments)
 
     assert "exception" not in result
     row = result["result"][0]
-    assert row["text"] == "Caption evidence."
-    assert row["citation"] == f"[doc:{figure.id} chunk:7]"
+    assert row["text"] == chunk.content
+    assert row["citation"] == f"[doc:{figure.id} chunk:{chunk.pk}]"
     assert ("image_url" in row) is include_images
     assert ("_image_instruction" in result) is include_images
 
 
 @pytest.mark.parametrize("include_images", [False, True])
 def test_opening_an_image_document_preserves_ocr_without_implicit_image(
-    docs, monkeypatch, include_images
+    current_figure, monkeypatch, include_images
 ):
     from apps.chat.services.tool_wiring.documents import whole_document_tool
 
-    user, doc, _, _ = docs
-    figure = figure_for(user, doc, "Calibration plot.")
-    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "preview")
+    user, figure, chunk = current_figure
+    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "legacy")
+    monkeypatch.setenv("RAG_EVIDENCE_TOKEN_BUDGET", "10000")
 
     async def token_count(_convo, _text):
         return 100
@@ -177,16 +180,18 @@ def test_opening_an_image_document_preserves_ocr_without_implicit_image(
     arguments = {"doc_id": str(figure.id)}
     if include_images:
         arguments["include_images"] = True
-    result = whole_document_tool(user, chat, CollectionsRef([doc.collection_id]))(
-        **arguments
-    )
+    consumer = SimpleNamespace(user=user, col_ref=CollectionsRef([figure.collection_id]))
+    turn = TurnContext(TurnBudget(TurnLimits()))
+    initialize_media_runtime(consumer, turn)
+    with bind_turn(turn):
+        result = whole_document_tool(user, chat, consumer.col_ref)(**arguments)
 
     assert "exception" not in result
     if include_images:
-        assert result["result"]["text"] == "OCR fallback"
-        assert result["result"]["image_url"] == f"/aquillm/document_image/{figure.id}/"
+        assert chunk.content in result["result"]["text"]
+        assert result["result"]["image_url"] == f"/aquillm/document_image/{figure.id}/?chunk_id={chunk.pk}"
     else:
-        assert result["result"] == "OCR fallback"
+        assert chunk.content in result["result"]
         assert "_image_instruction" not in result
 
 

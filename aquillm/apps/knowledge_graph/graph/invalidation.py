@@ -492,29 +492,16 @@ class _BoundedDeleteCollector(Collector):
     """Collector variant that caps materialization before Django builds sets."""
 
     def can_fast_delete(self, objs, from_field=None):
-        model = getattr(objs, "model", None)
-        meta = getattr(model or objs, "_meta", None)
-        if meta is not None and meta.label_lower in {
-            "apps_collections.vocabularyset", "apps_collections.vocabularydraft",
-            "apps_collections.vocabularyversion", "apps_collections.vocabularyentry",
-            "apps_collections.vocabularyattachment",
-        }:
-            return False
-        return super().can_fast_delete(objs, from_field=from_field)
+        from .representation_delete import must_collect_history
+        return not must_collect_history(objs) and super().can_fast_delete(objs, from_field=from_field)
 
     def __init__(self, *, using: str, origin: object):
         super().__init__(using=using, origin=origin)
         self._bounded_source_count = 0
 
     def add(self, objs, source=None, nullable=False, reverse_dependency=False):
-        from django.db.models import QuerySet
-
-        if isinstance(objs, QuerySet):
-            bounded = tuple(objs[: _MAX_LIFECYCLE_ROWS + 1])
-        else:
-            bounded = tuple(islice(iter(objs), _MAX_LIFECYCLE_ROWS + 1))
-        if len(bounded) > _MAX_LIFECYCLE_ROWS:
-            raise RuntimeError("delete origin exceeds the bounded lifecycle row limit")
+        from .representation_delete import bounded_new_objects, collect_exact_dense_history
+        bounded = bounded_new_objects(self, objs, _MAX_LIFECYCLE_ROWS)
         new_objects = super().add(
             bounded,
             source=source,
@@ -524,6 +511,7 @@ class _BoundedDeleteCollector(Collector):
         self._bounded_source_count += len(new_objects)
         if self._bounded_source_count > _MAX_LIFECYCLE_ROWS:
             raise RuntimeError("delete origin exceeds the bounded lifecycle row limit")
+        collect_exact_dense_history(self, new_objects)
         return new_objects
 
 
@@ -2021,9 +2009,10 @@ def cleanup_document_graph_state(
                     using=alias,
                 )
                 _delete_artifacts(document_artifacts, using=alias)
-                TextChunk.objects.using(alias).filter(
-                    doc_id=document.document_id
-                ).delete()
+                if reason not in ("document_content_changed", "document_chunks_replaced", "document_moved"):
+                    TextChunk.objects.using(alias).filter(
+                        doc_id=document.document_id
+                    ).delete()
                 result = DocumentGraphCleanupResult(
                     affected_collection_ids=final_affected,
                     current_collection_id=row.collection_id,

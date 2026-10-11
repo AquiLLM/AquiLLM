@@ -89,9 +89,17 @@ class TextChunk(models.Model):
     section_path = models.JSONField(default=list)
     embedding = VectorField(dimensions=1024, blank=True, null=True)
     embedding_provenance = models.JSONField(blank=True, null=True)
-    representation_generation = models.UUIDField(
-        null=True, db_column="representation_generation_id"
+    representation_generation = models.ForeignKey(
+        "DocumentRepresentationGeneration", null=True, on_delete=models.DO_NOTHING,
+        db_column="representation_generation_id",
     )
+    legacy_source_snapshot = models.ForeignKey(
+        "LegacyDocumentSourceSnapshot", null=True, on_delete=models.DO_NOTHING,
+    )
+    legacy_context_status = models.CharField(max_length=16, default="unbound")
+    legacy_artifact_status = models.CharField(max_length=16, default="unbound")
+    legacy_context_failure_code = models.CharField(max_length=64, default="", blank=True)
+    legacy_artifact_failure_code = models.CharField(max_length=64, default="", blank=True)
 
     doc_id = models.UUIDField(editable=False, validators=[doc_id_validator])
 
@@ -103,11 +111,25 @@ class TextChunk(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["doc_id", "start_position", "end_position"],
-                name="unique_chunk_position_per_document",
+                name="legacy_chunk_position_unique",
+                condition=models.Q(representation_generation__isnull=True),
             ),
             models.UniqueConstraint(
                 fields=["doc_id", "chunk_number"],
-                name="uniqe_chunk_per_document",
+                name="legacy_chunk_number_unique",
+                condition=models.Q(representation_generation__isnull=True),
+            ),
+            models.UniqueConstraint(
+                fields=["doc_id", "representation_generation", "chunk_number"],
+                name="generation_chunk_number_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["doc_id", "representation_generation", "start_position", "end_position"],
+                name="generation_chunk_position_unique",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(representation_generation__isnull=True) | models.Q(legacy_source_snapshot__isnull=True),
+                name="chunk_single_source_binding",
             ),
         ]
         indexes = [
@@ -134,12 +156,8 @@ class TextChunk(models.Model):
     @property
     def document(self):
         """Get the parent document for this chunk."""
-        descended_from_document = _get_descended_from_document()
-        for t in descended_from_document:
-            doc = t.objects.filter(id=self.doc_id).first()
-            if doc:
-                return doc
-        raise ValidationError(f"TextChunk {self.pk} is not associated with a document!")
+        from apps.documents.services.representation_history import exact_chunk_document
+        return exact_chunk_document(self, using=self._state.db or "default")
 
     @document.setter
     def document(self, doc):

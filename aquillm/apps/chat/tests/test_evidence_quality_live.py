@@ -185,6 +185,6 @@ async def test_actual_asgi_seed_retrieval_and_sdk_observation(
             assert 0 < result["pairs"]["acquisition"] <= 5
             assert result["pairs"]["final"] == 0
     else:
-        # R1 publishes a ledger even when this inactive-runtime fixture charges none.
-        assert result["actions"] == 0
+        # Default acquisition uses the original turn ledger without source preservation.
+        assert result["actions"] == 1
         assert len(result["delivered"]) == 3

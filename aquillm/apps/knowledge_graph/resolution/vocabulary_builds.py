@@ -27,6 +27,16 @@ def document_artifact_policy(artifact, *, using="default"):
     return validate_artifact(artifact, capture, collection_id=document.collection_id)
 
 
+def document_replay_context(artifact):
+    """Revalidate the persisted capsule before replaying its original policy."""
+    vocabulary = document_artifact_policy(artifact, using=artifact._state.db or "default")
+    collection_id = None
+    if vocabulary is not None:
+        from apps.knowledge_graph.extraction.pipeline import _get_concrete_document
+        collection_id = _get_concrete_document(artifact.scope_id).collection_id
+    return dict(vocabulary=vocabulary, collection_id=collection_id)
+
+
 def bind_collection_config(config, collection_id, artifacts=(), *, using="default"):
     capture = capture_build_vocabulary((collection_id,), using=using)
     capsule = capture.get(collection_id) if capture is not None else None
@@ -36,6 +46,18 @@ def bind_collection_config(config, collection_id, artifacts=(), *, using="defaul
     for artifact in artifacts:
         validate_artifact(artifact, capture, collection_id=collection_id)
     return replace(config, vocabulary=policy), capsule
+
+
+def collection_replay_config(artifact, marker):
+    """Retain committed row caps and validate the artifact's current veto policy."""
+    from .collection import CollectionResolutionConfig
+    from .vocabulary_capture import current_artifact_policy
+    return CollectionResolutionConfig(
+        max_entities=marker["max_entities"], max_memberships=marker["max_memberships"],
+        max_relations=marker["max_relations"], max_links=marker["max_links"],
+        vocabulary=current_artifact_policy(artifact,
+            collection_id=artifact.collection_scope_id, using=artifact._state.db or "default"),
+    )
 
 
 def collection_metadata(capsule, config):

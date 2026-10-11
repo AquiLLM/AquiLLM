@@ -19,9 +19,16 @@ def admit_tool_action(
     kind, query="", document_id=None, chunk_id=None, *, include_images=False
 ):
     runtime = current_source_runtime()
-    if runtime is None:
+    turn = current_turn()
+    if turn is not None:
+        budget = turn.budget
+        if runtime is not None and runtime.budget is not budget:
+            return False
+    elif runtime is not None:
+        budget = runtime.budget
+    else:
         return True
-    runtime.budget.check_active()
+    budget.check_active()
     action = AcquisitionAction(
         kind, query, str(document_id) if document_id else None, chunk_id
     )
@@ -30,7 +37,7 @@ def admit_tool_action(
         signature = json.dumps(
             [signature, "include_images", True], separators=(",", ":")
         )
-    return runtime.budget.reserve_action(signature)
+    return budget.reserve_action(signature)
 
 
 def limited_action_result():

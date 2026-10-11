@@ -34,6 +34,7 @@ from apps.documents.services.source_loading import (
     SourcePreparationLimited,
     current_source_runtime,
 )
+from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from lib.llm.evidence_guard import ContextLimited
 from lib.llm.providers import visibility
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
@@ -170,7 +171,7 @@ async def synthesize_from_evidence(
         try:
             packet = await revalidate_source_packet(packet)
             packet = await finalize_source_support(packet)
-        except SourcePreparationLimited:
+        except (SourcePreparationLimited, SourceScopeUnavailable):
             return await finish(
                 convo
                 + [AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")],
@@ -216,6 +217,8 @@ async def synthesize_from_evidence(
     budget = max_tokens if max_tokens is not None else synthesis_max_tokens()
     try:
         if bounded_packet:
+            from .rag_immutable_images import authorize_media_dispatch
+            await authorize_media_dispatch(packet, pre_seal=True)
             completed_request, _ = await complete_source_request(
                 llm_if, request_convo, budget, None, packet=packet
             )
@@ -257,6 +260,8 @@ async def synthesize_from_evidence(
             from lib.llm.turn_context import suppress_evidence_handoff
 
             with protect_evidence(protection), suppress_evidence_handoff():
+                from .rag_immutable_images import authorize_media_dispatch
+                await authorize_media_dispatch(packet)
                 completed_request, _ = await llm_if.complete(
                     request_convo, budget, stream_func=None
                 )

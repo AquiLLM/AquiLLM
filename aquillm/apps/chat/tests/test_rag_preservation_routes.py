@@ -97,6 +97,7 @@ async def test_manual_exact_document_outside_selection_uses_same_budget(
 ):
     from apps.chat.services.manual_search_turn import run_manual_search_turn
     from apps.chat.services.rag_turn import preservation_turn
+    from lib.llm.turn_context import current_turn
 
     user, doc, chunks, _ = docs
     configure(monkeypatch)
@@ -114,13 +115,15 @@ async def test_manual_exact_document_outside_selection_uses_same_budget(
     )
     consumer = SimpleNamespace(user=user, col_ref=CollectionsRef([]), convo=convo)
     async with preservation_turn(consumer, max_func_calls=3) as runtime:
+        assert runtime is None  # Empty picker has no authorized public source scope.
+        original_budget = current_turn().budget
         assert (
             await run_manual_search_turn(
                 consumer, SimpleNamespace(complete=complete), convo
             )
             == "handled"
         )
-        assert runtime.budget.actions_used == 1
+        assert current_turn().budget is original_budget and original_budget.actions_used == 1
     assert len(captured) == 1
     assert chunks[-1].content in captured[0][-1].content
     assert consumer.col_ref.collections == []

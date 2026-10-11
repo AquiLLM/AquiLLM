@@ -91,7 +91,7 @@ def publish_chunk_search_vectors(
             type(chunk.pk) is not int
             or chunk.pk <= 0
             or chunk.doc_id != locked.id
-            or chunk.representation_generation != representation_key
+            or chunk.representation_generation_id != representation_key
         ):
             raise SourceScopeUnavailable("source_scope_unavailable")
         if chunk.modality != TextChunk.Modality.TEXT:

@@ -56,8 +56,16 @@ def ordered_selections(snapshot):
         if s.document.id in seen:
             _unavailable()
         seen.add(s.document.id)
-        if s.generation_key is not None or s.source_revision_sha256 is not None:
-            _unavailable()  # I5 installs the exact active representation owner.
+        if s.generation_key is None:
+            if s.source_revision_sha256 is not None:
+                _unavailable()
+        else:
+            if type(s.generation_key) is not UUID:
+                _unavailable()
+            try:
+                require_digest(s.source_revision_sha256)
+            except ValueError:
+                _unavailable()
         if s.canonical_sha256 != s.document.source_hash:
             _unavailable()
     return tuple(
@@ -75,9 +83,9 @@ def representation_snapshot_digest(snapshot: RepresentationSnapshotV1) -> str:
             "selections": [
                 {
                     "document": document_payload(s.document),
-                    "generation_key": None,
+                    "generation_key": str(s.generation_key) if s.generation_key else None,
                     "canonical_sha256": s.canonical_sha256,
-                    "source_revision_sha256": None,
+                    "source_revision_sha256": s.source_revision_sha256,
                 }
                 for s in ordered_selections(snapshot)
             ],
@@ -85,69 +93,76 @@ def representation_snapshot_digest(snapshot: RepresentationSnapshotV1) -> str:
     )
 
 
-def validate_representation_snapshot(
-    snapshot: RepresentationSnapshotV1, *, using: str
-) -> RepresentationSnapshotV1:
+def validate_document_reference(ref, *, using):
+    document_payload(ref)
     from apps.documents.models import DESCENDED_FROM_DOCUMENT
 
-    for s in ordered_selections(snapshot):
-        ref = s.document
-        owners = []
-        for model in DESCENDED_FROM_DOCUMENT:
-            rows = (
-                model._base_manager.using(using)
-                .filter(id=ref.id)
-                .annotate(_canonical=SourceSHA256(F("full_text")))
-                .values("pkid", "id", "collection_id", "full_text_hash", "_canonical")[
-                    :2
-                ]
-            )
-            owners.extend((model._meta.label_lower, row) for row in rows)
-        if len(owners) != 1:
-            _unavailable()
-        label, row = owners[0]
-        if (
-            label,
-            row["pkid"],
-            row["id"],
-            row["collection_id"],
-            row["full_text_hash"],
-            row["_canonical"],
-        ) != (
-            ref.model_label,
-            ref.pkid,
-            ref.id,
-            ref.collection_id,
-            ref.source_hash,
-            s.canonical_sha256,
-        ):
-            _unavailable()
-    return snapshot
+    owners = []
+    for model in DESCENDED_FROM_DOCUMENT:
+        rows = (
+            model._base_manager.using(using)
+            .filter(id=ref.id)
+            .annotate(_canonical=SourceSHA256(F("full_text")))
+            .values("pkid", "id", "collection_id", "full_text_hash", "_canonical")[
+                :2
+            ]
+        )
+        owners.extend((model._meta.label_lower, row) for row in rows)
+    if len(owners) != 1:
+        _unavailable()
+    label, row = owners[0]
+    if (
+        label,
+        row["pkid"],
+        row["id"],
+        row["collection_id"],
+        row["full_text_hash"],
+        row["_canonical"],
+    ) != (
+        ref.model_label,
+        ref.pkid,
+        ref.id,
+        ref.collection_id,
+        ref.source_hash,
+        ref.source_hash,
+    ):
+        _unavailable()
+    return ref
 
+
+def validate_representation_snapshot(snapshot: RepresentationSnapshotV1, *, using: str) -> RepresentationSnapshotV1:
+    from .representation_validation_rows import validate_document_rows, validate_state_rows
+    selections = ordered_selections(snapshot)
+    if selections:
+        validate_document_rows(selections, using=using)
+        validate_state_rows(selections, using=using)
+    return snapshot
 
 def freeze_active_representations(
     documents: tuple[DocumentRefV1, ...], *, using: str
 ) -> RepresentationSnapshotV1:
     if type(documents) is not tuple:
         _unavailable()
-    snapshot = RepresentationSnapshotV1(
-        tuple(
-            RepresentationSelectionV1(ref, None, ref.source_hash, None)
-            for ref in documents
-        )
-    )
+    from .representation_scope import selection_for_document
+    snapshot = RepresentationSnapshotV1(tuple(selection_for_document(ref, using=using) for ref in documents))
     return validate_representation_snapshot(snapshot, using=using)
 
 
 def active_chunk_scope(queryset, *, snapshot):
     """Lazy predicates also close a UUID collision after this function returns."""
+    validate_representation_snapshot(snapshot, using=queryset.db)
+    return _active_chunk_predicates(queryset, snapshot=snapshot)
+
+
+def _active_chunk_predicates(queryset, *, snapshot):
+    """Build unchanged SQL fences within a caller's fresh validation boundary."""
     from apps.documents.models import DESCENDED_FROM_DOCUMENT
 
-    validate_representation_snapshot(snapshot, using=queryset.db)
     condition = Q(pk__in=[])
     for s in ordered_selections(snapshot):
         ref = s.document
-        clause = Q(doc_id=ref.id, representation_generation__isnull=True)
+        from .representation_scope import current_state_clause
+        clause = Q(doc_id=ref.id, representation_generation_id=s.generation_key) & current_state_clause(s, using=queryset.db)
         for model in DESCENDED_FROM_DOCUMENT:
             owners = model._base_manager.using(queryset.db).filter(id=ref.id)
             if model._meta.label_lower == ref.model_label:
@@ -162,3 +177,8 @@ def active_chunk_scope(queryset, *, snapshot):
                 clause &= ~Q(Exists(owners))
         condition |= clause
     return queryset.filter(condition)
+
+
+def load_chunk_source(chunk_id, *, using):
+    from .representation_citations import load_chunk_source as load
+    return load(chunk_id, using=using)
