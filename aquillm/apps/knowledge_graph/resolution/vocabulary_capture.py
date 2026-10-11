@@ -5,8 +5,6 @@ import os
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import DatabaseError
 
-from apps.collections.services.vocabulary import _authorization, published_entries
-from apps.collections.services.vocabulary_access import read_pins
 from apps.collections.services.vocabulary_contracts import MAX_BYTES, digest, normalized
 from apps.collections.services.vocabulary_database import vocabulary_database
 from .vocabulary_policy import ScopedVetoV1, bind_digest
@@ -47,9 +45,16 @@ class VocabularyCaptureV1:
         return next((c for c in self.capsules if c.collection_id == cid), None)
 
 
+def read_pins(selected, using, actor=None):
+    """Keep graph imports independent of Django model initialization."""
+    from apps.collections.services.vocabulary_access import read_pins as read
+    return read(selected, using, actor)
+
+
 def capture_build_vocabulary(collection_ids, *, using="default", actor=None):
     if not enabled():
         return None
+    from apps.collections.services.vocabulary import published_entries
     selected = tuple(sorted(set(collection_ids)))
     if not selected:
         return VocabularyCaptureV1((), ())
@@ -83,6 +88,7 @@ def capture_build_vocabulary(collection_ids, *, using="default", actor=None):
 def capture_retrieval_vocabulary(authorization):
     if not enabled():
         return None
+    from apps.collections.services.vocabulary import _authorization
     from apps.documents.services.source_loading import current_source_runtime
     runtime = current_source_runtime()
     if runtime is None or runtime.authorization is not authorization:

@@ -25,7 +25,6 @@ import json
 import os
 import re
 import sys
-import tempfile
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from contextlib import nullcontext
@@ -42,6 +41,7 @@ from uuid import UUID
 
 import yaml
 
+from .atomic_report_io import _atomic_replace_text
 from . import task21_hybrid_eval as _task21_hybrid_eval
 from .fixture_manifest import (
     FixtureEmbeddingBinding,
@@ -3937,28 +3937,6 @@ def _load_comparison_report(path: Path) -> Mapping[str, Any]:
             f"could not read comparison report {path}: {exc}"
         ) from exc
     return validate_comparison_bundle(payload)
-
-
-def _atomic_replace_text(path: Path, contents: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-        text=True,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(contents)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        try:
-            temporary.unlink(missing_ok=True)
-        finally:
-            raise
 
 
 def atomic_write_json(path: Path, payload: Any) -> None:
