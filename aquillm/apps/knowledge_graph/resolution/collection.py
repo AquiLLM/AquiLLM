@@ -7,6 +7,14 @@ safe to import in web workers that do not install the optional KG runtime.
 
 from __future__ import annotations
 
+from .collection_components import (
+    _DisjointSet,
+    _conflict_reason,
+    _identity_signature,
+    _component_anchors,
+    _component_pair_stable_key,
+)
+
 import json
 import re
 import uuid
@@ -886,85 +894,6 @@ class CollectionResolutionResult:
                 raise ValueError("result checksum is invalid")
 
 
-class _DisjointSet:
-    def __init__(
-        self,
-        values: Iterable[int],
-        *,
-        identifiers: Mapping[int, frozenset[str]] | None = None,
-        versions: Mapping[int, frozenset[str]] | None = None,
-        entity_types: Mapping[int, frozenset[str]] | None = None,
-        vocabulary=None, vocabulary_endpoints=None,
-    ) -> None:
-        self.parent = {value: value for value in values}
-        self.vocabulary = vocabulary
-        self.vocabulary_members = {
-            value: endpoint_terms(vocabulary, vocabulary_endpoints[value])
-            if vocabulary_endpoints is not None else frozenset()
-            for value in self.parent
-        }
-        self.identifiers = {
-            value: frozenset() if identifiers is None else identifiers[value]
-            for value in self.parent
-        }
-        self.versions = {
-            value: frozenset() if versions is None else versions[value]
-            for value in self.parent
-        }
-        self.entity_types = {
-            value: frozenset() if entity_types is None else entity_types[value]
-            for value in self.parent
-        }
-
-    def find(self, value: int) -> int:
-        root = value
-        while self.parent[root] != root:
-            root = self.parent[root]
-        while self.parent[value] != value:
-            next_value = self.parent[value]
-            self.parent[value] = root
-            value = next_value
-        return root
-
-    def union(self, left: int, right: int) -> int:
-        left_root, right_root = self.find(left), self.find(right)
-        if left_root == right_root:
-            return left_root
-        root, child = sorted((left_root, right_root))
-        self.parent[child] = root
-        self.identifiers[root] = self.identifiers[root] | self.identifiers[child]
-        self.versions[root] = self.versions[root] | self.versions[child]
-        self.entity_types[root] = self.entity_types[root] | self.entity_types[child]
-        self.vocabulary_members[root] |= self.vocabulary_members[child]
-        return root
-
-    def try_union(self, left: int, right: int) -> tuple[int | None, str | None]:
-        """Merge only when every component-level cannot-link remains true."""
-
-        left_root, right_root = self.find(left), self.find(right)
-        if left_root == right_root:
-            return left_root, None
-        identifiers = self.identifiers[left_root] | self.identifiers[right_root]
-        if len(identifiers) > 1:
-            return None, "component_stable_identifier_conflict"
-        versions = self.versions[left_root] | self.versions[right_root]
-        if len(versions) > 1:
-            return None, "component_version_signature_conflict"
-        entity_types = self.entity_types[left_root] | self.entity_types[right_root]
-        if len(entity_types) > 1:
-            return None, "component_ontology_type_conflict"
-        if component_veto(self.vocabulary,
-            self.vocabulary_members[left_root] | self.vocabulary_members[right_root]):
-            return None, "component_vocabulary_veto"
-        return self.union(left_root, right_root), None
-
-    def groups(self) -> dict[int, tuple[int, ...]]:
-        result: dict[int, list[int]] = defaultdict(list)
-        for value in sorted(self.parent):
-            result[self.find(value)].append(value)
-        return {root: tuple(values) for root, values in sorted(result.items())}
-
-
 def _ontology_maps(ontology: object) -> tuple[dict[str, str], frozenset[str]]:
     definitions = getattr(ontology, "entity_types", None)
     if not isinstance(definitions, Mapping) or not definitions:
@@ -1067,18 +996,6 @@ def _is_undefined_acronym(entity: DocumentEntityInput) -> bool:
     )
 
 
-def _conflict_reason(
-    left: DocumentEntityInput, right: DocumentEntityInput
-) -> str | None:
-    if left.version_signature != right.version_signature and (
-        left.version_signature or right.version_signature
-    ):
-        return "version_signature_conflict"
-    if left.identifier and right.identifier and left.identifier != right.identifier:
-        return "conflicting_stable_identifiers"
-    return None
-
-
 def _decision(
     left: int,
     right: int,
@@ -1112,17 +1029,6 @@ def _decision(
         left_embedding_input_hash=left_hash,
         right_embedding_input_hash=right_hash,
         candidate_rank=rank,
-    )
-
-
-def _identity_signature(
-    entity: DocumentEntityInput, canonical_type: str | None
-) -> tuple[str, str, str, str]:
-    return (
-        canonical_type or f"unknown:{entity.entity_type}",
-        entity.identifier,
-        normalize_entity_label(entity.normalized_label).key,
-        entity.version_signature,
     )
 
 
@@ -1487,20 +1393,6 @@ def resolution_result_checksum(result: CollectionResolutionResult) -> str:
     return _hash(_result_content(result))
 
 
-def _component_anchors(
-    members: Sequence[int], entities: Mapping[int, DocumentEntityInput]
-) -> tuple[frozenset[str], frozenset[str]]:
-    identifiers = frozenset(
-        entities[item].identifier for item in members if entities[item].identifier
-    )
-    versions = frozenset(
-        entities[item].version_signature
-        for item in members
-        if entities[item].version_signature
-    )
-    return identifiers, versions
-
-
 def _semantic_pair_is_eligible(
     left: int,
     right: int,
@@ -1570,14 +1462,6 @@ def _component_stable_key(
     """Address a deterministic component without using database insertion IDs."""
 
     return _hash(sorted(entities[item].document_cluster_key for item in members))
-
-
-def _component_pair_stable_key(
-    left: int,
-    right: int,
-    component_keys: Mapping[int, str],
-) -> tuple[str, str]:
-    return tuple(sorted((component_keys[left], component_keys[right])))  # type: ignore[return-value]
 
 
 def _automatic_conflict_components(

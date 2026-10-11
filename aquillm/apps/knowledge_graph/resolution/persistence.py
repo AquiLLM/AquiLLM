@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+from .persistence_values import (
+    _QUERY_ITERATOR_BATCH_SIZE,
+    _record_value,
+    _json_value,
+    _bounded_rows,
+)
+
 import json
 import re
-from collections.abc import Mapping
 from dataclasses import asdict
-from datetime import date, datetime
 from hashlib import sha256
-from itertools import islice
-from math import isfinite
-from uuid import UUID
 
 from . import DOCUMENT_CONTEXTUAL_RESOLVER_VERSION
 from .commit_validation import resolution_commit_is_valid
@@ -29,7 +31,6 @@ from .coreference_types import _is_hash
 from .source_exclusions import resolvable_mentions, source_exclusion_audit
 
 _HASH = re.compile(r"[0-9a-f]{64}")
-_QUERY_ITERATOR_BATCH_SIZE = 1_000
 _SOURCE_FIELDS = (
     "id",
     "artifact_id",
@@ -85,58 +86,6 @@ def _contextual_decision_audit(result):
         "resolver_version": result.resolver_version,
         "decisions": [asdict(decision) for decision in result.decisions],
     }
-
-
-def _record_value(record: object, field: str) -> object:
-    if isinstance(record, Mapping):
-        return record.get(field)
-    return getattr(record, field, None)
-
-
-def _json_value(value: object) -> object:
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
-    if isinstance(value, float):
-        if not isfinite(value):
-            raise ValueError("mention fingerprint values must be finite")
-        return value
-    if isinstance(value, Mapping):
-        if not all(isinstance(key, str) for key in value):
-            raise ValueError("mention metadata keys must be strings")
-        return {key: _json_value(value[key]) for key in sorted(value)}
-    if isinstance(value, (tuple, list)):
-        return [_json_value(item) for item in value]
-    raise ValueError(f"unsupported mention fingerprint value: {type(value).__name__}")
-
-
-def _bounded_rows(values, maximum: int, label: str) -> tuple[object, ...]:
-    if type(maximum) is not int or maximum < 1:
-        raise ValueError("resolution row cap must be a positive integer")
-    query_count = getattr(values, "count", None)
-    query_iterator = getattr(values, "iterator", None)
-    if callable(query_count) and callable(query_iterator):
-        count = query_count()
-        if type(count) is not int or count < 0:
-            raise ValueError(f"{label} count is invalid")
-        if count > maximum:
-            raise ValueError(f"{label} cap exceeded ({maximum})")
-        records = tuple(
-            islice(
-                query_iterator(chunk_size=min(maximum, _QUERY_ITERATOR_BATCH_SIZE)),
-                maximum + 1,
-            )
-        )
-        if len(records) > maximum:
-            raise ValueError(f"{label} cap exceeded ({maximum})")
-        return records
-    records = tuple(islice(iter(values), maximum + 1))
-    if len(records) > maximum:
-        raise ValueError(f"{label} cap exceeded ({maximum})")
-    return records
 
 
 def source_mention_fingerprint(mentions) -> str:
