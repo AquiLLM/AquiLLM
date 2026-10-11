@@ -7,14 +7,6 @@ from ..types.messages import ToolMessage, UserMessage
 from ..types.response import LLMResponse
 from .base import LLMInterface
 
-try:
-    from aquillm.settings import DEBUG
-except ImportError:
-    DEBUG = False
-
-if DEBUG:
-    from pprint import pp
-
 
 class ClaudeInterface(LLMInterface):
     """LLM interface for Anthropic's Claude models."""
@@ -58,9 +50,6 @@ class ClaudeInterface(LLMInterface):
             provider="claude",
             kind=synthesis_phase,
         )
-        if DEBUG:
-            print("Claude SDK Response:")
-            pp(response)
         text_block = None
         tool_block = None
         content = response.content

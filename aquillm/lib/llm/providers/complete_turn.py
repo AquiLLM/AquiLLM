@@ -113,14 +113,6 @@ from .retrieval_status import (
 )
 from .summary import generate_compact_tool_summary
 
-try:
-    from aquillm.settings import DEBUG
-except ImportError:
-    DEBUG = False
-
-if DEBUG:
-    from pprint import pp
-
 
 _DOC_IMAGE_URL_RE = re.compile(r"/aquillm/document_image/([^/]+)/")
 _MECHANICAL_TOOL_MAX_TOKENS = 256
@@ -1042,9 +1034,6 @@ async def complete_conversation_turn(
             bind_answer(
                 new_msg, await publication.finalize(new_msg.content), publication
             )
-    if DEBUG and not rag_answer:
-        print("Response from LLM:")
-        pp(new_msg.model_dump())
     if (
         defer_stream_until_final
         and callable(stream_func)
