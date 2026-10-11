@@ -13,7 +13,6 @@ MAX_LINES = 300
 # main/development reconciliation. Unrelated new files never enter this map.
 # A path must match its count: shrinking ratchets down; growth always fails.
 _BASELINE_MAX_LINES: dict[str, int] = {
-    "aquillm/apps/documents/tests/test_chunk_search_diagnostics.py": 304,
     "aquillm/apps/documents/tests/test_rerank_http_cache.py": 340,
     "aquillm/apps/chat/services/tool_wiring/documents.py": 326,
     "aquillm/apps/chat/tests/test_direct_rag_pipeline.py": 612,
