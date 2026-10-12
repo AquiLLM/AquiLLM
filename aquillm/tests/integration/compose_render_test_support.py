@@ -24,8 +24,10 @@ def render_compose_with_reviewed_env(
     ):
         raise TypeError("compose_files must be a nonempty exact tuple of Paths")
     docker = shutil.which("docker")
-    if docker is None:
+    standalone = shutil.which("docker-compose") if docker is None else None
+    if docker is None and standalone is None:
         pytest.skip("Docker Compose is unavailable")
+    client = [docker, "compose"] if docker is not None else [standalone]
     # Only retain client/OS variables; ambient model/API settings must not leak
     # into a defaults contract. Service env files are redirected below because
     # older Compose still stats them when --no-env-resolution is requested.
@@ -68,8 +70,7 @@ def render_compose_with_reviewed_env(
             encoding="utf-8",
         )
         command = [
-            docker,
-            "compose",
+            *client,
             "--env-file",
             str(env_file),
             "--project-directory",

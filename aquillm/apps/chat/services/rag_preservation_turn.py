@@ -142,10 +142,12 @@ async def finish_preservation(
     assessment = recheck_support(acquired.assessment, packet.source_evidence)
     packet.coverage_assessment = assessment
     packet.auxiliary_handoff = auxiliary_handoff
-    selected_collections = frozenset(runtime.authorization.selected_collection_ids)
-    packet._publication_scope_check = lambda: (
-        frozenset(int(value) for value in consumer.col_ref.collections)
-        == selected_collections
+    from apps.documents.services.representation_requested_selection import (
+        requested_selection, requested_selection_unchanged,
+    )
+    selected_collections = requested_selection(runtime, consumer)
+    packet._publication_scope_check = lambda: requested_selection_unchanged(
+        runtime, consumer, selected_collections
     )
     selected = perf_counter()
     if (

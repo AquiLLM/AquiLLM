@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from apps.documents.services.chunk_search_scope import (
-    FrozenRetrievalScope,
+    freeze_search_scope,
     bind_search_scope,
     reset_search_scope,
 )
@@ -75,15 +75,12 @@ def test_later_production_dispatch_reuses_original_scope_and_final_fences(
     settings.memgraph_traversal_enabled = True
     budget = TurnBudget(TurnLimits())
     source = SourceRuntime(budget, f.authorization)
-    scope = FrozenRetrievalScope(
-        f.snapshot,
-        None,
-        None,
-        f.authorization,
-        "default",
-        source,
-        requested_document_ids=f.authorization.selected_document_ids,
-    )
+    with source_runtime_scope(source):
+        scope = freeze_search_scope(
+            tuple(f.documents.values()), using="default", authorization=f.authorization,
+        )
+    f.snapshot = scope.representation
+    assert source._frozen_retrieval_scope.representation is scope.representation
     snapshot = replace(
         selected_snapshot(baseline=()),
         documents=tuple(f.documents.values()),
@@ -198,15 +195,12 @@ def test_actual_seed_extractor_runs_once_after_baseline_under_original_deadline(
     monkeypatch.setattr(type(runtime), "run_v2", run)
     budget = TurnBudget(TurnLimits())
     source = SourceRuntime(budget, f.authorization)
-    scope = FrozenRetrievalScope(
-        f.snapshot,
-        None,
-        None,
-        f.authorization,
-        "default",
-        source,
-        requested_document_ids=frozenset({f.documents["A"].id}),
-    )
+    with source_runtime_scope(source):
+        scope = freeze_search_scope(
+            (f.documents["A"],), using="default", authorization=incoming,
+        )
+    f.snapshot = scope.representation
+    assert source._frozen_retrieval_scope.representation is scope.representation
     snapshot = replace(
         selected_snapshot(baseline=()),
         documents=(f.documents["A"],),

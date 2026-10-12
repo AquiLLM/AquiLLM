@@ -46,8 +46,10 @@ def embedding_build_database(budget, *, using):
         if connection.vendor == "postgresql":
             milliseconds = min(previous, remaining) if previous else remaining
             execute(
-                "SELECT set_config('statement_timeout', %s, %s)",
-                [f"{milliseconds}ms", connection.in_atomic_block],
+                "SELECT set_config('statement_timeout', LEAST(%s, COALESCE(NULLIF("
+                "(SELECT setting::bigint FROM pg_settings WHERE name='statement_timeout'),"
+                "0), %s))::text || 'ms', %s)",
+                [milliseconds, milliseconds, connection.in_atomic_block],
                 False,
                 context,
             )

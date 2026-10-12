@@ -666,12 +666,29 @@ def test_collection_contributor_then_ontology_order_avoids_reverse_document_dead
 def test_document_source_a_b_a_creates_a_new_occurrence_and_duplicate_joins_it(
     monkeypatch,
 ):
-    from apps.documents.models import RawTextDocument, TextChunk
+    from apps.documents.models import TextChunk
+    from apps.documents.services.representation_history import reference
+    from apps.documents.services.representation_snapshot_build import build_canonical_snapshot_representation
+    from apps.knowledge_graph.projection.representation_inputs import capture_build_snapshot, binding_digest
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
     from apps.knowledge_graph.services import builds
 
     _collection, document, chunk = _persist_document(label="document-a-b-a")
-    context_a = _document_context(document, chunk)
+    monkeypatch.setenv("KG_GRAPH_REMEDIATION_MODE", "v2")
+
+    def current_context(current_chunk):
+        snapshot = capture_build_snapshot((document.id,))
+        context = _document_context(document, current_chunk)
+        return replace(context, representation_snapshot=snapshot, identity=replace(
+            context.identity, representation_digest=binding_digest(snapshot)))
+
+    def change_source(text):
+        document.full_text = text
+        document.save(dont_rechunk=True)
+        assert build_canonical_snapshot_representation(reference(document), using="default") == "activated"
+        return document.chunks.get()
+
+    context_a = current_context(chunk)
     current = {"context": context_a}
     _patch_document_activation(monkeypatch, lambda: current["context"])
 
@@ -704,34 +721,16 @@ def test_document_source_a_b_a_creates_a_new_occurrence_and_duplicate_joins_it(
         return activated, run
 
     first_a, first_a_run = bootstrap_and_activate(context_a)
-    text_b = "Atlas uses MMLU."
-    RawTextDocument.objects.filter(pk=document.pk).update(
-        full_text=text_b,
-        full_text_hash=RawTextDocument.hash_fn(text_b),
-    )
-    TextChunk.objects.filter(pk=chunk.pk).update(
-        content=text_b,
-        end_position=len(text_b),
-    )
-    document.refresh_from_db()
-    chunk.refresh_from_db()
-    context_b = _document_context(document, chunk)
+    chunk_b = change_source("Atlas uses MMLU.")
+    context_b = current_context(chunk_b)
     assert context_b.identity != context_a.identity
     second_b, second_b_run = bootstrap_and_activate(context_b)
 
-    text_a = "Orion uses MMLU."
-    RawTextDocument.objects.filter(pk=document.pk).update(
-        full_text=text_a,
-        full_text_hash=RawTextDocument.hash_fn(text_a),
-    )
-    TextChunk.objects.filter(pk=chunk.pk).update(
-        content=text_a,
-        end_position=len(text_a),
-    )
-    document.refresh_from_db()
-    chunk.refresh_from_db()
-    rollback_a = _document_context(document, chunk)
-    assert rollback_a.identity == context_a.identity
+    final_chunk_a = change_source("Orion uses MMLU.")
+    rollback_a = current_context(final_chunk_a)
+    assert rollback_a.identity.source_hash == context_a.identity.source_hash
+    assert rollback_a.identity != context_a.identity
+    assert len({chunk.pk, chunk_b.pk, final_chunk_a.pk}) == 3
     final_a, final_a_run = bootstrap_and_activate(rollback_a)
 
     current["context"] = rollback_a
@@ -753,24 +752,19 @@ def test_document_source_a_b_a_creates_a_new_occurrence_and_duplicate_joins_it(
             scope_id=str(document.id),
         ).order_by("build_generation")
     )
-    expected_a_key = builds.derive_document_build_key(context_a.identity)
-    expected_b_key = builds.derive_document_build_key(context_b.identity)
-    assert [row.build_generation for row in artifacts] == [1, 2, 3]
+    expected_keys = [builds.derive_document_build_key(c.identity)
+                     for c in (context_a, context_b, rollback_a)]
+    assert len(set(expected_keys)) == 3
     assert [row.build_generation for row in runs] == [1, 2, 3]
-    assert [row.build_key for row in artifacts] == [
-        expected_a_key,
-        expected_b_key,
-        expected_a_key,
-    ]
-    assert [row.status for row in artifacts] == [
-        GraphArtifact.Status.SUPERSEDED,
-        GraphArtifact.Status.SUPERSEDED,
-        GraphArtifact.Status.ACTIVE,
-    ]
-    assert (first_a.pk, second_b.pk, final_a.pk) == tuple(row.pk for row in artifacts)
-    assert (first_a_run.pk, second_b_run.pk, final_a_run.pk) == tuple(
-        row.pk for row in runs
-    )
+    assert [row.build_key for row in runs] == expected_keys
+    assert (first_a_run.pk, second_b_run.pk, final_a_run.pk) == tuple(row.pk for row in runs)
+    assert [row.artifact_id for row in runs] == [None, None, final_a.pk]
+    assert [row.pk for row in artifacts] == [final_a.pk]
+    assert final_a.build_generation == 3 and final_a.status == GraphArtifact.Status.ACTIVE
+    assert not GraphArtifact.objects.filter(pk__in=(first_a.pk, second_b.pk)).exists()
+    assert list(TextChunk.objects.filter(doc_id=document.id).order_by("pk").values_list("content", flat=True)) == [
+        "Orion uses MMLU.", "Atlas uses MMLU.", "Orion uses MMLU."]
+    assert list(document.chunks.values_list("pk", flat=True)) == [final_chunk_a.pk]
     assert completed is True
     assert owner is None and lease_generation is None
     assert duplicate_artifact.pk == final_a.pk
@@ -783,7 +777,7 @@ def test_document_source_a_b_a_creates_a_new_occurrence_and_duplicate_joins_it(
         )
         .values_list("pk", flat=True)
     ) == (final_a.pk,)
-    assert len(artifacts) == len(runs) == 3
+    assert len(artifacts) == 1 and len(runs) == 3
 
 
 def test_collection_policy_a_b_a_creates_a_new_occurrence_and_duplicate_joins_it(

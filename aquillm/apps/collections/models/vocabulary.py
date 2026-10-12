@@ -31,6 +31,7 @@ class VocabularyVersion(models.Model):
     published_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, on_delete=models.SET_NULL, related_name="+")
     published_by_ref = models.CharField(max_length=64)
     published_at = models.DateTimeField(auto_now_add=True)
+    publication_transaction_id = models.BigIntegerField(default=0, editable=False)
 
     class Meta:
         app_label = "apps_collections"

@@ -2,6 +2,8 @@
 
 import re
 
+from .rag_source_clause_grammar import overlaps_source_predicate, source_predicate_spans
+
 _REQUEST = re.compile(r"\b(?:summarize|explain|describe|review|check|evaluate|compare|contrast)\s+", re.I)
 _JOIN = re.compile(r"\b(?:and|with|versus|vs)\s+", re.I)
 _TRAILING_JOIN = re.compile(r"\s+(?:and|with|versus|vs)(?:\s+the)?\s*$", re.I)
@@ -50,6 +52,7 @@ def source_name_events(question, titles, references):
     candidates.extend((m.start(), m.start(), False) for m in _QUOTED.finditer(question))
     if any(begin == 0 for begin, _ in matches):
         candidates.append((0, 0, False))
+    predicates = source_predicate_spans(question, references)
     names = []
     for offset, occupied_start, source_noun in candidates:
         start = _LABEL.match(question, offset).end() if source_noun else offset
@@ -62,6 +65,8 @@ def source_name_events(question, titles, references):
         if source_noun and not known_start and _FOLLOWUP.match(question, start):
             continue
         end, literal, complete = _span(question, start, matches, references)
+        if not _QUOTED.match(question, start) and overlaps_source_predicate(start, end, predicates):
+            continue
         if not literal:
             continue
         has_history = any(start <= begin and finish <= end for begin, finish in matches)

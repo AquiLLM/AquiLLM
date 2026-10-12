@@ -12,10 +12,14 @@ class OriginalPrincipal:
     principal_pk: object
     turn: object
     budget: object
+    collection_ref: object
+    requested_collection_ids: tuple | None
 
 
 def capture_principal(consumer, turn):
-    return OriginalPrincipal(consumer, consumer.user, consumer.user.pk, turn, turn.budget)
+    from .representation_unavailable_parent import normalized_selection
+    return OriginalPrincipal(consumer, consumer.user, consumer.user.pk, turn, turn.budget,
+                             consumer.col_ref, normalized_selection(consumer.col_ref.collections))
 
 
 def validate_principal(binding, *, turn=None, principal=None):

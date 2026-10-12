@@ -118,16 +118,20 @@ def test_actual_used_schema_reverse_is_blocked_without_erasing_binding(legacy):
     from django.db.migrations.executor import MigrationExecutor
 
     publish(legacy)
-    binding = TextChunk.objects.get().search_vector_binding
+    identifier, binding = TextChunk.objects.values_list("pk", "search_vector_binding").get()
     leaves = MigrationExecutor(connection).loader.graph.leaf_nodes()
     try:
         with pytest.raises(RuntimeError, match="in_use"):
             MigrationExecutor(connection).migrate(
                 [("apps_documents", "0010_embedding_generation_hnsw_v1")]
             )
-        assert TextChunk.objects.get().search_vector_binding == binding
+        # Later unused additive migrations have already reversed before the
+        # used lexical migration refuses. Read only its still-present column.
+        assert TextChunk.objects.values_list("search_vector_binding", flat=True).get(pk=identifier) == binding
     finally:
         MigrationExecutor(connection).migrate(leaves)
+
+    assert TextChunk.objects.get(pk=identifier).search_vector_binding == binding
 
 
 def test_wrong_named_index_is_not_readiness_and_is_not_silently_replaced(legacy):

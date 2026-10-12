@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+from apps.chat.tests.persisted_direct_test_support import close_direct_worker
 
 from apps.chat.services.rag_selection_scoring import prepare_selection_candidates
 from apps.chat.tests.test_rag_selection_scoring import (
@@ -107,76 +108,71 @@ def test_timeout_fallback_rechecks_current_authority_and_revision(stop, remainin
 
 @pytest.mark.asyncio
 @pytest.mark.django_db(transaction=True)
-async def test_scoring_timeout_support_reaches_real_handoff_and_synthesis(monkeypatch):
-    from apps.chat.services import rag_source_hydration
+async def test_scoring_timeout_support_reaches_real_handoff_and_synthesis(monkeypatch, close_direct_worker):
+    from channels.db import database_sync_to_async
+    from apps.chat.services import rag_turn
     from apps.chat.services.rag_evidence import build_selected_evidence_packet
     from apps.chat.services.rag_selection import select_evidence
     from apps.chat.services.rag_selection_types import SelectionLimits, SelectionProfile
     from apps.chat.services.rag_synthesis import synthesize_from_evidence
-    from apps.documents.services.source_loading import (
-        SourceRuntime,
-        source_runtime_scope,
-    )
+    from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
+    from apps.chat.tests.persisted_direct_test_support import persisted_direct_case
+    from apps.documents.models import TextChunk
+    from apps.documents.services.source_loading import source_query_rows
     from lib.llm.evidence_guard import current_protection
     from lib.llm.types.conversation import Conversation
-    from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
+    from lib.llm.types.messages import ToolMessage, UserMessage
+    from lib.llm.types.response import LLMResponse
 
     scenario = Scenario()
-    prepared = scenario.prepare()
-    selected = select_evidence(
-        prepared.candidates,
-        profile=SelectionProfile("test", 1, 0, "v1"),
-        limits=SelectionLimits(2, 2, 3500),
-        score_status=prepared.score_status,
-    )
-    packet = build_selected_evidence_packet(
-        selected, query="result?", search_scope="selected"
-    )
-    packet.source_mode, packet.source_authorization, packet.selection = (
-        True,
-        scenario.authorization,
-        selected,
-    )
+    declared = [dict(doc_id="scoring", chunk_id=i, title="Scoring source", text=c.content,
+        citation=f"[doc:scoring chunk:{i}]") for i, c in enumerate(scenario.chunks, 1)]
+    case = await persisted_direct_case(declared)
+    convo = Conversation(system="system", messages=[UserMessage(content="result?"),
+        ToolMessage(tool_name="vector_search", for_whom="assistant",
+            content="retrieval preview", arguments={}, result_dict={})])
+    consumer = case.consumer(convo, (1,))
+    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
     monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "16000")
-    # Only the external body fetch is replaced; bounded DB/current policy and
-    # revision checks, packet rebuild, handoff and synthesis sealing stay real.
-    monkeypatch.setattr(
-        rag_source_hydration, "source_query_rows", lambda *_: scenario.chunks
-    )
+    monkeypatch.setattr(rag_turn, "TurnBudget", lambda limits: scenario.budget)
     delivered = []
-
-    async def complete(request, *_args, **_kwargs):
-        protection = current_protection()
-        assert protection is not None and protection.payload == request[-1].content
-        for chunk in scenario.chunks:
-            assert chunk.content in protection.payload
-            assert f"[doc:{chunk.doc_id} chunk:{chunk.pk}]" in protection.payload
-        delivered.append(protection.synthesis_lease)
-        return request + [
-            AssistantMessage(
-                content="42 mK only below 1 Pa; written consent required.",
-                stop_reason="end_turn",
-            )
-        ], "changed"
-
-    with source_runtime_scope(SourceRuntime(scenario.budget, scenario.authorization)):
-        result = await synthesize_from_evidence(
-            SimpleNamespace(complete=complete),
-            Conversation(
-                system="system",
-                messages=[
-                    UserMessage(content="result?"),
-                    ToolMessage(
-                        tool_name="vector_search",
-                        for_whom="assistant",
-                        content="retrieval preview",
-                        arguments={},
-                        result_dict={},
-                    ),
-                ],
-            ),
-            packet,
-        )
-    assert "42 mK only below 1 Pa" in result[-1].content
-    assert len(delivered) == 1 and delivered[0].can_publish()
-    assert scenario.budget.pairs_used["final"] == len(scenario.calls) == 1
+    async with rag_turn.preservation_turn(consumer, max_func_calls=3) as runtime:
+        assert runtime.budget is scenario.budget
+        original = runtime._frozen_retrieval_scope.representation
+        scenario.authorization = runtime.authorization
+        def load():
+            return tuple(source_query_rows(TextChunk.objects.filter(
+                pk__in=[c.pk for c in case.chunks.values()]).order_by("chunk_number")))
+        scenario.chunks = await database_sync_to_async(load)()
+        prepared = await database_sync_to_async(scenario.prepare)()
+        assert prepared.score_status == "rank_fallback" and prepared.fallback_reason == "deadline"
+        assert scenario.budget.scoring_remaining_ms("final") == 0
+        assert scenario.budget.remaining_ms() == 11999
+        selected = select_evidence(prepared.candidates,
+            profile=SelectionProfile("test", 1, 0, "v1"), limits=SelectionLimits(2, 2, 3500),
+            score_status=prepared.score_status)
+        packet = build_selected_evidence_packet(selected, query="result?", search_scope="selected")
+        packet.source_mode, packet.source_authorization, packet.selection = True, runtime.authorization, selected
+        answer = "42 mK only below 1 Pa; written consent required. " + " ".join(
+            f"[doc:{c.doc_id} chunk:{c.pk}]" for c in scenario.chunks)
+        llm = _FakeLLMInterface([LLMResponse(text=answer, tool_call=None,
+            stop_reason="end_turn", input_usage=1, output_usage=1)])
+        original_get = llm.get_message
+        async def get_message(*args, **kwargs):
+            protection = current_protection()
+            assert protection is not None
+            for chunk in scenario.chunks:
+                assert chunk.content in protection.payload
+                assert f"[doc:{chunk.doc_id} chunk:{chunk.pk}]" in protection.payload
+            assert runtime._frozen_retrieval_scope.representation is original
+            delivered.append(protection.synthesis_lease)
+            return await original_get(*args, **kwargs)
+        llm.get_message = get_message
+        result = await synthesize_from_evidence(llm, convo, packet)
+        assert "42 mK only below 1 Pa" in result[-1].content
+        assert result[-1]._validated_answer is not None
+        assert len(llm.calls) == len(delivered) == 1 and delivered[0].can_publish()
+        assert scenario.budget.pairs_used["final"] == len(scenario.calls) == 1
+    from asyncio import CancelledError
+    with pytest.raises(CancelledError, match="^finished$"):
+        delivered[0].can_publish()

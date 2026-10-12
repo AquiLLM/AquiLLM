@@ -45,6 +45,7 @@ def validate_study_controls(report):
             "graph_original_control_binding_mismatch",
         )
     before, after = (meaningful(controls[a]) for a in ("baseline", "candidate"))
+    require(set(before) == set(after), "graph_non_treatment_control_drift")
     changed = {
         k: {"baseline": before[k], "candidate": after[k]}
         for k in before

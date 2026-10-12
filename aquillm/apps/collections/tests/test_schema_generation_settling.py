@@ -20,6 +20,7 @@ from apps.ingestion.models import IngestionBatch, IngestionBatchItem
 @pytest.fixture
 def generation(monkeypatch):
     monkeypatch.setenv("KG_SCHEMA_GENERATION_ENABLED", "1")
+    monkeypatch.setenv("VLLM_BASE_URL", "http://vllm:8000/v1")
     user = User.objects.create_user(username="settling-owner")
     collection = Collection.objects.create(name="Bulk collection")
     draft = CollectionSchemaDraft.objects.create(

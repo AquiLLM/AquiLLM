@@ -77,6 +77,7 @@ def test_generate_schema_candidate_retries_once_with_semantic_correction(monkeyp
     from apps.collections.services.schema_generation import generate_schema_candidate
 
     payloads = []
+    monkeypatch.setenv("VLLM_BASE_URL", "http://vllm:8000/v1")
 
     def client(url, payload, headers, timeout):
         payloads.append(payload)

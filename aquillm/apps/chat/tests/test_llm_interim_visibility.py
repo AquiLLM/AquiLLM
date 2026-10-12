@@ -46,6 +46,8 @@ class InterimAssistantVisibilityTests(SimpleTestCase):
         self.assertNotIn("passage now", updated[-1].content)
 
     def test_retries_post_tool_answer_that_contains_raw_tool_transcript(self):
+        from lib.llm.tests.publication_fixture_support import selected_publication, UNCERTAINTY
+        citation = "[doc:doc-1 chunk:1]"
         llm = _FakeLLMInterface([
             LLMResponse(
                 text=(
@@ -64,7 +66,7 @@ class InterimAssistantVisibilityTests(SimpleTestCase):
                 text=(
                     "The mathematical content centers on calibration equations, "
                     "measurement definitions, and evaluation metrics grounded in the retrieved document."
-                ),
+                ) + " " + citation,
                 tool_call={},
                 stop_reason='stop',
                 input_usage=5,
@@ -87,10 +89,11 @@ class InterimAssistantVisibilityTests(SimpleTestCase):
             ],
         )
 
-        updated, changed = async_to_sync(llm.complete)(convo, 512)
+        with selected_publication([{"doc_id": "doc-1", "chunk_id": 1, "text": 'The document discusses calibration equations and evaluation metrics.'}]):
+            updated, changed = async_to_sync(llm.complete)(convo, 512)
 
         self.assertEqual(changed, 'changed')
         self.assertEqual(len(llm.calls), 2)
-        self.assertIn('calibration equations', updated[-1].content)
+        self.assertEqual(updated[-1].content, UNCERTAINTY + "\n\n> " + 'The document discusses calibration equations and evaluation metrics.' + " " + citation)
         self.assertNotIn('Tool:retrieve', updated[-1].content)
         self.assertNotIn("Let me first retrieve", updated[-1].content)

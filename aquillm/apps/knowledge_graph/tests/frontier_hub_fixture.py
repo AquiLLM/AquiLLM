@@ -29,6 +29,7 @@ def hub_bundles(*, preferred_last=False):
                 first.evidence[0],
                 relation_key=relation,
                 evidence_key=key("hub-evidence:" + str(i)),
+                provenance_key=key("hub-provenance:" + str(i)),
                 tail_mapping_key=entity,
                 confidence=0.01 if i == 199 else 0.75,
             )

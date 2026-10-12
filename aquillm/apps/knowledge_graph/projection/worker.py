@@ -7,6 +7,7 @@ from uuid import UUID
 from django.utils import timezone
 
 from .memgraph_repository import MemgraphProjectionRepository
+from .driver_lifecycle import OwnedProjectionRepository, release_owned_repository
 from .database_deadline import current_operation, projection_operation
 from .projection_lease import (
     _backend_transient,
@@ -63,7 +64,8 @@ def _projection_settings():
 
 
 def _memgraph_repository():
-    return memgraph_projection_repository(_projection_settings())
+    repository = memgraph_projection_repository(_projection_settings())
+    return OwnedProjectionRepository(repository, repository._driver.close)
 
 
 def _function_state_repository() -> FunctionProjectionStateRepository:
@@ -132,6 +134,7 @@ def _project_generation(*, projection_id, lease_owner, settings):
     )
     token = _STATE_REPOSITORY.set(state_repository)
     graph_ready_transition_started = False
+    owned_graph = None
     try:
         lease = claim_projection_lease(
             projection_id=identifier,
@@ -171,6 +174,8 @@ def _project_generation(*, projection_id, lease_owner, settings):
                 using=using,
             )
             graph = _memgraph_repository()
+            if type(graph) is OwnedProjectionRepository:
+                owned_graph, graph = graph, graph.repository
             timeout = settings.projection_timeout_ms / 1_000.0
             graph.write_staging_generation(
                 bundle=bundle,
@@ -244,6 +249,8 @@ def _project_generation(*, projection_id, lease_owner, settings):
         return ProjectionRunOutcomeV1(identifier, False, code.value)
     finally:
         _STATE_REPOSITORY.reset(token)
+        if owned_graph is not None:
+            release_owned_repository(owned_graph)
 
 
 __all__ = ["ProjectionRunOutcomeV1", "project_generation"]

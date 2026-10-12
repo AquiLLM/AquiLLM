@@ -5,6 +5,7 @@ from contextvars import ContextVar
 from copy import copy
 from dataclasses import dataclass, field
 from threading import RLock
+from uuid import UUID
 
 from django.db import connections, transaction
 from django.db.models.functions import MD5, Length
@@ -107,9 +108,23 @@ def source_query_rows(queryset, *, runtime=None, refresh=False, require_existing
             raise SourcePreparationLimited("source mode requires shared turn budget")
         return tuple(queryset)
     with runtime.lock, bounded_source_database(runtime, queryset.db):
-        from .representation_tool_scope import tool_scope, scoped_queryset
+        from .representation_tool_scope import tool_scope
+        from .representation_contracts import SourceScopeUnavailable
+        from .representation_store import _active_chunk_predicates
+
         frozen = tool_scope(runtime, using=queryset.db, require_existing=require_existing)
-        queryset = scoped_queryset(frozen, queryset)
+        # This eager locked operation owns fresh entry and final scope checks.
+        # Keep the lazy predicates; no query or validation permit leaves it.
+        if queryset.query.combinator:
+            raise SourceScopeUnavailable("source_scope_unavailable")
+        low, high = queryset.query.low_mark, queryset.query.high_mark
+        queryset = queryset.all()
+        queryset.query.clear_limits()
+        queryset = _active_chunk_predicates(
+            queryset.filter(doc_id__in=frozen.requested_document_ids),
+            snapshot=frozen.representation,
+        )
+        queryset.query.set_limits(low, high)
         scope = revalidate_retrieval_authorization_context(
             context=runtime.authorization
         )
@@ -152,8 +167,18 @@ def source_query_rows(queryset, *, runtime=None, refresh=False, require_existing
                 continue
             if not runtime.budget.can_publish():
                 break
+            from .representation_contracts import SourceScopeUnavailable
+            from .representation_store import _active_chunk_predicates
+
+            if type(meta["doc_id"]) is not UUID or meta["doc_id"] not in frozen.requested_document_ids:
+                raise SourceScopeUnavailable("source_scope_unavailable")
+
             loaded = (
-                frozen.queryset(queryset.model.objects.using(queryset.db).all())
+                _active_chunk_predicates(
+                    queryset.model.objects.using(queryset.db).filter(doc_id=meta["doc_id"]),
+                    snapshot=frozen.representation,
+                    document_id=meta["doc_id"],
+                )
                 .annotate(
                     _source_length=Length("content"), _source_revision=MD5("content")
                 )

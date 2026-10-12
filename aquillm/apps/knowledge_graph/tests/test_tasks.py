@@ -635,8 +635,7 @@ def test_task_autodiscovery_does_not_import_optional_ml_runtime(
         """
     )
     environment = os.environ.copy()
-    environment.update(
-        {
+    defaults = {
             "PYTHONPATH": str(repository_root / "aquillm"),
             "DJANGO_DEBUG": "0",
             "SECRET_KEY": "test-only-secret-key",
@@ -645,9 +644,9 @@ def test_task_autodiscovery_does_not_import_optional_ml_runtime(
             "OPENAI_API_KEY": "test-openai-key",
             "ANTHROPIC_API_KEY": "test-anthropic-key",
             "GEMINI_API_KEY": "test-gemini-key",
-            "KG_BUILD_ENABLED": build_enabled,
-        }
-    )
+    }
+    # Preserve the isolated runner's exact credentials/endpoints in the child.
+    environment = defaults | environment | {"KG_BUILD_ENABLED": build_enabled}
 
     completed = subprocess.run(
         [sys.executable, "-c", script],

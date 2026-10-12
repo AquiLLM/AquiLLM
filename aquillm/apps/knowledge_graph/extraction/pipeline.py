@@ -1009,28 +1009,20 @@ def _safe_mark_terminal(
     error_code: str,
     lease_owner=None,
     lease_generation=None,
+    original_run=None,
 ) -> bool:
-    """Best-effort bookkeeping that cannot replace the triggering exception."""
+    """Delegate with the current pipeline patch seams and original error policy."""
+    from .terminal_cleanup import safe_mark_terminal
 
-    try:
-        _mark_terminal(
-            artifact_id,
-            build_run_id,
-            artifact_status=artifact_status,
-            run_status=run_status,
-            error_code=error_code,
-            lease_owner=lease_owner,
-            lease_generation=lease_generation,
-        )
-    except Exception:
-        logger.exception(
-            "obs.kg.terminal_update_failed",
-            artifact_id=artifact_id,
-            build_run_id=build_run_id,
-            error_code=error_code,
-        )
-        return False
-    return True
+    return safe_mark_terminal(
+        _mark_terminal, logger, artifact_id, build_run_id,
+        artifact_status=artifact_status,
+        run_status=run_status,
+        error_code=error_code,
+        lease_owner=lease_owner,
+        lease_generation=lease_generation,
+        original_run=original_run,
+    )
 
 
 def extract_into_build(
@@ -1070,6 +1062,9 @@ def extract_into_build(
         lease_owner=lease_owner,
         lease_generation=lease_generation,
     )
+    from .terminal_cleanup import capture_original_run
+
+    original_run = capture_original_run(artifact, run, document_id)
     total_started = perf_counter()
     try:
         settings = load_extraction_settings()
@@ -1102,11 +1097,14 @@ def extract_into_build(
 
         persistence_started = perf_counter()
         with transaction.atomic():
-            locked_artifact, locked_run = _lock_extraction_orchestration_rows(
-                artifact_id,
-                build_run_id,
-                document_id,
-            )
+            try:
+                locked_artifact, locked_run = _lock_extraction_orchestration_rows(
+                    artifact_id, build_run_id, document_id,
+                )
+            except (GraphArtifact.DoesNotExist, GraphBuildRun.DoesNotExist) as exc:
+                raise MidflightSourceChangedError(
+                    "extraction destination was removed during inference"
+                ) from exc
             validate_build_identity(
                 locked_artifact,
                 locked_run,
@@ -1201,6 +1199,7 @@ def extract_into_build(
             error_code="source_or_config_stale",
             lease_owner=lease_owner,
             lease_generation=lease_generation,
+            original_run=original_run,
         )
         raise
     except Exception as exc:

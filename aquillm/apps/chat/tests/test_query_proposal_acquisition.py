@@ -1,4 +1,4 @@
-"""Production proposal acquisition and private cache scopes share one turn."""
+"""Service-composition probes use genuine admission and one original ledger."""
 from dataclasses import replace
 import asyncio
 
@@ -6,6 +6,8 @@ import pytest
 import pytest_asyncio
 
 from apps.chat.services.rag_acquisition import acquire_evidence
+from apps.chat.services.retrieval_query_binding import ensure_admission
+from apps.chat.tests.query_proposal_test_support import admitted_query_runtimes as admitted_query_runtimes
 from apps.chat.services.retrieval_query_proposals import build_query_proposals
 from apps.chat.services.retrieval_query_runtime import proposal_scope, proposal_identity
 from apps.chat.tests.test_rag_selection_scoring import Policy, _authorization
@@ -39,6 +41,7 @@ async def test_three_proposal_actions_leave_no_iterative_planner_call():
     r = SourceRuntime(TurnBudget(TurnLimits()), authorization)
     original = "Explain A_12"
     with source_runtime_scope(r):
+        await database_sync_to_async(ensure_admission)(r)
         vocab = await database_sync_to_async(_frozen_vocabulary)(r)
     rows = build_query_proposals(original, vocabulary=vocab, rewrite="Describe A_12")
     r._query_proposals = rows
@@ -57,8 +60,8 @@ async def test_three_proposal_actions_leave_no_iterative_planner_call():
     assert result.rounds == 3 and r.budget.planner_calls == 0
 
 
-def test_proposal_cache_identity_binds_query_policy_and_resets():
-    r = runtime()
+def test_proposal_cache_identity_binds_query_policy_and_resets(admitted_query_runtimes):
+    r = admitted_query_runtimes[0]
     row = build_query_proposals("Original")[0]
     r._query_proposals = (row,)
     with source_runtime_scope(r):
@@ -79,15 +82,14 @@ def test_proposal_cache_identity_binds_query_policy_and_resets():
 
 
 @pytest.mark.asyncio
-async def test_concurrent_turn_proposal_contexts_do_not_share_identity():
-    async def one(text):
-        r = runtime()
+async def test_concurrent_turn_proposal_contexts_do_not_share_identity(admitted_query_runtimes):
+    async def one(text, r):
         row = build_query_proposals(text)[0]
         r._query_proposals = (row,)
         with source_runtime_scope(r), proposal_scope(row, runtime=r):
             await asyncio.sleep(0)
             return proposal_identity(r, text)[0]
-    values = await asyncio.gather(one("first"), one("second"))
+    values = await asyncio.gather(one("first", admitted_query_runtimes[0]), one("second", admitted_query_runtimes[1]))
     assert len(set(values)) == 2
 
 

@@ -34,8 +34,10 @@ def configure_cutover(monkeypatch, settings, space):
 
 def distinct_verified_space():
     space = profile(compute_precision="bf16")
+    # Same synthetic bf16 declaration/endpoint as the shared verified-query
+    # fixture: its immutable deployment binding must also be identical.
     register_verified_profile(space, endpoint="http://fake-models:8000/v1",
-        deployment_artifact_sha256="d" * 64, engine_manifest=engine_manifest_for(space),
+        deployment_artifact_sha256="c" * 64, engine_manifest=engine_manifest_for(space),
         query_template="{text}", document_template="{text}")
     return space
 

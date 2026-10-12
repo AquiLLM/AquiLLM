@@ -155,13 +155,40 @@ def test_second_round_cannot_reset_any_original_budget():
     fixture = FrontierFixture()
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     budget = fixture.budget()
-    run(fixture, driver, budget)
-    previous_rows, deadline = budget.source_rows, budget.deadline
+    physical_rows = []
+    original_read = driver.execute_read
+
+    def observed_read(*args, **kwargs):
+        rows = original_read(*args, **kwargs)
+        physical_rows.append(len(rows))
+        return rows
+
+    driver.execute_read = observed_read
+    limits = {name: value for name, value in vars(budget).items()
+              if name.startswith("max_")}
+    deadline, turn, clock = budget.deadline, budget.turn_budget, budget.clock
+    assert limits["max_queries"] == 64
+    previous_queries = previous_rows = previous_calls = previous_manifests = 0
+    for _round in range(2):
+        run(fixture, driver, budget)
+        assert budget.queries - previous_queries == len(driver.calls) - previous_calls > 0
+        assert budget.source_rows == sum(physical_rows) > previous_rows
+        manifests = sum(query == MANIFEST_LOOKUP for query, *_ in driver.calls)
+        assert manifests - previous_manifests >= 2 * len(fixture.bundles)
+        previous_queries, previous_rows = budget.queries, budget.source_rows
+        previous_calls, previous_manifests = len(driver.calls), manifests
+        assert {name: getattr(budget, name) for name in limits} == limits
+        assert budget.deadline == deadline and budget.turn_budget is turn
+        assert budget.clock is clock
+    while budget.reserve_query():
+        pass
+    assert budget.queries == limits["max_queries"]
     with pytest.raises(FrontierUnavailableV2):
         run(fixture, driver, budget)
-    assert budget.source_rows > previous_rows
-    assert budget.queries == len(driver.calls) <= 64
-    assert budget.deadline == deadline
+    assert len(driver.calls) == previous_calls
+    assert budget.source_rows == previous_rows
+    assert budget.queries == 64
+    assert budget.deadline == deadline and budget.turn_budget is turn
 
 
 def test_late_manifest_is_charged_and_never_continues():
@@ -207,3 +234,17 @@ def test_original_turn_cancellation_fences_loader_without_dispatch():
     with pytest.raises(CancelledError):
         run(fixture, driver, budget)
     assert budget.queries == len(driver.calls) == 0
+
+
+def test_distinct_hub_endpoints_cannot_share_one_provenance_association():
+    bundles, _ = hub_bundles()
+    first, second = bundles
+    original = first.evidence[0].provenance_key
+    first = replace(first, evidence=tuple(
+        replace(row, provenance_key=original) for row in first.evidence
+    ))
+    fixture = FrontierFixture((first, second))
+    with pytest.raises(TopologyLoadError) as caught:
+        run(fixture, FrontierIndexFixtureDriver(fixture.bundles))
+    assert isinstance(caught.value.__cause__, ValueError)
+    assert str(caught.value.__cause__) == "conflicting provenance association"

@@ -1,45 +1,19 @@
-"""WebSocket smoke test for the direct RAG append path.
-
-Exercises ``handle_chat_receive`` (same code path as ``ChatConsumer.receive``)
-with ``RAG_DIRECT_ENABLED=1`` to verify that an append action triggers backend
-retrieval *before* any LLM tool-selection spin.
-
-Manual live WebSocket smoke (full stack, optional):
-
-1. Set ``RAG_DIRECT_ENABLED=1`` in the repo-root ``.env``.
-2. Start the dev stack::
-
-       docker compose -f deploy/compose/base.yml -f deploy/compose/development.yml up web db redis qdrant
-
-3. Open the chat UI, select one or more collections, and send a document question
-   (e.g. "search the selected documents for calibration notes").
-4. Confirm the assistant answers with citations and that retrieval happened without
-   an initial tool-selection round trip (check server logs for
-   ``direct_rag_turn_handled`` rather than ``llm_if.spin()`` on the append).
-
-Run this file locally (PowerShell, repo root)::
-
-    Get-Content .env | ForEach-Object {
-        if ($_ -match '^\\s*([^#][^=]+)=(.*)$') {
-            [Environment]::SetEnvironmentVariable($matches[1].Trim(), $matches[2].Trim(), 'Process')
-        }
-    }
-    cd aquillm
-    python -m pytest apps/chat/tests/test_direct_rag_websocket_smoke.py -q --tb=short
-
-No Postgres required: tests mock the consumer DB layer and exercise the same
-``handle_chat_receive`` path as the live WebSocket.
-"""
+"""Actual append/connect routing with persisted synthetic principal and sources."""
 from __future__ import annotations
 
 import json
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from apps.chat.consumers.chat import ChatConsumer, CollectionsRef
 from apps.chat.consumers.chat_receive import handle_chat_receive
 from apps.chat.services import rag_pipeline
+from apps.chat.tests.persisted_direct_test_support import (
+    close_direct_worker as close_direct_worker, persisted_direct_case, persisted_conversation,
+)
+
+pytestmark = pytest.mark.usefixtures("close_direct_worker")
 from apps.chat.tests.chat_message_test_support import (
     _FakeLLMInterface,
     _test_document_ids,
@@ -96,14 +70,10 @@ def _consumer(user, db_convo, llm_if) -> ChatConsumer:
     return consumer
 
 
-def _mock_user_and_convo():
-    user = MagicMock()
-    user.id = 1
-    db_convo = MagicMock()
-    db_convo.id = 42
-    db_convo.selected_collection_ids = []
-    db_convo.save = MagicMock()
-    return user, db_convo
+async def _persisted_user_and_convo(rows=(), *, labels=(1,)):
+    case = await persisted_direct_case(rows, collection_labels=labels)
+    db_convo = await persisted_conversation(case, labels)
+    return case, case.user, db_convo
 
 
 @pytest.mark.asyncio
@@ -127,15 +97,18 @@ async def test_append_direct_rag_skips_tool_selection_spin(
     """Append with RAG_DIRECT_ENABLED=1 retrieves before LLM tool selection."""
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     order: list[str] = []
-    raw = _results_payload()
+    case, user, db_convo = await _persisted_user_and_convo(_results_payload()["result"])
+    raw = case.rows(_results_payload())
 
     def fake_search(consumer, query, top_k):
+        from apps.chat.services.rag_action_tools import admit_tool_action
+        assert admit_tool_action("vector", query)
         order.append("retrieval")
         return raw
 
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", fake_search)
 
-    answer = (
+    answer = case.text(
         "The paper describes calibration using flat fields and dark frames "
         "[doc:doc-a chunk:1]."
     )
@@ -158,14 +131,13 @@ async def test_append_direct_rag_skips_tool_selection_spin(
 
     llm_if.get_message = tracked_get_message
 
-    user, db_convo = _mock_user_and_convo()
     consumer = _consumer(user, db_convo, llm_if)
 
     await handle_chat_receive(
         consumer,
         _append_payload(
             "search the selected documents for calibration notes",
-            [1],
+            case.collections((1,)),
         ),
     )
 
@@ -181,7 +153,8 @@ async def test_append_direct_rag_skips_tool_selection_spin(
     assert any(m.tool_name == "vector_search" for m in tool_msgs)
     assert assistant_msgs[-1].content
     assert "calibration" in assistant_msgs[-1].content.lower()
-    assert "[doc:doc-a chunk:1]" in assistant_msgs[-1].content
+    assert case.text("[doc:doc-a chunk:1]") in assistant_msgs[-1].content
+    assert order.count("retrieval") == 1
 
 
 @pytest.mark.asyncio
@@ -203,7 +176,7 @@ async def test_append_direct_rag_disabled_falls_back_to_spin(
     """When RAG_DIRECT_ENABLED=0, append still uses the normal LLM spin path."""
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "0")
 
-    user, db_convo = _mock_user_and_convo()
+    case, user, db_convo = await _persisted_user_and_convo()
     llm_if = _FakeLLMInterface([])
     consumer = _consumer(user, db_convo, llm_if)
 
@@ -211,7 +184,7 @@ async def test_append_direct_rag_disabled_falls_back_to_spin(
         consumer,
         _append_payload(
             "search the selected documents for calibration notes",
-            [1],
+            case.collections((1,)),
         ),
     )
 
@@ -252,8 +225,7 @@ async def test_reconnect_pending_user_turn_uses_direct_rag_before_tool_spin(
         system="sys",
         messages=[{"role": "user", "content": "what is attensity"}],
     )
-    user, db_convo = _mock_user_and_convo()
-    db_convo.selected_collection_ids = [203]
+    case, user, db_convo = await _persisted_user_and_convo(labels=(203,))
     db_convo.system_prompt = "sys"
 
     consumer = ChatConsumer()
@@ -281,17 +253,9 @@ async def test_reconnect_pending_user_turn_uses_direct_rag_before_tool_spin(
     with patch(
         "apps.chat.consumers.chat.load_conversation_from_db",
         return_value=pending,
-    ), patch(
-        "apps.chat.consumers.chat.database_sync_to_async",
-        side_effect=lambda function: (
-            lambda *args, **kwargs: _await_value(function(*args, **kwargs))
-        ),
     ):
         await consumer.connect()
 
     mock_direct.assert_awaited_once()
     mock_spin.assert_not_awaited()
 
-
-async def _await_value(value):
-    return value

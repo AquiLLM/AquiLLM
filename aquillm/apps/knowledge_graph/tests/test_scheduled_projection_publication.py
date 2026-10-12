@@ -11,6 +11,7 @@ from datetime import UTC
 from uuid import uuid4
 
 import pytest
+from apps.knowledge_graph.tests.maintenance_redis_test_support import owned_maintenance_redis, depth
 from celery import Celery
 from celery.beat import ScheduleEntry, Scheduler
 from kombu.exceptions import OperationalError
@@ -27,7 +28,7 @@ SCHEDULED = (
 
 
 @pytest.fixture
-def broker(monkeypatch):
+def broker(monkeypatch, owned_maintenance_redis):
     url = os.getenv("REDIS_MAINTENANCE_TEST_URL")
     if not url:
         pytest.skip("requires isolated REDIS_MAINTENANCE_TEST_URL")
@@ -66,11 +67,7 @@ def broker(monkeypatch):
         app.close()
 
 
-def depth(client, keys):
-    return sum(client.llen(key) for key in keys)
-
-
-def test_current_beat_ticks_do_not_grow_stopped_worker_backlog(monkeypatch):
+def test_current_beat_ticks_do_not_grow_stopped_worker_backlog(monkeypatch, owned_maintenance_redis):
     url = os.getenv("REDIS_MAINTENANCE_TEST_URL")
     if not url:
         pytest.skip("requires isolated REDIS_MAINTENANCE_TEST_URL")

@@ -3,6 +3,7 @@
 from dataclasses import asdict
 
 from apps.knowledge_graph.projection.frontier_cypher_v2 import (
+    INDEX_BATCH_LOOKUP,
     INDEX_LOOKUP,
     MANIFEST_LOOKUP,
     RAW_LOOKUP,
@@ -47,6 +48,12 @@ class FrontierIndexFixtureDriver:
         if query == INDEX_LOOKUP:
             row = self.index.get(parameters["index_key"])
             return ({"record": row},) if row else ()
+        if query == INDEX_BATCH_LOOKUP:
+            return tuple(
+                {"lookup_key": key, "record": self.index[key]}
+                for key in parameters["keys_csv"].split(",")
+                if key in self.index
+            )
         if query == RAW_LOOKUP:
             return tuple(
                 row

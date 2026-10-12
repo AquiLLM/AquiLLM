@@ -8,6 +8,9 @@ from uuid import UUID
 
 from apps.chat.services.rag_retrieval import _verified_row_coordinates
 from apps.chat.services.rag_source_name_spans import source_name_events
+from apps.chat.services.rag_source_clause_grammar import (
+    auxiliary_source_pronoun, local_reference_spans,
+)
 from lib.llm.types.messages import AssistantMessage, ToolMessage
 
 _CITATION = re.compile(r"\[doc:([^\s\]]+) chunk:([1-9][0-9]*)\]")
@@ -118,6 +121,8 @@ def _source_pronoun(question, match):
         r"\s*(?:for me|again|in more detail|please)?[.!?]*\s*", after, re.I
     ):
         return False
+    if cue == "it" and auxiliary_source_pronoun(question, match.start(), match.end()):
+        return True
     return bool(re.search(
         r"(?:\b(?:compare|contrast|explain|summarize|describe|review|check|evaluate)"
         r"|\b(?:in|from|between|about|of|with)"
@@ -147,7 +152,10 @@ def _reference_events(question, titles):
             if kind != "ordinal" and not _source_pronoun(question, match):
                 continue
             references.append((match.start(), match.end(), kind, match.group(0)))
-    for event, span in source_name_events(question, titles, [*events, *references]):
+    names = source_name_events(question, titles, [*events, *references])
+    local = local_reference_spans(question, [*events, *references, *(event for event, _ in names)])
+    references = [event for event in references if event[:2] not in local]
+    for event, span in names:
         if not _overlaps(*span, occupied):
             events.append(event)
             occupied.append(span)

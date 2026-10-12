@@ -65,7 +65,13 @@ class TurnRerankState:
         def work():
             result = None
             try:
-                result = callback(remaining)
+                with self.budget._lock:
+                    dispatch_remaining = min(
+                        remaining, self.budget.scoring_remaining_ms(phase) / 1000
+                    )
+                    if dispatch_remaining <= 0 or not self.can_admit():
+                        return
+                result = callback(dispatch_remaining)
                 if result is None:
                     self.fail()
                 if not self.can_admit() or self.budget.scoring_remaining_ms(phase) <= 0:

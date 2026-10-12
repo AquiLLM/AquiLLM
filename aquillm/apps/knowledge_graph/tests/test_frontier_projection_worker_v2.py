@@ -26,7 +26,9 @@ def test_existing_worker_requests_frontier_inside_original_stage_lifecycle(
     result = run_projection.run()
     assert result.ready
     assert calls[0]["frontier_index"] is True
-    assert calls[0]["timeout_seconds"] == 12.0
+    assert len(calls) == 1
+    # Setup consumes the original stage allowance; it cannot restart or enlarge it.
+    assert 0 < calls[0]["timeout_seconds"] <= 12.0
     assert run_projection.state.published == 1
 
 

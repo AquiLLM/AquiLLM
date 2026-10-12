@@ -31,7 +31,7 @@ def read_payload(driver, request, deadline, maximum):
     parameters = {"generation_key": request.generation}
     if request.kind == "index":
         parameters = {"index_key": request.keys[0]}
-    elif request.kind == "raw":
+    elif request.kind in {"raw", "index_batch"}:
         parameters["keys_csv"] = ",".join(request.keys)
     try:
         rows = driver.execute_read(

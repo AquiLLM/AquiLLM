@@ -11,7 +11,9 @@ from math import isfinite
 from typing import Final
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request
+
+from .gateway_opener import build_opener
 
 from .contracts import TopologyFailureReason, TopologyQueryName, TopologyScalar
 from .failures import TopologyLoadError
@@ -200,7 +202,7 @@ class TopologyGatewayClient:
             },
             method="POST",
         )
-        opener = build_opener(ProxyHandler({}), _RejectRedirect())
+        opener = build_opener(self._endpoint, ProxyHandler({}), _RejectRedirect())
         remaining = deadline - time.monotonic()
         if not isfinite(remaining) or remaining <= 0.0:
             raise TopologyGatewayRequestError(GatewayFailureReason.DEADLINE)

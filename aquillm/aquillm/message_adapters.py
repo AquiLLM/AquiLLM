@@ -24,6 +24,7 @@ from .llm import (
 )
 from .message_conversion import django_message_to_pydantic, pydantic_message_to_django
 from .models import Message, WSConversation
+from .message_history import retained_tool_history
 
 
 class ConversationConflictError(RuntimeError):
@@ -65,6 +66,9 @@ def _frontend_message_content(msg: LLM_Message) -> str:
     if msg.content == "** Empty Message, tool call **":
         return ""
     if isinstance(msg, AssistantMessage):
+        history = retained_tool_history(msg)
+        if history is not None and history.tool_call_name:
+            return ""
         return assistant_content_for_frontend(msg)
     return msg.content
 
@@ -280,9 +284,11 @@ def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:
     }
 
     if isinstance(msg, AssistantMessage):
-        if msg.tool_call_name:
-            msg_dict["tool_call_name"] = msg.tool_call_name
-            msg_dict["tool_call_input"] = msg.tool_call_input
+        history = retained_tool_history(msg)
+        call = history if history is not None else msg
+        if call.tool_call_name:
+            msg_dict["tool_call_name"] = call.tool_call_name
+            msg_dict["tool_call_input"] = call.tool_call_input
         if msg.usage:
             msg_dict["usage"] = msg.usage
     elif isinstance(msg, ToolMessage):

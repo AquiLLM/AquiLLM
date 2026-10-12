@@ -29,6 +29,18 @@ only after their actual task discovery, durable delivery and schema compatibilit
 have been verified. The final release manifest must name the tested image and
 code identities; a branch name alone is insufficient.
 
+The private V2 frontier request checksum changes with bounded index batching.
+Deploy the app and topology gateway as a tested compatible pair: drain in-flight
+graph requests during replacement, then verify the versions and request checksum
+before resuming them. Mixed old/new peers fail closed for graph reads; do not
+bypass checksum validation to restore availability. This protocol change requires
+no stored projection or index schema migration.
+
+A protocol rollback likewise restores a tested compatible app/gateway pair;
+rolling back only one peer is not sufficient. Preserve retained graph data and
+all existing authority, integrity and deadline checks. Version compatibility does
+not activate a treatment or satisfy its separate quality and rollout gates.
+
 ## Schema and retained data
 
 Use Django's migration dependency plan. The program adds these chains:

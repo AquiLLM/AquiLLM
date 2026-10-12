@@ -47,6 +47,10 @@ def test_create_episodic_memories_ignores_duplicate_insert_race(monkeypatch):
     )
 
     monkeypatch.setattr(memory_module, "use_mem0", lambda: False)
+    # This unit owns episodic insertion; profile promotion has real DB/Celery tests.
+    promotions = []
+    monkeypatch.setattr(memory_module, "_enqueue_profile_fact_promotion",
+                        lambda **kwargs: promotions.append(kwargs))
 
     def fake_filter(**kwargs):
         assert kwargs == {"user": 1, "assistant_message_uuid": assistant_uuid}
@@ -61,6 +65,10 @@ def test_create_episodic_memories_ignores_duplicate_insert_race(monkeypatch):
     monkeypatch.setattr(memory_module.EpisodicMemory.objects, "create", fake_create)
 
     memory_module.create_episodic_memories_for_conversation(db_convo)
+    assert len(promotions) == 1
+    assert promotions[0]["source_conversation_id"] == 99
+    assert promotions[0]["user_content"] == "Remember our Memgraph setup."
+    assert promotions[0]["assistant_content"] == ""
 
 
 def test_create_episodic_memories_still_raises_unrelated_integrity_errors(monkeypatch):
@@ -88,6 +96,10 @@ def test_create_episodic_memories_still_raises_unrelated_integrity_errors(monkey
     )
 
     monkeypatch.setattr(memory_module, "use_mem0", lambda: False)
+    # This unit owns episodic insertion; profile promotion has real DB/Celery tests.
+    promotions = []
+    monkeypatch.setattr(memory_module, "_enqueue_profile_fact_promotion",
+                        lambda **kwargs: promotions.append(kwargs))
     monkeypatch.setattr(
         memory_module.EpisodicMemory.objects,
         "filter",

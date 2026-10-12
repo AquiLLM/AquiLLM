@@ -96,7 +96,7 @@ def prepare_selection_candidates(
         item.chunk.pk: (item.source_fingerprint, item.excerpt) for item in first
     }
     used_scorer = scorer
-    if used_scorer is None and allow_new_scores:
+    if used_scorer is None and (allow_new_scores or pool.source_score_sets):
         from apps.documents.services.chunk_rerank_selection_provider import (
             current_selection_scorer,
         )

@@ -195,16 +195,16 @@ def test_eval_manifest_validates_its_correlated_superseded_document_artifacts():
 
 
 def test_eval_manifest_still_rejects_document_source_drift():
-    from apps.documents.models import RawTextDocument
+    """The contributor validator must reject a source edit before its commit."""
     from apps.knowledge_graph.graph import assembly
 
     collection, documents, _sources, destination, _request, config = _eval_manifest()
-    RawTextDocument.objects.filter(pkid=documents[0].pkid).update(
-        full_text_hash="f" * 64
-    )
-
-    with pytest.raises(assembly.CollectionGraphSourceStaleError):
-        _validate_manifest(collection, destination, config)
+    with transaction.atomic():
+        document = documents[0]
+        document.full_text += " changed"
+        document.save(dont_rechunk=True)
+        with pytest.raises(assembly.CollectionGraphSourceStaleError):
+            _validate_manifest(collection, destination, config)
 
 
 def test_eval_manifest_still_rejects_ordered_chunk_drift():

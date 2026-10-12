@@ -3,7 +3,9 @@
 from math import floor
 from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
-from urllib.request import ProxyHandler, Request, build_opener
+from urllib.request import ProxyHandler, Request
+
+from .gateway_opener import build_opener
 
 from .frontier_contracts_v2 import FrontierBudgetExceeded
 from .frontier_gateway_contracts_v2 import (
@@ -62,7 +64,7 @@ class FrontierGatewayClientV2:
                 "X-Frontier-Timeout-Ms": str(timeout_ms),
             },
         )
-        opener = build_opener(ProxyHandler({}), _RejectRedirect())
+        opener = build_opener(self.endpoint, ProxyHandler({}), _RejectRedirect())
         try:
             try:
                 response = opener.open(request, timeout=remaining)

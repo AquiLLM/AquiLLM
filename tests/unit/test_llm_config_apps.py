@@ -100,28 +100,13 @@ def test_assistant_tool_call_requires_pair():
         )
 
 
-def test_conversation_rejects_adjacent_user_messages():
-    # this checks the conversation alternation rule
-
-    with pytest.raises(ValidationError):
-        Conversation(
-            system="test system",
-            messages=[
-                UserMessage(content="first"),
-                UserMessage(content="second"),
-            ],
-        )
-
-
-def test_conversation_rejects_adjacent_assistant_messages():
-    # this checks assistant messages cannot sit next to each other
-
-    with pytest.raises(ValidationError):
-        Conversation(
-            system="test system",
-            messages=[
-                UserMessage(content="hi"),
-                AssistantMessage(content="one", stop_reason="end_turn"),
-                AssistantMessage(content="two", stop_reason="end_turn"),
-            ],
-        )
+@pytest.mark.parametrize("role", ["user", "assistant"])
+def test_conversation_preserves_adjacent_historical_messages(role):
+    # Interrupted provider work can leave a durable user turn before the next append.
+    # Loading history must preserve every original message and feedback identity.
+    cls = UserMessage if role == "user" else AssistantMessage
+    fields = {} if role == "user" else {"stop_reason": "end_turn"}
+    messages = [cls(content="first", **fields), cls(content="second", **fields)]
+    convo = Conversation(system="test system", messages=messages)
+    assert convo.messages == messages
+    assert [message.message_uuid for message in convo] == [message.message_uuid for message in messages]

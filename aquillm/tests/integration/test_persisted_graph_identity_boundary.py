@@ -1,9 +1,12 @@
 """Actual homonyms, canonical bridge and duplicate credit."""
+from dataclasses import replace
+from hashlib import sha256
+
 import pytest
 from django.contrib.auth.models import User
 
 from apps.collections.models import CollectionPermission
-from apps.knowledge_graph.models import CanonicalEntityLink, CollectionEntity, RelationMention
+from apps.knowledge_graph.models import CanonicalEntityLink, CollectionEntity, ProjectionChunkReference, RelationMention
 from tests.integration.persisted_graph_acquisition_support import acquire_graph
 from tests.integration.persisted_graph_corpus_support import (
     ANSWER, BRIDGE, SEED, graph_corpus as graph_corpus,
@@ -60,20 +63,36 @@ def test_actual_homonym_source_entities_never_become_one_identity(
     mercury = keys_for(labels, "Mercury")
     assert len(mercury) == 2
     query = "Which dataset does Mercury use?"
-    with owned_gateway(tmp_path) as gateway, graph_observation(monkeypatch) as graph:
-        result, observed = acquire_graph(source, gateway, monkeypatch, settings,
-            documents=corpus.documents(), query=query, query_entity=("model", "Mercury"))
-    assert_runtime_bounds(result, observed, query=query, documents=corpus.documents())
-    assert mercury <= graph.identities
-    expected = {"DatasetA", "DatasetB"}
-    actual = set()
-    for row in observed.inputs:
-        for association in row.ref.associations:
-            if association.relation_type == "uses_dataset":
-                assert association.source_identity_key in mercury
-                actual.update(labels[association.target_identity_key])
-                assert association.direction == "directed"
-    assert actual == expected
+    with owned_gateway(tmp_path) as gateway:
+        with graph_observation(monkeypatch) as ambiguous:
+            result, observed = acquire_graph(source, gateway, monkeypatch, settings,
+                documents=corpus.documents(), query=query, query_entity=("model", "Mercury"),
+                expect_references=False)
+        assert_runtime_bounds(result, observed, query=query, documents=corpus.documents())
+        assert ambiguous.allocations and not ambiguous.ranks
+        assert not ambiguous.identities and not result.handoff.candidates and not observed.inputs
+        for _, (allocations, _) in ambiguous.allocations:
+            assert all(not seeds for seeds, _, _ in allocations.values())
+        reached = set()
+        for name, expected in (("first", "DatasetA"), ("second", "DatasetB")):
+            documents = corpus.documents(name)
+            with graph_observation(monkeypatch) as graph:
+                result, observed = acquire_graph(corpus.sources[name], gateway, monkeypatch, settings,
+                    documents=documents, query=query, query_entity=("model", "Mercury"))
+            assert_runtime_bounds(result, observed, query=query, documents=documents)
+            current = mercury.intersection(graph.identities)
+            assert len(current) == 1 and not reached.intersection(current)
+            reached.update(current)
+            targets = set()
+            for row in observed.inputs:
+                for association in row.ref.associations:
+                    if association.relation_type == "uses_dataset":
+                        assert association.source_identity_key in current
+                        targets.update(labels[association.target_identity_key])
+                        assert association.direction == "directed"
+            assert targets == {expected}
+            assert result.handoff.candidates
+        assert reached == mercury
 
 
 def test_actual_bridge_is_discovered_but_unselected_private_endpoint_is_absent(
@@ -90,6 +109,8 @@ def test_actual_bridge_is_discovered_but_unselected_private_endpoint_is_absent(
         assert graph.seeds == keys_for(labels, SEED)
         assert keys_for(labels, ANSWER) <= graph.identities
         assert any("Answer sentinel" in row.text for row in observed.inputs)
+        answer_keys = {row.ref.chunk_key for row in observed.inputs if "Answer sentinel" in row.text}
+        assert answer_keys <= {ref.chunk_key for ref in result.handoff.candidates}
         assert any(a.source_identity_key in keys_for(labels, BRIDGE)
             and a.target_identity_key in keys_for(labels, ANSWER)
             and a.relation_type == "cites" and a.direction == "directed"
@@ -131,3 +152,66 @@ def test_actual_duplicate_evidence_keeps_semantic_endpoint_credit(
     assert after_scores == pytest.approx(before_scores, rel=1e-12, abs=1e-12)
     assert any("Answer sentinel" in row.text for row in duplicated.inputs)
     assert duplicated.representation is not baseline.representation
+
+
+
+def test_losing_physical_copy_qualification_reaches_actual_hydration_and_handoff(
+    graph_corpus, projection_roles, monkeypatch, settings, tmp_path,
+):
+    corpus = graph_corpus
+    qualification = "The estimate is valid only at pH 6; above pH 6 it is unsupported."
+    high_text = f"{SEED} cites {BRIDGE}. This is a preliminary estimate."
+    low_text = f"{SEED} cites {BRIDGE}. {qualification}"
+    extract = corpus.backend.extract_batch
+
+    def confidence_per_source(texts, *, ontology):
+        # Only the existing external extraction fixture varies; real storage,
+        # canonical resolution, projection, gateway and ranking stay untouched.
+        results = extract(texts, ontology=ontology)
+        return tuple(replace(result, relations=tuple(
+            replace(row, confidence=0.60 if qualification in text else 0.95)
+            for row in result.relations))
+            for text, result in zip(texts, results, strict=True))
+
+    monkeypatch.setattr(corpus.backend, "extract_batch", confidence_per_source)
+    high = corpus.add("high", collection="A", text=high_text)
+    low = corpus.add("low", collection="B", text=low_text)
+    corpus.prepare()
+    corpus.project()
+    high_chunk, low_chunk = high.document.chunks.get(), low.document.chunks.get()
+    assert high_chunk.content == high_text and low_chunk.content == low_text
+    mapping = dict(ProjectionChunkReference.objects.filter(
+        integer_chunk_pk__in=(high_chunk.pk, low_chunk.pk), projection__state="ready",
+    ).values_list("projection_chunk_key", "integer_chunk_pk"))
+    assert set(mapping.values()) == {high_chunk.pk, low_chunk.pk}
+    labels = identity_labels(corpus)
+    seed_keys, bridge_keys = keys_for(labels, SEED), keys_for(labels, BRIDGE)
+    assert len(seed_keys) == len(bridge_keys) == 1
+    query = f"For {SEED}, what qualification applies to the estimate at pH 6?"
+    with owned_gateway(tmp_path) as gateway:
+        with graph_observation(monkeypatch) as graph:
+            result, observed = acquire_graph(high, gateway, monkeypatch, settings,
+                documents=corpus.documents(), query=query, query_entity=("paper", SEED))
+    assert_runtime_bounds(result, observed, query=query, documents=corpus.documents())
+    assert graph.seeds == seed_keys and graph.allocations and graph.ranks
+    transitions = [group for arguments, _ in graph.ranks
+        for group in arguments["snapshot"].relation_groups
+        if group.source_identity_key in seed_keys and group.target_identity_key in bridge_keys
+        and group.relation_type == "cites"]
+    assert len(transitions) == 1
+    assert {mapping[row.chunk_key] for row in transitions[0].evidence} == {high_chunk.pk}
+    # The low copy really lost topology selection, yet its unique source text
+    # must remain discoverable and selectable through the graph channel.
+    hydrated = {mapping[row.ref.chunk_key]: row for row in observed.inputs}
+    assert set(hydrated) == {high_chunk.pk, low_chunk.pk}
+    selected = hydrated[low_chunk.pk]
+    assert selected.text == low_text
+    assert selected.text_sha256 == sha256(low_text.encode()).hexdigest()
+    assert any(a.source_identity_key in seed_keys and a.target_identity_key in bridge_keys
+        and a.relation_type == "cites" and a.direction == "directed"
+        for a in selected.ref.associations)
+    candidates = {ref.chunk_key: ref for ref in result.handoff.candidates}
+    assert selected.ref.chunk_key in candidates
+    assert candidates[selected.ref.chunk_key].evidence_provenance_keys == selected.ref.evidence_provenance_keys
+    assert observed.budget.sources_used == 2
+    assert observed.budget.text_used["materialized"] == len(high_text) + len(low_text)

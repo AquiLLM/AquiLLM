@@ -14,7 +14,7 @@ from .gateway_contracts import MAX_REQUEST_BYTES, _canonical, _load
 PATH = "/v2/topology/frontier"
 VERSION = "topology-frontier-v2"
 CHECKSUM = sha256(
-    b"frontier-v2:fixed-manifest-index-raw:relative-timeout:raw-body:limit2:raw-limit10"
+    b"frontier-v2:fixed-manifest-index-indexbatch32-raw:relative-timeout:raw-body:limit2:raw-limit10"
 ).hexdigest()
 
 
@@ -37,7 +37,7 @@ class FrontierGatewayRequestV2:
     response_bytes: int
 
     def __post_init__(self):
-        if self.kind not in {"manifest", "index", "raw"}:
+        if self.kind not in {"manifest", "index", "index_batch", "raw"}:
             raise ValueError("unknown frontier operation")
         _key(self.generation)
         if type(self.ready) is not ReadyGenerationBundleV1:
@@ -53,7 +53,7 @@ class FrontierGatewayRequestV2:
         if self.keys != tuple(sorted(set(self.keys))) or not (
             (self.kind == "manifest" and not self.keys)
             or (self.kind == "index" and len(self.keys) == 1)
-            or (self.kind == "raw" and 1 <= len(self.keys) <= 32)
+            or (self.kind in {"raw", "index_batch"} and 1 <= len(self.keys) <= 32)
         ):
             raise ValueError("frontier lookup keys exceed exact shape")
         if (
@@ -64,6 +64,8 @@ class FrontierGatewayRequestV2:
 
     @property
     def maximum(self):
+        if self.kind == "index_batch":
+            return 2 * len(self.keys)
         return 10 * len(self.keys) if self.kind == "raw" else 2
 
 

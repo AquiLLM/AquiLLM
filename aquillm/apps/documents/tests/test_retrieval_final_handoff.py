@@ -12,7 +12,7 @@ from apps.chat.services.retrieval_authorization import (
     resolve_document_retrieval_authorization,
 )
 from apps.collections.models import CollectionPermission
-from apps.documents.models import RawTextDocument, TextChunk
+from apps.documents.models import TextChunk
 from apps.documents.services import (
     chunk_search,
 )
@@ -99,9 +99,15 @@ def test_default_final_permission_is_bounded_and_followed_by_source_checks(
                 elif mutation == "cancel":
                     budget.close("cancelled")
                 elif mutation == "source":
-                    RawTextDocument.objects.filter(pk=legacy[0].pk).update(
-                        full_text="changed"
-                    )
+                    doc = legacy[0]
+                    doc.full_text = "changed"
+                    doc.save(dont_rechunk=True)
+                    saved = TextChunk.objects.get(doc_id=doc.id)
+                    assert saved.content == "source" and saved.legacy_source_snapshot_id is not None
+                    assert saved.legacy_source_snapshot.canonical_text == "source"
+                    assert saved.legacy_source_snapshot.captured_source_hash == legacy[1].source_hash
+                    assert doc.full_text_hash != legacy[1].source_hash
+                    assert scope.representation.selections[0].document.source_hash == legacy[1].source_hash
                 elif mutation == "body":
                     TextChunk.objects.update(content="changed")
                 elif mutation == "pointer":

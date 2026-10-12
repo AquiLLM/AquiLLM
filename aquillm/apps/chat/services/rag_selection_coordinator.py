@@ -178,12 +178,8 @@ def prepare_selection_turn(
     source_mode = preservation.evidence_text_mode == "source"
     runtime = current_source_runtime()
     if runtime is not None or source_mode:
-        if (
-            runtime is None
-            or frozenset(int(v) for v in consumer.col_ref.collections)
-            != runtime.authorization.selected_collection_ids
-        ):
-            raise SourcePreparationLimited("source scope or shared budget unavailable")
+        from apps.documents.services.representation_requested_selection import requested_selection
+        requested_selection(runtime, consumer)
         authorization = runtime.authorization
         turn_budget = runtime.budget
     else:

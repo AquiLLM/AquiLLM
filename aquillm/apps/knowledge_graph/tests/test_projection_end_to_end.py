@@ -9,6 +9,8 @@ from uuid import UUID
 
 import pytest
 
+from tests.integration.persisted_graph_role_support import projection_roles
+
 from apps.knowledge_graph.projection.state_repository import (
     FunctionProjectionStateRepository,
 )
@@ -167,33 +169,49 @@ def test_indexed_alias_fixture_resolves_to_the_opaque_automatic_component() -> N
 
 
 @pytest.mark.container
+@pytest.mark.django_db(transaction=True, databases="__all__")
 @pytest.mark.skipif(
-    os.environ.get("KG_REQUIRE_CONTAINER_TESTS") != "1",
+    os.environ.get("KG_REQUIRE_CONTAINER_TESTS") != "1"
+    and os.environ.get("RAG_REMEDIATION_TEST") != "1",
     reason="Task22 live PostgreSQL role proof runs only in the host harness",
 )
-def test_live_postgres_roles_are_source_read_only_and_state_function_only() -> None:
-    import psycopg
+def test_live_postgres_roles_are_source_read_only_and_state_function_only(request) -> None:
+    from contextlib import closing
+    import psycopg2
+
+    connect_options = {}
+    if os.environ.get("RAG_REMEDIATION_TEST") == "1":
+        from django.db import connections
+        from scripts.run_rag_remediation_tests import validate_environment
+
+        validate_environment(dict(os.environ))
+        request.getfixturevalue("projection_roles")
+        database = connections["default"].settings_dict["NAME"]
+        assert database == "test_rag_test"
+        connect_options["dbname"] = database
 
     source_dsn = os.environ["KG_PROJECTION_POSTGRES_SOURCE_DSN"]
     state_dsn = os.environ["KG_PROJECTION_POSTGRES_STATE_DSN"]
-    with psycopg.connect(source_dsn, autocommit=True) as source:
-        source.execute("SELECT 1 FROM public.aquillm_collection LIMIT 1")
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            source.execute("UPDATE public.aquillm_collection SET id=id WHERE false")
-    with psycopg.connect(state_dsn, autocommit=True) as state:
-        assert (
+    with closing(psycopg2.connect(source_dsn, **connect_options)) as connection:
+        connection.autocommit = True
+        with connection.cursor() as source:
+            source.execute("SELECT 1 FROM public.aquillm_collection LIMIT 1")
+            with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+                source.execute("UPDATE public.aquillm_collection SET id=id WHERE false")
+    with closing(psycopg2.connect(state_dsn, **connect_options)) as connection:
+        connection.autocommit = True
+        with connection.cursor() as state:
             state.execute(
                 "SELECT * FROM public.kg_projection_claim(%s,%s,CURRENT_TIMESTAMP,%s)",
                 (P1, "task22-live", 30),
-            ).fetchone()
-            is None
-        )
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            state.execute(
-                "UPDATE public.apps_knowledge_graph_collectiongraphprojection "
-                "SET state=state WHERE false"
             )
-        with pytest.raises(psycopg.errors.InsufficientPrivilege):
-            state.execute(
-                "SELECT 1 FROM public.apps_knowledge_graph_collectiongraphprojection"
-            )
+            assert state.fetchone() is None
+            with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+                state.execute(
+                    "UPDATE public.apps_knowledge_graph_collectiongraphprojection "
+                    "SET state=state WHERE false"
+                )
+            with pytest.raises(psycopg2.errors.InsufficientPrivilege):
+                state.execute(
+                    "SELECT 1 FROM public.apps_knowledge_graph_collectiongraphprojection"
+                )

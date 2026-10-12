@@ -1,6 +1,5 @@
 """Bounded private hydration using the original representation and body ledger."""
 
-from hashlib import sha256
 from time import monotonic
 
 from apps.collections.services.retrieval_authorization import (
@@ -10,7 +9,6 @@ from apps.documents.services.chunk_search_scope import current_scope
 from apps.documents.services.source_loading import (
     bounded_source_database,
 )
-from apps.knowledge_graph.projection.identifiers import ProjectionIdentifierDomain
 from apps.knowledge_graph.projection.runtime import (
     load_projection_runtime_settings,
     projection_identifier_codec,
@@ -20,7 +18,7 @@ from lib.retrieval.turn_budget import TurnBudget
 from .graph_evidence_selection_v2 import GraphEvidenceSelectionInputV2
 from .graph_handoff import GraphCandidateRefV2
 from .graph_query_contracts import GraphEvidenceRefV2
-from .ready_materialization_v2 import materialize_graph_candidates_v2
+from .graph_hydration_operation_v2 import hydrate_selection_operation
 from .ready_scope_v2 import SelectedGraphScopeV2
 
 
@@ -90,7 +88,6 @@ def load_selection_inputs_v2(
     # retrieval request must never hydrate other documents in the original scope.
     from apps.knowledge_graph.models import ProjectionChunkReference
 
-    result = []
     with bounded_source_database(runtime, authorization.database_alias):
         requested = (
             scope.requested_document_ids
@@ -118,34 +115,5 @@ def load_selection_inputs_v2(
             for ref, source in zip(refs[:max_rows], references[:max_rows], strict=True)
             if ref.chunk_key in allowed
         ]
-        for ref, source in pairs:
-            check_deadline(budget, deadline)
-            chunks = materialize_graph_candidates_v2(
-                selected=selected, refs=(ref,), authorization=authorization
-            )
-            check_deadline(budget, deadline)
-            if not chunks:
-                continue
-            chunk = chunks[0]
-            if scope is not None:
-                from apps.documents.services.chunk_search_scoped_rows import fingerprint
-
-                scope.bodies.setdefault(chunk.pk, fingerprint(chunk))
-            authority = groups[
-                ref.authority_group_checksum
-            ].scope.projection_for_generation(ref.graph_generation_key)
-            document_key = codec.encode(
-                ProjectionIdentifierDomain.DOCUMENT,
-                generation=authority.generation_id,
-                source=chunk.doc_id,
-            ).value
-            result.append(
-                GraphEvidenceSelectionInputV2(
-                    source,
-                    chunk.content,
-                    sha256(chunk.content.encode()).hexdigest(),
-                    document_key,
-                )
-            )
-    check_deadline(budget, deadline)
-    return tuple(result)
+    return hydrate_selection_operation(selected=selected, pairs=tuple(pairs),
+        runtime=runtime, document_codec=codec, deadline=deadline)

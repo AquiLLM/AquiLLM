@@ -6,7 +6,7 @@ from time import monotonic
 import pytest
 
 from apps.documents.services.chunk_search_scope import (
-    FrozenRetrievalScope,
+    freeze_search_scope,
     bind_search_scope,
     reset_search_scope,
 )
@@ -53,15 +53,12 @@ def test_actual_extended_seed_reads_share_global_prefix_and_budget(
         TextChunk.objects.filter(pk=rows[0].pk).update(content="stale")
     budget = TurnBudget(TurnLimits())
     source = SourceRuntime(budget, f.authorization)
-    scope = FrozenRetrievalScope(
-        f.snapshot,
-        None,
-        None,
-        f.authorization,
-        "default",
-        source,
-        requested_document_ids=f.authorization.selected_document_ids,
-    )
+    with source_runtime_scope(source):
+        scope = freeze_search_scope(
+            tuple(f.documents.values()), using="default", authorization=f.authorization,
+        )
+    f.snapshot = scope.representation
+    assert source._frozen_retrieval_scope.representation is scope.representation
     token = bind_search_scope(scope, "Atlas", graph_enabled=True)
     try:
         with source_runtime_scope(source):

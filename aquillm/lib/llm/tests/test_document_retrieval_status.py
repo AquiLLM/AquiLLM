@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from lib.llm.providers.complete_turn import complete_conversation_turn
+from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
@@ -24,7 +25,7 @@ class _StaticLLM:
         )
 
 
-async def test_no_result_document_search_notice_is_appended_to_final_answer():
+async def test_unbound_no_result_notice_cannot_establish_document_absence():
     convo = Conversation(
         system="sys",
         messages=[
@@ -55,13 +56,13 @@ async def test_no_result_document_search_notice_is_appended_to_final_answer():
     updated, changed = await complete_conversation_turn(_StaticLLM("I could not find that detail."), convo, 1000)
 
     assert changed == "changed"
-    assert (
-        'I searched selected documents for "HSC-PDR2 calibration", but retrieval returned no relevant passages.'
-        in updated[-1].content
-    )
+    assert updated[-1].content == LIMITED_ANSWER
+    assert updated[-2].result_dict == convo[-1].result_dict
+    assert updated[-2].result_dict["retrieval_status"] == "no_results"
+    assert "no relevant passages" not in updated[-1].content
 
 
-async def test_document_tool_exception_notice_is_appended_to_final_answer():
+async def test_unbound_tool_error_does_not_enter_the_final_answer():
     convo = Conversation(
         system="sys",
         messages=[
@@ -85,4 +86,6 @@ async def test_document_tool_exception_notice_is_appended_to_final_answer():
     updated, changed = await complete_conversation_turn(_StaticLLM("I could not verify this."), convo, 1000)
 
     assert changed == "changed"
-    assert "The document search tool failed: Tool call timed out" in updated[-1].content
+    assert updated[-1].content == LIMITED_ANSWER
+    assert updated[-2].result_dict == {"exception": "Tool call timed out"}
+    assert "Tool call timed out" not in updated[-1].content

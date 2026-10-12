@@ -73,7 +73,7 @@ def test_final_materialization_charges_original_source_budget_once(monkeypatch):
 def test_captured_two_group_handoff_rejects_races_without_reselection(
     monkeypatch, race
 ):
-    from apps.documents.models import RawTextDocument, TextChunk
+    from apps.documents.models import TextChunk
     from apps.knowledge_graph.models import CollectionGraphProjection
 
     f, selected, ref = evidence_fixture(monkeypatch)
@@ -94,13 +94,19 @@ def test_captured_two_group_handoff_rejects_races_without_reselection(
             generation_key=uuid4()
         )
     elif race == "source":
-        RawTextDocument.objects.filter(pk=f.documents["A"].pk).update(
-            full_text_hash="0" * 64
-        )
+        document = f.documents["A"]
+        document.full_text += " changed"
+        document.save(dont_rechunk=True)
+        f.chunks["A"].refresh_from_db()
+        assert f.chunks["A"].content == "A"
+        assert not document.chunks.exists()
     elif race == "representation":
-        TextChunk.objects.filter(pk=f.chunks["A"].pk).update(
-            representation_generation=uuid4()
-        )
+        from apps.documents.services.representation_history import reference
+        from apps.documents.services.representation_snapshot_build import build_canonical_snapshot_representation
+        document = f.documents["A"]
+        assert build_canonical_snapshot_representation(reference(document), using="default") == "activated"
+        assert TextChunk.objects.filter(pk=f.chunks["A"].pk, content="A").exists()
+        assert not document.chunks.filter(pk=f.chunks["A"].pk).exists()
     elif race == "revoke":
         f.policy.rows = ()
     else:
@@ -187,8 +193,20 @@ def test_source_cache_never_substitutes_previous_representation(monkeypatch):
     runtime = SourceRuntime(TurnBudget(TurnLimits()), f.authorization)
     queryset = TextChunk.objects.filter(pk=f.chunks["A"].pk)
     first = source_query_rows(queryset, runtime=runtime)[0]
-    generation = uuid4()
-    queryset.update(representation_generation=generation)
-    second = source_query_rows(queryset, runtime=runtime)[0]
-    assert first.representation_generation is None
-    assert second.representation_generation == generation
+    from apps.documents.services.representation_contracts import SourceScopeUnavailable
+    from apps.documents.services.representation_history import reference
+    from apps.documents.services.representation_snapshot_build import build_canonical_snapshot_representation
+    document = f.documents["A"]
+    frozen = runtime._frozen_retrieval_scope
+    assert first.representation_generation_id is None
+    assert build_canonical_snapshot_representation(reference(document), using="default") == "activated"
+    with pytest.raises(SourceScopeUnavailable):
+        source_query_rows(queryset, runtime=runtime)
+    assert runtime._frozen_retrieval_scope is frozen
+    assert queryset.get().content == first.content
+    assert not document.chunks.filter(pk=first.pk).exists()
+    fresh = SourceRuntime(TurnBudget(TurnLimits()), f.authorization)
+    second = source_query_rows(document.chunks, runtime=fresh)[0]
+    assert second.pk != first.pk
+    assert second.representation_generation_id is not None
+    assert second.content == first.content

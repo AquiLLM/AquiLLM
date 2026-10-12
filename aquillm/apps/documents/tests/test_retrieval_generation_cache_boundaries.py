@@ -48,8 +48,6 @@ def test_cache_read_and_write_revalidate_original_authority(
 ):
     from django.conf import settings
 
-    from apps.documents.models import RawTextDocument
-
     runtime, policy = prepare(legacy, transport)
     cached, writes = {}, []
     monkeypatch.setattr(
@@ -77,9 +75,15 @@ def test_cache_read_and_write_revalidate_original_authority(
             elif change == "body":
                 TextChunk.objects.update(content="edited")
             elif change == "source":
-                RawTextDocument.objects.filter(pk=legacy[0].pk).update(
-                    full_text="edited"
-                )
+                doc = legacy[0]
+                doc.full_text = "edited"
+                doc.save(dont_rechunk=True)
+                saved = TextChunk.objects.get(doc_id=doc.id)
+                assert saved.content == "source" and saved.legacy_source_snapshot_id is not None
+                assert saved.legacy_source_snapshot.canonical_text == "source"
+                assert saved.legacy_source_snapshot.captured_source_hash == legacy[1].source_hash
+                assert doc.full_text_hash != legacy[1].source_hash
+                assert scope.representation.selections[0].document.source_hash == legacy[1].source_hash
             elif change == "profile":
                 settings.DOCUMENT_EMBEDDING_SPACE_KEY = "e" * 64
             else:

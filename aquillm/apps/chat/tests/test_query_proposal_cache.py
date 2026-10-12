@@ -5,6 +5,7 @@ import pytest
 from django.test import override_settings
 
 from apps.chat.services.retrieval_query_proposals import build_query_proposals
+from apps.chat.services.retrieval_query_binding import ensure_admission
 from apps.chat.services.retrieval_query_runtime import _frozen_vocabulary, proposal_scope
 from apps.collections.models import CollectionPermission
 from apps.collections.services.django_retrieval_authorization import build_selected_scope_authorization_context
@@ -30,9 +31,11 @@ def test_candidate_cache_changes_with_query_policy_and_revokes_changed_pin(legac
         version=version, expected_revision=0)
     runtime = SourceRuntime(TurnBudget(TurnLimits()), authorization)
     with source_runtime_scope(runtime), override_settings(DOCUMENT_EMBEDDING_SPACE_KEY=transport[0].space_key):
+        witness = ensure_admission(runtime)
         snapshot = _frozen_vocabulary(runtime)
         row = build_query_proposals("source", vocabulary=snapshot)[1]
         scope = freeze_search_scope([doc], using="default", authorization=authorization)
+        assert scope.representation is witness.representation
         keys = []
         for value in (row, replace(row, policy_key="changed"), replace(row, text=row.text + " extra")):
             with proposal_scope(value, runtime=runtime):

@@ -1,10 +1,9 @@
 """Exact legacy-null representation scopes. Source hashes never grant access."""
 
-from dataclasses import asdict
 from uuid import UUID
 import re
 
-from django.db.models import Exists, F, Func, Q
+from django.db.models import Exists, F, Func, OuterRef, Q
 
 from lib.embeddings.document_contracts import digest, require_digest
 from .representation_contracts import (
@@ -39,7 +38,8 @@ def document_payload(ref):
         require_digest(ref.source_hash)
     except ValueError:
         _unavailable()
-    return {**asdict(ref), "id": str(ref.id)}
+    return {"model_label": ref.model_label, "pkid": ref.pkid, "id": str(ref.id),
+            "collection_id": ref.collection_id, "source_hash": ref.source_hash}
 
 
 def ordered_selections(snapshot):
@@ -148,35 +148,64 @@ def freeze_active_representations(
     return validate_representation_snapshot(snapshot, using=using)
 
 
-def active_chunk_scope(queryset, *, snapshot):
+def active_chunk_scope(queryset, *, snapshot, document_id=None):
     """Lazy predicates also close a UUID collision after this function returns."""
     validate_representation_snapshot(snapshot, using=queryset.db)
-    return _active_chunk_predicates(queryset, snapshot=snapshot)
+    return _active_chunk_predicates(queryset, snapshot=snapshot, document_id=document_id)
 
 
-def _active_chunk_predicates(queryset, *, snapshot):
+def _active_chunk_predicates(queryset, *, snapshot, document_id=None):
     """Build unchanged SQL fences within a caller's fresh validation boundary."""
     from apps.documents.models import DESCENDED_FROM_DOCUMENT
 
+    selections = ordered_selections(snapshot)
+    if document_id is not None:
+        if type(document_id) is not UUID:
+            _unavailable()
+        selections = tuple(s for s in selections if s.document.id == document_id)
+        if len(selections) != 1:
+            _unavailable()
+    from .representation_scope import current_state_clause, _current_active_state_clause
+    from .representation_tuple_predicate import ExactTupleMembership
     condition = Q(pk__in=[])
-    for s in ordered_selections(snapshot):
+    represented, active = {}, []
+    for s in selections:
         ref = s.document
-        from .representation_scope import current_state_clause
-        clause = Q(doc_id=ref.id, representation_generation_id=s.generation_key) & current_state_clause(s, using=queryset.db)
-        for model in DESCENDED_FROM_DOCUMENT:
-            owners = model._base_manager.using(queryset.db).filter(id=ref.id)
-            if model._meta.label_lower == ref.model_label:
-                exact = owners.annotate(_canonical=SourceSHA256(F("full_text"))).filter(
-                    pkid=ref.pkid,
-                    collection_id=ref.collection_id,
-                    full_text_hash=ref.source_hash,
-                    _canonical=s.canonical_sha256,
-                )
-                clause &= Q(Exists(exact)) & ~Q(Exists(owners.exclude(pkid=ref.pkid)))
-            else:
-                clause &= ~Q(Exists(owners))
-        condition |= clause
-    return queryset.filter(condition)
+        clause = Q(doc_id=ref.id, representation_generation_id=s.generation_key)
+        if s.generation_key is None:
+            condition |= clause & current_state_clause(s, using=queryset.db)
+        else:
+            active.append(s)
+        represented.setdefault(ref.model_label, []).append(ref)
+    if not selections:
+        return queryset.filter(condition)
+    if active:
+        active_condition = Q(ExactTupleMembership(
+            ("doc_id", "representation_generation_id"),
+            tuple((s.document.id, s.generation_key) for s in active)))
+        condition |= active_condition & _current_active_state_clause(tuple(active), using=queryset.db)
+
+    exact_owner = Q(pk__in=[])
+    unique_owner = Q()
+    for model in DESCENDED_FROM_DOCUMENT:
+        owners = model._base_manager.using(queryset.db).filter(id=OuterRef("doc_id"))
+        refs = represented.get(model._meta.label_lower, ())
+        if refs:
+            exact_tuples = ExactTupleMembership(
+                ("id", "pkid", "collection_id", "full_text_hash"),
+                tuple((ref.id, ref.pkid, ref.collection_id, ref.source_hash) for ref in refs))
+            identities = ExactTupleMembership(
+                ("id", "pkid"), tuple((ref.id, ref.pkid) for ref in refs))
+            # ordered_selections binds each canonical digest to its source hash;
+            # the complete tuple fixes the stored hash before this single SHA check.
+            exact = owners.annotate(_canonical=SourceSHA256(F("full_text"))).filter(
+                exact_tuples, _canonical=F("full_text_hash"))
+            exact_owner |= Q(Exists(exact))
+            # Keep UUID/PK pairs: a different selected PK can acquire this UUID
+            # after construction, and must then count as an unexpected owner.
+            owners = owners.exclude(identities)
+        unique_owner &= ~Q(Exists(owners))
+    return queryset.filter(condition & exact_owner & unique_owner)
 
 
 def load_chunk_source(chunk_id, *, using):

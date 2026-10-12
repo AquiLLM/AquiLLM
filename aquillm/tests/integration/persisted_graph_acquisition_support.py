@@ -60,7 +60,7 @@ class AcquisitionObservation:
 
 def acquire_graph(source, gateway, monkeypatch, settings, *, barrier=None,
                   documents=None, principal=None, query="What does Orion use?",
-                  query_entity=("model", "Orion")):
+                  query_entity=("model", "Orion"), expect_references=True):
     document = source.document
     documents = (document,) if documents is None else tuple(documents)
     consumer = SimpleNamespace(user=principal or document.ingested_by,
@@ -74,7 +74,10 @@ def acquire_graph(source, gateway, monkeypatch, settings, *, barrier=None,
     def load(**kwargs):
         observed.calls.append("hydration")
         observed.references = kwargs["references"]
-        assert observed.references, "the real frontier must yield references"
+        if expect_references:
+            assert observed.references, "the real frontier must yield references"
+        else:
+            assert not observed.references, "ambiguous direct seeds must remain unresolved"
         assert kwargs["authorization"] is observed.authorization
         assert kwargs["budget"] is observed.budget
         assert kwargs["selected"].representation_snapshot is observed.representation

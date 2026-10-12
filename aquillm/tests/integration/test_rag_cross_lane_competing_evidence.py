@@ -119,6 +119,7 @@ async def test_distinct_evidence_competes_in_actual_graph_route(
                 # Honest prefix controls; never label their numerical score full-source coverage.
                 if ranking.score_set is not None:
                     assert all(row.window_coverage is None for row in ranking.score_set.scores)
-            result = observed.trace.result(stored)
-            assert result['events'] == observed.trace.events
-            assert result['actions'] == 1
+        # Final ledger counters are emitted when preservation_turn exits.
+        result = observed.trace.result(stored)
+        assert result['events'] == observed.trace.events
+        assert result['actions'] == 1

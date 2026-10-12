@@ -95,6 +95,74 @@ def _current_row_queryset(scope, ids):
     )
 
 
+def _current_rows(rows, scope, valid_dense, *, dense_only=False):
+    """Eager metadata pass private to a caller-owned full-scope boundary."""
+    if not rows:
+        return (), set()
+    from .lexical_readiness import _matching_full_text_ids
+
+    fts_ids = tuple(row.pk for row in rows if row.pk in scope.fts_rows)
+    valid_fts = (
+        _matching_full_text_ids(scope, _current_row_queryset(scope, fts_ids))
+        if fts_ids else set()
+    )
+    from .chunk_search_revalidation import withdraw_full_text
+
+    withdraw_full_text(scope, rows, valid_fts)
+    metadata = (
+        _current_row_queryset(scope, tuple(row.pk for row in rows))
+        .annotate(_revision=MD5("content"))
+        .values_list(
+            "pk",
+            "doc_id",
+            "chunk_number",
+            "_revision",
+            "representation_generation",
+        )
+    )
+    current = {item[0]: tuple(item[1:]) for item in metadata}
+    result = []
+    for row in rows:
+        captured = scope.bodies.get(row.pk)
+        actual = fingerprint(row)
+        dense = scope.dense_rows.get(row.pk)
+        if (
+            row.pk in scope.fts_rows
+            and row.pk not in valid_fts
+            and row.pk not in scope.lexical_ids
+            and dense is None
+        ):
+            continue
+        if captured is None:
+            # Graph rows still cross the original frozen representation scope.
+            captured = actual
+            scope.bodies[row.pk] = actual
+        if actual != captured or current.get(row.pk) != captured:
+            continue
+        if (
+            dense
+            and (dense_only or row.pk not in scope.lexical_ids | valid_fts)
+            and (
+                dense.embedding_generation_key not in valid_dense
+                or actual[2] != dense.source_md5
+                or actual[3] != dense.representation_key
+            )
+        ):
+            continue
+        result.append(row)
+    return tuple(result), valid_fts
+
+
+def _retain_dense(rows, scope, final_keys, valid_fts, *, dense_only=False):
+    return tuple(
+        row
+        for row in rows
+        if row.pk not in scope.dense_rows
+        or (not dense_only and row.pk in scope.lexical_ids | valid_fts)
+        or scope.dense_rows[row.pk].embedding_generation_key in final_keys
+    )
+
+
 def validate_rows(rows, *, scope=None, dense_only=False):
     scope = scope or current_scope()
     rows = tuple(rows)
@@ -102,65 +170,24 @@ def validate_rows(rows, *, scope=None, dense_only=False):
         return rows
     with scope.database():
         valid_dense = set(scope.validate())
-        from .lexical_readiness import _matching_full_text_ids
-
-        fts_ids = tuple(row.pk for row in rows if row.pk in scope.fts_rows)
-        valid_fts = (
-            _matching_full_text_ids(scope, _current_row_queryset(scope, fts_ids))
-            if fts_ids else set()
-        )
-        from .chunk_search_revalidation import withdraw_full_text
-
-        withdraw_full_text(scope, rows, valid_fts)
-        metadata = (
-            _current_row_queryset(scope, tuple(row.pk for row in rows))
-            .annotate(_revision=MD5("content"))
-            .values_list(
-                "pk",
-                "doc_id",
-                "chunk_number",
-                "_revision",
-                "representation_generation",
-            )
-        )
-        current = {item[0]: tuple(item[1:]) for item in metadata}
-        result = []
-        for row in rows:
-            captured = scope.bodies.get(row.pk)
-            actual = fingerprint(row)
-            dense = scope.dense_rows.get(row.pk)
-            if (
-                row.pk in scope.fts_rows
-                and row.pk not in valid_fts
-                and row.pk not in scope.lexical_ids
-                and dense is None
-            ):
-                continue
-            if captured is None:
-                # Graph rows still cross the original frozen representation scope.
-                captured = actual
-                scope.bodies[row.pk] = actual
-            if actual != captured or current.get(row.pk) != captured:
-                continue
-            if (
-                dense
-                and (dense_only or row.pk not in scope.lexical_ids | valid_fts)
-                and (
-                    dense.embedding_generation_key not in valid_dense
-                    or actual[2] != dense.source_md5
-                    or actual[3] != dense.representation_key
-                )
-            ):
-                continue
-            result.append(row)
+        result, valid_fts = _current_rows(rows, scope, valid_dense, dense_only=dense_only)
         final_keys = set(scope.validate())
-        return tuple(
-            row
-            for row in result
-            if row.pk not in scope.dense_rows
-            or (not dense_only and row.pk in scope.lexical_ids | valid_fts)
-            or scope.dense_rows[row.pk].embedding_generation_key in final_keys
-        )
+        return _retain_dense(result, scope, final_keys, valid_fts, dense_only=dense_only)
+
+
+def _closed_authorized_rows(rows, *, scope, reauthorize):
+    """Keep both row observations around reauthorization inside fresh ends."""
+    with scope.database():
+        rows = tuple(rows)
+        initial_keys = set(scope.validate())
+        rows, _ = _current_rows(rows, scope, initial_keys)
+        # Only first-pass survivors reach incoming permission revalidation.
+        rows = tuple(reauthorize(rows))
+        rows, valid_fts = _current_rows(rows, scope, initial_keys)
+        # Empty survivors still cross original permission/source/policy/deadline
+        # fences. Never adopt dense eligibility absent at entry.
+        final_keys = initial_keys & set(scope.validate())
+        return _retain_dense(rows, scope, final_keys, valid_fts)
 
 
 def validated_dense_rows(rows):

@@ -51,9 +51,12 @@ def validate_state_rows(selections, *, using):
                 for s in selections}
     if len(expected) != len(selections):
         _unavailable()
-    condition = Q(pk__in=[])
+    groups = {}
     for label, pkid, document_id in expected:
-        condition |= Q(model_label=label, document_pkid=pkid, document_id=document_id)
+        groups.setdefault(label, []).append(Q(document_pkid=pkid, document_id=document_id))
+    condition = (Q(*(Q(Q(*pairs, _connector=Q.OR), model_label=label)
+                     for label, pairs in groups.items()), _connector=Q.OR)
+                 if groups else Q(pk__in=[]))
     rows = DocumentRepresentationState.objects.using(using).filter(condition).order_by("pk").values(
         "pk", "model_label", "document_pkid", "document_id", "collection_id",
         "legacy_closed", "legacy_source_hash", "active_generation_id",

@@ -173,10 +173,10 @@ def retrieval_payload(
     top_k: int = 10,
     omitted_doc_id: str | None = None,
 ) -> dict[str, Any]:
-    """A ranks repeatedly; B appears in the final aspect query's retrieved pool.
+    """A's redundant row precedes B in one oversized original-query pool.
 
-    Even at top_k=2, the union contains both necessary facts. Plain RRF at limit=2
-    retains A's redundant row ahead of B; diversity must occur before that cut.
+    Candidate acquisition must retain B before final top-k/document diversity.
+    No automatic clause splitting or optional proposal is assumed.
     """
     first, second = copy.deepcopy(case.papers)
     redundant = dict(first, chunk_id=first["chunk_id"] + 1)
@@ -185,7 +185,7 @@ def retrieval_payload(
         "This synthetic methods appendix repeats the apparatus description. "
         "It provides no additional measured outcome."
     )
-    rows = [second, first] if query_index >= 2 else [first, redundant]
+    rows = [first, redundant, second]
     rows = [row for row in rows if row["doc_id"] != omitted_doc_id][:top_k]
     for rank, row in enumerate(rows, start=1):
         row["rank"] = rank

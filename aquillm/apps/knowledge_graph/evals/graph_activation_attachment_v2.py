@@ -52,6 +52,7 @@ def validate_graph_activation_attachment_v2(report, *, quality_reports):
         unchanged = all(c == controls[0] for c in controls)
         applicable = not (
             unchanged
+            and "scoped_vocabulary" not in controls[0]
             and controls[0] == current
             and controls[0]["identity_policy"] == "legacy"
             and controls[0]["remediation_mode"] == "legacy"

@@ -197,7 +197,6 @@ class RagAnswerPublication:
                 limited = True
             limited = limited or not validate_final_answer(text, self.policy).valid
             image_urls = set(re.findall(r"!\[[^\]]*\]\(([^\s)]+)", text))
-            image_urls.update(re.findall(r"/aquillm/document_image/[^\s)\"'<>]+", text))
             from .rag_immutable_images import selected_image_lines
             try:
                 image_lines = selected_image_lines(self.packet, image_urls)

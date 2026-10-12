@@ -7,6 +7,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from lib.llm.providers.complete_turn import complete_conversation_turn
+from lib.llm.answer_publication import LIMITED_ANSWER
+from lib.llm.tests.publication_fixture_support import selected_publication, UNCERTAINTY, assert_uncertain_alpha
 from lib.llm.providers.rag_citations import (
     synthesize_cited_extract_from_results,
     collect_allowed_chunk_citations,
@@ -18,7 +20,6 @@ from lib.llm.providers.request_observability import observability_scope
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
-
 
 @pytest.mark.asyncio
 async def test_complete_turn_retries_when_post_tool_answer_lacks_required_citations():
@@ -66,11 +67,11 @@ async def test_complete_turn_retries_when_post_tool_answer_lacks_required_citati
             ),
         ],
     )
-    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=512)
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(llm, convo, max_tokens=512)
     assert changed == "changed"
-    assert updated[-1].content == "Cited answer [doc:doc-a chunk:7]."
+    assert updated[-1].content == UNCERTAINTY + "\n\n> Alpha finding with supporting detail. [doc:doc-a chunk:7]"
     assert llm.get_message.await_count == 2
-
 
 @pytest.mark.asyncio
 async def test_complete_turn_uses_higher_default_post_tool_token_budget(monkeypatch):
@@ -224,7 +225,7 @@ async def test_complete_turn_truncates_long_prior_answer_in_citation_retry(monke
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_soft_accepts_high_quality_without_invalid_citations():
+async def test_complete_turn_rejects_long_answer_with_uncited_factual_line():
     long_answer = (
         "- The book tracks how Mendelism became politically loaded in public debate [doc:doc-a chunk:7]\n"
         "- Radick emphasizes that scientific authority was shaped by institutions and networks\n"
@@ -256,10 +257,12 @@ async def test_complete_turn_soft_accepts_high_quality_without_invalid_citations
             ),
         ],
     )
-    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
     assert changed == "changed"
-    assert updated[-1].content == long_answer
-    assert llm.get_message.await_count == 1
+    assert updated[-1].content == LIMITED_ANSWER
+    assert llm.get_message.await_count == 2
+    assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -306,7 +309,7 @@ async def test_complete_turn_does_not_force_extractive_fallback_for_incomplete_b
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_skips_citation_rewrite_retry(monkeypatch):
+async def test_complete_turn_final_only_stream_still_repairs_uncited_claims(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     llm = SimpleNamespace(
         base_args={},
@@ -334,22 +337,28 @@ async def test_complete_turn_streaming_skips_citation_rewrite_retry(monkeypatch)
         ],
     )
 
-    async def _noop_stream(_payload: dict):
-        return None
+    events = []
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_noop_stream,
-    )
+    async def _noop_stream(payload: dict):
+        events.append(payload)
+
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_noop_stream,
+        )
     assert changed == "changed"
-    assert llm.get_message.await_count == 1
-    assert "One uncited point" in updated[-1].content
+    assert updated[-1].content == LIMITED_ANSWER
+    assert llm.get_message.await_count == 2
+    assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
+    assert len(events) == 1 and events[0]["done"] is True
+    assert events[0]["content"] == LIMITED_ANSWER
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallback(monkeypatch):
+async def test_complete_turn_final_only_stream_rejects_fabricated_citations(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     llm = SimpleNamespace(
         base_args={},
@@ -377,23 +386,28 @@ async def test_complete_turn_streaming_invalid_citations_get_note_not_full_fallb
         ],
     )
 
-    async def _noop_stream(_payload: dict):
-        return None
+    events = []
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_noop_stream,
-    )
+    async def _noop_stream(payload: dict):
+        events.append(payload)
+
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_noop_stream,
+        )
     assert changed == "changed"
-    assert llm.get_message.await_count == 1
-    assert "could not be verified" in updated[-1].content
-    assert "I can only provide claims directly supported by retrieved chunks" not in updated[-1].content
+    assert updated[-1].content == LIMITED_ANSWER
+    assert llm.get_message.await_count == 2
+    assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
+    assert len(events) == 1 and events[0]["done"] is True
+    assert events[0]["content"] == LIMITED_ANSWER
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_live_stream_appends_sources_on_done_only(monkeypatch):
+async def test_complete_turn_legacy_stream_flag_publishes_only_final_attribution(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     stream_payloads: list[dict] = []
 
@@ -402,24 +416,7 @@ async def test_complete_turn_live_stream_appends_sources_on_done_only(monkeypatc
 
     async def _fake_get_message(**kwargs):
         cb = kwargs.get("stream_callback")
-        assert callable(cb)
-        await cb(
-            {
-                "message_uuid": "m",
-                "role": "assistant",
-                "content": "Partial answer",
-                "done": False,
-            }
-        )
-        await cb(
-            {
-                "message_uuid": "m",
-                "role": "assistant",
-                "content": "Final answer [doc:doc-a chunk:7].",
-                "done": True,
-                "usage": 9,
-            }
-        )
+        assert cb is None
         return LLMResponse(
             text="Final answer [doc:doc-a chunk:7].",
             tool_call={},
@@ -443,22 +440,21 @@ async def test_complete_turn_live_stream_appends_sources_on_done_only(monkeypatc
         ],
     )
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_capture_stream,
-    )
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_capture_stream,
+        )
     assert changed == "changed"
     assert llm.get_message.await_count == 1
-    assert len(stream_payloads) == 2
-    assert stream_payloads[0]["content"] == "Partial answer"
-    assert stream_payloads[-1]["content"] == (
-        "Final answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
-    )
-    assert updated[-1].content == (
-        "Final answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
-    )
+    expected = UNCERTAINTY + "\n\n> alpha [doc:doc-a chunk:7]"
+    assert updated[-1].content == expected
+    assert len(stream_payloads) == 1
+    assert stream_payloads[0]["done"] is True
+    assert stream_payloads[0]["content"] == expected
+    assert "Partial answer" not in expected
 
 
 @pytest.mark.asyncio
@@ -472,16 +468,7 @@ async def test_complete_turn_streaming_skips_appending_sources_when_flag_disable
 
     async def _fake_get_message(**kwargs):
         cb = kwargs.get("stream_callback")
-        assert callable(cb)
-        await cb(
-            {
-                "message_uuid": "m",
-                "role": "assistant",
-                "content": "Narrative summary with no inline citations.",
-                "done": True,
-                "usage": 5,
-            }
-        )
+        assert cb is None
         return LLMResponse(
             text="Narrative summary with no inline citations.",
             tool_call={},
@@ -505,20 +492,23 @@ async def test_complete_turn_streaming_skips_appending_sources_when_flag_disable
         ],
     )
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_capture_stream,
-    )
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_capture_stream,
+        )
     assert changed == "changed"
-    assert stream_payloads[0]["content"] == "Narrative summary with no inline citations."
-    assert "Sources:" not in stream_payloads[0]["content"]
-    assert "Sources:" not in updated[-1].content
+    assert updated[-1].content == LIMITED_ANSWER
+    assert len(stream_payloads) == 1 and stream_payloads[0]["done"] is True
+    assert stream_payloads[0]["content"] == LIMITED_ANSWER
+    assert llm.get_message.await_count == 2
+    assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answer(monkeypatch):
+async def test_complete_turn_sources_cannot_rescue_uncited_model_answer(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     stream_payloads: list[dict] = []
 
@@ -527,16 +517,7 @@ async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answ
 
     async def _fake_get_message(**kwargs):
         cb = kwargs.get("stream_callback")
-        assert callable(cb)
-        await cb(
-            {
-                "message_uuid": "m",
-                "role": "assistant",
-                "content": "Narrative summary with no inline citations.",
-                "done": True,
-                "usage": 5,
-            }
-        )
+        assert cb is None
         return LLMResponse(
             text="Narrative summary with no inline citations.",
             tool_call={},
@@ -560,21 +541,19 @@ async def test_complete_turn_streaming_appends_sources_when_no_citations_in_answ
         ],
     )
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_capture_stream,
-    )
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_capture_stream,
+        )
     assert changed == "changed"
-    assert llm.get_message.await_count == 1
-    assert len(stream_payloads) == 1
-    assert stream_payloads[0]["done"] is True
-    streamed = stream_payloads[0]["content"]
-    assert "Narrative summary with no inline citations." in streamed
-    assert "Sources:" in streamed
-    assert "[doc:doc-a chunk:7]" in streamed
-    assert "Sources:" in updated[-1].content
+    assert updated[-1].content == LIMITED_ANSWER
+    assert len(stream_payloads) == 1 and stream_payloads[0]["done"] is True
+    assert stream_payloads[0]["content"] == LIMITED_ANSWER
+    assert llm.get_message.await_count == 2
+    assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -614,17 +593,23 @@ async def test_complete_turn_final_stream_adds_refs_when_model_emits_empty_sourc
         ],
     )
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_capture_stream,
-    )
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_capture_stream,
+        )
 
     assert changed == "changed"
-    assert "- [doc:doc-a chunk:7]" in updated[-1].content
-    assert stream_payloads
-    assert "- [doc:doc-a chunk:7]" in stream_payloads[-1]["content"]
+    from lib.llm.providers.complete_turn import _append_citation_sources_if_missing
+    assert _append_citation_sources_if_missing(
+        "A cited fact [doc:doc-a chunk:7].\n\nSources:", {"[doc:doc-a chunk:7]"}
+    ).endswith("Sources:\n- [doc:doc-a chunk:7]")
+    expected = UNCERTAINTY + "\n\n> alpha [doc:doc-a chunk:7]"
+    assert updated[-1].content == expected
+    assert len(stream_payloads) == 1 and stream_payloads[0]["done"] is True
+    assert stream_payloads[0]["content"] == expected
 
 
 @pytest.mark.asyncio
@@ -637,16 +622,7 @@ async def test_complete_turn_streaming_appends_used_sources_when_present(monkeyp
 
     async def _fake_get_message(**kwargs):
         cb = kwargs.get("stream_callback")
-        assert callable(cb)
-        await cb(
-            {
-                "message_uuid": "m",
-                "role": "assistant",
-                "content": "Summary with one inline cite [doc:doc-a chunk:1].",
-                "done": True,
-                "usage": 5,
-            }
-        )
+        assert cb is None
         return LLMResponse(
             text="Summary with one inline cite [doc:doc-a chunk:1].",
             tool_call={},
@@ -680,24 +656,33 @@ async def test_complete_turn_streaming_appends_used_sources_when_present(monkeyp
         ],
     )
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_capture_stream,
-    )
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_capture_stream,
+        )
     assert changed == "changed"
     assert llm.get_message.await_count == 1
     assert len(stream_payloads) == 1
     streamed = stream_payloads[0]["content"]
-    assert "Sources:" in streamed
-    assert "- [doc:doc-a chunk:1]" in streamed
-    assert "- [doc:doc-g chunk:7]" not in streamed
-    assert updated[-1].content.count("[doc:") == 2
+    from lib.llm.providers.complete_turn import _append_citation_sources_if_missing
+    refs = {f"[doc:doc-{letter} chunk:{index}]" for index, letter in enumerate("abcdefg", 1)}
+    source_list = _append_citation_sources_if_missing("Summary [doc:doc-a chunk:1].", refs)
+    assert "Sources:\n- [doc:doc-a chunk:1]" in source_list
+    assert "[doc:doc-g chunk:7]" not in source_list
+    expected = UNCERTAINTY + (
+        "\n\n> a [doc:doc-a chunk:1]\n\n> b [doc:doc-b chunk:2]"
+        "\n\n> c [doc:doc-c chunk:3]\n\n> d [doc:doc-d chunk:4]"
+        "\n\n> e [doc:doc-e chunk:5]"
+    )
+    assert streamed == updated[-1].content == expected
+    assert "[doc:doc-f" not in streamed and "[doc:doc-g" not in streamed
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_chunk(monkeypatch):
+async def test_complete_turn_cutoff_draft_cannot_escape_final_validation(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     stream_payloads: list[dict] = []
 
@@ -706,17 +691,7 @@ async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_ch
 
     async def _fake_get_message(**kwargs):
         cb = kwargs.get("stream_callback")
-        assert callable(cb)
-        await cb(
-            {
-                "message_uuid": "m",
-                "role": "assistant",
-                "content": "![fig. 6: 1), based at the recently established University (Page 168) Source: Gre",
-                "done": True,
-                "stop_reason": "max_tokens",
-                "usage": 4,
-            }
-        )
+        assert cb is None
         return LLMResponse(
             text="![fig. 6: 1), based at the recently established University (Page 168) Source: Gre",
             tool_call={},
@@ -754,21 +729,23 @@ async def test_complete_turn_streaming_does_not_append_sources_on_cutoff_done_ch
         ],
     )
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_capture_stream,
-    )
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_capture_stream,
+        )
     assert changed == "changed"
-    assert stream_payloads
-    assert stream_payloads[0]["done"] is True
-    assert "Sources:" not in stream_payloads[0]["content"]
-    assert "Sources:" in updated[-1].content
+    expected = assert_uncertain_alpha(updated)
+    assert len(stream_payloads) == 1 and stream_payloads[0]["done"] is True
+    assert stream_payloads[0]["content"] == expected
+    llm._continue_cutoff_response.assert_awaited_once()
+    assert llm._continue_cutoff_response.await_args.kwargs["stream_callback"] is None
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_cutoff_continuation_restart_still_appends_sources(monkeypatch):
+async def test_complete_turn_deduplicated_continuation_still_requires_complete_citations(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     llm = SimpleNamespace(
         base_args={},
@@ -818,24 +795,36 @@ async def test_complete_turn_streaming_cutoff_continuation_restart_still_appends
         ],
     )
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=AsyncMock(),
-    )
+    from lib.llm.providers.complete_turn_continuation import _trim_duplicate_continuation_prefix
+    partial = llm.get_message.return_value.text
+    continuation = llm._continue_cutoff_response.return_value.text
+    merged = partial + _trim_duplicate_continuation_prefix(partial, continuation)
+    assert merged.count("# The GalaxiesML Dataset: Comprehensive Technical Analysis") == 1
+    assert "LSST deployment thresholds" in merged
+    stream = AsyncMock()
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=stream,
+        )
     assert changed == "changed"
-    content = updated[-1].content
-    assert content.count("# The GalaxiesML Dataset: Comprehensive Technical Analysis") == 1
-    assert "Sources:" in content
-    assert "[doc:doc-a chunk:7]" in content
+    expected = assert_uncertain_alpha(updated)
+    llm._continue_cutoff_response.assert_awaited_once()
+    assert llm._continue_cutoff_response.await_args.kwargs["stream_callback"] is None
+    stream.assert_awaited_once()
+    assert stream.await_args.args[0]["done"] is True
+    assert stream.await_args.args[0]["content"] == expected
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_streaming_whole_document_continuation_appends_doc_source(monkeypatch):
+async def test_complete_turn_unbound_whole_document_continuation_stays_limited(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
-    async def _noop_stream(_payload: dict):
-        return None
+    events = []
+
+    async def _noop_stream(payload: dict):
+        events.append(payload)
 
     llm = SimpleNamespace(
         base_args={},
@@ -893,12 +882,15 @@ async def test_complete_turn_streaming_whole_document_continuation_appends_doc_s
         stream_func=_noop_stream,
     )
     assert changed == "changed"
-    assert "Sources:" in updated[-1].content
-    assert "- [doc:doc-whole-123]" in updated[-1].content
+    assert updated[-1].content == LIMITED_ANSWER
+    llm._continue_cutoff_response.assert_awaited_once()
+    assert llm._continue_cutoff_response.await_args.kwargs["stream_callback"] is None
+    assert len(events) == 1 and events[0]["done"] is True
+    assert events[0]["content"] == LIMITED_ANSWER
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_preserves_substantial_cutoff_draft_when_continuation_fails(monkeypatch):
+async def test_complete_turn_valid_cutoff_draft_publishes_only_selected_source(monkeypatch):
     async def _fake_compact_summary(_llm, _conversation, _max_tokens):
         return "Compressed fallback that should not replace the richer draft."
 
@@ -949,10 +941,11 @@ async def test_complete_turn_preserves_substantial_cutoff_draft_when_continuatio
         ],
     )
 
-    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
 
     assert changed == "changed"
-    assert updated[-1].content == partial
+    assert updated[-1].content == UNCERTAINTY + "\n\n> Alpha finding with supporting detail. [doc:doc-a chunk:7]"
     assert "Compressed fallback" not in updated[-1].content
 
 
@@ -984,8 +977,8 @@ async def test_complete_turn_recovers_from_blank_post_tool_answer_using_list_vec
                 ),
                 LLMResponse(
                     text=(
-                        "- Radick argues that Mendelism's triumph was historically contingent, not inevitable.\n"
-                        "- The excerpts suggest Weldonian alternatives were crowded out rather than simply disproved."
+                        "- Radick argues that Mendelism's triumph was historically contingent, not inevitable [doc:doc-a chunk:7].\n"
+                        "- The excerpts suggest Weldonian alternatives were crowded out rather than simply disproved [doc:doc-a chunk:7]."
                     ),
                     tool_call={},
                     stop_reason="stop",
@@ -1021,10 +1014,14 @@ async def test_complete_turn_recovers_from_blank_post_tool_answer_using_list_vec
         ],
     )
 
-    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
 
     assert changed == "changed"
-    assert "historically contingent" in updated[-1].content
+    assert updated[-1].content == UNCERTAINTY + (
+        "\n\n> Radick argues that the victory of Mendelian genetics was not the only path biology could "
+        "have taken, and that alternative traditions such as Weldonian biology were historically possible. [doc:doc-a chunk:7]"
+    )
     assert "could not generate a final answer" not in updated[-1].content
     assert llm.get_message.await_count == 3
 
@@ -1069,9 +1066,9 @@ async def test_complete_turn_does_not_use_chunk_dump_when_synthesis_fails(monkey
     updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
 
     assert changed == "changed"
-    content = updated[-1].content
-    assert "Here is a concise summary from the retrieved document" not in content
-    assert "I found supporting context" in content
+    assert updated[-1].content == LIMITED_ANSWER
+    assert "Hallucinations undermine trust" not in updated[-1].content
+    assert "I found supporting context" not in updated[-1].content
 
 
 def test_synthesize_cited_extract_still_available_when_extractive_ui_enabled():
@@ -1119,8 +1116,8 @@ async def test_complete_turn_recovers_blank_post_tool_whole_document_via_synthes
                 ),
                 LLMResponse(
                     text=(
-                        "This paper defines a calibration loss and reliability diagram. "
-                        "Equation (3) scores bin-wise accuracy; Figure 2 shows the curve."
+                        "This paper defines a calibration loss and reliability diagram [doc:doc-paper chunk:1]. "
+                        "Equation (3) scores bin-wise accuracy; Figure 2 shows the curve [doc:doc-paper chunk:1]."
                     ),
                     tool_call={},
                     stop_reason="stop",
@@ -1163,14 +1160,17 @@ async def test_complete_turn_recovers_blank_post_tool_whole_document_via_synthes
         ],
     )
 
-    updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
+    with selected_publication([{"doc_id": "doc-paper", "chunk_id": 1, "text": convo[-1].result_dict["result"]["text"]}]):
+        updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
 
     assert changed == "changed"
     assert llm.get_message.await_count == 2
     content = updated[-1].content
     assert "I found supporting context" not in content
-    assert "calibration loss" in content
-    assert "Equation (3)" in content
+    assert content == UNCERTAINTY + (
+        "\n\n> The objective combines a cross-entropy term with a calibration penalty. [doc:doc-paper chunk:1]"
+        "\n> Equation (3) defines the reliability score used in Figure 2. [doc:doc-paper chunk:1]"
+    )
 
 
 def test_collect_allowed_chunk_citations_accepts_explicit_ref_fields():

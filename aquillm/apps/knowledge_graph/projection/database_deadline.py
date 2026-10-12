@@ -1,6 +1,5 @@
 """One original projection deadline, including restricted PostgreSQL execution."""
 from contextlib import contextmanager
-from contextvars import ContextVar
 from math import isfinite
 from threading import Lock
 from time import monotonic
@@ -9,7 +8,7 @@ from django.db import connections, transaction
 
 from apps.knowledge_graph.database_cursor_deadline import bounded_cursor_calls
 
-_CURRENT = ContextVar("projection_database_operation", default=None)
+from .operation_context import _CURRENT, current_operation
 
 
 class ProjectionOperation:
@@ -37,10 +36,6 @@ class ProjectionOperation:
     def end(self):
         with self._lock:
             return self._deadline
-
-
-def current_operation():
-    return _CURRENT.get()
 
 
 @contextmanager

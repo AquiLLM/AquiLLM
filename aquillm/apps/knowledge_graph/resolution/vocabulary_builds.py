@@ -54,6 +54,7 @@ def collection_replay_config(artifact, marker):
     from .vocabulary_capture import current_artifact_policy
     return CollectionResolutionConfig(
         max_entities=marker["max_entities"], max_memberships=marker["max_memberships"],
+        max_document_inputs=marker["max_document_inputs"],
         max_relations=marker["max_relations"], max_links=marker["max_links"],
         vocabulary=current_artifact_policy(artifact,
             collection_id=artifact.collection_scope_id, using=artifact._state.db or "default"),

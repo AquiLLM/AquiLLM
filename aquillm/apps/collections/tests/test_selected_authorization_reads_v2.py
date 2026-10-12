@@ -12,6 +12,7 @@ from apps.collections.tests.test_bounded_graph_authorization_v2 import fixture
 from apps.documents.models import RawTextDocument, TeXDocument, TextChunk
 from apps.documents.services.source_loading import SourceRuntime, source_query_rows
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+from apps.documents.services.representation_contracts import SourceScopeUnavailable
 
 pytestmark = pytest.mark.django_db
 
@@ -53,12 +54,13 @@ def mutate(race, permission, docs):
         )
 
 
-def assert_bounded(queries, selected):
+def assert_bounded(queries, selected, *, maximum=1):
     data = [q["sql"] for q in queries if "UNION ALL" in q["sql"]]
-    assert len(data) == 1
-    assert data[0].rstrip().endswith("LIMIT 2")
-    assert str(selected) in data[0]
-    assert data[0].count("UNION ALL") == 7
+    assert 1 <= len(data) <= maximum
+    for query in data:
+        assert query.rstrip().endswith("LIMIT 2")
+        assert str(selected) in query
+        assert query.count("UNION ALL") == 7
 
 
 @pytest.mark.parametrize("race", [None, "revoke", "move", "duplicate", "cross_model"])
@@ -99,14 +101,19 @@ def test_source_cache_hit_rechecks_bounded_original_scope_and_budget(race):
     assert source_query_rows(queryset, runtime=runtime)[0].content == "initial"
     mutate(race, permission, docs)
     with CaptureQueriesContext(connection) as queries:
-        if race in ("duplicate", "cross_model"):
+        if race in ("revoke", "move"):
+            with pytest.raises(SourceScopeUnavailable):
+                source_query_rows(queryset, runtime=runtime)
+        elif race in ("duplicate", "cross_model"):
             with pytest.raises(ValueError):
                 source_query_rows(queryset, runtime=runtime)
         else:
             rows = source_query_rows(queryset, runtime=runtime)
             assert bool(rows) is (race is None)
     if race != "revoke":
-        assert_bounded(queries, docs[0].id)
+        # Frozen representation entry/exit and owner validation each recheck scope.
+        # Every query remains selected-ID bounded; a cache hit must not reload text.
+        assert_bounded(queries, docs[0].id, maximum=8)
     assert runtime.budget is budget and runtime.authorization is context
     assert budget.sources_used == 1 and budget.text_used["materialized"] == 7
 

@@ -9,6 +9,7 @@ from .frontier_index_build_v2 import quality_key
 from .frontier_index_contracts_v2 import digest
 from .frontier_reads_v2 import FrontierReadsV2, schema_error
 from .frontier_validation_v2 import validate_relation_entry, validate_source_page
+from .frontier_scope_batch_v2 import scope_rows
 
 PAGE_FAMILIES = (
     "ProjectedEntity",
@@ -75,16 +76,7 @@ class FrontierSessionV2:
                     if d.generation_key == generation
                 ),
             ]
-            rows = {}
-            for source in sources:
-                stream = "scope/" + source
-                head = self.reads.head(generation, stream)
-                if head is None:
-                    raise schema_error()
-                entry = self.reads.entry(generation, head, stream=stream)
-                if entry["family"] != "scope" or entry["next"] is not None:
-                    raise schema_error()
-                rows.update(self.reads.hydrate(generation, entry["refs"]))
+            rows = scope_rows(self.reads, generation, sources)
             page = page_from_rows(rows)
             validate_source_page(page, selected=selected, ready=self.ready)
             if {r.scope_key for r in page.provenance} != set(sources):

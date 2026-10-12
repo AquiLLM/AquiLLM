@@ -4,7 +4,7 @@ import re
 import uuid
 from abc import ABC
 from os import getenv
-from typing import Any, Literal, Optional, override
+from typing import Literal, Optional, Self, override
 
 import structlog
 from pydantic import BaseModel, Field, PrivateAttr, model_validator
@@ -37,11 +37,11 @@ class __LLMMessage(BaseModel, ABC):
     files: Optional[list[tuple[str, int]]] = None
     message_uuid: uuid.UUID = Field(default_factory=uuid.uuid4)
     
-    @classmethod
     @model_validator(mode='after')
-    def validate_tools(cls, data: Any) -> Any:
-        if (data.tools and not data.tool_choice) or (data.tool_choice and not data.tools):
+    def validate_tools(self) -> Self:
+        if (self.tools and not self.tool_choice) or (self.tool_choice and not self.tools):
             raise ValueError("Both tools and tool_choice must be populated if tools are used")
+        return self
 
     def render(self, *args, **kwargs) -> dict:
         """Render message for LLM consumption."""
@@ -148,13 +148,14 @@ class AssistantMessage(__LLMMessage):
     _validated_answer: object = PrivateAttr(default=None)
     _answer_publication_context: object = PrivateAttr(default=None)
     _rag_answer: bool = PrivateAttr(default=False)
+    _retained_tool_history: object = PrivateAttr(default=None)
 
-    @classmethod
     @model_validator(mode='after')
-    def validate_tool_call(cls, data: Any) -> Any:
-        if (any([data.tool_call_id, data.tool_call_name]) and
-        not all([data.tool_call_id, data.tool_call_name])):
+    def validate_tool_call(self) -> Self:
+        if (any([self.tool_call_id, self.tool_call_name]) and
+        not all([self.tool_call_id, self.tool_call_name])):
             raise ValueError("If a tool call is made, both tool_call_id and tool_call_name must have values")
+        return self
 
 
 # Union type prevents anything at runtime from constructing LLM_Messages directly.

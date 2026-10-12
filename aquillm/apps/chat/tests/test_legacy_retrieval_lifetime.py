@@ -4,19 +4,27 @@ from types import SimpleNamespace
 import pytest
 from apps.chat.services import rag_turn
 from lib.llm.turn_context import current_turn
+from apps.chat.tests.persisted_direct_test_support import (
+    close_direct_worker as close_direct_worker, persisted_direct_case,
+)
+from apps.documents.services.source_loading import current_source_runtime
+from apps.documents.services.representation_manual_scope import private_acquisition_runtime
 
 
 @pytest.mark.asyncio
-async def test_off_mode_has_one_budget_and_no_source_handoff(monkeypatch):
+async def test_off_mode_has_one_budget_and_no_public_source_runtime(monkeypatch, close_direct_worker):
     monkeypatch.setattr(
         rag_turn, "rag_preservation_config", lambda: SimpleNamespace(active=False)
     )
-    consumer = SimpleNamespace()
+    case = await persisted_direct_case([])
+    consumer = case.consumer(None, (1,))
     async with rag_turn.preservation_turn(consumer, max_func_calls=3) as runtime:
         assert runtime is None
         turn = current_turn()
         assert turn is not None
-        assert turn.handoff is None
+        assert turn.handoff is not None  # Mandatory publication guard, not preservation.
+        assert current_source_runtime() is None
+        assert private_acquisition_runtime().budget is turn.budget
         assert turn.budget.reserve_action("first")
         async with rag_turn.preservation_turn(consumer, max_func_calls=3):
             assert current_turn().budget is turn.budget
@@ -27,13 +35,14 @@ async def test_off_mode_has_one_budget_and_no_source_handoff(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_legacy_cancellation_closes_the_parent_ledger(monkeypatch):
+async def test_legacy_cancellation_closes_the_parent_ledger(monkeypatch, close_direct_worker):
     import asyncio
 
     monkeypatch.setattr(
         rag_turn, "rag_preservation_config", lambda: SimpleNamespace(active=False)
     )
-    consumer = SimpleNamespace()
+    case = await persisted_direct_case([])
+    consumer = case.consumer(None, (1,))
     ready = asyncio.Event()
     budgets = []
 
@@ -56,7 +65,7 @@ async def test_legacy_cancellation_closes_the_parent_ledger(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_legacy_turn_lifetime_allows_sealed_synthesis_past_retrieval_deadline(
-    monkeypatch,
+    monkeypatch, close_direct_worker,
 ):
     from lib.retrieval.turn_budget import TurnBudget, TurnLimits
     from lib.retrieval.synthesis_budget import seal_synthesis
@@ -69,7 +78,9 @@ async def test_legacy_turn_lifetime_allows_sealed_synthesis_past_retrieval_deadl
         rag_turn, "rag_preservation_config", lambda: SimpleNamespace(active=False)
     )
     monkeypatch.setattr(rag_turn, "TurnBudget", lambda limits: budget)
-    async with rag_turn.preservation_turn(SimpleNamespace(), max_func_calls=3):
+    case = await persisted_direct_case([])
+    consumer = case.consumer(None, (1,))
+    async with rag_turn.preservation_turn(consumer, max_func_calls=3):
         assert current_turn().budget is budget
         lease = seal_synthesis(
             budget,
@@ -80,7 +91,9 @@ async def test_legacy_turn_lifetime_allows_sealed_synthesis_past_retrieval_deadl
         )
         now[0] = 0.1
         assert not budget.can_publish()
-        assert current_turn().handoff is None
+        assert current_turn().handoff is not None
+        assert current_source_runtime() is None
+        assert private_acquisition_runtime().budget is budget
         assert lease.can_publish()
         assert lease.start_dispatch(512) == 0
     import asyncio

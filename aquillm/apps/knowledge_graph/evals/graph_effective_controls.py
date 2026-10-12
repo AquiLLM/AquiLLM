@@ -78,20 +78,15 @@ def validate_controls(value, *, observed_only=False):
         PPRAlgorithmConfig,
     )
 
-    require(
-        type(value) is dict
-        and set(value)
-        == {
-            "identity_policy",
-            "remediation_mode",
-            "resolver_versions",
-            "algorithm_config",
-            "algorithm_signature",
-            "runtime_observations",
-            "runtime_sha256",
-        },
-        "graph_applicability_unknown",
-    )
+    fields = {
+        "identity_policy", "remediation_mode", "resolver_versions",
+        "algorithm_config", "algorithm_signature", "runtime_observations",
+        "runtime_sha256",
+    }
+    require(type(value) is dict and set(value) in (
+        fields, fields | {"scoped_vocabulary"}),
+        "graph_applicability_unknown")
+    _validate_vocabulary_observation(value)
     policy = value["identity_policy"]
     require(
         policy in ("legacy", "contextual_v2")
@@ -135,4 +130,19 @@ def validate_controls(value, *, observed_only=False):
         },
         "graph_resolver_config_unknown",
     )
-    return value if observed_only else graph_effective_controls()
+    if observed_only:
+        return value
+    current = graph_effective_controls()
+    _validate_vocabulary_observation(current)
+    require(value.get("scoped_vocabulary") == current.get("scoped_vocabulary"),
+            "graph_applicability_unknown")
+    return current
+
+
+def _validate_vocabulary_observation(controls):
+    if "scoped_vocabulary" not in controls:
+        return
+    observation = controls["scoped_vocabulary"]
+    require(type(observation) is dict and set(observation) == {"state", "digest"}
+            and observation["state"] == "observed" and sha(observation["digest"]),
+            "graph_applicability_unknown")

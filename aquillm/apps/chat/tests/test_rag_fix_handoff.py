@@ -5,6 +5,7 @@ from threading import Event
 from types import SimpleNamespace
 
 import pytest
+from apps.chat.tests.persisted_direct_test_support import close_direct_worker
 from channels.db import database_sync_to_async
 
 from apps.chat.refs import CollectionsRef
@@ -13,12 +14,12 @@ from apps.chat.tests.test_rag_source_document_tools import docs as docs
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
-pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True)]
+pytestmark = [pytest.mark.asyncio, pytest.mark.django_db(transaction=True), pytest.mark.usefixtures("close_direct_worker")]
 
 
 @pytest.mark.parametrize("omit", ["source", "tail"])
 async def test_real_final_selection_loses_lookup_support_without_replanning(
-    docs, monkeypatch, omit
+    monkeypatch, omit
 ):
     from apps.chat.services import rag_pipeline, rag_preservation_turn
     from apps.chat.services.rag_turn import preservation_turn
@@ -31,14 +32,18 @@ async def test_real_final_selection_loses_lookup_support_without_replanning(
 
     configure(monkeypatch)
     monkeypatch.setenv("RAG_ITERATIVE_RETRIEVAL_ENABLED", "1")
-    user, doc, chunks, _ = docs
+    from apps.chat.tests.persisted_direct_test_support import persisted_direct_case
+    from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
+    from lib.llm.types.response import LLMResponse
+    from hashlib import sha256
+    import json
     text = "Background. The release codename is Borealis."
-    await database_sync_to_async(TextChunk.objects.filter(pk=chunks[0].pk).update)(
-        content=text
-    )
-    await database_sync_to_async(TextChunk.objects.exclude(pk=chunks[0].pk).update)(
-        content="Other context."
-    )
+    case = await persisted_direct_case([
+        dict(doc_id="handoff", chunk_id=1, title="Handoff source", text=text),
+        dict(doc_id="handoff", chunk_id=2, title="Handoff source", text="Other context."),
+    ])
+    user, doc = case.user, case.documents["handoff"]
+    chunks = tuple(case.chunks.values())
     fake_search(monkeypatch)
     selects, requests = [], []
     original = rag_preservation_turn.prepare_selection_turn
@@ -76,14 +81,22 @@ async def test_real_final_selection_loses_lookup_support_without_replanning(
 
     monkeypatch.setattr(rag_pipeline, "_prepare_selection_sync", select)
 
-    async def complete(request, *args, **kwargs):
-        requests.append(request)
-        return request + [
-            AssistantMessage(
-                content="The delivered evidence does not establish the codename.",
-                stop_reason="end_turn",
-            )
-        ], "changed"
+    assessed = json.dumps({"requested_aspects": ["release codename"],
+        "support": [{"aspect": "release codename", "chunk_id": chunks[0].pk,
+            "source_fingerprint": sha256(text.encode()).hexdigest(), "start": 12, "end": len(text)}],
+        "unresolved_aspects": [], "next_action": None})
+    answer = f"The delivered evidence does not establish the codename [doc:{doc.id} chunk:{chunks[1].pk}]."
+    llm = _FakeLLMInterface([LLMResponse(text=value, tool_call=None, stop_reason="end_turn",
+        input_usage=1, output_usage=1) for value in (assessed, answer)])
+    provider = llm.get_message
+    planners = []
+    async def get_message(*args, **kwargs):
+        if kwargs["system"].startswith("Assess evidence coverage"):
+            planners.append(kwargs)
+        else:
+            requests.append(kwargs["messages_pydantic"])
+        return await provider(*args, **kwargs)
+    llm.get_message = get_message
 
     convo = Conversation(
         system="sys", messages=[UserMessage(content="What is the release codename?")]
@@ -93,15 +106,16 @@ async def test_real_final_selection_loses_lookup_support_without_replanning(
     )
     async with preservation_turn(consumer, max_func_calls=3) as runtime:
         await rag_pipeline.run_direct_rag_turn(
-            consumer, SimpleNamespace(complete=complete), convo
+            consumer, llm, convo
         )
         acquired = runtime.observation["acquisition"]
         assert acquired.assessment.support
         packet = runtime.observation["delivered_packet"]
         assert packet.coverage_assessment.unresolved_aspects == ("release codename",)
         assert not packet.coverage_assessment.support
-        assert runtime.budget.planner_calls == 0
+        assert runtime.budget.planner_calls == len(planners) == 1
     assert len(selects) == len(requests) == 1
+    assert len(llm.calls) == 2  # One original assessment, one synthesis, no replan.
     assert "Borealis" not in requests[0][-1].content
     assert "partial" in requests[0][-1].content
 

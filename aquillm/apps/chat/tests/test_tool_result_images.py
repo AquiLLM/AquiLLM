@@ -60,190 +60,109 @@ class ToolMessageSafetyTests(SimpleTestCase):
         self.assertNotIn("data:image", tool_msg.content)
 
 
-_DOC_A = "00000000-0000-0000-0000-000000000001"
-_DOC_B = "00000000-0000-0000-0000-000000000002"
-_DOC_C = "00000000-0000-0000-0000-000000000003"
-_IMAGE_A = f"/aquillm/document_image/{_DOC_A}/"
-_IMAGE_B = f"/aquillm/document_image/{_DOC_B}/"
-_IMAGE_C = f"/aquillm/document_image/{_DOC_C}/"
+from apps.documents.tests.representation_support import upload as upload
+from apps.chat.tests.image_publication_test_support import (
+    image_case as image_case, captured_publication, citation, image_url, attributed,
+)
 
 
-def _figure_results() -> ToolMessage:
-    rows = [
-        {
-            "rank": rank,
-            "chunk_id": rank,
-            "doc_id": doc,
-            "chunk": rank,
-            "title": "Galaxy study",
-            "type": "image",
-            "text": caption,
-            "image_url": url,
-        }
-        for rank, doc, url, caption in (
-            (1, _DOC_A, _IMAGE_A, "Figure 1. Galaxy redshift distribution"),
-            (2, _DOC_B, _IMAGE_B, "Figure 2. Example galaxies in grizy bands"),
-            (3, _DOC_C, _IMAGE_C, "Figure 3. Deep galaxy images"),
-        )
-    ]
-    return ToolMessage(
-        content='{"result": "retrieved figures"}',
-        tool_name="vector_search",
-        arguments={"search_string": "galaxy z redshift", "top_k": 3},
-        for_whom="assistant",
-        result_dict={"result": rows},
-    )
+def _llm_reply(text):
+    return _FakeLLMInterface([LLMResponse(text=text, tool_call={}, stop_reason="stop",
+                                        input_usage=10, output_usage=20)])
 
 
-def _llm_reply(text: str) -> _FakeLLMInterface:
-    return _FakeLLMInterface(
-        [
-            LLMResponse(
-                text=text,
-                tool_call={},
-                stop_reason="stop",
-                input_usage=10,
-                output_usage=20,
-            ),
-        ]
-    )
+def _conversation(question, result):
+    return Conversation(system="You are a helpful assistant.", messages=[
+        UserMessage(content=question), ToolMessage(content="retrieved figures", tool_name="vector_search",
+            arguments={"search_string": question, "top_k": 3}, for_whom="assistant", result_dict=result)])
 
 
-def _figure_conversation(question: str) -> Conversation:
-    return Conversation(
-        system="You are a helpful assistant.",
-        messages=[UserMessage(content=question), _figure_results()],
-    )
-
-
-class ToolImageSelectionTests(SimpleTestCase):
+class TestToolImageSelection:
     def test_existing_conversation_receives_policy_without_rewriting_history(self):
         from lib.llm.providers.image_policy import CONDITIONAL_IMAGE_INSTRUCTION
-
-        convo = Conversation(
-            system="Saved conversation instructions.",
-            messages=[UserMessage(content="Hello")],
-        )
+        convo = Conversation(system="Saved conversation instructions.", messages=[UserMessage(content="Hello")])
         llm = _llm_reply("Hello.")
-
         updated, _ = async_to_sync(llm.complete)(convo, 1024)
+        assert CONDITIONAL_IMAGE_INSTRUCTION in llm.calls[0]["system"]
+        assert convo.system == updated.system == "Saved conversation instructions."
 
-        self.assertIn(CONDITIONAL_IMAGE_INSTRUCTION, llm.calls[0]["system"])
-        self.assertEqual(convo.system, "Saved conversation instructions.")
-        self.assertEqual(updated.system, "Saved conversation instructions.")
+    def test_conceptual_z_question_does_not_append_galaxy_images(self, image_case):
+        with captured_publication(image_case) as (result, context):
+            convo = _conversation("Why do the photometric filter and redshift parameter both use z?", result)
+            reply = "The examples do not explain naming history " + citation(image_case.figures[1]) + "."
+            updated, changed = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
+            assert changed == "changed"
+            assert updated[-1].content == attributed(image_case.figures)
+            assert updated[-1]._validated_answer.outcome == "partial"
+            assert "![" not in updated[-1].content
 
-    def test_conceptual_z_question_does_not_append_galaxy_images(self):
-        convo = _figure_conversation(
-            "Why do the photometric filter and the redshift parameter both use z?"
-        )
-        reply = (
-            "The retrieved galaxy examples do not explain the naming history "
-            f"[doc:{_DOC_B} chunk:2]."
-        )
+    def test_explicit_request_does_not_force_unselected_images(self, image_case):
+        with captured_publication(image_case) as (result, context):
+            convo = _conversation("Show a figure explaining the naming of z.", result)
+            reply = "The figures do not establish naming history " + citation(image_case.figures[1]) + "."
+            updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
+            assert updated[-1].content == attributed(image_case.figures)
+            assert "![" not in updated[-1].content
 
-        updated, changed = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
+    def test_only_one_of_three_model_selected_figures_is_displayed(self, image_case):
+        with captured_publication(image_case) as (result, context):
+            convo = _conversation("Show the galaxy redshift distribution.", result)
+            url = image_url(image_case.figures[0])
+            reply = "The histogram shows redshift " + citation(image_case.figures[0]) + f".\n\n![Histogram]({url})"
+            updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
+            assert updated[-1].content == attributed(image_case.figures) + f"\n\n![Selected source image]({url})"
+            assert updated[-1].content.count("![") == 1
+            for source in image_case.figures[1:]:
+                assert image_url(source) not in updated[-1].content
 
-        self.assertEqual(changed, "changed")
-        self.assertEqual(updated[-1].content, reply)
-        self.assertNotIn("![", updated[-1].content)
+    def test_prior_images_are_not_appended_to_a_later_text_answer(self, image_case):
+        with captured_publication(image_case) as (old_result, context):
+            history = _conversation("Show the galaxy distribution.", old_result).messages
+        history += [AssistantMessage(content="The distribution is shown.", stop_reason="stop")]
+        with captured_publication(image_case, text_only=True) as (result, context):
+            convo = Conversation(system="s", messages=[*history,
+                UserMessage(content="Now explain calibration."),
+                ToolMessage(content="calibration", tool_name="vector_search", for_whom="assistant", result_dict=result)])
+            reply = "Calibration uses flat fields " + citation(image_case.text) + "."
+            updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
+            assert updated[-1].content == attributed([image_case.text])
+            assert "document_image" not in updated[-1].content
 
-    def test_explicit_request_does_not_force_unselected_images(self):
-        convo = _figure_conversation("Show a figure explaining the naming of z.")
-        reply = (
-            "The retrieved figures do not establish why both terms use z "
-            f"[doc:{_DOC_B} chunk:2]."
-        )
+    def test_followup_reuses_only_the_figure_deliberately_selected_by_model(self, image_case):
+        # A fresh original turn recaptures current media; history alone grants nothing.
+        with captured_publication(image_case) as (result, context):
+            convo = _conversation("Find the galaxy distribution.", result)
+            convo += [AssistantMessage(content="I found it.", stop_reason="stop"), UserMessage(content="Display it in chat.")]
+            url = image_url(image_case.figures[0])
+            reply = "Here is the histogram " + citation(image_case.figures[0]) + f".\n\n![Histogram]({url})"
+            updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
+            assert updated[-1].content == attributed(image_case.figures) + f"\n\n![Selected source image]({url})"
+            for source in image_case.figures[1:]:
+                assert image_url(source) not in updated[-1].content
 
-        updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
+    def test_bare_image_link_does_not_force_an_embedded_gallery(self, image_case):
+        with captured_publication(image_case) as (result, context):
+            convo = _conversation("Link me to the redshift figure.", result)
+            url = image_url(image_case.figures[0])
+            reply = f"The histogram is at {url} " + citation(image_case.figures[0]) + "."
+            updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
+            assert updated[-1]._validated_answer.outcome == "partial"
+            assert attributed(image_case.figures) in updated[-1].content
+            assert "![" not in updated[-1].content
 
-        self.assertEqual(updated[-1].content, reply)
-
-    def test_only_one_of_three_model_selected_figures_is_displayed(self):
-        convo = _figure_conversation("Show the galaxy redshift distribution.")
-        reply = (
-            f"The histogram shows the redshift distribution [doc:{_DOC_A} chunk:1]."
-            f"\n\n![Galaxy redshift distribution]({_IMAGE_A})"
-        )
-
-        updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
-
-        self.assertEqual(updated[-1].content, reply)
-        self.assertEqual(updated[-1].content.count("!["), 1)
-        self.assertNotIn(_IMAGE_B, updated[-1].content)
-        self.assertNotIn(_IMAGE_C, updated[-1].content)
-
-    def test_prior_images_are_not_appended_to_a_later_text_answer(self):
-        convo = _figure_conversation("Show the galaxy redshift distribution.")
-        convo += [
-            AssistantMessage(content="The distribution is shown.", stop_reason="stop"),
-            UserMessage(content="Now explain the text about calibration."),
-            ToolMessage(
-                content='{"result": "calibration text"}',
-                tool_name="vector_search",
-                arguments={"search_string": "calibration", "top_k": 1},
-                for_whom="assistant",
-                result_dict={
-                    "result": [
-                        {
-                            "doc_id": _DOC_A,
-                            "chunk_id": 4,
-                            "type": "text",
-                            "text": "Calibration uses flat fields.",
-                        }
-                    ],
-                },
-            ),
-        ]
-        reply = f"Calibration uses flat fields [doc:{_DOC_A} chunk:4]."
-
-        updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
-
-        self.assertEqual(updated[-1].content, reply)
-
-    def test_followup_reuses_only_the_figure_deliberately_selected_by_model(self):
-        convo = _figure_conversation("Find the galaxy redshift distribution.")
-        convo += [
-            AssistantMessage(content="I found the histogram.", stop_reason="stop"),
-            UserMessage(content="Can you display it in chat?"),
-        ]
-        reply = f"Here is the histogram.\n\n![Redshift distribution]({_IMAGE_A})"
-
-        updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
-
-        self.assertEqual(updated[-1].content, reply)
-        self.assertNotIn(_IMAGE_B, updated[-1].content)
-
-    def test_bare_image_link_does_not_force_an_embedded_gallery(self):
-        convo = _figure_conversation("Link me to the redshift figure.")
-        reply = f"The histogram is available at {_IMAGE_A} [doc:{_DOC_A} chunk:1]."
-
-        updated, _ = async_to_sync(_llm_reply(reply).complete)(convo, 1024)
-
-        self.assertEqual(updated[-1].content, reply)
-        self.assertNotIn("![", updated[-1].content)
-
-    def test_final_stream_matches_selected_image_answer(self):
-        convo = _figure_conversation("Show the galaxy redshift distribution.")
-        reply = (
-            f"The histogram shows the distribution [doc:{_DOC_A} chunk:1]."
-            f"\n\n![Galaxy redshift distribution]({_IMAGE_A})"
-        )
-        events = []
-
-        async def stream_func(payload):
-            events.append(payload)
-
-        updated, changed = async_to_sync(_llm_reply(reply).complete)(
-            convo,
-            1024,
-            stream_func=stream_func,
-        )
-
-        self.assertEqual(changed, "changed")
-        self.assertEqual(len(events), 1)
-        self.assertTrue(events[0]["done"])
-        self.assertEqual(events[0]["content"], updated[-1].content)
-        self.assertIn(reply, events[0]["content"])
-        self.assertEqual(events[0]["content"].count("!["), 1)
-        self.assertNotIn(_IMAGE_B, events[0]["content"])
-        self.assertNotIn(_IMAGE_C, events[0]["content"])
+    def test_final_stream_matches_selected_image_answer(self, image_case):
+        with captured_publication(image_case) as (result, context):
+            convo = _conversation("Show the galaxy distribution.", result)
+            url = image_url(image_case.figures[0])
+            reply = "The histogram shows redshift " + citation(image_case.figures[0]) + f".\n\n![Histogram]({url})"
+            events = []
+            async def stream(payload):
+                events.append(payload)
+            llm = _llm_reply(reply)
+            updated, changed = async_to_sync(llm.complete)(convo, 1024, stream_func=stream)
+            assert changed == "changed" and len(llm.calls) == 1
+            assert len(events) == 1 and events[0]["done"] is True
+            assert events[0]["content"] == updated[-1].content == attributed(image_case.figures) + f"\n\n![Selected source image]({url})"
+            assert events[0]["content"].count("![") == 1
+            for source in image_case.figures[1:]:
+                assert image_url(source) not in events[0]["content"]

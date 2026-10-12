@@ -1,6 +1,7 @@
 """Run synthetic cross-document cases through the real synthesis path."""
 from __future__ import annotations
 
+from dataclasses import replace
 import copy
 import json
 import os
@@ -21,11 +22,13 @@ async def run_acceptance_case(
     prior_tool_rows: list[dict] | None = None,
     preserve_citation_settings: bool = False,
     stream_output: bool = False,
+    scripted_responses: bool = False,
 ) -> dict[str, Any]:
     """Run one case against an actual provider instance or a request probe.
 
     Real-provider use intentionally costs a small number of synthesis calls.
-    No database, uploaded document, network retrieval, or private text is needed.
+    An isolated test database supplies real synthetic owners/current VIEW scope.
+    No uploaded private document or network retrieval is needed.
     Reports record only synthetic evidence and responses, never API arguments.
     """
     from apps.chat.refs import CollectionsRef
@@ -37,6 +40,24 @@ async def run_acceptance_case(
     from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
     from .cross_document_acceptance_support import evaluate_answer, retrieval_payload
 
+    from .persisted_direct_test_support import persisted_direct_case
+    from .direct_rag_test_support import _admit_query
+    declared = retrieval_payload(case, top_k=100)["result"] + list(prior_tool_rows or ())
+    fixture = await persisted_direct_case(declared)
+    citation_map = {row["citation"]: fixture.text(row["citation"]) for row in declared}
+    def claim(value):
+        return replace(value, citations=tuple(fixture.text(v) for v in value.citations))
+    original_omitted = omitted_doc_id
+    omitted_doc_id = str(fixture.documents[omitted_doc_id].id) if omitted_doc_id else None
+    case = replace(case, papers=tuple(fixture.rows({"result": list(case.papers)})["result"]),
+        claims=tuple(claim(v) for v in case.claims), synthesis=claim(case.synthesis),
+        reference_answer=fixture.text(case.reference_answer))
+    if scripted_responses:
+        # Translate declared synthetic citation coordinates before any provider call.
+        llm_if.responses = [v.model_copy(update={"text": fixture.text(v.text)})
+                            for v in llm_if.responses]
+    if prior_tool_rows:
+        prior_tool_rows = fixture.rows({"result": prior_tool_rows})["result"]
     history = []
     if prior_tool_rows:
         prior_payload = {"result": prior_tool_rows, "retrieval_status": "results_found"}
@@ -65,7 +86,7 @@ async def run_acceptance_case(
         messages=[*history, UserMessage(content=case.question)],
     )
     queries = build_retrieval_queries(convo, case.question, max_queries=3)
-    consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
+    consumer = fixture.consumer(convo, (1,))
     captured_requests: list[dict] = []
     stream_payloads: list[dict] = []
     original_get_message = llm_if.get_message
@@ -93,13 +114,14 @@ async def run_acceptance_case(
         )
         return await original_get_message(*args, **kwargs)
 
+    captured_pool = fixture.rows({"result": declared[:3]})["result"]
     def fake_retrieval(_consumer, query, top_k):
-        return retrieval_payload(
-            case,
-            query_index=queries.index(query),
-            top_k=top_k,
-            omitted_doc_id=omitted_doc_id,
-        )
+        _admit_query(query)
+        rows = [dict(row) for row in captured_pool if row["doc_id"] != omitted_doc_id][:top_k]
+        for rank, row in enumerate(rows, 1):
+            row["rank"] = rank
+        return {"result": rows, "retrieval_status": "results_found" if rows else "no_results",
+            "retrieved_count": len(rows), "retrieved_documents": sorted({row["title"] for row in rows})}
 
     environment = {
         "RAG_DIRECT_ENABLED": "1",
@@ -159,7 +181,8 @@ async def run_acceptance_case(
     ]
     return {
         "case_id": case.case_id,
-        "omitted_doc_id": omitted_doc_id,
+        "omitted_doc_id": original_omitted,
+        "citation_map": citation_map,
         "outcome": outcome,
         "queries": queries,
         "provider_call_count": len(captured_requests),

@@ -7,7 +7,7 @@ from django.db.models.functions import MD5
 from pgvector.django import L2Distance
 
 from apps.documents.models import TextChunk
-from apps.documents.models.embedding_index import ChunkEmbedding, DocumentEmbeddingState
+from apps.documents.models.embedding_index import ChunkEmbedding
 from lib.embeddings.document_binding import (
     validate_query_observation,
     validate_stored_binding,
@@ -24,6 +24,7 @@ from lib.embeddings.document_provider import compatible_receipt
 from lib.embeddings.utils import EmbeddingContractError
 from lib.retrieval.turn_budget import TurnBudget
 
+from .embedding_dense_rows import dense_owner_rows
 from .embedding_index_query_scope import _authorized_runtime, _dense_runtime, requested_dense_scope
 from .embedding_index_store import load_embedding_space
 from .representation_contracts import RepresentationSnapshotV1, SourceScopeUnavailable
@@ -104,35 +105,10 @@ def freeze_dense_generations(
     validate_representation_snapshot(snapshot, using=using)
     require_digest(space_key)
     selected = []
-    for s in ordered_selections(snapshot):
+    for s, generation_key, manifest_sha256 in dense_owner_rows(
+        ordered_selections(snapshot), space_key=space_key, using=using
+    ):
         ref = s.document
-        owner = (
-            DocumentEmbeddingState.objects.using(using)
-            .filter(
-                model_label=ref.model_label,
-                document_pkid=ref.pkid,
-                document_id=ref.id,
-                collection_id=ref.collection_id,
-                representation_key=s.generation_key,
-                space_id=space_key,
-            )
-            .select_related("active_generation")
-            .only("pk", "active_generation", "active_generation__key", "active_generation__owner_id",
-                  "active_generation__state", "active_generation__failure_kind",
-                  "active_generation__source_hash", "active_generation__canonical_sha256",
-                  "active_generation__manifest_sha256")
-            .first()
-        )
-        generation = owner.active_generation if owner else None
-        if (
-            generation is None
-            or generation.owner_id != owner.pk
-            or generation.state != "ready"
-            or generation.failure_kind
-            or generation.source_hash != ref.source_hash
-            or generation.canonical_sha256 != s.canonical_sha256
-        ):
-            continue
         selected.append(
             DenseGenerationSelectionV1(
                 ref.id,
@@ -140,8 +116,8 @@ def freeze_dense_generations(
                 ref.pkid,
                 s.generation_key,
                 ref.source_hash,
-                generation.key,
-                generation.manifest_sha256,
+                generation_key,
+                manifest_sha256,
             )
         )
     selected = tuple(selected)

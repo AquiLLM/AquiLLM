@@ -1,5 +1,5 @@
 """Persisted generation selection and lazy SQL eligibility; history never falls back."""
-from django.db.models import Exists, F, Q
+from django.db.models import Exists, F, OuterRef, Q
 
 from apps.documents.models import DocumentRepresentationGeneration, DocumentRepresentationState
 from .representation_contracts import RepresentationSelectionV1, SourceScopeUnavailable
@@ -64,3 +64,22 @@ def current_state_clause(selection, *, using):
         active_generation__source_revision_sha256=selection.source_revision_sha256,
     )
     return Q(Exists(valid))
+
+
+def _current_active_state_clause(selections, *, using):
+    """One lazy state scan, with each captured non-null owner tuple kept intact."""
+    from .representation_tuple_predicate import ExactTupleMembership
+    exact = ExactTupleMembership(
+        ("model_label", "document_pkid", "document_id", "collection_id", "active_generation_id",
+         "active_generation__collection_id", "active_generation__canonical_sha256",
+         "active_generation__source_revision_sha256"),
+        tuple((s.document.model_label, s.document.pkid, s.document.id, s.document.collection_id,
+               s.generation_key, s.document.collection_id, s.document.source_hash,
+               s.source_revision_sha256) for s in selections))
+    states = DocumentRepresentationState.objects.using(using).filter(
+        exact, document_id=OuterRef("doc_id"),
+        active_generation_id=OuterRef("representation_generation_id"),
+        legacy_closed=True, active_generation__status="active",
+        active_generation__owner_id=F("pk"),
+    )
+    return Q(Exists(states))

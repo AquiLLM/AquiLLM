@@ -109,7 +109,10 @@ async def test_manual_revocation_before_handoff_has_no_provider_request(
         CollectionPermission.objects.filter(user=user).delete()
         return result
 
+    from unittest.mock import AsyncMock
+    provider_calls = []
     async def complete(*args, **kwargs):
+        provider_calls.append(True)
         pytest.fail("revoked manual source must not reach the provider")
 
     monkeypatch.setattr(rag_preservation_turn, "prepare_selection_turn", select)
@@ -118,11 +121,16 @@ async def test_manual_revocation_before_handoff_has_no_provider_request(
     )
     consumer = SimpleNamespace(user=user, col_ref=CollectionsRef([]), convo=convo)
     async with preservation_turn(consumer, max_func_calls=3) as runtime:
+        from lib.llm.turn_context import current_turn
+        budget = current_turn().budget
+        assert runtime is None  # Empty picker retains a private unavailable parent.
         await run_manual_search_turn(
             consumer, SimpleNamespace(complete=complete), convo
         )
-        assert runtime.budget.actions_used == 1
-    assert "limits" in consumer.convo[-1].content
+        assert budget.actions_used == 1
+    from lib.llm.answer_publication import LIMITED_ANSWER
+    assert consumer.convo[-1].content == LIMITED_ANSWER
+    assert provider_calls == []
 
 
 async def test_all_off_keeps_the_legacy_direct_route(docs, monkeypatch):
@@ -131,15 +139,16 @@ async def test_all_off_keeps_the_legacy_direct_route(docs, monkeypatch):
 
     configure(monkeypatch, source=False)
     fake_search(monkeypatch)
-    user, doc, _, _ = docs
+    user, doc, chunks, _ = docs
 
     async def forbidden(*args, **kwargs):
         pytest.fail("all-off route must not enter preservation controller")
 
-    async def complete(request, *args, **kwargs):
-        return request + [
-            AssistantMessage(content="Legacy answer", stop_reason="end_turn")
-        ], "changed"
+    from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
+    from lib.llm.types.response import LLMResponse
+    citation = f"[doc:{doc.id} chunk:{chunks[0].pk}]"
+    llm = _FakeLLMInterface([LLMResponse(text=f"Legacy answer {citation}.", tool_call=None,
+        stop_reason="end_turn", input_usage=1, output_usage=1)])
 
     monkeypatch.setattr(rag_preservation_turn, "run_preservation_rag", forbidden)
     convo = Conversation(
@@ -152,8 +161,15 @@ async def test_all_off_keeps_the_legacy_direct_route(docs, monkeypatch):
         assert runtime is None
         assert (
             await rag_pipeline.run_direct_rag_turn(
-                consumer, SimpleNamespace(complete=complete), convo
+                consumer, llm, convo
             )
             == "handled"
         )
-    assert consumer.convo[-1].content == "Legacy answer"
+    assert len(llm.calls) == 1
+    message = consumer.convo[-1]
+    assert message.content.startswith(
+        "Support for an answer is uncertain in the selected evidence. "
+        "These are attributed excerpts, not a conclusion about the question:\n\n")
+    assert f"> Aspect 0. {citation}\n> Qualified tail: only below 1 Pa. {citation}" in message.content
+    assert "Legacy answer" not in message.content
+    assert message._validated_answer.outcome == "partial"

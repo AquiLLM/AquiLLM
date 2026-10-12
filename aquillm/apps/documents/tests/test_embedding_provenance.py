@@ -233,10 +233,15 @@ def test_positional_bulk_conflict_update_clears_replaced_vector_receipt():
     row.save()
     replacement = chunk(embedding=[0.2] * 1024)
     replacement.doc_id = row.doc_id
+    replacement.pk = row.pk
+    # Legacy document/ordinal uniqueness is partial; the primary key is a
+    # supported conflict target while retaining positional bulk arguments.
     TextChunk.objects.bulk_create(
-        [replacement], None, False, True, ["embedding"], ["doc_id", "chunk_number"]
+        [replacement], None, False, True, ["embedding"], ["pk"]
     )
     row.refresh_from_db()
+    assert TextChunk.objects.filter(doc_id=row.doc_id).count() == 1
+    assert list(row.embedding) == pytest.approx([0.2] * 1024)
     assert row.embedding_provenance is None
 
 

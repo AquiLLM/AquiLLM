@@ -6,11 +6,13 @@ import pytest
 
 from apps.chat.services.rag_source_continuity import resolve_source_anchors
 from apps.chat.tests.test_rag_source_continuity import _history
-from apps.chat.tests.test_rag_selection_scoring import Policy, _authorization
-from apps.documents.services.source_loading import SourceRuntime, source_runtime_scope
+from apps.chat.tests.persisted_direct_test_support import (
+    close_direct_worker as close_direct_worker, persisted_direct_case,
+)
+from apps.chat.services.rag_turn import preservation_turn
+from lib.llm.turn_context import current_turn
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import UserMessage
-from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
 @pytest.mark.parametrize("question", [
@@ -68,7 +70,7 @@ def test_join_without_prior_source_reference_cannot_supply_name_start():
     'Summarize the paper "Attention Is All You Need"',
     "Summarize the report Cosmic Dust",
 ])
-async def test_fresh_conversation_grammar_reaches_retrieval(question, followup, monkeypatch):
+async def test_fresh_conversation_grammar_reaches_retrieval(question, followup, monkeypatch, close_direct_worker):
     from apps.chat.refs import CollectionsRef
     from apps.chat.services import rag_pipeline
 
@@ -76,23 +78,30 @@ async def test_fresh_conversation_grammar_reaches_retrieval(question, followup, 
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source" if followup else "legacy")
     monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "1" if followup else "0")
     convo = Conversation(system="sys", messages=[UserMessage(content=question)])
-    runtime = SourceRuntime(TurnBudget(TurnLimits()), _authorization(Policy()))
-    consumer = SimpleNamespace(
-        user=runtime.authorization.reauthorization_capability._principal,
-        col_ref=CollectionsRef([1]), convo=convo,
-    )
+    case = await persisted_direct_case([dict(
+        doc_id="grammar", chunk_id=1, title="Available source",
+        text="A real source establishes the original selected scope.",
+        citation="[doc:grammar chunk:1]")])
+    consumer = case.consumer(convo, (1,))
     queries = []
 
     def empty_search(_consumer, query, _top_k):
+        from apps.chat.services.rag_action_tools import admit_tool_action
+        assert admit_tool_action("vector", query)
         queries.append(query)
         return {"result": []}
 
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", empty_search)
-    with source_runtime_scope(runtime):
+    async with preservation_turn(consumer, max_func_calls=3) as runtime:
+        if followup:
+            assert runtime.authorization is not None
+            assert runtime._frozen_retrieval_scope.representation is not None
+        budget = current_turn().budget
         assert await rag_pipeline.run_direct_rag_turn(
             consumer, SimpleNamespace(), convo
         ) == "handled"
     assert queries == [question]
+    assert budget.actions_used == 1 and budget.planner_calls == 0
     assert "title or citation" not in consumer.convo[-1].content
 
 
@@ -103,7 +112,7 @@ async def test_fresh_conversation_grammar_reaches_retrieval(question, followup, 
     "Summarize the paper Red and that paper",
     "Compare the paper Red with the second one",
 ])
-async def test_missing_source_antecedent_asks_focused_clarification(question, followup, monkeypatch):
+async def test_missing_source_antecedent_asks_focused_clarification(question, followup, monkeypatch, close_direct_worker):
     from apps.chat.refs import CollectionsRef
     from apps.chat.services import rag_pipeline
 
@@ -113,9 +122,11 @@ async def test_missing_source_antecedent_asks_focused_clarification(question, fo
     convo = Conversation(system="sys", messages=[
         UserMessage(content=question)
     ])
-    runtime = SourceRuntime(TurnBudget(TurnLimits()), _authorization(Policy()))
-    consumer = SimpleNamespace(user=runtime.authorization.reauthorization_capability._principal,
-                               col_ref=CollectionsRef([1]), convo=convo)
+    case = await persisted_direct_case([dict(
+        doc_id="grammar", chunk_id=1, title="Available source",
+        text="A real source establishes the original selected scope.",
+        citation="[doc:grammar chunk:1]")])
+    consumer = case.consumer(convo, (1,))
     queried = []
 
     def search(*args):
@@ -123,8 +134,12 @@ async def test_missing_source_antecedent_asks_focused_clarification(question, fo
         return {"result": []}
 
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
-    with source_runtime_scope(runtime):
+    async with preservation_turn(consumer, max_func_calls=3) as runtime:
+        if followup:
+            assert runtime.authorization is not None
+            assert runtime._frozen_retrieval_scope.representation is not None
+        budget = current_turn().budget
         assert await rag_pipeline.run_direct_rag_turn(consumer, SimpleNamespace(), convo) == "handled"
     assert queried == []
     assert "title or citation" in consumer.convo[-1].content
-    assert runtime.budget.planner_calls == 0
+    assert budget.planner_calls == budget.actions_used == 0

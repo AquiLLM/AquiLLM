@@ -61,8 +61,12 @@ async def structural_turn(source, question, monkeypatch):
                 record = (runtime, turn, runtime.budget._synthesis)
                 if event == 'synthesis_sealed':
                     sealed.append(record)
-                else:
+                elif record[2] is not None:
+                    # Coverage planning also emits sdk_start before synthesis is sealed.
                     dispatches.append((*record, data['payload']))
+                else:
+                    assert not sealed, 'an unleased SDK call occurred after synthesis sealing'
+                    assert 'Assess evidence coverage, not relevance' in data['payload']['messages'][0]['content']
 
         probe.setattr(WindowSelectionScorer, 'score_windows', score)
         with mode_environment('combined'), transport_observation(unattributed), observe(sink) as observer:

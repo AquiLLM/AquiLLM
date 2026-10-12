@@ -4,6 +4,7 @@ from lib.llm.providers.visibility import sanitize_assistant_text
 
 from .llm import AssistantMessage, LLM_Message, ToolMessage, UserMessage
 from .models import Message, WSConversation
+from .message_history import capture_tool_history, retained_tool_history
 
 
 def pydantic_message_to_django(
@@ -14,6 +15,7 @@ def pydantic_message_to_django(
     Returns an unsaved Message object — the caller is responsible for saving it
     (typically via bulk_create for performance).
     """
+    history = retained_tool_history(msg)
     # Fields shared by all message types
     content = (
         sanitize_assistant_text(
@@ -26,6 +28,8 @@ def pydantic_message_to_django(
     )
     if getattr(msg, "_rag_answer", False):
         content = msg.content
+    if history is not None:
+        content = history.content
     common = {
         "conversation": conversation,  # FK linking this message to its conversation
         "message_uuid": msg.message_uuid,  # frontend message identity
@@ -41,10 +45,10 @@ def pydantic_message_to_django(
         return Message(
             **common,
             model=msg.model,  # which LLM model generated this response
-            stop_reason=msg.stop_reason,  # e.g. 'end_turn' or 'tool_use'
-            tool_call_id=msg.tool_call_id,  # ID if the LLM called a tool
-            tool_call_name=msg.tool_call_name,  # e.g. 'vector_search'
-            tool_call_input=msg.tool_call_input,  # arguments passed to the tool
+            stop_reason=history.stored_stop_reason if history else msg.stop_reason,  # e.g. 'end_turn' or 'tool_use'
+            tool_call_id=history.tool_call_id if history else msg.tool_call_id,  # ID if the LLM called a tool
+            tool_call_name=history.tool_call_name if history else msg.tool_call_name,  # e.g. 'vector_search'
+            tool_call_input=history.tool_call_input if history else msg.tool_call_input,  # arguments passed to the tool
             usage=msg.usage,  # token count for this response
         )
     elif isinstance(msg, ToolMessage):
@@ -75,16 +79,20 @@ def django_message_to_pydantic(msg: Message) -> LLM_Message:
     }
 
     if msg.role == "assistant":
-        return AssistantMessage(
+        incomplete = bool(msg.tool_call_id) != bool(msg.tool_call_name)
+        message = AssistantMessage(
             **common,
             model=msg.model,
             stop_reason=msg.stop_reason
             or "end_turn",  # default to 'end_turn' if not stored
-            tool_call_id=msg.tool_call_id,
-            tool_call_name=msg.tool_call_name,
-            tool_call_input=msg.tool_call_input,
+            tool_call_id=None if incomplete else msg.tool_call_id,
+            tool_call_name=None if incomplete else msg.tool_call_name,
+            tool_call_input=None if incomplete else msg.tool_call_input,
             usage=msg.usage,
         )
+        if incomplete:
+            capture_tool_history(message, msg)
+        return message
     elif msg.role == "tool":
         return ToolMessage(
             **common,

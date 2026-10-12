@@ -1,5 +1,6 @@
 """Meter every equality lookup and validate authenticated source records."""
 
+from copy import deepcopy
 from dataclasses import fields
 
 from apps.knowledge_graph.retrieval.topology.contracts import TopologyFailureReason
@@ -11,13 +12,18 @@ from apps.knowledge_graph.retrieval.topology.frontier_gateway_contracts_v2 impor
     FrontierCompletedBudgetFailureV2,
 )
 
-from .frontier_cypher_v2 import INDEX_LOOKUP, MANIFEST_LOOKUP, RAW_LOOKUP
+from .frontier_cypher_v2 import (
+    INDEX_BATCH_LOOKUP, INDEX_LOOKUP, MANIFEST_LOOKUP, RAW_LOOKUP,
+)
 from .frontier_index_contracts_v2 import decode_record, marker_present, record_digest
 from .memgraph_driver import MemgraphDriverError
 from .memgraph_pagination import FAMILY_IDENTITY_FIELDS
 from .memgraph_records import FAMILIES, _dto
 
-QUERIES = {"manifest": MANIFEST_LOOKUP, "index": INDEX_LOOKUP, "raw": RAW_LOOKUP}
+QUERIES = {
+    "manifest": MANIFEST_LOOKUP, "index": INDEX_LOOKUP,
+    "index_batch": INDEX_BATCH_LOOKUP, "raw": RAW_LOOKUP,
+}
 KINDS = dict(FAMILIES)
 
 
@@ -30,9 +36,14 @@ class FrontierReadsV2:
         self.driver, self.ready, self.budget = driver, ready, budget
         self.deadline = min(deadline, budget.deadline)
         self.manifests = {}
+        self._index_records = {}
 
     def read(self, kind, generation, keys=()):
         maximum = 10 * len(keys) if kind == "raw" else 2
+        if kind == "index_batch":
+            if not 1 <= len(keys) <= 32:
+                raise ValueError("frontier index batch exceeds its bound")
+            maximum = 2 * len(keys)
         if maximum > 320 or maximum < 1:
             raise ValueError("frontier lookup batch exceeds its bound")
         if (
@@ -53,7 +64,7 @@ class FrontierReadsV2:
         parameters = {"generation_key": generation}
         if kind == "index":
             parameters = {"index_key": keys[0]}
-        elif kind == "raw":
+        elif kind in {"raw", "index_batch"}:
             parameters["keys_csv"] = ",".join(keys)
         try:
             if callable(getattr(self.driver, "execute_frontier_read", None)):
@@ -134,16 +145,35 @@ class FrontierReadsV2:
             self.manifests[generation] = marker
         return indexed
 
+    def _check_index_deadline(self):
+        self.budget.check_active()
+        if self.budget.clock() >= self.deadline:
+            raise TimeoutError("frontier original deadline expired")
+
     def index(self, generation, key):
-        rows = self.read("index", generation, (key,))
-        if len(rows) != 1 or type(rows[0]) is not dict or set(rows[0]) != {"record"}:
-            raise schema_error()
-        try:
-            return decode_record(
-                rows[0]["record"], expected_key=key, generation=generation
-            )
-        except (KeyError, TypeError, ValueError):
-            raise schema_error() from None
+        self._check_index_deadline()
+        identity = generation, key
+        if identity not in self._index_records:
+            rows = self.read("index", generation, (key,))
+            if len(rows) != 1 or type(rows[0]) is not dict or set(rows[0]) != {"record"}:
+                raise schema_error()
+            try:
+                decoded = decode_record(
+                    rows[0]["record"], expected_key=key, generation=generation
+                )
+            except (KeyError, TypeError, ValueError):
+                raise schema_error() from None
+            # Immutable, content-addressed data only, bounded by admitted reads.
+            # Every authority attestation and raw evidence read remains fresh.
+            self._index_records[identity] = decoded
+        result = deepcopy(self._index_records[identity])
+        self._check_index_deadline()
+        return result
+
+    def indices(self, generation, keys):
+        from .frontier_index_batch_v2 import read_indices
+
+        return read_indices(self, generation, keys)
 
     def head(self, generation, name):
         key = self.manifests[generation]["frontier_root_key"]

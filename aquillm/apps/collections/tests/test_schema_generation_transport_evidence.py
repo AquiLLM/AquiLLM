@@ -28,6 +28,7 @@ def test_direct_vllm_adapter_never_debug_logs_sentinel_prompt_text(monkeypatch, 
 
     monkeypatch.setattr(schema_generation_support, "_post_local_vllm_json", post)
     monkeypatch.setenv("VLLM_API_KEY", "sentinel-api-key")
+    monkeypatch.setenv("VLLM_BASE_URL", "http://vllm:8000/v1")
     caplog.set_level("DEBUG")
 
     generate_schema_candidate([{"document_id": "doc", "chunk_id": 1, "text": sentinel}])

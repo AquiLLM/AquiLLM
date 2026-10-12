@@ -114,17 +114,34 @@ def _freeze_legacy_packet(consumer, packet, collections, budget, document_id=Non
         return True
 
 
+def _requested_selection_unchanged(consumer, binding):
+    """Keep the original picker witness, including for registered manual children."""
+    from apps.documents.services.representation_principal import validate_principal
+    from apps.documents.services.representation_unavailable_parent import normalized_selection
+
+    try:
+        validate_principal(binding)
+        return (binding.consumer is consumer
+                and consumer.col_ref is binding.collection_ref
+                and binding.requested_collection_ids is not None
+                and normalized_selection(consumer.col_ref.collections)
+                == binding.requested_collection_ids)
+    except Exception:
+        return False
+
+
 async def bind_legacy_answer_packet(consumer, packet, *, document_id=None):
     from .rag_answer_publication import bind_packet_publication
 
     turn = current_turn()
     if turn is None:
         return
-    collections = tuple(consumer.col_ref.collections)
+    binding = getattr(turn, "_media_principal_binding", None)
+    scope_check = lambda: _requested_selection_unchanged(consumer, binding)
     try:
         async with asyncio.timeout(min(3, turn.budget.remaining_ms() / 1000)):
-            valid = await database_sync_to_async(_freeze_legacy_packet)(
-                consumer, packet, collections, turn.budget, document_id
+            valid = scope_check() and await database_sync_to_async(_freeze_legacy_packet)(
+                consumer, packet, binding.requested_collection_ids, turn.budget, document_id
             )
             if not valid:
                 packet.source_authorization = None
@@ -136,9 +153,7 @@ async def bind_legacy_answer_packet(consumer, packet, *, document_id=None):
         packet.source_authorization = None
         packet.selection = None
         packet.retrieval_status = "context_limited"
-    return bind_packet_publication(
-        packet, scope_check=lambda: tuple(consumer.col_ref.collections) == collections
-    )
+    return bind_packet_publication(packet, scope_check=scope_check)
 
 
 async def legacy_tool_handoff(consumer, llm, convo, max_tokens, stream_func):

@@ -15,20 +15,21 @@ def authorized_search_rows(
     rows: object, *, authorization_context: object | None, hybrid_requested: bool
 ) -> tuple[object, ...]:
     from .chunk_search_scope import current_scope
-    from .chunk_search_scoped_rows import validate_rows
+    from .chunk_search_scoped_rows import _closed_authorized_rows, validate_rows
 
     scope = current_scope()
-    with scope.database() if scope else nullcontext():
-        rows = validate_rows(rows)
+
+    def reauthorize(current):
         if hybrid_requested or is_exact_authorization_context(authorization_context):
             try:
-                rows = reauthorized_baseline(tuple(rows), authorization_context)[0]
+                return reauthorized_baseline(tuple(current), authorization_context)[0]
             except Exception:
-                rows = ()
-        if scope:
-            rows = validate_rows(rows)
-            scope.validate()  # Empty results must also obey the original deadline.
-        return tuple(rows)
+                return ()
+        return current
+
+    if scope:
+        return _closed_authorized_rows(rows, scope=scope, reauthorize=reauthorize)
+    return tuple(reauthorize(validate_rows(rows)))
 
 
 def finalize_search_rows(snapshot, ranked, *, authorize, pool=(), fallback_limit=None):
