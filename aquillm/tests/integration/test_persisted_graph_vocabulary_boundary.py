@@ -6,6 +6,7 @@ from apps.collections.tests.test_vocabulary_scope import entry, publish, service
 from apps.chat.services import rag_turn
 from apps.documents.services import chunk_search_scope, source_loading
 from apps.knowledge_graph.evals.graph_effective_controls import graph_effective_controls
+from apps.knowledge_graph.retrieval import graph_hydration_operation_v2
 from apps.knowledge_graph.resolution.vocabulary_capture import KEY
 from apps.knowledge_graph.tests.test_graph_gate_applicability import reports, validate
 from tests.integration.persisted_graph_acquisition_support import acquire_graph
@@ -113,6 +114,7 @@ def test_captured_vocabulary_fences_real_nonnull_graph(
 
     with monkeypatch.context() as probe:
         probe.setattr(source_loading, "source_query_rows", load)
+        probe.setattr(graph_hydration_operation_v2, "source_query_rows", load)
         probe.setattr(rag_turn, "create_runtime", create_runtime)
         probe.setattr(chunk_search_scope, "freeze_active_representations", freeze)
         with owned_gateway(tmp_path) as gateway:

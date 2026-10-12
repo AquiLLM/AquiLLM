@@ -24,9 +24,13 @@ _PROCESS_NOUN_LIMIT = 6
 
 
 def auxiliary_source_pronoun(question, start, end):
-    """Admit a clause-start auxiliary's pronoun only outside quoted text."""
-    return bool(_AUXILIARY_START.search(question[:start])) and not _overlap(
-        start, end, (match.span() for match in _QUOTES.finditer(question)))
+    """Admit referential auxiliary subjects, excluding dummy 'it is true that'."""
+    auxiliary = _AUXILIARY_START.search(question[:start])
+    if auxiliary is None or _overlap(
+        start, end, (match.span() for match in _QUOTES.finditer(question))):
+        return False
+    return not (auxiliary.group(1).casefold() in {"is", "was"}
+                and re.match(r"\s+true\s+that\b", question[end:], re.I))
 
 
 def _local_auxiliary_subject(question, start, end, references, quotes):

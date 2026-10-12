@@ -60,7 +60,7 @@ def extractor_app():
 def gateway_app():
     from apps.knowledge_graph.retrieval.topology import gateway_service
     from apps.knowledge_graph.projection.frontier_cypher_v2 import (
-        INDEX_LOOKUP, MANIFEST_LOOKUP, RAW_LOOKUP,
+        INDEX_BATCH_LOOKUP, INDEX_LOOKUP, MANIFEST_LOOKUP, RAW_LOOKUP,
     )
 
     class Driver:
@@ -83,6 +83,12 @@ def gateway_app():
             if query == INDEX_LOOKUP:
                 row = self.records["index"].get(parameters["index_key"])
                 return ({"record": row},) if row else ()
+            if query == INDEX_BATCH_LOOKUP:
+                return tuple(
+                    {"lookup_key": key, "record": self.records["index"][key]}
+                    for key in parameters["keys_csv"].split(",")
+                    if key in self.records["index"]
+                )
             if query == RAW_LOOKUP:
                 return tuple(row for key in parameters["keys_csv"].split(",")
                              for row in self.raw.get((parameters["generation_key"], key), ())[:10])

@@ -7,6 +7,7 @@ import pytest
 from channels.db import database_sync_to_async
 
 from lib.llm.turn_context import TurnContext, bind_turn, call_tool_async
+from lib.llm.types.tools import ToolChoice
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
@@ -90,6 +91,7 @@ async def test_non_source_tool_after_retrieval_expiry_keeps_original_policy(canc
         content="",
         stop_reason="tool_use",
         tools=[calculator],
+        tool_choice=ToolChoice(type="auto"),
         tool_call_id="local",
         tool_call_name="calculator",
         tool_call_input={},

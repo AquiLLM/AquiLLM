@@ -143,3 +143,49 @@ async def test_missing_source_antecedent_asks_focused_clarification(question, fo
     assert queried == []
     assert "title or citation" in consumer.convo[-1].content
     assert budget.planner_calls == budget.actions_used == 0
+
+
+@pytest.mark.parametrize("auxiliary", ["Is", "Was"])
+@pytest.mark.parametrize("prior", ["empty", "single", "ambiguous"])
+def test_true_that_expletive_never_acquires_historical_source(auxiliary, prior):
+    from apps.chat.tests.auxiliary_followup_test_support import single_history
+
+    history = (Conversation(system="sys", messages=[]) if prior == "empty"
+               else single_history() if prior == "single" else _history())
+    original = history.model_dump()
+    anchors = resolve_source_anchors(f"{auxiliary} it true that Vega is variable?", history)
+    assert anchors.document_ids == anchors.chunk_identities == ()
+    assert anchors.unresolved_references == anchors.source_constraints == ()
+    assert history.model_dump() == original
+
+
+@pytest.mark.parametrize("placement", ["within", "later"])
+@pytest.mark.parametrize("known", [False, True])
+def test_expletive_keeps_explicit_citation_constraints(placement, known):
+    from apps.chat.tests.auxiliary_followup_test_support import single_history
+
+    citation = "[doc:paper-z chunk:7]" if known else "[doc:unknown chunk:99]"
+    question = (f"Is it true that {citation} supports the claim?" if placement == "within"
+                else f"Is it true that Vega is variable? Review {citation}.")
+    history = single_history()
+    original = history.model_dump()
+    anchors = resolve_source_anchors(question, history)
+    assert anchors.document_ids == (("paper-z",) if known else ())
+    assert anchors.chunk_identities == (((7, "paper-z", 0),) if known else ())
+    assert anchors.unresolved_references == (() if known else (citation,))
+    assert anchors.source_constraints == ((citation,) if known else ())
+    assert history.model_dump() == original
+
+
+@pytest.mark.parametrize("question", ["Is it true?", "Was it true?"])
+def test_copular_reference_without_complement_retains_single_source(question):
+    from apps.chat.tests.auxiliary_followup_test_support import single_history
+
+    history = single_history()
+    original = history.model_dump()
+    anchors = resolve_source_anchors(question, history)
+    assert anchors.document_ids == ("paper-z",)
+    assert anchors.chunk_identities == ((7, "paper-z", 0),)
+    assert anchors.unresolved_references == ()
+    assert anchors.source_constraints == ("it",)
+    assert history.model_dump() == original

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from lib.llm.turn_context import TurnContext, bind_turn, call_tool_async, current_turn
+from lib.llm.types.tools import ToolChoice
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
@@ -26,6 +27,7 @@ async def test_both_tool_executor_hops_preserve_context():
         content="",
         stop_reason="tool_use",
         tools=[probe],
+        tool_choice=ToolChoice(type="auto"),
         tool_call_id="one",
         tool_call_name="probe",
         tool_call_input={},
@@ -59,6 +61,7 @@ async def test_cancellation_during_sync_tool_wait_fences_late_work():
         content="",
         stop_reason="tool_use",
         tools=[blocked],
+        tool_choice=ToolChoice(type="auto"),
         tool_call_id="one",
         tool_call_name="blocked",
         tool_call_input={},
