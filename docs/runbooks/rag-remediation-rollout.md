@@ -1,8 +1,10 @@
 # RAG remediation rollout candidate
 
-This runbook describes a review candidate. Implementation integration, rollback
-rehearsal, the combined adversarial matrix and final branch review are still in
-progress. It does not authorize deployment, register a production embedding
+This runbook describes the integrated implementation candidate. Focused rehearsal
+evidence is retained at its recorded source revisions; final job records are
+available in the release manifest. Review the PR before deciding to merge into
+`development`; deployment requires a separate decision after review and verification.
+This document does not authorize deployment, register a production embedding
 profile, rebuild shared data, or activate an experimental treatment.
 
 Use the [remediation program](../superpowers/plans/2026-10-10-rag-remediation-program.md)
@@ -53,7 +55,13 @@ Use Django's migration dependency plan. The program adds these chains:
 - Knowledge graph: contextual candidate methods 0012, then nullable captured
   representation bindings 0013 and restricted projection representation validation
   0014. Knowledge graph 0014 depends on documents 0014.
-- Collections: immutable vocabulary versions and explicit attachments 0004.
+  Knowledge graph 0015 then replaces only the two projection chunk-store/coordinate
+  validation joins with bounded input-driven primary-key lookups. It rewrites no data
+  and retains the existing function ownership, grants, lease and coordinate checks.
+- Collections: immutable vocabulary versions and explicit attachments 0004, followed
+  by publication transaction provenance 0005. The database assigns each new version
+  its publication transaction ID and permits entries only in that transaction.
+  Reversal refuses removal of this provenance while published versions exist.
 - Memory: profile-fact provenance 0003.
 
 Inspect the complete plan on the candidate binary before applying it. Concurrent
@@ -67,6 +75,12 @@ refuse removal of representation, output-ledger, vocabulary or graph-binding
 provenance once used. Reversing an unused disposable schema is a different test
 from rolling back an application with citable history. Do not bypass those guards
 or clear history to make a downgrade succeed.
+
+Knowledge graph 0015 is independently reversible to the previous store function.
+That reversal preserves stored rows and authority checks but restores the earlier
+stale-statistics performance risk; it is not a performance-safe rollback promise.
+Review the actual forward/reverse restricted-role and populated-load results in
+the final job records before selecting a deployment rollback.
 
 Retained source artifacts, extraction revisions, chunks and media continue to
 consume storage. This program does not authorize retention cleanup. Assign an
@@ -186,9 +200,10 @@ tools and planners cannot inherit that expansion. Old citation endpoints may
 serve retained historical bytes under current permission, while new answers
 must retain their originally captured current generation.
 
-Before final review, bind the complete source tree to the integrated test runs,
-rollback results and closure ledger. Report pinned baseline failures separately
-from new failures, warnings and tests not run. Include the final immutable code
-revision, runtime identities, migration/rebuild manifests, resource measurements,
-and independent review findings. Until those records are complete, this remains
-a candidate rather than a verified rollout.
+Before the PR merge decision, bind the complete source tree to final integrated
+test runs, rollback results and the closure ledger. Report pinned baseline failures
+separately from new failures, warnings and tests not run; include the immutable code
+revision and independent review findings. Before a separate deployment decision,
+complete the runtime identities, migration/rebuild manifests, resource and cost
+estimates, and retention ownership. These operational requirements remain pending;
+source review or focused test passes alone do not establish a verified rollout.

@@ -1,0 +1,1966 @@
+{
+  "schema": "rag-remediation-release-candidate-v1",
+  "status": "ten_job_results_and_contract_dispositions_recorded_PR_review_pending",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "development_base": "dae54507c6e55f3cf1fb0a0974d4f22ebe2cdb8f",
+  "source_snapshot_sha256": "bd786a0e6afc1660a4a74614e712b91837a97be53c5a69b307bd2169853fd6fb",
+  "deployment_performed": false,
+  "production_rebuild_performed": false,
+  "independent_human_reviews_available": false,
+  "optional_treatment_activation": false,
+  "integration_runs": [
+    {
+      "job": "source_ingestion",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-r5-test",
+        "--",
+        "aquillm/apps/ingestion/tests",
+        "aquillm/lib/parsers/tests",
+        "aquillm/lib/embeddings/tests",
+        "aquillm/apps/documents/tests",
+        "aquillm/tests/integration/test_legacy_requested_selection_boundary.py",
+        "-q",
+        "-ra",
+        "--tb=short"
+      ],
+      "exit_code": 0,
+      "log_sha256": "05602c8555ca160c5def19c9a7326ee3b0aa95c1e24485ea4faa5b28ff43e7a2",
+      "result_sha256": "a9541c829f7a986913cbb0d35489121ea0eae56700775df8632e86291ab90c1f",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "8623365299ed2daa120b3225bcab4a9d5348cb0c74bacd221c40ce2f9ff598cc",
+          "image_id": "sha256:41220a30a0295b0fd6d827dc85efbb15b7c0f6b57efcadcf1ddccc24f1cccb48"
+        },
+        {
+          "service": "db",
+          "container_id": "25213d9aedc0458b58bf87ebb723fc2ec12f0e46a23660b4f3d8f9f187deb39a",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "45b65596626ee41b7b50191b751e35df713cb42cd2806663689677922ed74076",
+          "image_id": "sha256:e68a353e73e85e504d22b6457f4ea19d232ab40e8a8c39eec2c5873e3ee0dec9"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "b686fc8f315c3f07881f3c26d7e58b0bf3f3d632fc3548f3d92e277fd4ca1eee",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "355e9e5fd54778a4411fbf5ef7051b1b07a4bfa7c59b4f649afef604a921a256",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": {
+        "passed": 1751,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "warnings": 35
+      },
+      "skips": [],
+      "warnings": [
+        {
+          "category": "PydanticDeprecatedSince212",
+          "count": 1,
+          "source": "aquillm/lib/llm/types/tools.py:66",
+          "observation": "After-model validator uses a classmethod; deprecated since Pydantic 2.12 and scheduled for removal in V3.",
+          "disposition": "OPEN_COMPATIBILITY_DEBT",
+          "action": "Migrate to the supported instance-method validator before the incompatible upgrade; this passing run does not clear the warning."
+        },
+        {
+          "category": "FutureWarning",
+          "count": 1,
+          "source": "aquillm/lib/ocr/gemini.py:13",
+          "observation": "The imported google.generativeai package reports ended support and no further updates or bug fixes.",
+          "disposition": "OPEN_DEPENDENCY_MIGRATION_DEBT",
+          "action": "Review migration to google.genai; this owned test run does not establish live OCR provider behavior."
+        },
+        {
+          "category": "RuntimeWarning",
+          "count": 1,
+          "source": "django.db.backends.utils",
+          "observation": "Database access occurred during application initialization.",
+          "disposition": "OPEN_STARTUP_ATTRIBUTION_AND_LIFECYCLE_DEBT",
+          "action": "Identify the originating initialization/import call path. The retained warning has no caller stack establishing which application component caused it; attribution remains unresolved."
+        },
+        {
+          "category": "UserWarning",
+          "count": 32,
+          "source": "django.core.handlers.base",
+          "observation": "Missing prod_static directory during test middleware initialization.",
+          "module_counts": {
+            "aquillm/apps/ingestion/tests/test_handwritten_ingest.py": 1,
+            "aquillm/apps/ingestion/tests/test_ingestion_monitor_includes_non_pdf.py": 1,
+            "aquillm/apps/ingestion/tests/test_unified_ingestion_api.py": 3,
+            "aquillm/apps/documents/tests/test_citation_api.py": 10,
+            "aquillm/apps/documents/tests/test_document_chunk_highlight.py": 2,
+            "aquillm/apps/documents/tests/test_pdf_response.py": 11,
+            "aquillm/apps/documents/tests/test_representation_media.py": 1,
+            "aquillm/apps/documents/tests/test_representation_media_edges.py": 2,
+            "aquillm/apps/documents/tests/test_representation_pdf_history.py": 1
+          },
+          "disposition": "TEST_STATIC_ASSET_ENVIRONMENT_WARNING_RETAINED",
+          "action": "This is not evidence that deployed static assets are correct. Deployment asset collection and serving verification remain separate operational gates."
+        }
+      ],
+      "duration_seconds": 1824.39,
+      "summary": "1751 passed, 35 warnings in 1824.39s (0:30:24)",
+      "summary_derivation": "Read the entire retained log and verified its exact SHA-256, result, completed source post-proof, driver argv and runtime receipt. The final summary reports 1751 ordinary passes and 35 warnings; no skipped, failed or error cases are reported anywhere in the retained log, and the wrapper/result exit is zero. Four warning groups reconcile as 1+1+1+32=35. Observed elapsed time is 1824.39 seconds (30 minutes 24.39 seconds); no performance cause or regression is inferred from differences from historical runs. This is one completed source-ingestion job only, not aggregate acceptance. Dependency migration and startup attribution remain open; static-asset deployment verification, real quality, rebuild, activation, deployment and user PR review gates are unchanged.",
+      "public_log_or_summary_url": "./source-ingestion-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "graph_answer",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--",
+        "aquillm/apps/chat/tests",
+        "aquillm/apps/collections/tests",
+        "aquillm/apps/knowledge_graph/tests",
+        "aquillm/apps/memory/tests",
+        "aquillm/lib/knowledge_graph/tests",
+        "aquillm/lib/llm/tests",
+        "aquillm/lib/memory/tests",
+        "aquillm/lib/tools/search/tests/test_vector_search_pack.py",
+        "aquillm/tests/integration/test_cache_numeric_authority.py",
+        "aquillm/tests/integration/test_cache_original_scope.py",
+        "aquillm/tests/integration/test_cache_publication.py",
+        "aquillm/tests/integration/test_cache_settings_flags.py",
+        "aquillm/tests/integration/test_cache_vocabulary_scope.py",
+        "aquillm/tests/integration/test_cold_rag_service_lifecycle.py",
+        "aquillm/tests/integration/test_default_action_admission.py",
+        "aquillm/tests/integration/test_graph_cross_lane_database_deadline.py",
+        "aquillm/tests/integration/test_graph_private_original_scope.py",
+        "aquillm/tests/integration/test_knowledge_graph_import_isolation.py",
+        "aquillm/tests/integration/test_persisted_graph_generation_boundary.py",
+        "aquillm/tests/integration/test_persisted_graph_identity_boundary.py",
+        "aquillm/tests/integration/test_persisted_graph_scope_coverage.py",
+        "aquillm/tests/integration/test_persisted_graph_semantic_provenance.py",
+        "aquillm/tests/integration/test_persisted_graph_vocabulary_boundary.py",
+        "aquillm/tests/integration/test_projection_database_deadline.py",
+        "aquillm/tests/integration/test_projection_database_fetch_deadline.py",
+        "aquillm/tests/integration/test_projection_legacy_role_boundary.py",
+        "aquillm/tests/integration/test_projection_representation_publication_races.py",
+        "aquillm/tests/integration/test_projection_representation_role_boundary.py",
+        "aquillm/tests/integration/test_projection_representation_schema_boundary.py",
+        "aquillm/tests/integration/test_projection_representation_state_boundary.py",
+        "aquillm/tests/integration/test_rag_cross_lane_archive.py",
+        "aquillm/tests/integration/test_rag_cross_lane_collector.py",
+        "aquillm/tests/integration/test_rag_cross_lane_competing_evidence.py",
+        "aquillm/tests/integration/test_rag_cross_lane_graph_gate_predicates.py",
+        "aquillm/tests/integration/test_rag_cross_lane_graph_observations.py",
+        "aquillm/tests/integration/test_rag_cross_lane_graph_publication.py",
+        "aquillm/tests/integration/test_rag_cross_lane_graph_route.py",
+        "aquillm/tests/integration/test_rag_cross_lane_history.py",
+        "aquillm/tests/integration/test_rag_cross_lane_memory.py",
+        "aquillm/tests/integration/test_rag_cross_lane_outage.py",
+        "aquillm/tests/integration/test_rag_cross_lane_publication.py",
+        "aquillm/tests/integration/test_rag_cross_lane_repair.py",
+        "aquillm/tests/integration/test_rag_cross_lane_support.py",
+        "aquillm/tests/integration/test_rag_projection_provision.py",
+        "aquillm/tests/integration/test_rag_remediation_isolation.py",
+        "aquillm/tests/integration/test_rag_structural_delivery.py",
+        "aquillm/tests/integration/test_rag_structural_ordering.py",
+        "aquillm/tests/integration/test_rag_typecheck_wrapper.py",
+        "aquillm/tests/integration/test_representation_graph_delete.py",
+        "aquillm/tests/integration/test_vllm_lmcache_plumbing.py",
+        "aquillm/tests/integration/test_worker_handoff.py",
+        "aquillm/tests/integration/test_worker_handoff_startup.py",
+        "tests/test_check_file_lengths.py",
+        "tests/test_check_logging_conventions.py",
+        "tests/test_check_retrieval_logging.py",
+        "tests/test_knowledge_graph_dependencies.py",
+        "tests/test_rag_remediation_frontend.py",
+        "aquillm/tests/integration/test_compose_render_test_support.py",
+        "aquillm/tests/integration/test_knowledge_graph_compose.py",
+        "aquillm/tests/integration/test_compose_multimodal_services.py",
+        "aquillm/tests/integration/test_embedding_policy_compose.py",
+        "aquillm/tests/integration/test_sidecar_revision_compose.py",
+        "aquillm/tests/integration/test_requested_selection_boundary.py",
+        "tests/unit",
+        "-q",
+        "-ra",
+        "--tb=short"
+      ],
+      "exit_code": 0,
+      "log_sha256": "0b18b84a56f8116f47bd2d4cc89ebdaa8419f7abe4a63245d4bc72bb21627c30",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "88550fa6250b30d116731e296b6fc5f3b9e76b7400ca72e35c2bc2d33448ab26",
+          "image_id": "sha256:f57096d89bfd987c1427575c4ef997a468b532d8e5327922a9eea8d1cfad3c4d"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "13f50377dcd0efa2e6027ec922b8f2684f4cf524f6bf0b3cdf1a5d508435e18e",
+          "image_id": "sha256:8bb011470fe73eb776c1ccf2d34d70f0b49627b93b89ab861959cc8292fdd959"
+        },
+        {
+          "service": "frontend",
+          "container_id": "d976147de24a4a0d4856f8592bb9af1b4262edf8fc66940b4da731f4551c09cd",
+          "image_id": "sha256:77caeb34b4954c1d22f6d559e6e1f138296bbfd753243248f85d738cf1e6e415"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": {
+        "passed": 7016,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 1,
+        "warnings": 152,
+        "subtests_passed": 83
+      },
+      "skips": [
+        {
+          "count": 1,
+          "test": "tests/unit/test_nemotron_verification_harness.py::test_profile_self_test_covers_failure_policy_and_image_provenance",
+          "reason": "PowerShell is unavailable in the Linux test environment.",
+          "disposition": "PLATFORM_SKIP_WITH_SEPARATE_UNCHANGED_SCRIPT_HOST_SUPPLEMENT",
+          "supplement": {
+            "retained_receipt_sha256": "94b971006125388d7c55284e34aa091fa8bc2236db37cfd82abb981e0efbef77",
+            "script": "scripts/verify_nemotron_asr.ps1",
+            "script_sha256": "31bbf91c0c0b76599f62db70683165d3cca2904cb9fde1dd2843c0e7a6d66a37",
+            "command": [
+              "pwsh",
+              "-NoProfile",
+              "-File",
+              "scripts/verify_nemotron_asr.ps1",
+              "-SelfTest"
+            ],
+            "exit_code": 0,
+            "scope": "Previously retained standalone synthetic host SelfTest; no application, model, Docker, GPU or deployment execution. Current candidate verifier bytes equal the supplemented bytes. This does not convert the Linux skip into a pass."
+          }
+        }
+      ],
+      "warnings": [
+        {
+          "category": "PydanticDeprecatedSince212",
+          "count": 1,
+          "source": "aquillm/lib/llm/types/tools.py:66",
+          "observation": "After-model validator uses a classmethod; deprecated since Pydantic 2.12 and scheduled for removal in V3.",
+          "disposition": "OPEN_COMPATIBILITY_DEBT",
+          "action": "Migrate to the supported instance-method validator before the incompatible upgrade; this passing run does not clear the warning."
+        },
+        {
+          "category": "FutureWarning",
+          "count": 1,
+          "source": "aquillm/lib/ocr/gemini.py:13",
+          "observation": "The imported google.generativeai package reports ended support and no further updates or bug fixes.",
+          "disposition": "OPEN_DEPENDENCY_MIGRATION_DEBT",
+          "action": "Review migration to google.genai; this owned test run does not establish live OCR provider behavior."
+        },
+        {
+          "category": "RuntimeWarning",
+          "count": 1,
+          "source": "django.db.backends.utils",
+          "observation": "Database access occurred during application initialization.",
+          "disposition": "OPEN_STARTUP_ATTRIBUTION_AND_LIFECYCLE_DEBT",
+          "action": "Identify the originating initialization/import call path. The retained warning has no caller stack establishing which application component caused it; attribution remains unresolved."
+        },
+        {
+          "category": "UserWarning",
+          "count": 138,
+          "source": "django.core.handlers.base",
+          "observation": "Missing prod_static directory during test middleware initialization.",
+          "module_counts": {
+            "aquillm/apps/chat/tests/test_chat_rename.py": 17,
+            "aquillm/apps/chat/tests/test_collection_prompt_skills.py": 4,
+            "aquillm/apps/collections/tests/test_collection_api.py": 8,
+            "aquillm/apps/collections/tests/test_collection_subcollection_create_api.py": 2,
+            "aquillm/apps/collections/tests/test_graph_visualization_api.py": 11,
+            "aquillm/apps/collections/tests/test_graph_visualization_edges.py": 6,
+            "aquillm/apps/collections/tests/test_schema_api.py": 5,
+            "aquillm/apps/collections/tests/test_schema_api_editor.py": 6,
+            "aquillm/apps/collections/tests/test_schema_api_generation.py": 4,
+            "aquillm/apps/collections/tests/test_schema_api_history.py": 3,
+            "aquillm/apps/collections/tests/test_schema_api_publication.py": 13,
+            "aquillm/apps/collections/tests/test_schema_api_restore_inputs.py": 28,
+            "aquillm/apps/collections/tests/test_schema_api_validation.py": 18,
+            "aquillm/apps/memory/tests/test_profile_memory_api.py": 9,
+            "aquillm/apps/knowledge_graph/tests/test_document_lifecycle.py": 1,
+            "aquillm/tests/integration/test_rag_cross_lane_history.py": 2,
+            "aquillm/tests/integration/test_rag_cross_lane_memory.py": 1
+          },
+          "disposition": "TEST_STATIC_ASSET_ENVIRONMENT_WARNING_RETAINED",
+          "action": "This is not evidence that deployed static assets are correct. Deployment asset collection and serving verification remain separate operational gates."
+        },
+        {
+          "category": "DeprecationWarning",
+          "count": 11,
+          "source": "multiprocessing.popen_fork",
+          "observation": "Fork was invoked from a multithreaded process; the runtime warns of possible child deadlocks.",
+          "module_counts": {
+            "aquillm/apps/knowledge_graph/tests/test_scheduled_projection_publication.py": 6,
+            "aquillm/apps/knowledge_graph/tests/test_scheduled_projection_worker.py": 5
+          },
+          "disposition": "OPEN_TEST_PROCESS_LIFECYCLE_DEBT",
+          "cleanup_context": "Publication launches six fork publishers, requires exit code zero after bounded joins, and kills/joins survivors in finally. Worker tests use five fork-worker contexts with terminate/join, then kill/join and an explicit not-alive assertion. The broker fixture deletes only its unique Redis namespace and closes the Celery app.",
+          "limitations": "These cleanup paths and the successful run do not eliminate fork-from-multithreaded-process risk or prove absence of every process/resource leak. Publication cleanup has no final not-alive assertion after its fallback join; broker Redis clients and process handles are not all explicitly closed. No teardown exception is reported in this retained log.",
+          "action": "Retain the risk for a separate fixture/process lifecycle improvement; do not classify it as universally harmless noise."
+        }
+      ],
+      "duration_seconds": 3858.69,
+      "summary": "7016 passed, 1 skipped, 152 warnings, 83 subtests passed in 3858.69s (1:04:18)",
+      "summary_derivation": "Read the entire retained log and verified its exact SHA-256, result, completed source post-proof, driver argv and runtime receipt. Ordinary passed tests (7016) and reported passed subtests (83) remain separate; zero failures/errors derives from the complete summary, no failed/error entries, and exit zero. Warning counts are 1+1+1+138+11=152. This is one completed graph job only; the remaining nine current-batch outcomes and aggregate acceptance are not asserted. Startup attribution, dependency and process lifecycle debt remain open; real quality, rebuild, activation, deployment and user PR review gates are unchanged.",
+      "public_log_or_summary_url": "./graph-answer-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "typecheck",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--typecheck"
+      ],
+      "exit_code": 0,
+      "log_sha256": "9b7d1aad8a86b023ea9a06aed689bf1e35bf4fbfb28795ead50042d228d6d190",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "a08a772256a355a2a67433d9ed763636239a1ee7bf3fe1f31b908cb444d1a913",
+          "image_id": "sha256:7d7fe9d6a90447f549c2b4eb39a0979146beb5f83d875a62fbe04f471406983d"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "354ec2fe135b53b48da81686c0e00606471076e02dd3ac39ab730b56d6da1cfc",
+          "image_id": "sha256:54d1cf4a2c14f2c857d7e71b2013e66e246a7aada3b9dcf3a8364504e532e8d5"
+        },
+        {
+          "service": "frontend",
+          "container_id": "c507bb7bf51ce8af8cb6902e0a628cd5c4435779e4f36f5463b0998730b1e8e6",
+          "image_id": "sha256:d9ce7598e3894a921d8817d4285c1014f536ffa24f93d09cbae0dc4ebf16f646"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": null,
+      "skips": [],
+      "warnings": [],
+      "duration_seconds": null,
+      "summary": "TypeScript tsc --noEmit completed with exit zero and no diagnostics.",
+      "summary_derivation": "Read the entire retained typecheck log and terminal output. It reports only the npm script and tsc --noEmit invocation, with no warning, error, skip, test count or elapsed-time report. Counts and duration therefore remain null. The completed wrapper result and separate equal source/index post-check establish this job result; it is not aggregate acceptance.",
+      "public_log_or_summary_url": "./typecheck-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "vitest",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--vitest",
+        "react/src/features/chat/components/Chat.context.test.tsx",
+        "react/src/features/chat/components/Chat.test.tsx",
+        "react/src/features/chat/components/ChatCollectionsModal.test.tsx",
+        "react/src/features/chat/components/ChatRenameDialog.test.tsx",
+        "react/src/features/chat/components/CitationModalProvider.test.tsx",
+        "react/src/features/chat/components/HistoricalCitationContext.test.tsx",
+        "react/src/features/chat/components/HistoricalCitationRouting.test.tsx",
+        "react/src/features/chat/components/MessageBubble.test.tsx",
+        "react/src/features/chat/components/MessageSources.test.tsx",
+        "react/src/features/chat/components/PDFCitationModal.test.tsx",
+        "react/src/features/chat/components/VirtualizedPdfPages.test.tsx",
+        "react/src/features/chat/components/pdfPageExtraction.test.ts",
+        "react/src/features/chat/components/pdfPageWindow.test.ts",
+        "react/src/features/chat/hooks/useChatWebSocket.bootstrap.test.tsx",
+        "react/src/features/chat/hooks/useChatWebSocket.context.test.tsx",
+        "react/src/features/chat/hooks/useChatWebSocket.lifecycle.test.tsx",
+        "react/src/features/chat/hooks/useChatWebSocket.test.tsx",
+        "react/src/utils/pdfTextMatch.test.ts",
+        "react/src/utils/stripCitationSources.test.ts",
+        "react/src/utils/textOffsetMatch.test.ts"
+      ],
+      "exit_code": 0,
+      "log_sha256": "d4f1b94273e6cf92079588d25f2da61321429b06f60155f8df723008ddbd5918",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "5233685f9101d4a3faed7a2de87c6b19a38910e71e5202781ce53058caca20c4",
+          "image_id": "sha256:a2468c32b76dbc38c7c9bf964a7c135622eeac59c374f142445c41ef21b512db"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "d62967db65ea4c6c8cde6ab7445fcc8b20aa0ab7cf3bc53e62a3df67fd2a95d5",
+          "image_id": "sha256:ef0d30ecbcb5d13f3a4ba2dc9ffab5294c04972e74d65e411dbb65153d9225e8"
+        },
+        {
+          "service": "frontend",
+          "container_id": "d2032ee2b94fa680cc2be6504586027bdb4c1ad855c628b7d5ce2cfa6101d1ec",
+          "image_id": "sha256:43c25153523fce5140559b30403273e73f1ea5cb1163ca2a458882c89d17876b"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": {
+        "passed": 202,
+        "total": 202,
+        "failed": 0,
+        "skipped": 0,
+        "test_files_passed": 20,
+        "test_files_total": 20
+      },
+      "skips": [],
+      "warnings": [
+        {
+          "kind": "dependency_metadata_warning",
+          "count": 1,
+          "category": "Browserslist caniuse-lite age",
+          "observed": "The retained log reports browser compatibility data 21 months old.",
+          "disposition": "Maintenance debt remains. This successful job does not establish current browser-target data or production browser coverage; a dependency refresh needs its own change and verification."
+        },
+        {
+          "kind": "expected_negative_case_stderr",
+          "count": 1,
+          "message": "Conversation changed elsewhere. Refresh and resend.",
+          "test_path": "react/src/features/chat/hooks/useChatWebSocket.lifecycle.test.tsx",
+          "test_name": "preserves a fatal stale-writer error after permanent close",
+          "test_line": 260,
+          "evidence_lines": [
+            265,
+            268,
+            269,
+            271
+          ],
+          "disposition": "The fixture injects a fatal stale-writer exception and permanent close; assertions retain that exact error, disabled input and one socket after the retry window. Logged by the actual hook error branch; no application-server failure is inferred from this synthetic socket event."
+        },
+        {
+          "kind": "expected_negative_case_stderr",
+          "count": 1,
+          "message": "Unavailable",
+          "test_path": "react/src/features/chat/hooks/useChatWebSocket.lifecycle.test.tsx",
+          "test_name": "disables input immediately on fatal initialization errors",
+          "test_line": 274,
+          "evidence_lines": [
+            279,
+            280,
+            281,
+            283,
+            284
+          ],
+          "disposition": "The fixture injects a fatal initialization exception after readiness; assertions require disabled input and the exact error, then refuse to restore readiness from a later snapshot. Logged by the actual hook error branch; no application-server failure is inferred from this synthetic socket event."
+        },
+        {
+          "kind": "expected_negative_case_stderr",
+          "count": 1,
+          "message": "Tool result validation failed.",
+          "test_path": "react/src/features/chat/hooks/useChatWebSocket.test.tsx",
+          "test_name": "settles an aborted tool turn and allows a later retry to run normally",
+          "test_line": 140,
+          "evidence_lines": [
+            165,
+            168,
+            170,
+            171,
+            184,
+            203,
+            204,
+            205
+          ],
+          "disposition": "The fixture injects a tool error; assertions stop the spinner, allow retry, clear the error for that retry and retain the completed retry answer. Logged by the actual hook error branch; no application-server failure is inferred from this synthetic socket event."
+        },
+        {
+          "kind": "expected_negative_case_stderr",
+          "count": 1,
+          "message": "Tool result validation failed.",
+          "test_path": "react/src/features/chat/hooks/useChatWebSocket.test.tsx",
+          "test_name": "resumes a terminal tool turn after authoritative reconnect hydration",
+          "test_line": 208,
+          "evidence_lines": [
+            224,
+            228,
+            229,
+            235,
+            236,
+            237,
+            272,
+            273,
+            274
+          ],
+          "disposition": "The fixture injects a tool error; assertions retain it until authoritative hydration, resume the pending state and settle after the recovered answer. Logged by the actual hook error branch; no application-server failure is inferred from this synthetic socket event."
+        }
+      ],
+      "duration_seconds": 4.87,
+      "summary": "Vitest passed 202 tests across 20 test files. One outdated Browserslist-data warning and four deliberately injected WebSocket error messages were reviewed; no tests were skipped.",
+      "summary_derivation": "Read the entire retained Vitest log: twenty per-file results sum to 202 and match both final totals. Duration is the reported 4.87 seconds; concurrent transform/collect/test/environment phase times are not summed into wall time. The four stderr headers match exact negative-case tests and asserted UI/recovery outcomes through useChatWebSocket.ts line207. The Browserslist warning remains maintenance debt. The wrapper exited zero and the separate post proof matches all 3118 source files and the index. Synthetic fixture text only; no credentials or private corpus content identified. This is one job, not aggregate acceptance.",
+      "public_log_or_summary_url": "./vitest-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "browser_settings",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--playwright",
+        "react/tests/usersettings.spec.ts"
+      ],
+      "exit_code": 0,
+      "log_sha256": "143772f5c7aa77542b589e1478859821e6d34c4862b0d0d12637a14cc10d255e",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "7c9f3b4890c463740538a6661ac1c88653401687dc306db26463ee9a663b7834",
+          "image_id": "sha256:795974f107138e617b56bc2bd2f96cfbda33916f0e07c354686bbaf781af4e6a"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "1c8519460b81c6e2db980bafeef2cd0b5eaa810ec905d2d0de6eea50bee91716",
+          "image_id": "sha256:59b2559c2258fbd77c7e7ec95f09c02981bdd273a29ab56c5d69107a03b1cf3f"
+        },
+        {
+          "service": "frontend",
+          "container_id": "3e4ceb31ebe650bb7f72887692aeacdd935f60dbe43518d92c0c0a42c2850d54",
+          "image_id": "sha256:70fdffe6d648b1a760c59f3de9ceceac04f57b8e8f275205bb592d7dbcdfa336"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": {
+        "passed": 13,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "warnings": 0
+      },
+      "skips": [],
+      "warnings": [],
+      "duration_seconds": 13.7,
+      "summary": "13 passed (13.7s)",
+      "summary_derivation": "Full retained Playwright output read: 13 individually successful cases and the exact final summary; no warning, skip, failure, error or retry is reported. Counts derive from Playwright output, not the pytest summary parser. Duration is the reported whole-suite value, not a sum of individual case timings. The settings browser job exercises two profile-memory UI cases using intercepted API responses, five themes and six fonts. It does not verify real external-memory deletion or provider reconciliation. The source-bound owned configuration uses one Chromium worker and zero retries. Driver command, log/result hashes, separate completed source/index post-proof and runtime receipt match the candidate. No aggregate acceptance, live quality, data rebuild or deployment claim.",
+      "public_log_or_summary_url": "./browser-settings-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "browser_assets",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--playwright",
+        "react/tests/rag-browser-assets.spec.ts"
+      ],
+      "exit_code": 0,
+      "log_sha256": "7ef3c69f8de5db59f0fbdbc6d8ec82efe7cb30dfc11a3035cd09a9bdf1fd87ed",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "6cfc4e5cdf894edf1e2f3b04fe829c11d5e3d907497c8e27511b410755438065",
+          "image_id": "sha256:f0a8044d948422d4071efb9a36d899e4a0822621a7525219c2a31084ceba5398"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "f6c0c3c00d91e0439590cac30b60021532d6fd475d52aaa1002089f87734b4f3",
+          "image_id": "sha256:628f481fca7c12d471be2740a75e9ab857c0147ea8f0643c4830443bf3b2c54f"
+        },
+        {
+          "service": "frontend",
+          "container_id": "81dff6082ee41e508b03667aec8c4b9e6d4761172f5aa332bcc25cb631820071",
+          "image_id": "sha256:1b014c12d84a0a12bf9e9d8533d55a4908f757196a81c4e8bc02629f4f684ee0"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": {
+        "passed": 1,
+        "failed": 0,
+        "errors": 0,
+        "skipped": 0,
+        "warnings": 0
+      },
+      "skips": [],
+      "warnings": [],
+      "duration_seconds": 0.609,
+      "summary": "1 passed (609ms)",
+      "summary_derivation": "Full retained Playwright output read: 1 individually successful cases and the exact final summary; no warning, skip, failure, error or retry is reported. Counts derive from Playwright output, not the pytest summary parser. Duration is the reported whole-suite value, not a sum of individual case timings. The asset job checks successful HTTP retrieval and SHA-256 equality of the served main JavaScript bundle against the file in the owned frontend image. It does not establish production deployment or all-asset correctness. The source-bound owned configuration uses one Chromium worker and zero retries. Driver command, log/result hashes, separate completed source/index post-proof and runtime receipt match the candidate. No aggregate acceptance, live quality, data rebuild or deployment claim.",
+      "public_log_or_summary_url": "./browser-assets-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "manage_check",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--manage",
+        "check"
+      ],
+      "exit_code": 0,
+      "log_sha256": "4acc4aa13be9eb2ddc76760505435189244e5f01b1498b5073399d2427d7ad20",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "e9b8d4598b556b817e9ff4658b9586ab632232cc662416a8b8f659bc909a0172",
+          "image_id": "sha256:e45f46e694b479646392e88efe45f0baecb2e00d71029bf4654a03854df4a4d5"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "f61cc5270ebc2802954c6a3b4519dc23194368c4abeeb4693f6f3041afcff05c",
+          "image_id": "sha256:3012a25f1621bb0e8638d6289100bdab51c42b77c64906ff683f91e256270035"
+        },
+        {
+          "service": "frontend",
+          "container_id": "81dff6082ee41e508b03667aec8c4b9e6d4761172f5aa332bcc25cb631820071",
+          "image_id": "sha256:1b014c12d84a0a12bf9e9d8533d55a4908f757196a81c4e8bc02629f4f684ee0"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": null,
+      "skips": [],
+      "warnings": [
+        {
+          "kind": "FutureWarning",
+          "count": 1,
+          "category": "Deprecated Google OCR SDK",
+          "source_path": "aquillm/lib/ocr/gemini.py",
+          "source_line": 13,
+          "observed": "The imported google.generativeai package reports that support has ended.",
+          "disposition": "Dependency maintenance debt remains. The system check succeeding does not establish current SDK support or a successful live OCR request; no dependency change or blanket warning waiver is made here."
+        },
+        {
+          "kind": "RuntimeWarning",
+          "count": 1,
+          "category": "Database access during app initialization",
+          "observed": "Django reports database access before app initialization is complete.",
+          "disposition": "Startup database access remains a maintenance concern. Current AppConfig.ready calls inline vector prewarming for management commands, consistent with the subsequent prewarmed info event; the log does not identify every initiating query. No warning suppression, database-plan or production-readiness claim follows."
+        }
+      ],
+      "duration_seconds": null,
+      "summary": "Django system check completed with exit zero and identified no issues (0 silenced). Two startup warnings were reviewed and retained as maintenance debt.",
+      "summary_derivation": "Read the full retained output and result. It contains one deprecated Google OCR SDK FutureWarning, one Django app-initialization database RuntimeWarning, one prewarming info event, and the zero-issue system-check result. This is not a test run; no test counts, skips or elapsed duration were reported, so counts and duration remain null. The original wrapper exit and separate post proof verify all 3118 source files and index entries unchanged. Runtime identities describe the validated project inventory, not proof every service was exercised. No credential/private corpus text identified; public wording omits internal paths. No inference is made about the active migration job or aggregate acceptance.",
+      "public_log_or_summary_url": "./manage-check-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "migration_drift",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--manage",
+        "makemigrations",
+        "--check",
+        "--dry-run"
+      ],
+      "exit_code": 0,
+      "log_sha256": "c847a68e725b0a7c378b2685c0d7c2c8d13a29fbb9a33b3339282addd89c4144",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "0ef43e9607d000a43893d1a6e217b618fea09a7601799821a756a35db2170fc1",
+          "image_id": "sha256:1525b3cd4c3e8b67832b67736a01486d4b1b73378fd679d850f851803da00e1b"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "72bf9ed96c198c391d81dc38013f7dd9dee6630b2854ab8de05480f6e852b8da",
+          "image_id": "sha256:fce3574c12f9abdfab7c07cdaa7e575deeee6d96fd3f93416205eee4297e779d"
+        },
+        {
+          "service": "frontend",
+          "container_id": "81dff6082ee41e508b03667aec8c4b9e6d4761172f5aa332bcc25cb631820071",
+          "image_id": "sha256:1b014c12d84a0a12bf9e9d8533d55a4908f757196a81c4e8bc02629f4f684ee0"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": null,
+      "skips": [],
+      "warnings": [
+        {
+          "kind": "FutureWarning",
+          "count": 1,
+          "category": "Deprecated Google OCR SDK",
+          "source_path": "aquillm/lib/ocr/gemini.py",
+          "source_line": 13,
+          "observed": "The imported google.generativeai package reports that support has ended.",
+          "disposition": "Dependency maintenance debt remains. This command succeeding does not establish current SDK support or a successful live OCR request; no dependency change or blanket warning waiver is made here."
+        },
+        {
+          "kind": "RuntimeWarning",
+          "count": 1,
+          "category": "Database access during app initialization",
+          "observed": "Django reports database access before app initialization is complete.",
+          "disposition": "Startup database access remains a maintenance concern. Current AppConfig.ready calls inline vector prewarming for management commands, consistent with the subsequent prewarmed info event; the log does not identify every initiating query. No warning suppression, database-plan or production-readiness claim follows."
+        }
+      ],
+      "duration_seconds": null,
+      "summary": "Django makemigrations --check --dry-run completed with exit zero and reported no changes detected. Two startup warnings were reviewed and retained as maintenance debt.",
+      "summary_derivation": "Read the entire retained output: one unsupported Google OCR SDK FutureWarning, one database-during-app-initialization RuntimeWarning, a prewarming info event and No changes detected. This establishes no detected model-to-migration drift for the selected settings/source. It does not apply migrations, verify every database object, establish deployed schema parity or reconstruct a query plan. No tests, skips or elapsed duration were reported; counts and duration remain null. The original wrapper exit and separate post match all 3118 source files and the index. No credentials/private corpus text identified; runtime inventory scope is retained. No result is inferred for the active migration-plan job or aggregate acceptance.",
+      "public_log_or_summary_url": "./migration-drift-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "migration_plan",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--manage",
+        "showmigrations",
+        "--plan"
+      ],
+      "exit_code": 0,
+      "log_sha256": "33281cb58c36703faa28d480a27b981ab1ce2fa625ec6d64591aed43128d345f",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "86a5c6e8bcb6edff91fb3e7e435326d2324270b93c1339ec90c2166fdf73260d",
+          "image_id": "sha256:0229d213e03e0140f61f64eaa7d021ea90b930664f2a312c6e6883ac4b465313"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "7fef47aa85cd1a652bb49073c6534d47cafd6d703ca12472e04e08a6daccd5b8",
+          "image_id": "sha256:3ba038faf1c45f179f8864248da2fa86daec540aac6a1bb758de37e1d7a3f9f1"
+        },
+        {
+          "service": "frontend",
+          "container_id": "81dff6082ee41e508b03667aec8c4b9e6d4761172f5aa332bcc25cb631820071",
+          "image_id": "sha256:1b014c12d84a0a12bf9e9d8533d55a4908f757196a81c4e8bc02629f4f684ee0"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": null,
+      "skips": [],
+      "warnings": [
+        {
+          "kind": "FutureWarning",
+          "count": 1,
+          "category": "Deprecated Google OCR SDK",
+          "source_path": "aquillm/lib/ocr/gemini.py",
+          "source_line": 13,
+          "observed": "The imported google.generativeai package reports that support has ended.",
+          "disposition": "Dependency maintenance debt remains. This command succeeding does not establish current SDK support or a successful live OCR request; no dependency change or blanket warning waiver is made here."
+        },
+        {
+          "kind": "RuntimeWarning",
+          "count": 1,
+          "category": "Database access during app initialization",
+          "observed": "Django reports database access before app initialization is complete.",
+          "disposition": "Startup database access remains a maintenance concern. Current AppConfig.ready calls inline vector prewarming for management commands, consistent with the subsequent prewarmed info event; the log does not identify every initiating query. No warning suppression, database-plan or production-readiness claim follows."
+        }
+      ],
+      "duration_seconds": null,
+      "summary": "Django showmigrations --plan completed with exit zero. All 112 listed migration rows are marked applied, including knowledge graph 0015 and vocabulary publication transaction 0005. Two startup warnings remain documented.",
+      "summary_derivation": "Read the entire retained log, including all 112 unique migration rows: every row is marked [X], with no unapplied row listed. The complete output also contains one unsupported Google OCR SDK FutureWarning, one app-initialization database RuntimeWarning and one prewarming info event. The markers report migration-recorder state in this isolated runtime; they do not verify physical object definitions/index validity or deployed-schema parity and do not execute migration functions. Migration rows are not tests: counts and duration remain null because no test counts or elapsed duration were reported. The wrapper exited zero and the separate post matches all 3118 source files and index entries. No credentials/private corpus text identified; runtime inventory scope is retained. No result is inferred for the active migration-applied job or aggregate acceptance.",
+      "public_log_or_summary_url": "./migration-plan-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    },
+    {
+      "job": "migration_applied",
+      "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "command": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--manage",
+        "migrate",
+        "--check"
+      ],
+      "exit_code": 0,
+      "log_sha256": "6aeadeeb1b87f88543ddd324e215e9b5008b17db2a21b3198ed058d80b0a3eb4",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true,
+      "runtime": [
+        {
+          "service": "app",
+          "container_id": "2e3c230ae54bc73bbae5fb0ecf102d5891317092dec9db02973510e01f5db657",
+          "image_id": "sha256:50ac296b6cd23a025a663cde8ee9a83da94fe6c414dcd6036c79d1ed24d3d231"
+        },
+        {
+          "service": "db",
+          "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+          "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+        },
+        {
+          "service": "fake-models",
+          "container_id": "cd2558d6420c7ea7a842cc6b906d04e857a9239d589d7f30af83e4af9fc80f1d",
+          "image_id": "sha256:05d4770175519f0b5ab2714ef6f49821eee33176c4238be089a52fb0e231c02e"
+        },
+        {
+          "service": "frontend",
+          "container_id": "81dff6082ee41e508b03667aec8c4b9e6d4761172f5aa332bcc25cb631820071",
+          "image_id": "sha256:1b014c12d84a0a12bf9e9d8533d55a4908f757196a81c4e8bc02629f4f684ee0"
+        },
+        {
+          "service": "memgraph",
+          "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+          "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+        },
+        {
+          "service": "redis",
+          "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+          "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+        }
+      ],
+      "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+      "counts": null,
+      "skips": [],
+      "warnings": [
+        {
+          "kind": "FutureWarning",
+          "count": 1,
+          "category": "Deprecated Google OCR SDK",
+          "source_path": "aquillm/lib/ocr/gemini.py",
+          "source_line": 13,
+          "observed": "The imported google.generativeai package reports that support has ended.",
+          "disposition": "Dependency maintenance debt remains. This command succeeding does not establish current SDK support or a successful live OCR request; no dependency change or blanket warning waiver is made here."
+        },
+        {
+          "kind": "RuntimeWarning",
+          "count": 1,
+          "category": "Database access during app initialization",
+          "observed": "Django reports database access before app initialization is complete.",
+          "disposition": "Startup database access remains a maintenance concern. Current AppConfig.ready calls inline vector prewarming for management commands, consistent with the subsequent prewarmed info event; the log does not identify every initiating query. No warning suppression, database-plan or production-readiness claim follows."
+        }
+      ],
+      "duration_seconds": null,
+      "summary": "Django migrate --check completed with exit zero, indicating no unapplied migrations for the isolated runtime. Two startup warnings were reviewed and retained as maintenance debt.",
+      "summary_derivation": "Read the entire retained output and completed result. The log contains one unsupported Google OCR SDK FutureWarning, one database-during-app-initialization RuntimeWarning and one prewarming info event; it prints no separate migration success sentence. The actual migrate --check exit is zero. This check reports pending-migration state for the isolated runtime and does not itself apply migrations, verify physical object definitions/index validity or establish deployed-schema parity. No tests, skips, migration-row count or elapsed duration were reported; counts and duration remain null. The wrapper and separate post match all 3118 source files and index entries. No credentials/private corpus text identified; runtime inventory scope is retained. This individual review makes no aggregate acceptance claim.",
+      "public_log_or_summary_url": "./migration-applied-job.json",
+      "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved."
+    }
+  ],
+  "remaining_verification": [
+    "User PR review before development merge and rollout.",
+    "F19 meaningful independent real holdout, F06 activation and F05 deployed rebuild remain open/pending.",
+    "Deployment requires separate reviewed rollout, cost/resource estimates and retention ownership."
+  ],
+  "limits": {
+    "acquisition_actions": 3,
+    "unique_sources": 45,
+    "materialized_codepoints": 250000,
+    "tokenized_codepoints": 1000000,
+    "acquisition_pairs": 90,
+    "final_pairs": 45,
+    "inflight_pairs_per_process": 6,
+    "planner_calls": 2,
+    "planner_call_ms": 2000,
+    "planner_output_tokens": 512,
+    "retrieval_deadline_ms": 15000,
+    "final_scoring_reserve_ms": 3000,
+    "pair_context_tokens": 1024
+  },
+  "quality_decisions": {
+    "state": "inconclusive",
+    "reason": "Synthetic fixture evidence does not supply independent held-out human reviews or attested live-runtime performance."
+  },
+  "data_migration": {
+    "state": "not_performed_in_production",
+    "rollback_policy": "Preserve used additive history; representation rollback publishes a fresh retained-source generation; incompatible dense rows are never reactivated."
+  },
+  "model_and_resource_changes": {
+    "production_model_replacement": false,
+    "gpu_allocation_change": false,
+    "runtime_benchmark": "Synthetic disposable service/DB fixtures only; no live GPU claims."
+  },
+  "completed_measurement_scope": {
+    "physical_vector": "800 exact/direct pairs and 640 SQL plan inspections; no HNSW use and no ANN speedup inference.",
+    "source_index": "Five synthetic cases/eight outputs with extraction/fidelity and Python resource observations.",
+    "quality": "Neither observation supplies independent human labels or live deployment quality/cost evidence."
+  },
+  "not_code_acceptance_blockers_but_explicitly_deferred": [
+    "Production data rebuild/reingestion, verified profile enrollment and deployment.",
+    "Human review/live-runtime treatment activation evidence; all optional treatments remain inconclusive/off.",
+    "Deployment-specific time/storage/provider/GPU cost estimates and retention owner assignment remain prerequisites for a later development rollout; no production value is inferred from synthetic measurements."
+  ],
+  "verification_record_status": "All ten retained job receipts verified; summaries independently reviewed. No deployment or optional activation.",
+  "integrated_validation_repairs": [
+    {
+      "change": "Preserve shorter operator statement limits within source database work; restore limits on successful completion and preserve original errors through rollback.",
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Remove duplicate standalone validation only inside each synchronous row metadata operation; retain fresh entry and exit authority, source, anchor and vocabulary checks and unchanged SQL predicates.",
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Factor common dense and representation-state query fields while retaining exact paired identity tuples, nullable representation behavior and fresh current-state queries.",
+      "paths": [
+        "aquillm/apps/documents/services/embedding_dense_rows.py",
+        "aquillm/apps/documents/services/representation_validation_rows.py",
+        "aquillm/apps/documents/tests/test_grouped_scalar_predicates.py"
+      ],
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Remove duplicate nested entry sweeps only inside the locked eager source metadata operation; retain full fresh entry/final validation, explicit authorization, lazy owner/state/collision and exact body predicates, original deadlines, accounting and public lazy boundaries.",
+      "paths": [
+        "aquillm/apps/documents/services/source_loading.py",
+        "aquillm/apps/documents/tests/test_source_metadata_closed_operation.py"
+      ],
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Add persisted graph assertions for a losing physical-copy qualification through actual hydration/final graph handoff and the exact cross-collection bridge answer in that handoff; no LLM-publication or outer-acquisition timing claim.",
+      "paths": [
+        "aquillm/tests/integration/test_persisted_graph_identity_boundary.py"
+      ],
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Compile bounded complete non-null identity tuples as parameterized membership expressions, with resolved field preparation and clone/alias support. Preserve legacy NULL branches, all owner/collision/current-state fences and fresh validation; generic backend fallback preserves parameter ordering.",
+      "paths": [
+        "aquillm/apps/documents/services/representation_tuple_predicate.py",
+        "aquillm/apps/documents/services/representation_store.py",
+        "aquillm/apps/documents/services/representation_scope.py",
+        "aquillm/apps/documents/tests/test_representation_tuple_compiler_work.py",
+        "aquillm/apps/documents/tests/test_representation_tuple_predicate.py",
+        "aquillm/apps/documents/tests/test_representation_tuple_fallback.py"
+      ],
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Keep both ordered metadata/body/full-text observations around incoming reauthorization inside a private eager operation with fresh full entry and exit scope checks. First-pass exclusions, sticky full-text withdrawal, dense intersection and both outer finalization traversals remain intact.",
+      "paths": [
+        "aquillm/apps/documents/services/chunk_search_scoped_rows.py",
+        "aquillm/apps/documents/services/chunk_search_authorization.py",
+        "aquillm/apps/chat/tests/test_closed_search_authorization.py"
+      ],
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Resolve current scorer identity for existing acquisition score sets when new scoring is disabled. Reuse still requires exact current query/source/revision/window coverage; local preparation remains charged and new model scoring remains separately forbidden.",
+      "paths": [
+        "aquillm/apps/chat/services/rag_selection_scoring.py",
+        "aquillm/apps/chat/tests/test_automatic_score_reuse.py"
+      ],
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Distinguish copular expletive Is/Was it true that questions from source references; align paired tool-message fixtures, the actual vocabulary body observer alias and cold gateway batch-lookup fixture with existing contracts. Preserve original assertions and deadlines.",
+      "paths": [
+        "aquillm/apps/chat/services/rag_source_clause_grammar.py",
+        "aquillm/apps/chat/tests/test_rag_fix_tool_deadlines.py",
+        "aquillm/apps/chat/tests/test_rag_source_grammar.py",
+        "aquillm/apps/chat/tests/test_rag_turn_lifecycle.py",
+        "aquillm/tests/integration/cold_service_child.py",
+        "aquillm/tests/integration/test_persisted_graph_vocabulary_boundary.py"
+      ],
+      "state": "integrated_final_job_records_available"
+    },
+    {
+      "change": "Knowledge graph0015 keeps each bounded JSON input row outside a primary-key-only chunk lookup and checks its exact document/number pair afterward. Only two joins change; no data rewrite, authority relaxation or deadline change.",
+      "paths": [
+        "aquillm/apps/knowledge_graph/migrations/0015_projection_chunk_input_lookup.py",
+        "aquillm/apps/knowledge_graph/tests/test_projection_bulk_stale_statistics.py",
+        "aquillm/apps/knowledge_graph/tests/test_projection_chunk_lookup_migration.py"
+      ],
+      "state": "integrated_final_job_records_available"
+    }
+  ],
+  "candidate_tree": "bfb5a737a7f944022102afdebf5d79b337b9b770",
+  "source_snapshot_hash_basis": "SHA256 of UTF-8 canonical JSON mapping relative path to raw tested-file SHA256 (sorted keys, comma/colon separators); not committed content hashes.",
+  "source_inventory": {
+    "file_count": 3118,
+    "raw_tested_inventory_sha256": "bd786a0e6afc1660a4a74614e712b91837a97be53c5a69b307bd2169853fd6fb",
+    "index_entries_sha256": "b25149daf807b3667df27968ccf5937e5c7bfbea9ef7e1f8b1ca3f335424b88f",
+    "index_hash_basis": "SHA256 of exact git ls-files --stage -z bytes",
+    "committed_tree": "bfb5a737a7f944022102afdebf5d79b337b9b770",
+    "committed_navigation_hash_basis": "SHA256(git show candidate_revision:path bytes)",
+    "line_ending_note": "Raw tested working-tree bytes and committed bytes are recorded separately; Git normalization may change line endings."
+  },
+  "final_acceptance_plan": {
+    "state": "ten_job_records_available_not_blanket_contract_closure",
+    "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+    "expanded_python_module_count": 844,
+    "changed_python_module_count": 459,
+    "changed_path_count": 1049,
+    "inventory_count_addendum": {
+      "status": "VERIFIED_CURRENT_INVENTORY_COUNTS_NO_CORRECTION_NEEDED",
+      "batch": "final-bulkfix",
+      "candidate_head": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+      "sealed_proposal_sha256": "f11a65bbbe8e694c712a4119613ff2ca87348037460fbf43392e285a9ee43b56",
+      "declared_changed_test_count": 459,
+      "actual_changed_test_count": 459,
+      "actual_changed_paths": 1049,
+      "selected_python_modules": 844,
+      "all_actual_changed_tests_covered": true,
+      "newly_changed_preexisting_test": null,
+      "reason": "Current sealed and actual counts agree. No historical changed-test correction is carried into this batch.",
+      "module_count_is_not_test_count": true,
+      "correction_required": false,
+      "sha256": "645321404fb0b21983f41f980e6fa1fbd7ee086517ca9854c2a4946189af1a98"
+    },
+    "module_count_is_not_test_count": true,
+    "inventory_sha256": "f11a65bbbe8e694c712a4119613ff2ca87348037460fbf43392e285a9ee43b56",
+    "jobs": [
+      {
+        "name": "source_ingestion",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-r5-test",
+          "--",
+          "aquillm/apps/ingestion/tests",
+          "aquillm/lib/parsers/tests",
+          "aquillm/lib/embeddings/tests",
+          "aquillm/apps/documents/tests",
+          "aquillm/tests/integration/test_legacy_requested_selection_boundary.py",
+          "-q",
+          "-ra",
+          "--tb=short"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "graph_answer",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--",
+          "aquillm/apps/chat/tests",
+          "aquillm/apps/collections/tests",
+          "aquillm/apps/knowledge_graph/tests",
+          "aquillm/apps/memory/tests",
+          "aquillm/lib/knowledge_graph/tests",
+          "aquillm/lib/llm/tests",
+          "aquillm/lib/memory/tests",
+          "aquillm/lib/tools/search/tests/test_vector_search_pack.py",
+          "aquillm/tests/integration/test_cache_numeric_authority.py",
+          "aquillm/tests/integration/test_cache_original_scope.py",
+          "aquillm/tests/integration/test_cache_publication.py",
+          "aquillm/tests/integration/test_cache_settings_flags.py",
+          "aquillm/tests/integration/test_cache_vocabulary_scope.py",
+          "aquillm/tests/integration/test_cold_rag_service_lifecycle.py",
+          "aquillm/tests/integration/test_default_action_admission.py",
+          "aquillm/tests/integration/test_graph_cross_lane_database_deadline.py",
+          "aquillm/tests/integration/test_graph_private_original_scope.py",
+          "aquillm/tests/integration/test_knowledge_graph_import_isolation.py",
+          "aquillm/tests/integration/test_persisted_graph_generation_boundary.py",
+          "aquillm/tests/integration/test_persisted_graph_identity_boundary.py",
+          "aquillm/tests/integration/test_persisted_graph_scope_coverage.py",
+          "aquillm/tests/integration/test_persisted_graph_semantic_provenance.py",
+          "aquillm/tests/integration/test_persisted_graph_vocabulary_boundary.py",
+          "aquillm/tests/integration/test_projection_database_deadline.py",
+          "aquillm/tests/integration/test_projection_database_fetch_deadline.py",
+          "aquillm/tests/integration/test_projection_legacy_role_boundary.py",
+          "aquillm/tests/integration/test_projection_representation_publication_races.py",
+          "aquillm/tests/integration/test_projection_representation_role_boundary.py",
+          "aquillm/tests/integration/test_projection_representation_schema_boundary.py",
+          "aquillm/tests/integration/test_projection_representation_state_boundary.py",
+          "aquillm/tests/integration/test_rag_cross_lane_archive.py",
+          "aquillm/tests/integration/test_rag_cross_lane_collector.py",
+          "aquillm/tests/integration/test_rag_cross_lane_competing_evidence.py",
+          "aquillm/tests/integration/test_rag_cross_lane_graph_gate_predicates.py",
+          "aquillm/tests/integration/test_rag_cross_lane_graph_observations.py",
+          "aquillm/tests/integration/test_rag_cross_lane_graph_publication.py",
+          "aquillm/tests/integration/test_rag_cross_lane_graph_route.py",
+          "aquillm/tests/integration/test_rag_cross_lane_history.py",
+          "aquillm/tests/integration/test_rag_cross_lane_memory.py",
+          "aquillm/tests/integration/test_rag_cross_lane_outage.py",
+          "aquillm/tests/integration/test_rag_cross_lane_publication.py",
+          "aquillm/tests/integration/test_rag_cross_lane_repair.py",
+          "aquillm/tests/integration/test_rag_cross_lane_support.py",
+          "aquillm/tests/integration/test_rag_projection_provision.py",
+          "aquillm/tests/integration/test_rag_remediation_isolation.py",
+          "aquillm/tests/integration/test_rag_structural_delivery.py",
+          "aquillm/tests/integration/test_rag_structural_ordering.py",
+          "aquillm/tests/integration/test_rag_typecheck_wrapper.py",
+          "aquillm/tests/integration/test_representation_graph_delete.py",
+          "aquillm/tests/integration/test_vllm_lmcache_plumbing.py",
+          "aquillm/tests/integration/test_worker_handoff.py",
+          "aquillm/tests/integration/test_worker_handoff_startup.py",
+          "tests/test_check_file_lengths.py",
+          "tests/test_check_logging_conventions.py",
+          "tests/test_check_retrieval_logging.py",
+          "tests/test_knowledge_graph_dependencies.py",
+          "tests/test_rag_remediation_frontend.py",
+          "aquillm/tests/integration/test_compose_render_test_support.py",
+          "aquillm/tests/integration/test_knowledge_graph_compose.py",
+          "aquillm/tests/integration/test_compose_multimodal_services.py",
+          "aquillm/tests/integration/test_embedding_policy_compose.py",
+          "aquillm/tests/integration/test_sidecar_revision_compose.py",
+          "aquillm/tests/integration/test_requested_selection_boundary.py",
+          "tests/unit",
+          "-q",
+          "-ra",
+          "--tb=short"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "typecheck",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--typecheck"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "vitest",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--vitest",
+          "react/src/features/chat/components/Chat.context.test.tsx",
+          "react/src/features/chat/components/Chat.test.tsx",
+          "react/src/features/chat/components/ChatCollectionsModal.test.tsx",
+          "react/src/features/chat/components/ChatRenameDialog.test.tsx",
+          "react/src/features/chat/components/CitationModalProvider.test.tsx",
+          "react/src/features/chat/components/HistoricalCitationContext.test.tsx",
+          "react/src/features/chat/components/HistoricalCitationRouting.test.tsx",
+          "react/src/features/chat/components/MessageBubble.test.tsx",
+          "react/src/features/chat/components/MessageSources.test.tsx",
+          "react/src/features/chat/components/PDFCitationModal.test.tsx",
+          "react/src/features/chat/components/VirtualizedPdfPages.test.tsx",
+          "react/src/features/chat/components/pdfPageExtraction.test.ts",
+          "react/src/features/chat/components/pdfPageWindow.test.ts",
+          "react/src/features/chat/hooks/useChatWebSocket.bootstrap.test.tsx",
+          "react/src/features/chat/hooks/useChatWebSocket.context.test.tsx",
+          "react/src/features/chat/hooks/useChatWebSocket.lifecycle.test.tsx",
+          "react/src/features/chat/hooks/useChatWebSocket.test.tsx",
+          "react/src/utils/pdfTextMatch.test.ts",
+          "react/src/utils/stripCitationSources.test.ts",
+          "react/src/utils/textOffsetMatch.test.ts"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "browser_settings",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--playwright",
+          "react/tests/usersettings.spec.ts"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "browser_assets",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--playwright",
+          "react/tests/rag-browser-assets.spec.ts"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "manage_check",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--manage",
+          "check"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "migration_drift",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--manage",
+          "makemigrations",
+          "--check",
+          "--dry-run"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "migration_plan",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--manage",
+          "showmigrations",
+          "--plan"
+        ],
+        "exit_code": 0
+      },
+      {
+        "name": "migration_applied",
+        "command_argv": [
+          "rtk",
+          "proxy",
+          "python",
+          "-X",
+          "utf8",
+          "scripts/run_rag_remediation_tests.py",
+          "--project",
+          "aquillm-rag-integration",
+          "--manage",
+          "migrate",
+          "--check"
+        ],
+        "exit_code": 0
+      }
+    ]
+  },
+  "historical_focused_verification": [
+    {
+      "status": "focused_pass_not_final_composed_acceptance",
+      "run_uuid": "8aad7a57-6fda-4bc9-a13a-6bce13f8aa2a",
+      "command_argv": [
+        "rtk",
+        "proxy",
+        "python",
+        "-X",
+        "utf8",
+        "scripts/run_rag_remediation_tests.py",
+        "--project",
+        "aquillm-rag-integration",
+        "--",
+        "aquillm/apps/chat/tests/test_rag_query_treatments.py",
+        "aquillm/apps/chat/tests/test_rag_query_treatment_revalidation.py",
+        "aquillm/apps/chat/tests/test_query_binding_publication.py",
+        "aquillm/apps/chat/tests/test_query_binding_admission.py",
+        "aquillm/apps/chat/tests/test_query_binding_sweep_boundary.py",
+        "aquillm/apps/documents/tests/test_representation_validation_batches.py",
+        "aquillm/apps/documents/tests/test_representation_validation_boundaries.py",
+        "aquillm/apps/documents/tests/test_representation_tool_scope.py",
+        "aquillm/apps/documents/tests/test_representation_search_lifetime.py",
+        "aquillm/apps/documents/tests/test_representation_sql_guards.py",
+        "aquillm/apps/documents/tests/test_representation_principal.py",
+        "aquillm/apps/documents/tests/test_representation_manual_scope.py",
+        "aquillm/apps/documents/tests/test_representation_concurrency.py",
+        "aquillm/apps/documents/tests/test_representation_edits.py",
+        "aquillm/apps/documents/tests/test_representation_dense.py",
+        "aquillm/apps/documents/tests/test_representation_dense_bounds.py",
+        "aquillm/apps/documents/tests/test_embedding_generation_query.py",
+        "aquillm/apps/chat/tests/test_closed_row_validation.py",
+        "aquillm/apps/documents/tests/test_lexical_revalidation.py",
+        "aquillm/apps/documents/tests/test_lexical_dense_revalidation.py",
+        "aquillm/apps/documents/tests/test_lexical_fusion_runtime.py",
+        "aquillm/apps/documents/tests/test_lexical_relevance.py",
+        "aquillm/apps/documents/tests/test_chunk_search_query_cache.py",
+        "aquillm/apps/documents/tests/test_retrieval_scope_lifetime.py",
+        "aquillm/apps/documents/tests/test_compatible_candidate_scope.py",
+        "aquillm/apps/documents/tests/test_compatible_candidate_narrowing.py",
+        "-q",
+        "-ra",
+        "--tb=short"
+      ],
+      "passed": 265,
+      "failed": 0,
+      "warnings": 6,
+      "duration_seconds": 824.2,
+      "exit_code": 0,
+      "raw_log_sha256": "0947badcb929d7064c37a0ff07f8e74d6a16a1a47f3419d938087c0d898011dc",
+      "source_and_index_post_verified": true,
+      "raw_source_inventory_sha256": "075c5cad1c06b9e5c9eb7e4e28a4626010caed656eb9f5b100b3fe3a5309af4d",
+      "binding": "Historical focused evidence only; not the new candidate or final acceptance.",
+      "public_log_or_summary_url": null,
+      "command_normalization": "Portable RTK/proxy invocation of the retained Python wrapper command: interpreter path normalized to python; -X utf8, every wrapper argument and -q -ra --tb=short are preserved. Local driver and absolute host paths are omitted.",
+      "candidate_revision": "87d654ca805d4c5f5e7d548974ab2c1f06bc8d80"
+    },
+    {
+      "scope": "Original two bulk tests and four small/large retained-page variants. The first small case observed zero rows/two pages and included actual populated-load assertions; temporary EXPLAIN observer was present.",
+      "candidate_revision": null,
+      "binding": "Historical pre-pin focused raw source; not a final-bulkfix job or aggregate acceptance.",
+      "exit_code": 0,
+      "counts": {
+        "passed": 6,
+        "warnings": 3
+      },
+      "duration_seconds": 63.51,
+      "log_sha256": "bdb11b3dc3adf87f79fa7b3fb58692f136ef7f9ec698feffea9428acce4a5b2d",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true
+    },
+    {
+      "scope": "Migration/ACL/authority focused modules including actual0015 reverse/forward restricted execution and atomic coordinate checks.",
+      "candidate_revision": null,
+      "binding": "Historical pre-pin focused raw source; not a final-bulkfix job or aggregate acceptance.",
+      "exit_code": 0,
+      "counts": {
+        "passed": 37,
+        "warnings": 3
+      },
+      "duration_seconds": 42.98,
+      "log_sha256": "b22f8a08cca81052f540afd1e753de9e70c1e56a86b863a0a18133b784f1a777",
+      "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+      "source_and_index_unchanged": true
+    }
+  ],
+  "public_verification_evidence": [
+    {
+      "kind": "independent_source_review_and_static_checks",
+      "url": "source-review-static.json",
+      "sha256": "32e7b7aab955c6b0ced472be5788be32c76b6ec0cc93764a4fc3cf8af63c8c6c"
+    },
+    {
+      "kind": "raw_to_committed_byte_mapping",
+      "url": "raw-to-committed-mapping.json",
+      "sha256": "fbb7f574f46b439070cabc4f668fef7f1a9324f91872c3e74d5a5ca80b315868"
+    },
+    {
+      "kind": "raw_tested_source_inventory",
+      "url": "raw-source-inventory.json",
+      "sha256": "edaaaa7c37c46ccf3033980ab2afcc222e85a5d150c9f76a50220bf2d0405556",
+      "hash_basis": "Exact published JSON file bytes; per-file raw SHA256 values inside."
+    }
+  ],
+  "program_scope": {
+    "schema": "rag-remediation-program-scope-v1",
+    "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+    "candidate_tree": "bfb5a737a7f944022102afdebf5d79b337b9b770",
+    "plan": "docs/superpowers/plans/2026-10-10-rag-remediation-program.md",
+    "lane_plans": [
+      "docs/superpowers/plans/2026-10-10-rag-source-index-remediation.md",
+      "docs/superpowers/plans/2026-10-10-rag-retrieval-remediation.md",
+      "docs/superpowers/plans/2026-10-10-rag-graph-remediation.md",
+      "docs/superpowers/plans/2026-10-10-rag-answer-memory-remediation.md"
+    ],
+    "execution_decisions": "docs/runbooks/rag-remediation-execution-decisions.md",
+    "source_review_record": "docs/audits/rag-remediation-implementation/source-review-summary.json",
+    "preparation_status": "Historical requirement mapping reused with the three-file bulk repair; final runtime and acceptance remain separate. Exact candidate identity and verified runtime references are assigned during gated rendering.",
+    "progress": "P0 and all 21 lane tasks have mapped implementation/review evidence. P1 has integrated regression controls; P2 has evaluation and activation gates with optional studies inconclusive; P3 has staged release and rollback material. Final acceptance, quality and deployment are separate.",
+    "task_count": 25,
+    "new_implementation_omissions_identified_in_bounded_scope_review": [],
+    "review_limit": "Reuses the exact candidate source-review chain and requirement mappings; this scope check is not another exhaustive code audit.",
+    "tasks": [
+      {
+        "id": "P0",
+        "scope": "Frozen contracts and isolated harness",
+        "stage": "code_mapped",
+        "paths": [
+          "scripts/run_rag_remediation_tests.py",
+          "aquillm/tests/integration/test_rag_remediation_isolation.py"
+        ]
+      },
+      {
+        "id": "I1",
+        "scope": "Immutable source and archive-member identity",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/ingestion/services/source_artifacts.py",
+          "aquillm/apps/ingestion/tests/test_source_artifacts.py"
+        ]
+      },
+      {
+        "id": "I2",
+        "scope": "Structural order and Office fallback",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/lib/parsers/structural.py",
+          "aquillm/lib/parsers/tests/test_structural_extraction.py"
+        ]
+      },
+      {
+        "id": "I3",
+        "scope": "Durable output ledger and recovery",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/ingestion/services/output_ledger.py",
+          "aquillm/apps/ingestion/tests/test_output_transactions.py"
+        ]
+      },
+      {
+        "id": "I4",
+        "scope": "Verified dense generations",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/documents/services/embedding_index_store.py",
+          "aquillm/apps/documents/tests/test_embedding_generation_query.py"
+        ],
+        "later_gates": [
+          "deployed_data"
+        ]
+      },
+      {
+        "id": "I5",
+        "scope": "Structural representation activation and retained citations",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/documents/services/representation_activation.py",
+          "aquillm/apps/documents/tests/test_representation_migrations.py"
+        ],
+        "later_gates": [
+          "deployed_data"
+        ]
+      },
+      {
+        "id": "I6",
+        "scope": "Populated migration, reindex and rollback",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/documents/management/commands/reindex_document_representations.py",
+          "aquillm/apps/documents/tests/test_representation_rollback_rehearsal.py"
+        ],
+        "later_gates": [
+          "deployed_data",
+          "rollout_readiness"
+        ]
+      },
+      {
+        "id": "R1",
+        "scope": "Bounded reranker routes and lifetime",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/documents/services/rerank_request_lifetime.py",
+          "aquillm/apps/documents/tests/test_rerank_dispatch_lifetime.py"
+        ]
+      },
+      {
+        "id": "R2",
+        "scope": "Compatible generations and original selection",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/documents/services/representation_requested_selection.py",
+          "aquillm/apps/documents/tests/test_representation_tool_scope.py"
+        ]
+      },
+      {
+        "id": "R3",
+        "scope": "Lexical ordering and fusion",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/documents/services/lexical_collection.py",
+          "aquillm/apps/documents/tests/test_lexical_fusion_runtime.py"
+        ],
+        "later_gates": [
+          "optional_quality"
+        ]
+      },
+      {
+        "id": "R4",
+        "scope": "Validated references and faithful proposals",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/chat/services/rag_source_clause_grammar.py",
+          "aquillm/apps/chat/tests/test_rag_source_grammar.py"
+        ],
+        "later_gates": [
+          "optional_quality"
+        ]
+      },
+      {
+        "id": "R5",
+        "scope": "Complete evidence delivery and controlled treatments",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/chat/services/rag_selection_coordinator.py",
+          "aquillm/apps/chat/tests/test_rag_suffix_evidence_delivery.py"
+        ],
+        "later_gates": [
+          "F06_activation"
+        ]
+      },
+      {
+        "id": "G1",
+        "scope": "Conservative graph identity",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/knowledge_graph/resolution/identity_policy.py",
+          "aquillm/apps/knowledge_graph/tests/test_graph_remediation_cases.py"
+        ],
+        "later_gates": [
+          "F05_rebuild",
+          "F19_holdout"
+        ]
+      },
+      {
+        "id": "G2",
+        "scope": "Relation intent and exact handoff",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/knowledge_graph/retrieval/projected_relation_ranking_v2.py",
+          "aquillm/apps/knowledge_graph/tests/test_projected_relation_ranking_v2.py"
+        ],
+        "later_gates": [
+          "optional_quality"
+        ]
+      },
+      {
+        "id": "G3",
+        "scope": "Question-relevant and competing graph evidence",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/knowledge_graph/retrieval/graph_evidence_selection_v2.py",
+          "aquillm/tests/integration/test_rag_cross_lane_competing_evidence.py"
+        ],
+        "later_gates": [
+          "optional_quality"
+        ]
+      },
+      {
+        "id": "G4",
+        "scope": "Bounded cross-generation frontier",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/knowledge_graph/retrieval/topology/frontier_loader_v2.py",
+          "aquillm/apps/knowledge_graph/tests/test_graph_runtime_authority_v2.py"
+        ],
+        "later_gates": [
+          "optional_quality"
+        ]
+      },
+      {
+        "id": "G5",
+        "scope": "Partial readiness, representation and contention fences",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/knowledge_graph/retrieval/ready_scope_repository_v2.py",
+          "aquillm/apps/knowledge_graph/tests/test_canonical_reconciliation_deadline_postgres.py",
+          "aquillm/apps/knowledge_graph/migrations/0015_projection_chunk_input_lookup.py",
+          "aquillm/apps/knowledge_graph/tests/test_projection_bulk_stale_statistics.py",
+          "aquillm/apps/knowledge_graph/tests/test_projection_chunk_lookup_migration.py"
+        ],
+        "later_gates": [
+          "operational_incident"
+        ]
+      },
+      {
+        "id": "G6",
+        "scope": "Absolute graph quality and activation gates",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/knowledge_graph/evals/graph_quality_gates_v2.py",
+          "aquillm/apps/knowledge_graph/tests/test_graph_quality_gates_v2.py"
+        ],
+        "later_gates": [
+          "F19_holdout"
+        ]
+      },
+      {
+        "id": "A1",
+        "scope": "Final publication and repair safety",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/chat/services/rag_answer_publication.py",
+          "aquillm/tests/integration/test_rag_cross_lane_publication.py"
+        ]
+      },
+      {
+        "id": "A2",
+        "scope": "Support distinct from ranking and safe abstention",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/chat/services/rag_support_decision.py",
+          "aquillm/apps/chat/tests/test_rag_answer_support.py"
+        ],
+        "later_gates": [
+          "optional_quality"
+        ]
+      },
+      {
+        "id": "A3",
+        "scope": "Independent evidence and calibration gates",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/apps/chat/evals/evidence_support_activation.py",
+          "aquillm/apps/chat/tests/test_evidence_support_trust.py"
+        ],
+        "later_gates": [
+          "F19_holdout"
+        ]
+      },
+      {
+        "id": "A4",
+        "scope": "Affirmative memory and correction/revocation",
+        "stage": "code_mapped",
+        "paths": [
+          "aquillm/lib/memory/extraction/stable_facts.py",
+          "aquillm/tests/integration/test_rag_cross_lane_memory.py"
+        ]
+      },
+      {
+        "id": "P1",
+        "scope": "Integrated adversarial matrix",
+        "stage": "integration_controls",
+        "paths": [
+          "aquillm/tests/integration/test_rag_cross_lane_competing_evidence.py",
+          "aquillm/tests/integration/test_rag_cross_lane_history.py"
+        ]
+      },
+      {
+        "id": "P2",
+        "scope": "Quality and operational experiment decisions",
+        "stage": "evaluation_gates",
+        "paths": [
+          "aquillm/apps/chat/evals/retrieval_treatment_manifest.py",
+          "docs/runbooks/rag-remediation-treatments.md"
+        ],
+        "later_gates": [
+          "optional_quality",
+          "F19_holdout"
+        ]
+      },
+      {
+        "id": "P3",
+        "scope": "Release packaging and rollback readiness",
+        "stage": "release_preparation",
+        "paths": [
+          "docs/runbooks/rag-remediation-rollout.md",
+          "aquillm/apps/documents/tests/test_representation_profile_cutover.py"
+        ],
+        "later_gates": [
+          "public_metadata",
+          "rollout_readiness",
+          "user_PR_review"
+        ]
+      }
+    ],
+    "gates": {
+      "final_runtime": "All ten pinned candidate job records, source/index equality and warning/skip dispositions are reviewed. Historical failed and focused runs remain separate.",
+      "public_metadata": "Nineteen public artifacts and their runtime/source mappings independently reviewed; publication binds the reviewed bytes to a separate metadata commit linked from the PR.",
+      "F19_holdout": "OPEN: no meaningful independent real holdout/human quality assessment has passed. Synthetic eligibility tests do not supply labels, cohort coverage or live quality.",
+      "F05_rebuild": "PENDING: deployed graph rebuild/version cutover and independent identity-quality evidence.",
+      "F06_activation": "PENDING: validated production preservation-mode activation; test-mode suffix delivery is not deployed acceptance.",
+      "optional_quality": "All 12 optional treatments remain inconclusive/off. Independent treatment-specific quality and cold/warm fixed-load operational gates remain required before activation.",
+      "deployed_data": "Affected source/vector/graph rebuilds and verified deployed coverage remain pending; retained historical citations do not imply current-index eligibility.",
+      "rollout_readiness": "Before deployment, bind compatible app/gateway versions, runtime and migration/rebuild manifests, rollback, measured time/storage/provider-GPU cost estimates, retention ownership and a separate cleanup policy.",
+      "operational_incident": "G5 controlled contention tests do not reproduce the production incident; operational incident confirmation remains a separately authorized operator run.",
+      "user_PR_review": "User review of the concrete PR precedes development merge/deployment."
+    },
+    "coverage_limits": [
+      "I6 uses real populated migration fixtures plus separate archive/formula/media/recovery/rollback controls; no monolithic all-format rehearsal or direct fresh-generation figure rollback is claimed.",
+      "Synthetic physical-vector measurements do not establish ANN speedup or live semantic quality.",
+      "No deployed rebuild, optional activation or deployment is established by this preparation snapshot."
+    ],
+    "final_runtime_references": [
+      {
+        "job": "source_ingestion",
+        "url": "source-ingestion-job.json",
+        "log_sha256": "05602c8555ca160c5def19c9a7326ee3b0aa95c1e24485ea4faa5b28ff43e7a2"
+      },
+      {
+        "job": "graph_answer",
+        "url": "graph-answer-job.json",
+        "log_sha256": "0b18b84a56f8116f47bd2d4cc89ebdaa8419f7abe4a63245d4bc72bb21627c30"
+      },
+      {
+        "job": "typecheck",
+        "url": "typecheck-job.json",
+        "log_sha256": "9b7d1aad8a86b023ea9a06aed689bf1e35bf4fbfb28795ead50042d228d6d190"
+      },
+      {
+        "job": "vitest",
+        "url": "vitest-job.json",
+        "log_sha256": "d4f1b94273e6cf92079588d25f2da61321429b06f60155f8df723008ddbd5918"
+      },
+      {
+        "job": "browser_settings",
+        "url": "browser-settings-job.json",
+        "log_sha256": "143772f5c7aa77542b589e1478859821e6d34c4862b0d0d12637a14cc10d255e"
+      },
+      {
+        "job": "browser_assets",
+        "url": "browser-assets-job.json",
+        "log_sha256": "7ef3c69f8de5db59f0fbdbc6d8ec82efe7cb30dfc11a3035cd09a9bdf1fd87ed"
+      },
+      {
+        "job": "manage_check",
+        "url": "manage-check-job.json",
+        "log_sha256": "4acc4aa13be9eb2ddc76760505435189244e5f01b1498b5073399d2427d7ad20"
+      },
+      {
+        "job": "migration_drift",
+        "url": "migration-drift-job.json",
+        "log_sha256": "c847a68e725b0a7c378b2685c0d7c2c8d13a29fbb9a33b3339282addd89c4144"
+      },
+      {
+        "job": "migration_plan",
+        "url": "migration-plan-job.json",
+        "log_sha256": "33281cb58c36703faa28d480a27b981ab1ce2fa625ec6d64591aed43128d345f"
+      },
+      {
+        "job": "migration_applied",
+        "url": "migration-applied-job.json",
+        "log_sha256": "6aeadeeb1b87f88543ddd324e215e9b5008b17db2a21b3198ed058d80b0a3eb4"
+      }
+    ],
+    "final_acceptance_disposition": "Deterministic results, nineteen contract dispositions and public metadata have been independently reviewed. User PR review remains pending. F19 holdout is open, F05 deployed rebuild and F06 production activation are pending, and all twelve optional treatments remain off.",
+    "stage_meanings": {
+      "code_mapped": "Implementation and review evidence mapped; final acceptance is separate.",
+      "integration_controls": "Integrated regression controls and mapped final job results are reviewed; quality and operational gates remain separate.",
+      "evaluation_gates": "Evaluation/activation code present; optional studies inconclusive.",
+      "release_preparation": "Release and rollback material prepared and independently reviewed; user PR review and development rollout remain pending."
+    },
+    "shared_pending_gate": "user_PR_review"
+  },
+  "historical_failed_final_jobs": [
+    {
+      "batch": "final-8307",
+      "job": "graph_answer",
+      "candidate_revision": "d7c9d14b648eaf4e4f17a0105eeac0f946c9c86a",
+      "exit_code": 1,
+      "counts": {
+        "failed": 16,
+        "passed": 6983,
+        "skipped": 1,
+        "warnings": 152,
+        "subtests_passed": 83
+      },
+      "duration_seconds": 3857.42,
+      "log_sha256": "bfc3349f7814fc4a74de03bf068e0abe8735252e9a20d8cdfcff24feb391d7e1",
+      "result_sha256": "8a93cc12569be31271b7500a977c5bf23f67de4bbb89898821e07c5ba0f89fca",
+      "source_and_index_unchanged": true,
+      "scope": "Historical failed broad job; not acceptance of the later bulk-fix candidate."
+    },
+    {
+      "batch": "final-98436",
+      "job": "graph_answer",
+      "candidate_revision": "edd58f96adb3c7ac5e6940e8d17c644c8f8ed978",
+      "exit_code": 1,
+      "counts": {
+        "failed": 2,
+        "passed": 7009,
+        "skipped": 1,
+        "warnings": 152,
+        "subtests_passed": 83
+      },
+      "duration_seconds": 3797.12,
+      "log_sha256": "9fb5aa79814685edc43e4ebfbc57c84ea43116c39a55ec5603a344e886ca44fa",
+      "result_sha256": "8a93cc12569be31271b7500a977c5bf23f67de4bbb89898821e07c5ba0f89fca",
+      "source_and_index_unchanged": true,
+      "scope": "Historical failed broad job; not acceptance of the later bulk-fix candidate."
+    }
+  ],
+  "unresolved_findings_scope": "SOURCE_REVIEW_BLOCKERS_ONLY_NOT_AUDIT_ACCEPTANCE_QUALITY_DATA_OR_DEPLOYMENT",
+  "metadata_revision": null
+}

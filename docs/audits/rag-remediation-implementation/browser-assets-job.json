@@ -1,0 +1,79 @@
+{
+  "job": "browser_assets",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "command": [
+    "rtk",
+    "proxy",
+    "python",
+    "-X",
+    "utf8",
+    "scripts/run_rag_remediation_tests.py",
+    "--project",
+    "aquillm-rag-integration",
+    "--playwright",
+    "react/tests/rag-browser-assets.spec.ts"
+  ],
+  "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved.",
+  "exit_code": 0,
+  "log_sha256": "7ef3c69f8de5db59f0fbdbc6d8ec82efe7cb30dfc11a3035cd09a9bdf1fd87ed",
+  "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+  "source_and_index_unchanged": true,
+  "source_snapshot_sha256": "2588c92a9537d3ec70f0827691026775dd2bdd00636844d7ac3fddb1432d798c",
+  "runtime": [
+    {
+      "service": "app",
+      "container_id": "6cfc4e5cdf894edf1e2f3b04fe829c11d5e3d907497c8e27511b410755438065",
+      "image_id": "sha256:f0a8044d948422d4071efb9a36d899e4a0822621a7525219c2a31084ceba5398"
+    },
+    {
+      "service": "db",
+      "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+      "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+    },
+    {
+      "service": "fake-models",
+      "container_id": "f6c0c3c00d91e0439590cac30b60021532d6fd475d52aaa1002089f87734b4f3",
+      "image_id": "sha256:628f481fca7c12d471be2740a75e9ab857c0147ea8f0643c4830443bf3b2c54f"
+    },
+    {
+      "service": "frontend",
+      "container_id": "81dff6082ee41e508b03667aec8c4b9e6d4761172f5aa332bcc25cb631820071",
+      "image_id": "sha256:1b014c12d84a0a12bf9e9d8533d55a4908f757196a81c4e8bc02629f4f684ee0"
+    },
+    {
+      "service": "memgraph",
+      "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+      "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+    },
+    {
+      "service": "redis",
+      "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+      "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+    }
+  ],
+  "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+  "counts": {
+    "passed": 1,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "warnings": 0
+  },
+  "skips": [],
+  "warnings": [],
+  "duration_seconds": 0.609,
+  "summary": "1 passed (609ms)",
+  "summary_derivation": "Full retained Playwright output read: 1 individually successful cases and the exact final summary; no warning, skip, failure, error or retry is reported. Counts derive from Playwright output, not the pytest summary parser. Duration is the reported whole-suite value, not a sum of individual case timings. The asset job checks successful HTTP retrieval and SHA-256 equality of the served main JavaScript bundle against the file in the owned frontend image. It does not establish production deployment or all-asset correctness. The source-bound owned configuration uses one Chromium worker and zero retries. Driver command, log/result hashes, separate completed source/index post-proof and runtime receipt match the candidate. No aggregate acceptance, live quality, data rebuild or deployment claim.",
+  "public_log_or_summary_url": "./browser-assets-job.json",
+  "status": "COMPLETED_JOB_RESULTS_AND_WARNING_SKIP_DISPOSITIONS_REVIEWED",
+  "retained_evidence_hashes": {
+    "source_proof": "c685d34c9e6eab2c1fa950975854070084fee0a78293f7d9bd2af1b84208b5c7",
+    "driver_receipt": "3344494533ac7939912c60291c02ac0f83abb37c174094bfc1f7b318221fbd9f",
+    "runtime_receipt": "ff694fbff698d398b15f5061f91946787f9db8f9ce4b725afcb095e434c3f2da",
+    "manual_review": "6839383f73949810396e0dfa12d6512449e537861e8090ff4d8716a29841af13",
+    "candidate_manifest": "ed79f211ef99fae4025e1f0fa466b1b7231d87bc120dc0e82c8478e579ecd1a8"
+  },
+  "limits": [
+    "This is one job record. Separate contract, quality, data and deployment dispositions remain in closure.json."
+  ]
+}

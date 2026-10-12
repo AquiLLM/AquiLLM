@@ -1,0 +1,72 @@
+{
+  "job": "typecheck",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "command": [
+    "rtk",
+    "proxy",
+    "python",
+    "-X",
+    "utf8",
+    "scripts/run_rag_remediation_tests.py",
+    "--project",
+    "aquillm-rag-integration",
+    "--typecheck"
+  ],
+  "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved.",
+  "exit_code": 0,
+  "log_sha256": "9b7d1aad8a86b023ea9a06aed689bf1e35bf4fbfb28795ead50042d228d6d190",
+  "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+  "source_and_index_unchanged": true,
+  "source_snapshot_sha256": "2588c92a9537d3ec70f0827691026775dd2bdd00636844d7ac3fddb1432d798c",
+  "runtime": [
+    {
+      "service": "app",
+      "container_id": "a08a772256a355a2a67433d9ed763636239a1ee7bf3fe1f31b908cb444d1a913",
+      "image_id": "sha256:7d7fe9d6a90447f549c2b4eb39a0979146beb5f83d875a62fbe04f471406983d"
+    },
+    {
+      "service": "db",
+      "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+      "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+    },
+    {
+      "service": "fake-models",
+      "container_id": "354ec2fe135b53b48da81686c0e00606471076e02dd3ac39ab730b56d6da1cfc",
+      "image_id": "sha256:54d1cf4a2c14f2c857d7e71b2013e66e246a7aada3b9dcf3a8364504e532e8d5"
+    },
+    {
+      "service": "frontend",
+      "container_id": "c507bb7bf51ce8af8cb6902e0a628cd5c4435779e4f36f5463b0998730b1e8e6",
+      "image_id": "sha256:d9ce7598e3894a921d8817d4285c1014f536ffa24f93d09cbae0dc4ebf16f646"
+    },
+    {
+      "service": "memgraph",
+      "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+      "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+    },
+    {
+      "service": "redis",
+      "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+      "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+    }
+  ],
+  "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+  "counts": null,
+  "skips": [],
+  "warnings": [],
+  "duration_seconds": null,
+  "summary": "TypeScript tsc --noEmit completed with exit zero and no diagnostics.",
+  "summary_derivation": "Read the entire retained typecheck log and terminal output. It reports only the npm script and tsc --noEmit invocation, with no warning, error, skip, test count or elapsed-time report. Counts and duration therefore remain null. The completed wrapper result and separate equal source/index post-check establish this job result; it is not aggregate acceptance.",
+  "public_log_or_summary_url": "./typecheck-job.json",
+  "status": "COMPLETED_JOB_RESULTS_AND_WARNING_SKIP_DISPOSITIONS_REVIEWED",
+  "retained_evidence_hashes": {
+    "source_proof": "ecb607a5666852c226ac259dc1151ebe28e281d315bf72900b60797d11af8b81",
+    "driver_receipt": "5ecf3541e19f026f30a29f6136183964d60e18263ff18d0fbf9de9a2f4a963c3",
+    "runtime_receipt": "cf2f226baf687d6c922d584625233f37889617642511753a86d7b17ec2ccc25d",
+    "manual_review": "5b0abc3aeffb63601d45437094ac4f936ffbad03d1ae0c71a2da97f76ad24cbc",
+    "candidate_manifest": "ed79f211ef99fae4025e1f0fa466b1b7231d87bc120dc0e82c8478e579ecd1a8"
+  },
+  "limits": [
+    "This is one job record. Separate contract, quality, data and deployment dispositions remain in closure.json."
+  ]
+}

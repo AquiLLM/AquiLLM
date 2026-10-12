@@ -1,0 +1,1483 @@
+{
+  "schema": "rag-remediation-closure-v1",
+  "status": "deterministic_contract_dispositions_recorded_PR_review_pending",
+  "audit_baseline": "6e756e252999ee6ccf604f88ea5326f49ddaa6d4",
+  "comparison_development": "dae54507c6e55f3cf1fb0a0974d4f22ebe2cdb8f",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "audit_issue": "https://github.com/AquiLLM/AquiLLM-internal/issues/6",
+  "related_internal_issue": "https://github.com/AquiLLM/AquiLLM-internal/issues/4",
+  "findings": [
+    {
+      "id": "F01",
+      "title": "Structured facts lost/corrupted",
+      "task_ids": [
+        "I1",
+        "I2",
+        "I5",
+        "I6"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "I1",
+          "I2",
+          "I5",
+          "I6"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "deterministic_fidelity_verified_affected_data_pending",
+        "required_evidence": "Blank/formula/table/order fidelity; versioned structural chunks; affected data rebuilt or explicitly pending",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/documents/tests/test_source_index_rollout_fidelity.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/lib/parsers/tests/test_structural_extraction.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_archive.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "The contract permits rebuilt **or explicitly pending** data. Do not report a production rebuild."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/lib/parsers/structural.py",
+          "sha256": "4758a1603a815b242738507016323d7a316d6aa0ad85f0f7b7be6e75aeb6aa40",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/lib/parsers/structural.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/representation_activation.py",
+          "sha256": "03d9df4463680c5e6190797530fdf2dd1a1ffdec96d296ea86b81dd6410f4cee",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/representation_activation.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F02",
+      "title": "Mixed embedding spaces and hash reuse",
+      "task_ids": [
+        "I4",
+        "R2",
+        "I5",
+        "I6"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "I4",
+          "R2",
+          "I5",
+          "I6"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Wrong/unknown space excluded in real SQL; query response identity; safe reuse; verified coverage and rollback",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/documents/tests/test_embedding_generation_query.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_embedding_provenance_migrations.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_representation_profile_cutover.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_grouped_scalar_predicates.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_representation_tuple_compiler_work.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_representation_tuple_predicate.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_representation_tuple_fallback.py",
+            "job": "source_ingestion"
+          }
+        ],
+        "limits": "Actual live provider registration, deployed dense coverage and operational cutover remain separate."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/embedding_index_query.py",
+          "sha256": "d8f646fa664cbb088db0de03ff5fa5d44de9efd139a34456e60894d4ee2cbcdb",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/embedding_index_query.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/representation_reindex.py",
+          "sha256": "6ef36a41aacf79bedbf4611cb9f3992a6665fa67ebef9655700987029c18999f",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/representation_reindex.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F03",
+      "title": "Invalid answers survive citation repair",
+      "task_ids": [
+        "A1"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "A1"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Uncited/partly cited repair never reaches stream or persistence; authorized limited fallback",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/lib/llm/tests/test_rag_citations.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_repair.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_publication.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Validated deterministic publication is not a human factual-quality result."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/chat/services/rag_answer_publication.py",
+          "sha256": "89c6385485f19a3ded59fdcb0686b06920c29cad737c88de1f3211291444e9bc",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/chat/services/rag_answer_publication.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F04",
+      "title": "Reranker outage amplification",
+      "task_ids": [
+        "R1"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "R1"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "24-candidate outage causes one request with at most six pairs; later batches stop; process/turn work bounded; no late publication",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/documents/tests/test_rerank_outage_containment.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_rerank_outage_admission.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_outage.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Six-pair bound is per process; an external request already dispatched cannot be retracted."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/rerank_request_lifetime.py",
+          "sha256": "8b9863b0d3b5dc98e1d2e1fb2ccdeb6c15b85f6ea99e4cccc6a49ecc425dd0bd",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/rerank_request_lifetime.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/rerank_protocol_publication.py",
+          "sha256": "8bebd036603dca891ad8856d5755c6b380ab5a2c903b2a10150c15a058ae98d1",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/rerank_protocol_publication.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F05",
+      "title": "Homonym identity collapse",
+      "task_ids": [
+        "G1",
+        "G6"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "G1",
+          "G6"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "identity_code_verified_deployed_rebuild_pending",
+        "required_evidence": "Unanchored same-name entities remain distinct; stable positive identity and conflict cases; rebuilt version",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_contextual_document_identity.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_contextual_collection_identity.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_persisted_graph_identity_boundary.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Production graph rebuild/version cutover and independent identity holdout are not established."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/knowledge_graph/resolution/identity_policy.py",
+          "sha256": "09e2e9c9278a0cf4f2dc9b75473c848808c44aa5d8a91e7cd571dbce074ab933",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/knowledge_graph/resolution/identity_policy.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F06",
+      "title": "Prefix truncation loses answers",
+      "task_ids": [
+        "R5",
+        "A1",
+        "A2"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "R5",
+          "A1",
+          "A2"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "activated_test_mode_delivery_verified_production_activation_pending",
+        "required_evidence": "Exact suffix evidence reaches scorer and sealed generator request under an activated validated mode",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/chat/tests/test_rag_suffix_evidence_delivery.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_rag_suffix_window_reuse.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_structural_delivery.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_automatic_score_reuse.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "No optional treatment is activated; its real quality gate remains required."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/chat/services/rag_support_delivery.py",
+          "sha256": "1014cdf24b0ce514305a26cced32a205c9f6d7868929734b660043b084a7ab95",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/chat/services/rag_support_delivery.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F07",
+      "title": "Arbitrary exact ordering/short identifiers",
+      "task_ids": [
+        "R3"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "R3"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "ATP-only flood cannot evict ATP+BRCA1 answer; CO/NO/pH and phrase cases; real lexical ordering",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/documents/tests/test_lexical_relevance.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_lexical_fusion_runtime.py",
+            "job": "source_ingestion"
+          }
+        ],
+        "limits": "Finite adversarial fixtures are not general scientific retrieval quality."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/lexical_candidates.py",
+          "sha256": "56531198e7207092ffe3867d2bc1ac1cbb6a0445d8576fbd383bcce49f58dfe6",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/lexical_candidates.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F08",
+      "title": "Vector-first hybrid fallback",
+      "task_ids": [
+        "R3"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "R3"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Exact-only/graph-only relevant candidates survive declared fusion/fallback; authority remains intact",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/documents/tests/test_candidate_rank_fusion.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_rag_fusion_review_regressions.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_competing_evidence.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_source_metadata_closed_operation.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_graph_hydration_operation.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_closed_search_authorization.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_automatic_score_reuse.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Focused8307 all four modes passed; pinned broad graph results and their reviewed warnings/skips are recorded separately in the release manifest."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/chunk_search.py",
+          "sha256": "921902f7d4879344a6b9bf8922a7689695295c86dfad6d7f70d7f1d2d5f5cba2",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/chunk_search.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F09",
+      "title": "Query/source-reference guessing",
+      "task_ids": [
+        "R4"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "R4"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Fresh grammatical pronouns retrieve; real source references validated; original-first constrained proposals",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/chat/tests/test_source_reference_clause_grammar.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_source_reference_local_barriers.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_rag_query_treatment_revalidation.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_requested_selection_boundary.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "No claim of unrestricted anaphora/language understanding."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/chat/services/retrieval_query_proposals.py",
+          "sha256": "92386114a1eb11c082ec32d967cb03a717b8c0c22a55c18c7e46bedeba5c25e3",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/chat/services/retrieval_query_proposals.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/representation_validation_rows.py",
+          "sha256": "277fffabdc074b0e23f80b061dce70e802646d8fcaf5742c483a490d9873462d",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/representation_validation_rows.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/source_loading.py",
+          "sha256": "5c8529f54d149a13b5aacdfc465a33a964008161b231b21e989c0699deedde32",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/source_loading.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/chunk_search_scoped_rows.py",
+          "sha256": "2eba502e1f572e04411a7be98fcbb9e540813930abb9da0cf745de78abd0a571",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/chunk_search_scoped_rows.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/representation_store.py",
+          "sha256": "b58c9bd6135c61270c2213505e7e3414e6e2756bc7394d5fd5976dc4ec238b2a",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/representation_store.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/documents/services/lexical_readiness.py",
+          "sha256": "0c7e18564a7415e9b79a8d057a1e140a600243961d4fc78ee4a2d1481aed46dd",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/documents/services/lexical_readiness.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F10",
+      "title": "Ranking treated as answerability",
+      "task_ids": [
+        "A2",
+        "A3",
+        "R5"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "A2",
+          "A3",
+          "R5"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Uncalibrated/irrelevant pools cannot imply support; complete/partial/insufficient/unknown decisions evaluated",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/chat/tests/test_evidence_support_capture.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_evidence_support_gates.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_support.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Rank is not support calibration; human calibration/activation remains pending."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/chat/services/rag_support_delivery.py",
+          "sha256": "1014cdf24b0ce514305a26cced32a205c9f6d7868929734b660043b084a7ab95",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/chat/services/rag_support_delivery.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F11",
+      "title": "Predicate-blind graph ranking",
+      "task_ids": [
+        "G2",
+        "G6"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "G2",
+          "G6"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Relation intent changes useful evidence; duplicate physical transitions do not inflate relevance",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_frontier_ranking_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_frontier_adversarial_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_projected_relation_ranking_v2.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Positive duplicate comparison is a typed projected fixture, not measured live relevance gain."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/knowledge_graph/retrieval/graph_runtime_v2.py",
+          "sha256": "9310c39c617f15054baf60ab4efa5c415d1e58201d5467eb76f78ce34949ee0d",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/knowledge_graph/retrieval/graph_runtime_v2.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F12",
+      "title": "Query-independent graph evidence pruning",
+      "task_ids": [
+        "G3",
+        "G6"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "G3",
+          "G6"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Relevant third mention and conflicting physical copy remain discoverable within shared budgets",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_frontier_selection_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_frontier_scope_batch_conflicts_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_graph_runtime_authority_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_persisted_graph_identity_boundary.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Focused35794 proves actual hydration/handoff under counters; conflict rejection alone is not credited as discovery."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/knowledge_graph/projection/frontier_evidence_v2.py",
+          "sha256": "2061de837f5f2d2aa0cccc3448b9b92ac71e2b6d5563eb3f9775e10a2923bcba",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/knowledge_graph/projection/frontier_evidence_v2.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F13",
+      "title": "Readiness and topology-size cliffs",
+      "task_ids": [
+        "G4",
+        "G5",
+        "G6"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "G4",
+          "G5",
+          "G6"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Ready authorized subsets survive unrelated rebuilding; hubs yield honest partial coverage; invalid authority rejected",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_frontier_authority_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_frontier_budget_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_frontier_terminal_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/documents/tests/test_source_metadata_closed_operation.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_graph_hydration_operation.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_ready_subset_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_closed_search_authorization.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_projection_bulk_postgres.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_projection_bulk_stale_statistics.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_projection_chunk_lookup_migration.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Partial/unavailable coverage remains explicit; original caps and lifetime remain unchanged."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/knowledge_graph/retrieval/ready_materialization_v2.py",
+          "sha256": "2b45cb62bb6382cd37736ad6551d6e5326a8086f55abdb59004fdd6becb66b6b",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/knowledge_graph/retrieval/ready_materialization_v2.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F14",
+      "title": "Missing discovered canonical bridges",
+      "task_ids": [
+        "G4",
+        "G5"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "G4",
+          "G5"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Real adapter test reaches seed-in-A/shared-in-B/answer path under compatible authority and caps",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_frontier_http_bridge_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_graph_runtime_http_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_competing_evidence.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_persisted_graph_identity_boundary.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Handoff is not itself LLM publication. Focused35794 and the original composed modes are distinct evidence."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/knowledge_graph/retrieval/graph_runtime_v2.py",
+          "sha256": "9310c39c617f15054baf60ab4efa5c415d1e58201d5467eb76f78ce34949ee0d",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/knowledge_graph/retrieval/graph_runtime_v2.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F15",
+      "title": "ZIP retained as member PDF source",
+      "task_ids": [
+        "I1",
+        "I3"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "I1",
+          "I3"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Citation source bytes/hash/path match the actual PDF member",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/ingestion/tests/test_archive_source_binding.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_archive.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Fixtures do not prove migration of all deployed archives."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/ingestion/services/source_artifacts.py",
+          "sha256": "73c67b22574945ed57c0fd309f0bc7b9ecdfd5e45d3c597283fa3cb6efe3dab4",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/ingestion/services/source_artifacts.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F16",
+      "title": "Untracked partial upload outputs",
+      "task_ids": [
+        "I3"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "I3"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Crash/failure/retry/concurrency preserve an exact resumable output ledger with no duplicate publication",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/ingestion/tests/test_output_crash_windows.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/ingestion/tests/test_output_recovery.py",
+            "job": "source_ingestion"
+          },
+          {
+            "path": "aquillm/apps/ingestion/tests/test_output_transactions.py",
+            "job": "source_ingestion"
+          }
+        ],
+        "limits": "Retention ownership, schedules, production recovery/rebuild and rollout remain separate."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/ingestion/services/output_ledger.py",
+          "sha256": "84f8029c0437b13bda65e53d4e980b4fb673dca86d58e172ebbc3e1ba1d54baf",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/ingestion/services/output_ledger.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F17",
+      "title": "Office fallback unreachable",
+      "task_ids": [
+        "I2"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "I2"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Missing/failed conversion invokes native fallback; successful empty conversion has explicit semantics",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/ingestion/tests/test_office_conversion_fallback.py",
+            "job": "source_ingestion"
+          }
+        ],
+        "limits": "Unsupported extraction stays explicit/partial; no arbitrary-converter certification."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/lib/parsers/structural.py",
+          "sha256": "4758a1603a815b242738507016323d7a316d6aa0ad85f0f7b7be6e75aeb6aa40",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/lib/parsers/structural.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F18",
+      "title": "Negated memory persisted",
+      "task_ids": [
+        "A4"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "A4"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "mapped_deterministic_assertions_verified",
+        "required_evidence": "Negated/quoted/hypothetical requests create no facts; affirmative/correction/revocation cases retain provenance",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/memory/tests/test_profile_directive_tokens.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/memory/tests/test_profile_memory_review_regressions.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/tests/integration/test_rag_cross_lane_memory.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Bounded grammar is not unrestricted intent understanding."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/lib/memory/extraction/_intent_scope.py",
+          "sha256": "dd7205f601a84b5cd8c703c4f3801535e397779414f23db59b0f72f750af5186",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/lib/memory/extraction/_intent_scope.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    },
+    {
+      "id": "F19",
+      "title": "Weak particular graph gates",
+      "task_ids": [
+        "G6",
+        "P2"
+      ],
+      "code": {
+        "state": "implementation_integrated_source_reviewed",
+        "implemented_task_interfaces": [
+          "G6",
+          "P2"
+        ],
+        "task_completion_not_inferred": true,
+        "note": "Implementation and independent source review are recorded; operational and quality states remain separate."
+      },
+      "acceptance": {
+        "state": "gate_implementation_verified_meaningful_real_holdout_open",
+        "required_evidence": "Poor absolute identity precision and one-tagged-winner/widespread-regression examples fail; meaningful holdout passes",
+        "final_candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+        "final_verification_records": [
+          {
+            "path": "aquillm/apps/knowledge_graph/tests/test_graph_quality_gates_v2.py",
+            "job": "graph_answer"
+          },
+          {
+            "path": "aquillm/apps/chat/tests/test_evidence_quality_gates.py",
+            "job": "graph_answer"
+          }
+        ],
+        "limits": "Synthetic positive eligibility tests do not satisfy the positive real-holdout requirement. All twelve treatments remain off/inconclusive."
+      },
+      "data": {
+        "state": "production_not_rebuilt",
+        "synthetic_rehearsal": "See mapped final job records and their explicit skips/limits; production data was not rebuilt.",
+        "applicability": "No production mutation performed. Source/index/graph history repair or rebuild, when applicable, requires a separately selected bounded rollout; no automatic retroactive repair is claimed."
+      },
+      "quality_gate": {
+        "decision": "inconclusive",
+        "independent_human_reviews": "not_available",
+        "live_runtime_attestation": "not_available",
+        "scope": "Independent treatment activation evidence remains absent; this is separate from deterministic invariant test acceptance."
+      },
+      "deployment": {
+        "state": "not_performed"
+      },
+      "evidence": [
+        {
+          "kind": "current_source_navigation_not_runtime_proof",
+          "path": "aquillm/apps/knowledge_graph/evals/graph_quality_gates_v2.py",
+          "sha256": "5ea9abd58157c8bf9c3f98123e7d249fa9b1e47972c03babcbea126eef6a197f",
+          "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+          "immutable_url": "https://github.com/AquiLLM/AquiLLM/blob/7df6277184c97fcfcc36e3bc550aa4cbda9055fd/aquillm/apps/knowledge_graph/evals/graph_quality_gates_v2.py",
+          "hash_basis": "Exact binary git show bytes; not raw workspace bytes or Git object ID"
+        },
+        {
+          "kind": "public_quality_and_measurement_status",
+          "path": "docs/audits/rag-remediation-implementation/retrieval-evidence-acceptance.md",
+          "limits": "This decision record does not replace final invariant acceptance.",
+          "sha256": null,
+          "candidate_revision": null,
+          "immutable_url": null,
+          "hash_basis": "Sibling metadata; its commit is linked externally after creation",
+          "relative_url": "retrieval-evidence-acceptance.md"
+        }
+      ]
+    }
+  ],
+  "status_scope": "Pinned job results and deterministic assertions are reviewed. F19 real holdout remains open; F05 deployed rebuild and F06 production activation remain pending. No blanket nineteen-contract closure.",
+  "review_snapshot": "Independent exact-source review and required static checks are recorded; each acceptance contract remains separately assessed.",
+  "source_navigation_hash_basis": "SHA256 of exact committed bytes from git show candidate_revision:path; distinct from raw tested working-tree bytes.",
+  "metadata_revision": null,
+  "metadata_revision_basis": "Separate later metadata commit; immutable implementation candidate above is unchanged."
+}

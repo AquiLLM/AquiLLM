@@ -1,6 +1,6 @@
 # Retrieval evidence acceptance ledger
 
-Status: review candidate; final composed verification remains pending.
+Status: final job records are available in [the release manifest](release-manifest.json); contract and PR review remain separate.
 **All twelve treatment decisions are inconclusive; no activation is authorized.** Passing invariants, fixture reports, source review,
 quality acceptance and deployment are separate outcomes. This ledger changes no
 configuration. See the [treatment register](../../runbooks/rag-remediation-treatments.md),
@@ -18,7 +18,7 @@ configuration. See the [treatment register](../../runbooks/rag-remediation-treat
 
 R4 and I5 are integrated into the verification candidate. Native structural,
 whole-source and fixture CLI controls have executed; query and projection
-integration repairs are under verification. Historical results do not certify the
+integration results are recorded in the final release manifest. Historical results do not certify the
 final composed candidate. Original failure reports remain in the evidence bundle.
 
 ## Independent treatment decisions
@@ -30,12 +30,12 @@ current-authority safeguards remain in force. Existing baseline behavior remains
 | Treatment | Current evidence / missing treatment-specific proof | Decision and default impact |
 | --- | --- | --- |
 | Window/source | Delivery/reuse invariants delivered; matched legacy/window/source/both quality and operational results missing. | **Inconclusive/off**; text modes remain legacy. |
-| Retrieval fusion | Implementation/invariants delivered; matched exact/FTS/RRF/protected-slot quality outcomes and final channel-competition verification remain pending. | **Inconclusive/off**; retain reviewed baseline fusion configuration. |
-| Query proposals | Original/vocabulary/rewrite controls have executed; query integration repairs are under verification. Matched semantic acceptance remains missing. | **Inconclusive/off**; optional vocabulary/rewrite disabled. |
+| Retrieval fusion | Implementation/invariants delivered; matched exact/FTS/RRF/protected-slot quality outcomes and semantic channel-competition acceptance remain pending. | **Inconclusive/off**; retain reviewed baseline fusion configuration. |
+| Query proposals | Original/vocabulary/rewrite controls have executed; query integration results are recorded in the final release manifest. Matched semantic acceptance remains missing. | **Inconclusive/off**; optional vocabulary/rewrite disabled. |
 | Candidate depth | No accepted independent bounded-depth comparison or denial/latency study. | **Inconclusive/off**; baseline depth and shared limits unchanged. |
 | Structure | Native structural delivery and exact row-membership ordering controls passed. Matched semantic acceptance and parser-only transition remain unmeasured. | **Inconclusive/off**; no serving section/downweighting policy activated. |
 | Embedding preparation | Verified producer/binding mechanisms delivered; merged coverage and matched semantic comparison pending. | **Inconclusive/off** for treatment; only genuinely compatible current generations may serve. |
-| Graph | Capture and full-route controls have runtime observations; projection integration repairs and final composed verification remain pending. Strict G6 acceptance is not established. | **Inconclusive/off**; retain reviewed baseline graph settings. |
+| Graph | Capture and full-route controls have runtime observations; projection integration and composed results are recorded in the final release manifest. Strict G6 acceptance is not established. | **Inconclusive/off**; retain reviewed baseline graph settings. |
 | Document capacity | Independent capacity study and supported exclusion accounting missing. | **Inconclusive/off**; capacity mode legacy. |
 | Follow-up | Independent current-source rehydration and quality decision missing. | **Inconclusive/off**; follow-up disabled. |
 | Iterative acquisition | Actual refinement/shared exhaustion and independent operational decision missing. | **Inconclusive/off**; iterative acquisition disabled. |

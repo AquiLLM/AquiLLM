@@ -1,0 +1,79 @@
+{
+  "job": "browser_settings",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "command": [
+    "rtk",
+    "proxy",
+    "python",
+    "-X",
+    "utf8",
+    "scripts/run_rag_remediation_tests.py",
+    "--project",
+    "aquillm-rag-integration",
+    "--playwright",
+    "react/tests/usersettings.spec.ts"
+  ],
+  "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved.",
+  "exit_code": 0,
+  "log_sha256": "143772f5c7aa77542b589e1478859821e6d34c4862b0d0d12637a14cc10d255e",
+  "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+  "source_and_index_unchanged": true,
+  "source_snapshot_sha256": "2588c92a9537d3ec70f0827691026775dd2bdd00636844d7ac3fddb1432d798c",
+  "runtime": [
+    {
+      "service": "app",
+      "container_id": "7c9f3b4890c463740538a6661ac1c88653401687dc306db26463ee9a663b7834",
+      "image_id": "sha256:795974f107138e617b56bc2bd2f96cfbda33916f0e07c354686bbaf781af4e6a"
+    },
+    {
+      "service": "db",
+      "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+      "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+    },
+    {
+      "service": "fake-models",
+      "container_id": "1c8519460b81c6e2db980bafeef2cd0b5eaa810ec905d2d0de6eea50bee91716",
+      "image_id": "sha256:59b2559c2258fbd77c7e7ec95f09c02981bdd273a29ab56c5d69107a03b1cf3f"
+    },
+    {
+      "service": "frontend",
+      "container_id": "3e4ceb31ebe650bb7f72887692aeacdd935f60dbe43518d92c0c0a42c2850d54",
+      "image_id": "sha256:70fdffe6d648b1a760c59f3de9ceceac04f57b8e8f275205bb592d7dbcdfa336"
+    },
+    {
+      "service": "memgraph",
+      "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+      "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+    },
+    {
+      "service": "redis",
+      "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+      "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+    }
+  ],
+  "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+  "counts": {
+    "passed": 13,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "warnings": 0
+  },
+  "skips": [],
+  "warnings": [],
+  "duration_seconds": 13.7,
+  "summary": "13 passed (13.7s)",
+  "summary_derivation": "Full retained Playwright output read: 13 individually successful cases and the exact final summary; no warning, skip, failure, error or retry is reported. Counts derive from Playwright output, not the pytest summary parser. Duration is the reported whole-suite value, not a sum of individual case timings. The settings browser job exercises two profile-memory UI cases using intercepted API responses, five themes and six fonts. It does not verify real external-memory deletion or provider reconciliation. The source-bound owned configuration uses one Chromium worker and zero retries. Driver command, log/result hashes, separate completed source/index post-proof and runtime receipt match the candidate. No aggregate acceptance, live quality, data rebuild or deployment claim.",
+  "public_log_or_summary_url": "./browser-settings-job.json",
+  "status": "COMPLETED_JOB_RESULTS_AND_WARNING_SKIP_DISPOSITIONS_REVIEWED",
+  "retained_evidence_hashes": {
+    "source_proof": "a0179c84776ab4fa120e487200bf1bec8ca33d9ad357d79f8da9cb4a0c24e4af",
+    "driver_receipt": "3021916a57ba5967a3877da8a12d4488a1feacd3b398c5e6b60ec9b7dbc27620",
+    "runtime_receipt": "d937c0e560c564a76e8babf0abdd0af330c730389a49028a610a59273e81e337",
+    "manual_review": "ea3814ab7e8fea9e238f7347e00bb8c0d54111926b160132e2494f607ea84922",
+    "candidate_manifest": "ed79f211ef99fae4025e1f0fa466b1b7231d87bc120dc0e82c8478e579ecd1a8"
+  },
+  "limits": [
+    "This is one job record. Separate contract, quality, data and deployment dispositions remain in closure.json."
+  ]
+}

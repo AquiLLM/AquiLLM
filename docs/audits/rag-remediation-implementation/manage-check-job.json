@@ -1,0 +1,90 @@
+{
+  "job": "manage_check",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "command": [
+    "rtk",
+    "proxy",
+    "python",
+    "-X",
+    "utf8",
+    "scripts/run_rag_remediation_tests.py",
+    "--project",
+    "aquillm-rag-integration",
+    "--manage",
+    "check"
+  ],
+  "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved.",
+  "exit_code": 0,
+  "log_sha256": "4acc4aa13be9eb2ddc76760505435189244e5f01b1498b5073399d2427d7ad20",
+  "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+  "source_and_index_unchanged": true,
+  "source_snapshot_sha256": "2588c92a9537d3ec70f0827691026775dd2bdd00636844d7ac3fddb1432d798c",
+  "runtime": [
+    {
+      "service": "app",
+      "container_id": "e9b8d4598b556b817e9ff4658b9586ab632232cc662416a8b8f659bc909a0172",
+      "image_id": "sha256:e45f46e694b479646392e88efe45f0baecb2e00d71029bf4654a03854df4a4d5"
+    },
+    {
+      "service": "db",
+      "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+      "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+    },
+    {
+      "service": "fake-models",
+      "container_id": "f61cc5270ebc2802954c6a3b4519dc23194368c4abeeb4693f6f3041afcff05c",
+      "image_id": "sha256:3012a25f1621bb0e8638d6289100bdab51c42b77c64906ff683f91e256270035"
+    },
+    {
+      "service": "frontend",
+      "container_id": "81dff6082ee41e508b03667aec8c4b9e6d4761172f5aa332bcc25cb631820071",
+      "image_id": "sha256:1b014c12d84a0a12bf9e9d8533d55a4908f757196a81c4e8bc02629f4f684ee0"
+    },
+    {
+      "service": "memgraph",
+      "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+      "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+    },
+    {
+      "service": "redis",
+      "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+      "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+    }
+  ],
+  "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+  "counts": null,
+  "skips": [],
+  "warnings": [
+    {
+      "kind": "FutureWarning",
+      "count": 1,
+      "category": "Deprecated Google OCR SDK",
+      "source_path": "aquillm/lib/ocr/gemini.py",
+      "source_line": 13,
+      "observed": "The imported google.generativeai package reports that support has ended.",
+      "disposition": "Dependency maintenance debt remains. The system check succeeding does not establish current SDK support or a successful live OCR request; no dependency change or blanket warning waiver is made here."
+    },
+    {
+      "kind": "RuntimeWarning",
+      "count": 1,
+      "category": "Database access during app initialization",
+      "observed": "Django reports database access before app initialization is complete.",
+      "disposition": "Startup database access remains a maintenance concern. Current AppConfig.ready calls inline vector prewarming for management commands, consistent with the subsequent prewarmed info event; the log does not identify every initiating query. No warning suppression, database-plan or production-readiness claim follows."
+    }
+  ],
+  "duration_seconds": null,
+  "summary": "Django system check completed with exit zero and identified no issues (0 silenced). Two startup warnings were reviewed and retained as maintenance debt.",
+  "summary_derivation": "Read the full retained output and result. It contains one deprecated Google OCR SDK FutureWarning, one Django app-initialization database RuntimeWarning, one prewarming info event, and the zero-issue system-check result. This is not a test run; no test counts, skips or elapsed duration were reported, so counts and duration remain null. The original wrapper exit and separate post proof verify all 3118 source files and index entries unchanged. Runtime identities describe the validated project inventory, not proof every service was exercised. No credential/private corpus text identified; public wording omits internal paths. No inference is made about the active migration job or aggregate acceptance.",
+  "public_log_or_summary_url": "./manage-check-job.json",
+  "status": "COMPLETED_JOB_RESULTS_AND_WARNING_SKIP_DISPOSITIONS_REVIEWED",
+  "retained_evidence_hashes": {
+    "source_proof": "02479c0d4d8dfdb6ee5c2691cda3a44ead2f217683d9e94373309d0bb2712a05",
+    "driver_receipt": "7c6e122ac3732176da9304ac26aeab8764b99f97d9336865e7f259f86b9a36e3",
+    "runtime_receipt": "9e480ef92f55c0f89c2bfb471c760a7cdff65b176d88d55dbc15195d75d730db",
+    "manual_review": "63643b2a66567dd44890302b3c1cf76da9d53276d2a097877bef357808ab42a5",
+    "candidate_manifest": "ed79f211ef99fae4025e1f0fa466b1b7231d87bc120dc0e82c8478e579ecd1a8"
+  },
+  "limits": [
+    "This is one job record. Separate contract, quality, data and deployment dispositions remain in closure.json."
+  ]
+}

@@ -1,0 +1,233 @@
+{
+  "job": "graph_answer",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "command": [
+    "rtk",
+    "proxy",
+    "python",
+    "-X",
+    "utf8",
+    "scripts/run_rag_remediation_tests.py",
+    "--project",
+    "aquillm-rag-integration",
+    "--",
+    "aquillm/apps/chat/tests",
+    "aquillm/apps/collections/tests",
+    "aquillm/apps/knowledge_graph/tests",
+    "aquillm/apps/memory/tests",
+    "aquillm/lib/knowledge_graph/tests",
+    "aquillm/lib/llm/tests",
+    "aquillm/lib/memory/tests",
+    "aquillm/lib/tools/search/tests/test_vector_search_pack.py",
+    "aquillm/tests/integration/test_cache_numeric_authority.py",
+    "aquillm/tests/integration/test_cache_original_scope.py",
+    "aquillm/tests/integration/test_cache_publication.py",
+    "aquillm/tests/integration/test_cache_settings_flags.py",
+    "aquillm/tests/integration/test_cache_vocabulary_scope.py",
+    "aquillm/tests/integration/test_cold_rag_service_lifecycle.py",
+    "aquillm/tests/integration/test_default_action_admission.py",
+    "aquillm/tests/integration/test_graph_cross_lane_database_deadline.py",
+    "aquillm/tests/integration/test_graph_private_original_scope.py",
+    "aquillm/tests/integration/test_knowledge_graph_import_isolation.py",
+    "aquillm/tests/integration/test_persisted_graph_generation_boundary.py",
+    "aquillm/tests/integration/test_persisted_graph_identity_boundary.py",
+    "aquillm/tests/integration/test_persisted_graph_scope_coverage.py",
+    "aquillm/tests/integration/test_persisted_graph_semantic_provenance.py",
+    "aquillm/tests/integration/test_persisted_graph_vocabulary_boundary.py",
+    "aquillm/tests/integration/test_projection_database_deadline.py",
+    "aquillm/tests/integration/test_projection_database_fetch_deadline.py",
+    "aquillm/tests/integration/test_projection_legacy_role_boundary.py",
+    "aquillm/tests/integration/test_projection_representation_publication_races.py",
+    "aquillm/tests/integration/test_projection_representation_role_boundary.py",
+    "aquillm/tests/integration/test_projection_representation_schema_boundary.py",
+    "aquillm/tests/integration/test_projection_representation_state_boundary.py",
+    "aquillm/tests/integration/test_rag_cross_lane_archive.py",
+    "aquillm/tests/integration/test_rag_cross_lane_collector.py",
+    "aquillm/tests/integration/test_rag_cross_lane_competing_evidence.py",
+    "aquillm/tests/integration/test_rag_cross_lane_graph_gate_predicates.py",
+    "aquillm/tests/integration/test_rag_cross_lane_graph_observations.py",
+    "aquillm/tests/integration/test_rag_cross_lane_graph_publication.py",
+    "aquillm/tests/integration/test_rag_cross_lane_graph_route.py",
+    "aquillm/tests/integration/test_rag_cross_lane_history.py",
+    "aquillm/tests/integration/test_rag_cross_lane_memory.py",
+    "aquillm/tests/integration/test_rag_cross_lane_outage.py",
+    "aquillm/tests/integration/test_rag_cross_lane_publication.py",
+    "aquillm/tests/integration/test_rag_cross_lane_repair.py",
+    "aquillm/tests/integration/test_rag_cross_lane_support.py",
+    "aquillm/tests/integration/test_rag_projection_provision.py",
+    "aquillm/tests/integration/test_rag_remediation_isolation.py",
+    "aquillm/tests/integration/test_rag_structural_delivery.py",
+    "aquillm/tests/integration/test_rag_structural_ordering.py",
+    "aquillm/tests/integration/test_rag_typecheck_wrapper.py",
+    "aquillm/tests/integration/test_representation_graph_delete.py",
+    "aquillm/tests/integration/test_vllm_lmcache_plumbing.py",
+    "aquillm/tests/integration/test_worker_handoff.py",
+    "aquillm/tests/integration/test_worker_handoff_startup.py",
+    "tests/test_check_file_lengths.py",
+    "tests/test_check_logging_conventions.py",
+    "tests/test_check_retrieval_logging.py",
+    "tests/test_knowledge_graph_dependencies.py",
+    "tests/test_rag_remediation_frontend.py",
+    "aquillm/tests/integration/test_compose_render_test_support.py",
+    "aquillm/tests/integration/test_knowledge_graph_compose.py",
+    "aquillm/tests/integration/test_compose_multimodal_services.py",
+    "aquillm/tests/integration/test_embedding_policy_compose.py",
+    "aquillm/tests/integration/test_sidecar_revision_compose.py",
+    "aquillm/tests/integration/test_requested_selection_boundary.py",
+    "tests/unit",
+    "-q",
+    "-ra",
+    "--tb=short"
+  ],
+  "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved.",
+  "exit_code": 0,
+  "log_sha256": "0b18b84a56f8116f47bd2d4cc89ebdaa8419f7abe4a63245d4bc72bb21627c30",
+  "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+  "source_and_index_unchanged": true,
+  "source_snapshot_sha256": "2588c92a9537d3ec70f0827691026775dd2bdd00636844d7ac3fddb1432d798c",
+  "runtime": [
+    {
+      "service": "app",
+      "container_id": "88550fa6250b30d116731e296b6fc5f3b9e76b7400ca72e35c2bc2d33448ab26",
+      "image_id": "sha256:f57096d89bfd987c1427575c4ef997a468b532d8e5327922a9eea8d1cfad3c4d"
+    },
+    {
+      "service": "db",
+      "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+      "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+    },
+    {
+      "service": "fake-models",
+      "container_id": "13f50377dcd0efa2e6027ec922b8f2684f4cf524f6bf0b3cdf1a5d508435e18e",
+      "image_id": "sha256:8bb011470fe73eb776c1ccf2d34d70f0b49627b93b89ab861959cc8292fdd959"
+    },
+    {
+      "service": "frontend",
+      "container_id": "d976147de24a4a0d4856f8592bb9af1b4262edf8fc66940b4da731f4551c09cd",
+      "image_id": "sha256:77caeb34b4954c1d22f6d559e6e1f138296bbfd753243248f85d738cf1e6e415"
+    },
+    {
+      "service": "memgraph",
+      "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+      "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+    },
+    {
+      "service": "redis",
+      "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+      "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+    }
+  ],
+  "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+  "counts": {
+    "passed": 7016,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 1,
+    "warnings": 152,
+    "subtests_passed": 83
+  },
+  "skips": [
+    {
+      "count": 1,
+      "test": "tests/unit/test_nemotron_verification_harness.py::test_profile_self_test_covers_failure_policy_and_image_provenance",
+      "reason": "PowerShell is unavailable in the Linux test environment.",
+      "disposition": "PLATFORM_SKIP_WITH_SEPARATE_UNCHANGED_SCRIPT_HOST_SUPPLEMENT",
+      "supplement": {
+        "retained_receipt_sha256": "94b971006125388d7c55284e34aa091fa8bc2236db37cfd82abb981e0efbef77",
+        "script": "scripts/verify_nemotron_asr.ps1",
+        "script_sha256": "31bbf91c0c0b76599f62db70683165d3cca2904cb9fde1dd2843c0e7a6d66a37",
+        "command": [
+          "pwsh",
+          "-NoProfile",
+          "-File",
+          "scripts/verify_nemotron_asr.ps1",
+          "-SelfTest"
+        ],
+        "exit_code": 0,
+        "scope": "Previously retained standalone synthetic host SelfTest; no application, model, Docker, GPU or deployment execution. Current candidate verifier bytes equal the supplemented bytes. This does not convert the Linux skip into a pass."
+      }
+    }
+  ],
+  "warnings": [
+    {
+      "category": "PydanticDeprecatedSince212",
+      "count": 1,
+      "source": "aquillm/lib/llm/types/tools.py:66",
+      "observation": "After-model validator uses a classmethod; deprecated since Pydantic 2.12 and scheduled for removal in V3.",
+      "disposition": "OPEN_COMPATIBILITY_DEBT",
+      "action": "Migrate to the supported instance-method validator before the incompatible upgrade; this passing run does not clear the warning."
+    },
+    {
+      "category": "FutureWarning",
+      "count": 1,
+      "source": "aquillm/lib/ocr/gemini.py:13",
+      "observation": "The imported google.generativeai package reports ended support and no further updates or bug fixes.",
+      "disposition": "OPEN_DEPENDENCY_MIGRATION_DEBT",
+      "action": "Review migration to google.genai; this owned test run does not establish live OCR provider behavior."
+    },
+    {
+      "category": "RuntimeWarning",
+      "count": 1,
+      "source": "django.db.backends.utils",
+      "observation": "Database access occurred during application initialization.",
+      "disposition": "OPEN_STARTUP_ATTRIBUTION_AND_LIFECYCLE_DEBT",
+      "action": "Identify the originating initialization/import call path. The retained warning has no caller stack establishing which application component caused it; attribution remains unresolved."
+    },
+    {
+      "category": "UserWarning",
+      "count": 138,
+      "source": "django.core.handlers.base",
+      "observation": "Missing prod_static directory during test middleware initialization.",
+      "module_counts": {
+        "aquillm/apps/chat/tests/test_chat_rename.py": 17,
+        "aquillm/apps/chat/tests/test_collection_prompt_skills.py": 4,
+        "aquillm/apps/collections/tests/test_collection_api.py": 8,
+        "aquillm/apps/collections/tests/test_collection_subcollection_create_api.py": 2,
+        "aquillm/apps/collections/tests/test_graph_visualization_api.py": 11,
+        "aquillm/apps/collections/tests/test_graph_visualization_edges.py": 6,
+        "aquillm/apps/collections/tests/test_schema_api.py": 5,
+        "aquillm/apps/collections/tests/test_schema_api_editor.py": 6,
+        "aquillm/apps/collections/tests/test_schema_api_generation.py": 4,
+        "aquillm/apps/collections/tests/test_schema_api_history.py": 3,
+        "aquillm/apps/collections/tests/test_schema_api_publication.py": 13,
+        "aquillm/apps/collections/tests/test_schema_api_restore_inputs.py": 28,
+        "aquillm/apps/collections/tests/test_schema_api_validation.py": 18,
+        "aquillm/apps/memory/tests/test_profile_memory_api.py": 9,
+        "aquillm/apps/knowledge_graph/tests/test_document_lifecycle.py": 1,
+        "aquillm/tests/integration/test_rag_cross_lane_history.py": 2,
+        "aquillm/tests/integration/test_rag_cross_lane_memory.py": 1
+      },
+      "disposition": "TEST_STATIC_ASSET_ENVIRONMENT_WARNING_RETAINED",
+      "action": "This is not evidence that deployed static assets are correct. Deployment asset collection and serving verification remain separate operational gates."
+    },
+    {
+      "category": "DeprecationWarning",
+      "count": 11,
+      "source": "multiprocessing.popen_fork",
+      "observation": "Fork was invoked from a multithreaded process; the runtime warns of possible child deadlocks.",
+      "module_counts": {
+        "aquillm/apps/knowledge_graph/tests/test_scheduled_projection_publication.py": 6,
+        "aquillm/apps/knowledge_graph/tests/test_scheduled_projection_worker.py": 5
+      },
+      "disposition": "OPEN_TEST_PROCESS_LIFECYCLE_DEBT",
+      "cleanup_context": "Publication launches six fork publishers, requires exit code zero after bounded joins, and kills/joins survivors in finally. Worker tests use five fork-worker contexts with terminate/join, then kill/join and an explicit not-alive assertion. The broker fixture deletes only its unique Redis namespace and closes the Celery app.",
+      "limitations": "These cleanup paths and the successful run do not eliminate fork-from-multithreaded-process risk or prove absence of every process/resource leak. Publication cleanup has no final not-alive assertion after its fallback join; broker Redis clients and process handles are not all explicitly closed. No teardown exception is reported in this retained log.",
+      "action": "Retain the risk for a separate fixture/process lifecycle improvement; do not classify it as universally harmless noise."
+    }
+  ],
+  "duration_seconds": 3858.69,
+  "summary": "7016 passed, 1 skipped, 152 warnings, 83 subtests passed in 3858.69s (1:04:18)",
+  "summary_derivation": "Read the entire retained log and verified its exact SHA-256, result, completed source post-proof, driver argv and runtime receipt. Ordinary passed tests (7016) and reported passed subtests (83) remain separate; zero failures/errors derives from the complete summary, no failed/error entries, and exit zero. Warning counts are 1+1+1+138+11=152. This is one completed graph job only; the remaining nine current-batch outcomes and aggregate acceptance are not asserted. Startup attribution, dependency and process lifecycle debt remain open; real quality, rebuild, activation, deployment and user PR review gates are unchanged.",
+  "public_log_or_summary_url": "./graph-answer-job.json",
+  "status": "COMPLETED_JOB_RESULTS_AND_WARNING_SKIP_DISPOSITIONS_REVIEWED",
+  "retained_evidence_hashes": {
+    "source_proof": "3ef26a0d29d5d036d74019ef1f642de8c4f16a03dce25965f29df55dd3816f71",
+    "driver_receipt": "1c0ae551493d21db94a3ad939147a799fc8fa925764bcd0c604ddf2d1670fac6",
+    "runtime_receipt": "341fe29673bd48a8e532ea7c048cfaac32c4105087e52c7453af9ed7751f5eb3",
+    "manual_review": "1175c7469df2b307bd3265969ea5d5da241a3aab12b214c89c928ad597e2a713",
+    "candidate_manifest": "ed79f211ef99fae4025e1f0fa466b1b7231d87bc120dc0e82c8478e579ecd1a8"
+  },
+  "limits": [
+    "This is one job record. Separate contract, quality, data and deployment dispositions remain in closure.json."
+  ]
+}
