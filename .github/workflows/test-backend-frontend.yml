@@ -346,7 +346,7 @@ jobs:
           tests/unit/test_nemotron_verification_harness.py
           tests/test_check_logging_conventions.py
           tests/test_check_retrieval_logging.py
-          -q --tb=short
+          -x -vv --tb=short --durations=20
       - name: Logging and file-size guardrails
         run: |
           python scripts/check_logging_conventions.py
