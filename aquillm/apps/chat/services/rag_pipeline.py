@@ -27,6 +27,7 @@ from apps.chat.services.rag_pipeline_messages import (
     _retry_needs_visual_tools,
 )
 from apps.chat.services.rag_pipeline_retrieval import run_parallel_searches, successful_search_results
+from apps.chat.services.rag_pipeline_retrieval import finish_failed_direct_retrieval
 from apps.chat.services.rag_query import build_retrieval_queries
 from apps.chat.services.rag_retrieval import merge_ranked_tool_results
 from apps.chat.services.rag_selection_coordinator import (
@@ -293,7 +294,7 @@ async def _run_direct_rag_turn(consumer, llm_if, convo, *, stream_func=None):
             correlation_id=correlation_id,
             error_type=type(exc).__name__,
         )
-        return "skipped"
+        return await finish_failed_direct_retrieval(consumer, convo, exc, stream_func=stream_func)
 
 
 __all__ = ["DirectRagOutcome", "run_direct_rag_turn"]
