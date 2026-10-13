@@ -22,6 +22,15 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 8
+      redis:
+        image: redis:7.4-bookworm
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 8
     env:
       DJANGO_DEBUG: "1"
       SECRET_KEY: ci-not-secret
@@ -34,6 +43,9 @@ jobs:
       LLM_CHOICE: OPENAI
       MEM0_ENABLED: "0"
     steps:
+      - name: Resolve the isolated task broker
+        # Base settings use the Compose hostname; this runner has its own Redis.
+        run: echo '127.0.0.1 redis' | sudo tee -a /etc/hosts
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:

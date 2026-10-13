@@ -54,10 +54,10 @@ class IndexRecoveryTests(TestCase):
     def test_async_force_reaches_the_worker(self):
         with patch.object(index_conversation_task, 'apply_async') as queue:
             call_command('index_conversations', '--async', '--force', stdout=StringIO())
-        self.assertTrue(queue.call_args.kwargs['kwargs']['force'])
-        with patch('apps.chat.services.conversation_indexing.index_conversation') as indexer:
-            index_conversation_task.run(**queue.call_args.kwargs['kwargs'])
-        indexer.assert_called_once_with(self.conversation.pk, force=True)
+            self.assertTrue(queue.call_args.kwargs['kwargs']['force'])
+            with patch('apps.chat.services.conversation_indexing.index_conversation') as indexer:
+                index_conversation_task.run(**queue.call_args.kwargs['kwargs'])
+            indexer.assert_called_once_with(self.conversation.pk, force=True)
 
     def test_legacy_complete_flag_does_not_skip_null_vectors(self):
         with patch('apps.chat.services.conversation_indexing.get_embeddings', side_effect=EmbeddingUpstreamUnavailableError('offline')), patch(

@@ -1,5 +1,6 @@
 """Authorized standalone query admissions established before async test work."""
 from uuid import uuid4
+from unittest.mock import patch
 
 import pytest
 
@@ -11,14 +12,22 @@ from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 @pytest.fixture
 def admitted_query_runtimes(transactional_db):
+    from apps.documents.tasks.chunking import create_chunks
+
     runtimes = []
-    for _ in range(3):
-        _, _, authorization = setup_scope("query-admission-" + uuid4().hex)
-        runtime = SourceRuntime(TurnBudget(TurnLimits()), authorization)
-        with source_runtime_scope(runtime):
-            witness = ensure_admission(runtime)
-        assert witness.scope is runtime._frozen_retrieval_scope
-        runtimes.append(runtime)
+    with patch.object(create_chunks, "delay") as publication:
+        for _ in range(3):
+            _, _, authorization = setup_scope("query-admission-" + uuid4().hex)
+            runtime = SourceRuntime(TurnBudget(TurnLimits()), authorization)
+            with source_runtime_scope(runtime):
+                witness = ensure_admission(runtime)
+            assert witness.scope is runtime._frozen_retrieval_scope
+            runtimes.append(runtime)
+    assert publication.call_count == 3
+    assert {call.args[0] for call in publication.call_args_list} == {
+        str(document_id) for runtime in runtimes
+        for document_id in runtime.authorization.selected_document_ids
+    }
     return runtimes
 
 
