@@ -336,6 +336,7 @@ jobs:
       - name: Vocabulary permission and publication contracts
         run: >-
           python -m pytest
+          aquillm/apps/collections/tests/test_retrieval_principal_activity.py
           aquillm/apps/collections/tests/test_vocabulary_database_cleanup.py
           aquillm/apps/collections/tests/test_vocabulary_database_operator_limits.py
           aquillm/apps/collections/tests/test_vocabulary_deadline.py
@@ -374,6 +375,8 @@ jobs:
           tests/unit/test_nemotron_verification_harness.py
           tests/test_check_logging_conventions.py
           tests/test_check_retrieval_logging.py
+          tests/test_replay_retrieval.py
+          tests/test_replay_target_preflight.py
           -x -vv --tb=short --durations=20
       - name: Logging and file-size guardrails
         run: |

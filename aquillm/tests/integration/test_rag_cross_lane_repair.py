@@ -29,8 +29,8 @@ async def test_valid_repaired_citation_cannot_carry_invented_quantity(publicatio
         assert citation in str(provider.requests[-1]["messages"])
         expected = ("Support for an answer is uncertain in the selected evidence. "
             "These are attributed excerpts, not a conclusion about the question:\n\n"
-            f"> α😀 Capacity is 18 litres at 20 C. {citation}\n"
-            f"> The capacity applies only below 1 Pa. {citation}")
+            f"> α😀 Capacity is 18 litres at 20 C. {citation} "
+            f"The capacity applies only below 1 Pa. {citation}")
         assert message.content == expected and message._validated_answer.outcome == "partial"
         saved, events = await publish(source, consumer)
         assert saved == expected

@@ -37,9 +37,9 @@ def withdraw_full_text(scope, checked_rows, valid_ids):
         )
 
 
-def reconcile_candidate_order(rows):
+def reconcile_candidate_order(rows, *, scope=None):
     """Only reorder already admitted rows, before scoring or known fallback."""
-    scope = current_scope()
+    scope = scope if scope is not None else current_scope()
     rows = tuple(rows)
     if scope is None or scope.fusion_v2 is None:
         return rows

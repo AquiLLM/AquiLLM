@@ -38,8 +38,9 @@ class ChunkWindowScore:
 class _AttemptBudget:
     """Invocation-local diagnostics; all admission remains on the shared ledger."""
 
-    def __init__(self, budget):
+    def __init__(self, budget, on_submit=None):
         self.budget, self.attempts = budget, 0
+        self.on_submit = on_submit
 
     def __getattr__(self, name):
         return getattr(self.budget, name)
@@ -50,6 +51,12 @@ class _AttemptBudget:
     def record_admission(self, count):
         with self.budget._lock:
             self.attempts += count
+            if self.on_submit is not None:
+                try:
+                    self.on_submit(count)
+                except Exception:
+                    # Diagnostics cannot interrupt release of a real I/O lease.
+                    pass
 
     def start_pairs(self, count, *, phase):
         admitted = self.budget.start_pairs(count, phase=phase)
@@ -59,7 +66,15 @@ class _AttemptBudget:
 
 
 def score_window_plan(
-    plan, *, scorer, budget, phase="acquisition", timeout_seconds=3.0, clock=monotonic
+    plan,
+    *,
+    scorer,
+    budget,
+    phase="acquisition",
+    timeout_seconds=3.0,
+    clock=monotonic,
+    on_submit=None,
+    should_stop=None,
 ):
     """Complete candidates in rank order, windows in source order.
 
@@ -71,10 +86,10 @@ def score_window_plan(
     if budget is None or plan.preparation_coverage != "complete":
         return WindowScoreSet(plan, (), 0)
     state = rerank_state_for(budget)
-    budget = _AttemptBudget(budget)
+    budget = _AttemptBudget(budget, on_submit)
     for window_id, window in zip(plan.required_window_ids, plan.windows):
         remaining = min(deadline - clock(), budget.scoring_remaining_ms(phase) / 1000)
-        if remaining <= 0 or not state.can_admit():
+        if remaining <= 0 or not state.can_admit() or (should_stop and should_stop()):
             break
         pair = (plan.query, window.text)
         try:

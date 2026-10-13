@@ -94,6 +94,17 @@ async def call_tool_async(llm, message):
     from lib.retrieval.operation import operation_scope
 
     state = current_turn()
+    timeout = tool_timeout(message.tool_call_name)
+    if state and is_retrieval_tool(message.tool_call_name) and timeout <= 0:
+        from lib.llm.types.messages import ToolMessage
+
+        return ToolMessage(
+            tool_name=message.tool_call_name,
+            for_whom="assistant",
+            content="Retrieval deadline exhausted; available evidence may be partial.",
+            arguments=message.tool_call_input or {},
+            result_dict={"result": [], "retrieval_status": "context_limited"},
+        )
     try:
         with (
             operation_scope(state.budget)
@@ -102,7 +113,7 @@ async def call_tool_async(llm, message):
         ):
             return await asyncio.wait_for(
                 asyncio.to_thread(llm.call_tool, message),
-                tool_timeout(message.tool_call_name),
+                timeout,
             )
     except asyncio.CancelledError:
         if state:
@@ -142,6 +153,8 @@ async def evidence_handoff(llm, conversation, max_tokens, stream_func):
     if state is None or state.handoff is None or _IN_HANDOFF.get():
         return None
     if not conversation.messages or not isinstance(conversation[-1], ToolMessage):
+        return None
+    if conversation[-1].for_whom != "assistant":
         return None
     check_turn_active()
     token = _IN_HANDOFF.set(True)

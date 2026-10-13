@@ -78,7 +78,7 @@ def prepare_source_windows(
     """Count complete pairs first; retain every source code point in exact slices.
 
     ``pair_counter`` must count the *complete model template* or return None.
-    The byte-based fallback is deliberately an estimate, never a verification.
+    Unknown pair counts stop preparation without inferring fitted windows.
     Every actual counter invocation is charged; memoized repeated slices are free.
     """
     if not isinstance(source, SourceEvidence) or not isinstance(query, str):
@@ -118,7 +118,7 @@ def prepare_source_windows(
         check_preparation_open()
         if value is None:
             unknown = True
-            value = len(query.encode("utf-8")) + len(text.encode("utf-8")) + 256
+            raise PreparationStopped("pair_counter_unknown")
         if type(value) is not int or value < 0:
             raise ValueError("invalid complete pair count")
         memo[text] = value
@@ -218,4 +218,7 @@ def prepare_source_windows(
             start = end - low
         return finish("unknown" if unknown else "complete")
     except PreparationStopped as stopped:
+        if unknown:
+            windows.clear()
+            return finish("unknown", str(stopped))
         return finish("partial", str(stopped))

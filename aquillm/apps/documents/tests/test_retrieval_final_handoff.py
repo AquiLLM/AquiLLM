@@ -174,7 +174,8 @@ def test_scored_search_sidecar_matches_final_rows_after_permission_mutation(
         result = original_authorization(rows, context)
         if ready and rows:
             traversals.append(True)
-            if len(traversals) == 2:
+            # Ranking now shares the final union's single closed authorization.
+            if len(traversals) == 1:
                 if mutation == "body":
                     TextChunk.objects.update(content="changed")
                 elif mutation == "pointer":
@@ -193,7 +194,7 @@ def test_scored_search_sidecar_matches_final_rows_after_permission_mutation(
             TextChunk, "unrelated", 2, [legacy[0]], authorization_context=auth
         )
     returned = tuple(row.pk for row in rows)
-    assert len(traversals) >= 2
+    assert len(traversals) == 1
     assert bool(returned) is (mutation == "none")
     assert diagnostics_rows == [returned]
     assert tuple(row.pk for row in vectors) == returned

@@ -14,6 +14,62 @@ from apps.chat.evals.evidence_quality_seed import (
 
 
 @pytest.mark.django_db
+def test_seed_principal_is_active_without_login_credentials(tmp_path, monkeypatch):
+    from django.contrib.auth.models import User
+
+    from aquillm import utils
+
+    monkeypatch.setattr(utils, "get_embedding", lambda *a, **k: [0.1] * 1024)
+    cases = load_cases(Path(__file__).parents[1] / "evals/evidence_quality_cases.json")
+    manifest = seed_cases([cases[2]], tmp_path / "seed.json")
+    user = User.objects.get(pk=manifest["user_id"])
+    assert user.is_active is True
+    assert user.has_usable_password() is False
+    assert user.is_staff is False and user.is_superuser is False
+    assert user.email == ""
+    returned, _, _ = create_conversation(cases[2], manifest)
+    assert returned.pk == user.pk and returned.is_active is True
+
+
+@pytest.mark.django_db
+def test_seed_principal_database_deactivation_denies_stale_user(tmp_path, monkeypatch):
+    from django.contrib.auth.models import User
+
+    from apps.collections.services.django_retrieval_authorization import (
+        build_selected_scope_authorization_context,
+    )
+    from apps.documents.models import RawTextDocument
+    from aquillm import utils
+
+    monkeypatch.setattr(utils, "get_embedding", lambda *a, **k: [0.1] * 1024)
+    cases = load_cases(Path(__file__).parents[1] / "evals/evidence_quality_cases.json")
+    case = cases[2]
+    manifest = seed_cases([case], tmp_path / "seed.json")
+    user, _, _ = create_conversation(case, manifest)
+    scope = (manifest["cases"][case["case_id"]]["collection_id"],)
+    documents = tuple(RawTextDocument.objects.filter(collection_id=scope[0]))
+    assert user.is_active is True
+    assert (
+        build_selected_scope_authorization_context(
+            principal=user, selected_collection_ids=scope, selected_documents=documents
+        )
+        is not None
+    )
+    User.objects.filter(pk=user.pk).update(is_active=False)
+    assert (
+        user.is_active is True
+    )  # Stale request-local principal cannot override DB state.
+    assert (
+        build_selected_scope_authorization_context(
+            principal=user, selected_collection_ids=scope, selected_documents=documents
+        )
+        is None
+    )
+    with pytest.raises(User.DoesNotExist):
+        create_conversation(case, manifest)
+
+
+@pytest.mark.django_db
 def test_seed_current_revisions_separate_authority_and_ordered_followup(
     tmp_path, monkeypatch
 ):

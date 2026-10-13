@@ -169,5 +169,6 @@ async def test_multisentence_excerpts_keep_conditions_and_local_citations():
         answer = await context.finalize("Capacity is 18 litres [doc:a chunk:1].")
         assert "uncertain" in answer.content
         assert "> Capacity is 18 litres. [doc:a chunk:1]" in answer.content
-        assert "> This applies only at 20 C. [doc:a chunk:1]" in answer.content
+        assert "This applies only at 20 C. [doc:a chunk:1]" in answer.content
+        assert answer.content.count("> ") == 1
         await context.verify(answer, content=answer.content, sink="stream")

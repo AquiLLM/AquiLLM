@@ -38,3 +38,19 @@ def successful_search_results(outcomes, logger):
             total_count=len(outcomes),
         )
     return results
+
+
+async def finish_failed_direct_retrieval(consumer, convo, error, *, stream_func=None):
+    """A spent deadline finishes the turn instead of restarting model retrieval."""
+    from lib.llm.turn_context import check_turn_active, current_turn
+
+    turn = current_turn()
+    if not isinstance(error, TimeoutError) or turn is None:
+        return "skipped"
+    if turn.budget.remaining_ms() > 0:
+        return "skipped"
+    from .rag_answer_publication import limited_rag_result
+
+    check_turn_active()
+    consumer.convo = await limited_rag_result(convo, stream_func=stream_func)
+    return "handled"

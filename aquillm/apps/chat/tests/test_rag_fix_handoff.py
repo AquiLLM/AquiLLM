@@ -135,8 +135,17 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
     fake_search(monkeypatch)
     user, doc, chunks, _ = docs
     started, release, finished = Event(), Event(), Event()
+    acquisition_finished = asyncio.Event()
     late, requests, selections = [], [], []
     original = rag_preservation_turn.prepare_selection_turn
+    original_acquire = rag_preservation_turn.acquire_evidence
+
+    async def acquire(*args, **kwargs):
+        result = await original_acquire(*args, **kwargs)
+        acquisition_finished.set()
+        return result
+
+    monkeypatch.setattr(rag_preservation_turn, "acquire_evidence", acquire)
 
     def select(*args, **kwargs):
         selections.append(True)
@@ -157,7 +166,7 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
     def blocked_search(*args, **kwargs):
         runtime = current_source_runtime()
         started.set()
-        release.wait(2)
+        release.wait()
         runtime.budget.publish(lambda: late.append(True))
         finished.set()
         return None, None, [], {}
@@ -202,8 +211,12 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
         )
         try:
             assert await asyncio.to_thread(started.wait, 1)
-            done, _ = await asyncio.wait({task}, timeout=0.6)
-            assert task in done
+            # The tool deadline bounds acquisition, not the subsequent real DB
+            # selection and synthesis. Both must advance without this provider.
+            await asyncio.wait_for(acquisition_finished.wait(), timeout=0.6)
+            assert not release.is_set() and not finished.is_set()
+            await task
+            assert not finished.is_set()
             assert runtime.observation["acquisition"].stop_reason == "partial_unknown"
             assert runtime.budget.actions_used == 2
         finally:

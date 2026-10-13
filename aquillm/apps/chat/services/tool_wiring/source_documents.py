@@ -69,7 +69,7 @@ def selected_document_metadata(user, col_ref):
     if documents is not None:
         return documents
     return Collection.get_user_accessible_documents(
-        user, Collection.objects.filter(id__in=col_ref.collections))
+        user, Collection.objects.filter(id__in=col_ref.collections), metadata_only=True)
 
 
 def document_metadata(doc_id):

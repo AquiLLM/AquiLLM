@@ -4,8 +4,14 @@ from hashlib import md5
 
 from django.db.models.functions import MD5
 
-from .chunk_search_scope import current_scope
-from .source_loading import source_query_rows
+from .chunk_search_scope import FrozenRetrievalScope, current_scope
+from .representation_contracts import SourceScopeUnavailable
+from .representation_store import _active_chunk_predicates
+from .source_loading import (
+    SourceRuntime,
+    bounded_source_database,
+    source_query_rows,
+)
 
 
 def fingerprint(row):
@@ -18,31 +24,62 @@ def fingerprint(row):
 
 
 def scoped_rows(queryset, scope, *, lexical=False):
+    from .chunk_search_source_operation import (
+        _closed_header,
+        _closed_scoped_rows,
+        _same_header,
+    )
+
     if scope is None:
         return source_query_rows(queryset)
+    if type(scope) is FrozenRetrievalScope and type(scope.runtime) is SourceRuntime:
+        runtime, alias = scope.runtime, scope.using
+        header = _closed_header(queryset, scope)
+        if header is not None:
+            with runtime.lock, bounded_source_database(runtime, alias):
+                # Context entry may call a clock or database hook. Never accept
+                # replacement state under the original runtime's lock/timeout.
+                if not _same_header(header, _closed_header(queryset, scope)):
+                    raise SourceScopeUnavailable("source_scope_unavailable")
+                return _closed_scoped_rows(queryset, scope, header, lexical)
+    return _independent_scoped_rows(queryset, scope, lexical)
+
+
+def _independent_scoped_rows(queryset, scope, lexical):
+    """Fallback retains the independently guarded public source operation."""
     with scope.database():
         rows = source_query_rows(queryset, runtime=scope.runtime)
-        scope.validate()
-        if lexical == "full_text":
-            bindings = dict(
-                queryset.model.objects.using(scope.using)
-                .filter(pk__in=[row.pk for row in rows])
-                .values_list("pk", "search_vector_binding")
-            )
-            for row in rows:
-                row.search_vector_binding = bindings.get(row.pk)
-        for row in rows:
-            scope.bodies.setdefault(row.pk, fingerprint(row))
-            if lexical == "full_text":
-                scope.fts_rows.setdefault(row.pk, row.search_vector_binding)
-            elif lexical:
-                scope.lexical_ids.add(row.pk)
-        validated = validate_rows(rows, scope=scope)
+        initial_keys = set(scope.validate())
+        if not rows:
+            return rows
+        _record_rows(queryset, rows, scope, lexical)
+        # This closed operation already owns the fresh entry before recording
+        # body/lexical observations. Retain a fresh final check after metadata.
+        result, valid_fts = _current_rows(rows, scope, initial_keys)
+        final_keys = set(scope.validate())
+        validated = _retain_dense(result, scope, final_keys, valid_fts)
         if lexical == "full_text":
             return tuple(
                 row for row in validated if row.pk not in scope.fts_invalid_ids
             )
         return validated
+
+
+def _record_rows(queryset, rows, scope, lexical):
+    if lexical == "full_text":
+        bindings = dict(
+            queryset.model.objects.using(scope.using)
+            .filter(pk__in=[row.pk for row in rows])
+            .values_list("pk", "search_vector_binding")
+        )
+        for row in rows:
+            row.search_vector_binding = bindings.get(row.pk)
+    for row in rows:
+        scope.bodies.setdefault(row.pk, fingerprint(row))
+        if lexical == "full_text":
+            scope.fts_rows.setdefault(row.pk, row.search_vector_binding)
+        elif lexical:
+            scope.lexical_ids.add(row.pk)
 
 
 def dense_rows(model_cls, observation, scope, limit):
@@ -68,10 +105,12 @@ def dense_rows(model_cls, observation, scope, limit):
     with scope.database():
         keys = set(scope.validate())
         ranked = tuple(r for r in ranked if r.embedding_generation_key in keys)
-        queryset = scope.queryset(
+        queryset = _active_chunk_predicates(
             model_cls.objects.using(scope.using).filter(
                 pk__in=[r.chunk_id for r in ranked],
-            )
+                doc_id__in=scope.requested_document_ids,
+            ),
+            snapshot=scope.representation,
         ).defer("embedding")
         rows = scoped_rows(queryset, scope)
         by_id = {r.pk: r for r in rows}
@@ -85,11 +124,11 @@ def dense_rows(model_cls, observation, scope, limit):
 def _current_row_queryset(scope, ids):
     """Private metadata query; never returned from the closed row operation."""
     from apps.documents.models import TextChunk
-    from .representation_store import _active_chunk_predicates
 
     return _active_chunk_predicates(
         TextChunk.objects.using(scope.using).filter(
-            pk__in=ids, doc_id__in=scope.requested_document_ids,
+            pk__in=ids,
+            doc_id__in=scope.requested_document_ids,
         ),
         snapshot=scope.representation,
     )
@@ -104,7 +143,8 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False):
     fts_ids = tuple(row.pk for row in rows if row.pk in scope.fts_rows)
     valid_fts = (
         _matching_full_text_ids(scope, _current_row_queryset(scope, fts_ids))
-        if fts_ids else set()
+        if fts_ids
+        else set()
     )
     from .chunk_search_revalidation import withdraw_full_text
 
@@ -170,9 +210,13 @@ def validate_rows(rows, *, scope=None, dense_only=False):
         return rows
     with scope.database():
         valid_dense = set(scope.validate())
-        result, valid_fts = _current_rows(rows, scope, valid_dense, dense_only=dense_only)
+        result, valid_fts = _current_rows(
+            rows, scope, valid_dense, dense_only=dense_only
+        )
         final_keys = set(scope.validate())
-        return _retain_dense(result, scope, final_keys, valid_fts, dense_only=dense_only)
+        return _retain_dense(
+            result, scope, final_keys, valid_fts, dense_only=dense_only
+        )
 
 
 def _closed_authorized_rows(rows, *, scope, reauthorize):
@@ -201,5 +245,12 @@ def ranked_rows(reranked):
     scope = current_scope()
     if scope and isinstance(reranked, QuerySet):
         with scope.database():
-            return scoped_rows(scope.queryset(reranked.using(scope.using)), scope)
+            scope.validate()
+            queryset = _active_chunk_predicates(
+                reranked.using(scope.using).filter(
+                    doc_id__in=scope.requested_document_ids,
+                ),
+                snapshot=scope.representation,
+            )
+            return scoped_rows(queryset, scope)
     return validate_rows(tuple(reranked), scope=scope)

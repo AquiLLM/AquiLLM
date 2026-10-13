@@ -21,6 +21,7 @@ from apps.chat.tests.rag_suffix_test_support import (
     suffix_case,
 )
 from lib.embeddings.tests.test_document_provider import transport as transport
+from lib.llm.providers.rag_citations import find_uncited_numeric_claims
 
 HEADER = "Table 1. Signed results; concentration unit: ug/L."
 CONTRADICTION = (
@@ -125,9 +126,10 @@ async def test_actual_acquisition_scores_reused_without_losing_source_conditions
     assert (
         MARKER in result["persisted_answer"] and citation in result["persisted_answer"]
     )
-    # The unchanged renderer cites each sentence; remove only its framing.
+    # Retain every source line; remove only exact injected inline/terminal references.
+    assert not find_uncited_numeric_claims(result["persisted_answer"])
     quoted = " ".join(
-        line.removeprefix("> ").removesuffix(" " + citation)
+        line.removeprefix("> ").replace(" " + citation, "")
         for line in result["persisted_answer"].splitlines()
         if line.startswith("> ")
     )

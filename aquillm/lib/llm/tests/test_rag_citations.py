@@ -1167,10 +1167,8 @@ async def test_complete_turn_recovers_blank_post_tool_whole_document_via_synthes
     assert llm.get_message.await_count == 2
     content = updated[-1].content
     assert "I found supporting context" not in content
-    assert content == UNCERTAINTY + (
-        "\n\n> The objective combines a cross-entropy term with a calibration penalty. [doc:doc-paper chunk:1]"
-        "\n> Equation (3) defines the reliability score used in Figure 2. [doc:doc-paper chunk:1]"
-    )
+    source_text = convo[-1].result_dict["result"]["text"]
+    assert content == f"{UNCERTAINTY}\n\n> {source_text} [doc:doc-paper chunk:1]"
 
 
 def test_collect_allowed_chunk_citations_accepts_explicit_ref_fields():

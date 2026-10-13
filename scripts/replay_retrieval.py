@@ -12,6 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "aquillm"))
+from apps.chat.evals.replay_controls import (  # noqa: E402
+    MODE_CHOICES,
+    MODE_DEFAULTS,
+    validate_modes,
+)
 from apps.chat.evals.retrieval_replay import (  # noqa: E402
     EXPERIMENTS,
     fingerprint,
@@ -62,8 +67,16 @@ def parse_args(argv=None):
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--repetitions", type=positive, default=1)
     parser.add_argument("--experiment", choices=EXPERIMENTS, default="baseline")
+    for name, choices in MODE_CHOICES.items():
+        parser.add_argument(
+            "--" + name.replace("_", "-"), choices=choices, default=MODE_DEFAULTS[name]
+        )
     parser.add_argument("--revision", type=full_revision)
     args = parser.parse_args(argv)
+    try:
+        validate_modes(args.experiment, selected_modes(args))
+    except ValueError:
+        parser.error("treatment modes require --experiment current")
     if (
         args.repetitions > 10
         or len(args.collection_ids) > 64
@@ -77,19 +90,32 @@ def parse_args(argv=None):
     return args
 
 
+def selected_modes(args):
+    return {name: getattr(args, name) for name in MODE_CHOICES}
+
+
 def selected_sources(user, collections):
-    from apps.chat.refs import CollectionsRef
-    from apps.chat.services.tool_wiring.source_documents import (
-        document_metadata,
-        selected_document_metadata,
-    )
+    """Offline gold oracle under cache-off replay controls, outside serving tools."""
+    from django.contrib.auth import get_user_model
+
+    from apps.collections.models import Collection
     from apps.documents.models import TextChunk
 
-    sources = []
-    for metadata in selected_document_metadata(user, CollectionsRef(collections)):
-        document = document_metadata(metadata.id)
-        if document is None or not document.collection.user_can_view(user):
+    def authorize(document=None):
+        if not user.is_active or not get_user_model().objects.filter(
+            pk=user.pk, is_active=True
+        ).exists():
+            raise ValueError("principal_inactive")
+        if document is not None and not document.collection.user_can_view(user):
             raise ValueError("source_authorization_failed")
+
+    authorize()
+    documents = Collection.get_user_accessible_documents(
+        user, Collection.objects.filter(pk__in=collections), metadata_only=True
+    )
+    sources = []
+    for document in documents:
+        authorize(document)
         sources.append(
             {
                 "source": document.full_text,
@@ -104,6 +130,10 @@ def selected_sources(user, collections):
                 ],
             }
         )
+        authorize(document)
+    authorize()
+    for document in documents:
+        authorize(document)
     return sources
 
 
@@ -111,11 +141,13 @@ def effective_config(settings, config):
     from dataclasses import asdict
 
     from apps.chat.services import rag_config
+    from apps.chat.services.retrieval_query_runtime import configured_proposal_controls
     from apps.documents.services.chunk_rerank_config import (
         rerank_doc_char_limit,
         rerank_pair_token_limit,
         rerank_text_mode,
     )
+    from lib.retrieval.turn_budget import TurnLimits
 
     return {
         "vector_cap": config.vector_top_k,
@@ -123,6 +155,9 @@ def effective_config(settings, config):
         "candidate_multiplier": getattr(settings, "RAG_CANDIDATE_MULTIPLIER", 3.0),
         "cache_enabled": settings.RAG_CACHE_ENABLED,
         "graph_overlay": getattr(settings, "KG_OVERLAY_ENABLED", False),
+        "graph_remediation_mode": getattr(
+            settings, "KG_GRAPH_REMEDIATION_MODE", "legacy"
+        ),
         "graph_direct": getattr(settings, "KG_GRAPH_DIRECT_ENABLED", False),
         "graph_extended": getattr(settings, "KG_GRAPH_EXTENDED_ENABLED", False),
         "rerank_character_cap": rerank_doc_char_limit(),
@@ -134,6 +169,10 @@ def effective_config(settings, config):
         "candidate_top_k": rag_config.direct_rag_candidate_top_k(),
         "max_queries": rag_config.direct_rag_max_queries(),
         "token_budget": rag_config.evidence_token_budget(),
+        "proposal_controls": configured_proposal_controls(),
+        "turn_limits": asdict(
+            TurnLimits(actions=min(3, rag_config.direct_rag_max_queries()))
+        ),
     }
 
 
@@ -143,6 +182,7 @@ def main(argv=None):
         "schema_version": 1,
         "success": False,
         "experiment": args.experiment,
+        "modes": selected_modes(args),
         "requested": {
             "question_count": None,
             "collection_count": len(args.collection_ids),
@@ -170,7 +210,14 @@ def main(argv=None):
         from apps.chat.services import rag_pipeline
 
         config = apps.get_app_config("aquillm")
-        with replay_runtime(args.experiment, settings, config, rag_pipeline, None):
+        with replay_runtime(
+            args.experiment,
+            settings,
+            config,
+            rag_pipeline,
+            None,
+            **selected_modes(args),
+        ):
             user = get_user_model().objects.get(pk=args.principal_id)
             if not user.is_active:
                 raise ValueError("principal_inactive")
@@ -195,6 +242,7 @@ def main(argv=None):
                         settings,
                         config,
                         rag_pipeline,
+                        **selected_modes(args),
                     )
                     row["repetition"] = repetition
                     report["turns"].append(row)

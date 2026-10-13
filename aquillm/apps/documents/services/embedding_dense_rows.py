@@ -2,7 +2,9 @@
 from django.db.models import Q
 
 from apps.documents.models.embedding_index import DocumentEmbeddingState
+
 from .representation_contracts import SourceScopeUnavailable
+from .representation_tuple_predicate import ExactTupleMembership
 from .source_deadline import check_source_deadline
 
 _BATCH_SIZE = 64
@@ -23,13 +25,13 @@ def _identity(selection, space_key):
 
 
 def _batch_rows(identities, *, using):
-    groups = {}
-    for label, pkid, document_id, collection_id, representation_key, space_id in identities:
-        groups.setdefault((label, collection_id, space_id), []).append(
-            Q(document_pkid=pkid, document_id=document_id, representation_key=representation_key))
-    predicate = Q(*(Q(Q(*pairs, _connector=Q.OR), model_label=label,
-                      collection_id=collection_id, space_id=space_id)
-                    for (label, collection_id, space_id), pairs in groups.items()), _connector=Q.OR)
+    current = tuple(row for row in identities if row[4] is not None)
+    legacy = tuple((*row[:4], row[5]) for row in identities if row[4] is None)
+    predicate = Q(ExactTupleMembership(_IDENTITY, current))
+    if legacy:
+        # SQL tuple equality cannot match NULL; retain the exact other fields.
+        predicate |= Q(representation_key__isnull=True) & Q(ExactTupleMembership(
+            (*_IDENTITY[:4], _IDENTITY[5]), legacy))
     rows = (DocumentEmbeddingState.objects.using(using).filter(predicate)
             .order_by("pk").values(*_FIELDS)[:len(identities) + 1])
     check_source_deadline()

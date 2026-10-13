@@ -3,7 +3,8 @@
 from uuid import UUID
 import re
 
-from django.db.models import Exists, F, Func, OuterRef, Q
+from django.contrib.postgres.expressions import ArraySubquery
+from django.db.models import BooleanField, F, Func, Q
 
 from lib.embeddings.document_contracts import digest, require_digest
 from .representation_contracts import (
@@ -16,6 +17,18 @@ from .representation_contracts import (
 
 class SourceSHA256(Func):
     template = "encode(sha256(convert_to(%(expressions)s, 'UTF8')), 'hex')"
+
+
+class OwnerIdMembership(Func):
+    """Parameter-safe UUID membership in one statement-local owner array."""
+
+    def __init__(self, owners):
+        super().__init__(F("doc_id"), ArraySubquery(owners), output_field=BooleanField())
+
+    def as_sql(self, compiler, connection, **extra_context):
+        lhs, lhs_params = compiler.compile(self.source_expressions[0])
+        rhs, rhs_params = compiler.compile(self.source_expressions[1])
+        return f"({lhs} = ANY({rhs}))", [*lhs_params, *rhs_params]
 
 
 def _unavailable():
@@ -143,8 +156,65 @@ def freeze_active_representations(
 ) -> RepresentationSnapshotV1:
     if type(documents) is not tuple:
         _unavailable()
-    from .representation_scope import selection_for_document
-    snapshot = RepresentationSnapshotV1(tuple(selection_for_document(ref, using=using) for ref in documents))
+    from apps.documents.models import DocumentRepresentationState
+
+    from .representation_tuple_predicate import ExactTupleMembership
+
+    expected, document_ids = {}, set()
+    for ref in documents:
+        document_payload(ref)
+        key = ref.model_label, ref.pkid, ref.id
+        if key in expected or ref.id in document_ids:
+            _unavailable()
+        expected[key] = ref
+        document_ids.add(ref.id)
+    if not expected:
+        return validate_representation_snapshot(
+            RepresentationSnapshotV1(()), using=using
+        )
+    identity = ("model_label", "document_pkid", "document_id")
+    rows = (
+        DocumentRepresentationState.objects.using(using)
+        .filter(ExactTupleMembership(identity, tuple(expected)))
+        .order_by()
+        .values(
+            "model_label",
+            "document_pkid",
+            "document_id",
+            "active_generation_id",
+            "legacy_closed",
+            "legacy_source_hash",
+            "active_generation__canonical_sha256",
+            "active_generation__source_revision_sha256",
+        )[: len(expected) + 1]
+    )
+    states = {}
+    for row in rows:
+        key = row["model_label"], row["document_pkid"], row["document_id"]
+        if key not in expected or key in states:
+            _unavailable()
+        states[key] = row
+    selections = []
+    for ref in documents:
+        state = states.get((ref.model_label, ref.pkid, ref.id))
+        if state and state["active_generation_id"]:
+            selections.append(
+                RepresentationSelectionV1(
+                    ref,
+                    state["active_generation_id"],
+                    state["active_generation__canonical_sha256"],
+                    state["active_generation__source_revision_sha256"],
+                )
+            )
+        elif state and (
+            state["legacy_closed"] or state["legacy_source_hash"] != ref.source_hash
+        ):
+            _unavailable()
+        else:
+            selections.append(
+                RepresentationSelectionV1(ref, None, ref.source_hash, None)
+            )
+    snapshot = RepresentationSnapshotV1(tuple(selections))
     return validate_representation_snapshot(snapshot, using=using)
 
 
@@ -165,20 +235,24 @@ def _active_chunk_predicates(queryset, *, snapshot, document_id=None):
         selections = tuple(s for s in selections if s.document.id == document_id)
         if len(selections) != 1:
             _unavailable()
-    from .representation_scope import current_state_clause, _current_active_state_clause
+    from .representation_scope import _current_active_state_clause, _current_legacy_state_clause
     from .representation_tuple_predicate import ExactTupleMembership
     condition = Q(pk__in=[])
-    represented, active = {}, []
+    represented, active, legacy = {}, [], []
     for s in selections:
         ref = s.document
-        clause = Q(doc_id=ref.id, representation_generation_id=s.generation_key)
         if s.generation_key is None:
-            condition |= clause & current_state_clause(s, using=queryset.db)
+            legacy.append(s)
         else:
             active.append(s)
         represented.setdefault(ref.model_label, []).append(ref)
     if not selections:
         return queryset.filter(condition)
+    if legacy:
+        condition |= (
+            Q(doc_id__in=[s.document.id for s in legacy], representation_generation_id__isnull=True)
+            & _current_legacy_state_clause(tuple(legacy), using=queryset.db)
+        )
     if active:
         active_condition = Q(ExactTupleMembership(
             ("doc_id", "representation_generation_id"),
@@ -187,8 +261,9 @@ def _active_chunk_predicates(queryset, *, snapshot, document_id=None):
 
     exact_owner = Q(pk__in=[])
     unique_owner = Q()
+    selected_ids = tuple(s.document.id for s in selections)
     for model in DESCENDED_FROM_DOCUMENT:
-        owners = model._base_manager.using(queryset.db).filter(id=OuterRef("doc_id"))
+        owners = model._base_manager.using(queryset.db).filter(id__in=selected_ids).order_by()
         refs = represented.get(model._meta.label_lower, ())
         if refs:
             exact_tuples = ExactTupleMembership(
@@ -200,11 +275,17 @@ def _active_chunk_predicates(queryset, *, snapshot, document_id=None):
             # the complete tuple fixes the stored hash before this single SHA check.
             exact = owners.annotate(_canonical=SourceSHA256(F("full_text"))).filter(
                 exact_tuples, _canonical=F("full_text_hash"))
-            exact_owner |= Q(Exists(exact))
+            # A bounded uncorrelated membership read hashes each selected owner
+            # once in this SQL statement, rather than its full body per chunk.
+            # ARRAY creates a statement-local InitPlan. Plain IN can become a
+            # nested semi-join that rescans even an uncorrelated owner query.
+            # Exact PK/UUID tuples admit at most len(refs) rows, so this limit
+            # cannot truncate valid owners or reduce lexical recall.
+            exact_owner |= Q(OwnerIdMembership(exact.values("id")[:len(refs)]))
             # Keep UUID/PK pairs: a different selected PK can acquire this UUID
             # after construction, and must then count as an unexpected owner.
             owners = owners.exclude(identities)
-        unique_owner &= ~Q(Exists(owners))
+        unique_owner &= ~Q(doc_id__in=owners.values("id"))
     return queryset.filter(condition & exact_owner & unique_owner)
 
 

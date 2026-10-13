@@ -66,6 +66,26 @@ def current_state_clause(selection, *, using):
     return Q(Exists(valid))
 
 
+def _current_legacy_state_clause(selections, *, using):
+    """One lazy anti-scan preserves each captured legacy owner's identity."""
+    from .representation_tuple_predicate import ExactTupleMembership
+
+    identity = ("model_label", "document_pkid", "document_id")
+    owners = tuple((s.document.model_label, s.document.pkid, s.document.id)
+                   for s in selections)
+    hashes = tuple((*owner, s.document.source_hash)
+                   for owner, s in zip(owners, selections, strict=True))
+    states = DocumentRepresentationState.objects.using(using).filter(
+        ExactTupleMembership(identity, owners), document_id=OuterRef("doc_id"),
+    )
+    invalid = states.filter(
+        Q(legacy_closed=True) | Q(active_generation__isnull=False)
+        | Q(legacy_source_hash__isnull=True)
+        | ~Q(ExactTupleMembership((*identity, "legacy_source_hash"), hashes))
+    )
+    return ~Q(Exists(invalid)) & ~Q(legacy_context_status="unavailable")
+
+
 def _current_active_state_clause(selections, *, using):
     """One lazy state scan, with each captured non-null owner tuple kept intact."""
     from .representation_tuple_predicate import ExactTupleMembership

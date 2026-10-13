@@ -45,12 +45,11 @@ async def acquire_evidence(
     assessment = CoverageAssessment()
     reason = "initial"
 
-    async def run(action, proposal=None):
+    async def run(action, proposal=None, *, initial=False):
         from lib.llm.turn_context import tool_timeout
         from lib.retrieval.operation import operation_scope
 
         timeout = min(
-            ACTION_TIMEOUT_MS,
             tool_timeout(retrieval=True) * 1000,
             max(
                 0,
@@ -59,6 +58,9 @@ async def acquire_evidence(
                 - COMPLETION_RESERVE_MS,
             ),
         )
+        # The mandatory original search may use the unreserved turn allowance.
+        if not initial:
+            timeout = min(timeout, ACTION_TIMEOUT_MS)
         if timeout <= 0:
             raise TimeoutError("acquisition reserve")
         with operation_scope(budget):
@@ -84,6 +86,7 @@ async def acquire_evidence(
     try:
         if not initial_acquired and budget.actions_used < budget.limits.actions:
             from apps.documents.services.source_loading import current_source_runtime
+
             from .retrieval_query_runtime import run_optional_proposal
 
             runtime = current_source_runtime()
@@ -91,9 +94,12 @@ async def acquire_evidence(
             if prepared and prepared == query_proposals:
                 if prepared[0].text != question or prepared[0].kind != "original":
                     raise ValueError("original query changed")
-                results.append(await run_optional_proposal(prepared[0], anchors=anchors, run=run))
+                results.append(await run_optional_proposal(
+                    prepared[0], anchors=anchors,
+                    run=lambda action: run(action, initial=True)))
             else:
-                results.append(await run(AcquisitionAction("vector", question)))
+                results.append(await run(
+                    AcquisitionAction("vector", question), initial=True))
         for proposal in query_proposals[1:3]:
             if budget.actions_used >= budget.limits.actions:
                 break

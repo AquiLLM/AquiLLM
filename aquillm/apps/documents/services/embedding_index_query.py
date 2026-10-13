@@ -35,6 +35,7 @@ from .representation_store import (
     representation_snapshot_digest,
     validate_representation_snapshot,
 )
+from .source_deadline import check_source_deadline
 from .source_loading import (
     SourcePreparationLimited,
     bounded_source_database,
@@ -145,10 +146,30 @@ def validate_dense_snapshot(
         != tuple(sorted((s.generation_key for s in dense_snapshot.selections), key=str))
     ):
         raise SourceScopeUnavailable("source_scope_unavailable")
-    current = freeze_dense_generations(
-        snapshot, space_key=dense_snapshot.space_key, using=using
+    validate_representation_snapshot(snapshot, using=using)
+    # An empty dense capture still validates every original source owner and
+    # retains the deadline fence formerly supplied by the dense owner sweep.
+    check_source_deadline()
+    captured = {s.document_id: s for s in dense_snapshot.selections}
+    owners = tuple(
+        s for s in ordered_selections(snapshot) if s.document.id in captured
     )
-    current_map = {s.document_id: s for s in current.selections}
+    current_map, generation_keys = {}, set()
+    for owner, generation_key, manifest_sha256 in dense_owner_rows(
+        owners, space_key=dense_snapshot.space_key, using=using
+    ):
+        if type(generation_key) is not UUID or generation_key in generation_keys:
+            raise SourceScopeUnavailable("source_scope_unavailable")
+        try:
+            require_digest(manifest_sha256)
+        except ValueError:
+            raise SourceScopeUnavailable("source_scope_unavailable") from None
+        generation_keys.add(generation_key)
+        ref = owner.document
+        current_map[ref.id] = DenseGenerationSelectionV1(
+            ref.id, ref.model_label, ref.pkid, owner.generation_key,
+            ref.source_hash, generation_key, manifest_sha256,
+        )
     return tuple(
         s.generation_key
         for s in dense_snapshot.selections

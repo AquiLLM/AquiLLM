@@ -70,6 +70,74 @@ def _safe_excerpt(text):
     )
 
 
+def _attributed_span(text, citation):
+    """Keep exact span characters; add only mechanically necessary references."""
+    from lib.llm.providers.rag_citations import find_uncited_numeric_claims
+
+    # Capture separators rather than replacing source sentence/line boundaries.
+    parts = re.split(r"((?<=[.!?])\s+|(?<=[.!?][\"')\u201d\u2019])\s+)", text)
+    meaningful = [
+        i for i in range(0, len(parts), 2) if any(c.isalnum() for c in parts[i])
+    ]
+    last = meaningful[-1]
+
+    def quoted(indices):
+        rendered = "".join(
+            part + (" " + citation if i in indices else "")
+            for i, part in enumerate(parts)
+        )
+        return "> " + rendered.replace("\n", "\n> ")
+
+    rendered = quoted({last})
+    if find_uncited_numeric_claims(rendered):
+        required = {
+            i
+            for i in meaningful
+            if re.search(r"\d", parts[i]) and re.search(r"[A-Za-z]{2,}", parts[i])
+        }
+        rendered = quoted(required | {last})
+    return rendered
+
+
+def _render_unknown_excerpts(packet, support):
+    """Admit each entire source atomically under source and rendered limits."""
+    from .rag_complete_excerpts import partition_complete_source
+
+    header = (
+        "Support for an answer is uncertain in the selected evidence. "
+        "These are attributed excerpts, not a conclusion about the question:"
+    )
+    points = []
+    remaining_slots, remaining_codepoints = 5, 6000
+    for row in packet.chunks:
+        citation = _chunk_citation_from_row(row)
+        if citation not in packet.citation_tokens:
+            continue
+        spans = partition_complete_source(
+            row.get("text", row.get("x", "")),
+            slots=remaining_slots,
+            codepoints=remaining_codepoints,
+        )
+        if not spans or not all(
+            _safe_excerpt(span) and any(c.isalnum() for c in span) for span in spans
+        ):
+            continue
+        rendered = [_attributed_span(span, citation) for span in spans]
+        candidate = header + "\n\n" + "\n\n".join(points + rendered)
+        # Account for header, references and blockquote markers too. Reject the
+        # whole source rather than publish a prefix without its later conditions.
+        if len(candidate) > 6000:
+            continue
+        points.extend(rendered)
+        remaining_slots -= len(spans)
+        remaining_codepoints -= sum(map(len, spans))
+    if not points:
+        return LIMITED_ANSWER, "limited"
+    return header + "\n\n" + "\n\n".join(
+        points
+    ), "answer" if support.state == "complete" else "partial"
+
+
 def render_supported_answer(packet):
     """Return final text/outcome, independent of unsupported provider assertions."""
     support = refresh_answer_support(packet)
@@ -100,25 +168,7 @@ def render_supported_answer(packet):
                 + "."
             )
     else:
-        from .rag_complete_excerpts import partition_complete_source
-
-        header = (
-            "Support for an answer is uncertain in the selected evidence. "
-            "These are attributed excerpts, not a conclusion about the question:"
-        )
-        remaining_slots, remaining_codepoints = 5, 6000
-        for row in packet.chunks:
-            citation = _chunk_citation_from_row(row)
-            if citation in packet.citation_tokens:
-                spans = partition_complete_source(
-                    row.get("text", row.get("x", "")),
-                    slots=remaining_slots,
-                    codepoints=remaining_codepoints,
-                )
-                if spans is not None:
-                    excerpts.extend((span, citation) for span in spans)
-                    remaining_slots -= len(spans)
-                    remaining_codepoints -= sum(map(len, spans))
+        return _render_unknown_excerpts(packet, support)
     points = []
     for text, citation in excerpts:
         if _safe_excerpt(text):

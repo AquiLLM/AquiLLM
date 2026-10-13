@@ -80,5 +80,13 @@ def citation(chunk):
 
 
 def literal_excerpt(text, reference):
-    # Frozen case text has ordinary sentence separators; no renderer under test.
-    return "\n".join("> " + sentence + " " + reference for sentence in text.replace(". ", ".\n").splitlines())
+    # Explicit frozen-case attribution, independent of the renderer under test.
+    assert text in (EXACT, IRRELEVANT, CONTRADICTORY, DISTRACTOR)
+    if text == CONTRADICTORY:
+        return (
+            f"> The capacity is 18 litres at 20 C. {reference} "
+            f"The capacity is 12 litres at 40 C. {reference} "
+            "These measurements conflict and neither is an accepted "
+            f"specification. {reference}"
+        )
+    return "> " + text + " " + reference

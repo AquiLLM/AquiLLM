@@ -93,6 +93,7 @@ class DjangoCollectionRetrievalPermissionPolicy:
             CollectionPermission.objects.using(database_alias)
             .filter(
                 user_id=principal_id,
+                user__is_active=True,
                 collection_id__in=selected_collection_ids,
                 permission__in=("VIEW", "EDIT", "MANAGE"),
             )
@@ -119,6 +120,9 @@ class DjangoCollectionRetrievalPermissionPolicy:
     ):
         from apps.collections.models import CollectionPermission
         from apps.documents.models.document import _get_document_types
+        from apps.documents.services.representation_tuple_predicate import (
+            ExactTupleMembership,
+        )
         from apps.knowledge_graph.retrieval.graph_seed_reads_v2 import seed_query_rows
 
         principal_id = self._principal_id(principal)
@@ -128,6 +132,7 @@ class DjangoCollectionRetrievalPermissionPolicy:
             CollectionPermission.objects.using(database_alias)
             .filter(
                 user_id=principal_id,
+                user__is_active=True,
                 collection_id__in=selected_collection_ids,
                 permission__in=("VIEW", "EDIT", "MANAGE"),
             )
@@ -138,11 +143,14 @@ class DjangoCollectionRetrievalPermissionPolicy:
         )
         if not authorized:
             return ()
+        membership = ExactTupleMembership(
+            ("id",), tuple((value,) for value in selected_document_ids)
+        )
         queries = tuple(
             model._base_manager.using(database_alias)
             .filter(
+                membership,
                 collection_id__in=authorized,
-                id__in=selected_document_ids,
             )
             .order_by()
             .values_list("collection_id", "id")
