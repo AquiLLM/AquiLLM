@@ -1,6 +1,7 @@
 """Private lexical hydration applies one original owner fence without widening."""
 
 import re
+from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -17,7 +18,7 @@ from apps.documents.models import (
 )
 from apps.documents.services import chunk_search_candidates as candidates
 from apps.documents.services import chunk_search_scope as scopes
-from apps.documents.services import lexical_collection
+from apps.documents.services import closed_lexical_operation
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.documents.services.source_loading import source_runtime_scope
 from apps.documents.tests.test_source_metadata_closed_operation import captured
@@ -172,9 +173,9 @@ def test_late_lexical_mutation_is_rejected_before_body_observation(
 ):
     case, scope, _, _ = captured(1, "none", transport, monkeypatch, settings)
     settings.RAG_FULL_TEXT_ENABLED = False
-    real_rows, attempted = lexical_collection.scoped_rows, []
+    real_rows, attempted = closed_lexical_operation._source_body_rows, []
 
-    def rows(query, current, **kwargs):
+    def mutate():
         # The private candidate query has been constructed; delegate real eager
         # metadata/body loading only after committing the adversarial mutation.
         attempted.append(True)
@@ -232,9 +233,27 @@ def test_late_lexical_mutation_is_rejected_before_body_observation(
                     )
                 ]
             )
-        return real_rows(query, current, **kwargs)
+    def rows(query, *args, **kwargs):
+        if not attempted:
+            mutate()
+        return real_rows(query, *args, **kwargs)
 
-    monkeypatch.setattr(lexical_collection, "scoped_rows", rows)
+    if change == "generation":
+        real_database = closed_lexical_operation.bounded_source_database
+
+        @contextmanager
+        def database(*args):
+            # Real rebuild on_commit publication must finish before the outer
+            # reader's atomic block, after its original header was captured.
+            mutate()
+            with real_database(*args):
+                yield
+
+        monkeypatch.setattr(
+            closed_lexical_operation, "bounded_source_database", database
+        )
+    else:
+        monkeypatch.setattr(closed_lexical_operation, "_source_body_rows", rows)
     try:
         with source_runtime_scope(scope.runtime):
             with pytest.raises((SourceScopeUnavailable, ValueError)):

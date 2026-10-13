@@ -91,6 +91,25 @@ def _same_header(left, right):
 
 
 def _closed_scoped_rows(queryset, scope, header, lexical):
+    from . import chunk_search_scoped_rows as row_operations
+
+    def read(staged, original, budget, allowed, cache):
+        query = _prepare_source_queryset(queryset, original)
+        rows = (
+            _source_body_rows(query, original, budget, allowed, cache)
+            if allowed and budget.can_publish()
+            else ()
+        )
+        row_operations._record_rows(queryset, rows, staged, lexical)
+        return rows
+
+    return _closed_row_operation(
+        queryset, scope, header, read, full_text=lexical == "full_text"
+    )
+
+
+def _closed_row_operation(queryset, scope, header, read, *, full_text=False):
+    """Consume a private eager reader; shared fresh fences own all publication."""
     from apps.collections.services.retrieval_authorization import (
         revalidate_retrieval_authorization_context,
     )
@@ -108,26 +127,21 @@ def _closed_scoped_rows(queryset, scope, header, lexical):
     pending = {}
     try:
         initial_keys = set(scope.validate())
-        query = _prepare_source_queryset(queryset, original)
         authority = revalidate_retrieval_authorization_context(
             context=runtime.authorization
         )
         allowed = frozenset(authority.document_ids)
-        rows = (
-            _source_body_rows(
-                query, original, budget, allowed, ChainMap(pending, runtime.cache)
-            )
-            if allowed and budget.can_publish()
-            else ()
+        rows = tuple(
+            read(staged, original, budget, allowed, ChainMap(pending, header[0][4]))
         )
-        row_operations._record_rows(queryset, rows, staged, lexical)
         rows, valid_fts = row_operations._current_rows(rows, staged, initial_keys)
         final_keys = initial_keys & set(scope.validate())
         rows = row_operations._retain_dense(rows, staged, final_keys, valid_fts)
-        if lexical == "full_text":
+        if full_text:
             rows = tuple(row for row in rows if row.pk not in staged.fts_invalid_ids)
         check_source_deadline()
         surviving = {row.pk for row in rows}
+        identities = {(row.pk, row_operations.fingerprint(row)) for row in rows}
 
         def publish():
             # Check inside the ledger gate too: its clock/liveness callbacks may
@@ -149,8 +163,12 @@ def _closed_scoped_rows(queryset, scope, header, lexical):
                     scope.lexical_ids.add(pk)
                 if pk in staged.fts_rows:
                     scope.fts_rows.setdefault(pk, staged.fts_rows[pk])
-            runtime.cache.update(
-                {key: row for key, row in pending.items() if row.pk in surviving}
+            header[0][4].update(
+                {
+                    key: row
+                    for key, row in pending.items()
+                    if (row.pk, row_operations.fingerprint(row)) in identities
+                }
             )
 
         if not budget.publish(publish):

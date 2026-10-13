@@ -10,6 +10,17 @@ from .lexical_candidates import extract_exact_terms, ranked_exact_queryset
 from .lexical_readiness import FullTextCoverage, full_text_candidates
 
 
+def _collect_production_lexical(model_cls, documents, candidates, scope, query, limits):
+    """Only this concrete production callsite may use the closed ORM adapter."""
+    if not controls()["full_text"]:
+        from .closed_lexical_operation import _collect_closed_lexical
+
+        result = _collect_closed_lexical(model_cls, documents, scope, query, limits)
+        if result is not None:
+            return result
+    return collect_lexical(model_cls, candidates, scope, query, limits)
+
+
 def collect_lexical(model_cls, candidates, scope, query, limits):
     full_text, coverage = (), FullTextCoverage("disabled")
     trigram_limit = limits.trigram

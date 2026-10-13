@@ -69,3 +69,46 @@ failed turns and full retrieval latency. Distinguish changes from new embeddings
 application code, source preservation and graph mode; a bundled before/after result
 cannot attribute gains to one component. Known-question regression and operational
 smoke tests do not meet independent held-out quality gates.
+
+## Development reranker readiness
+
+Windowed scoring needs a verified pair counter in each serving worker. Install a
+read-only attestation directory, bind it into the web container, set
+`RAG_PAIR_CAPABILITY_ATTESTATION` to its attestation file, and enable
+`RAG_PAIR_CAPABILITY_WARM_ENABLED=1` with windowed mode. Use the ASGI lifespan
+wrapper so each worker performs the bounded real protocol/tokenizer warm-up.
+A separate management-command process does not initialize serving workers.
+
+The deployment verifier must compare the running container identity, image,
+start time, model/tokenizer/code revisions, effective engine arguments, template,
+and retained artifact hashes before atomically renewing the short-lived proof.
+Recheck the source verification record immediately before publishing; serialize
+renewal attempts. Withdraw proof on a mismatch. A GPU-container restart requires
+fresh verification even if its model name is unchanged. Keep the renewal service,
+timer, proof-directory bind, and their rollback state with the private deployment
+receipt. Do not install credentials in the proof or print runtime environment maps.
+
+Warm-up consumes its own bounded startup allowance. Request retrieval keeps its
+original 15-second ledger; diagnostic runs with a longer deadline are not release
+acceptance results.
+
+## Comparison scope and failure accounting
+
+Confirm that the historical principal, collection, and source hashes still exist
+before calling a replay a replication. If only the questions are available, label
+the run as transferred questions on a different corpus. The chat reproduction
+question can duplicate a study question and must not count as another independent
+sample. If historical embedding provenance is unknown, do not compare new query
+vectors against those old stored vectors as if their spaces were compatible.
+
+A disposable comparison role needs read-only transactions and no table-write or
+privileged-role grants on every configured database alias. Preserve the graph
+role configuration while overriding actual connection credentials. If a graph
+read API requires explicit EXECUTE, verify the exact installed read-only function
+body and grant only those functions to the temporary role.
+
+Freeze ordered question manifests and scoped owner, source, representation,
+embedding, permission, and graph fingerprints before each arm. Recheck them after
+the run. Require a positive final guard receipt: a native success file left before
+a wrapper failure, process timeout, or incomplete cleanup is a failed comparison,
+with its raw report retained separately. Do not aggregate it as a successful turn.

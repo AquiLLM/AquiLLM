@@ -20,7 +20,8 @@ from .chunk_rerank_score_cache import (
     set_window_result,
     window_cache_key,
 )
-from .chunk_rerank_window_scores import aggregate_window_scores, score_window_plan
+from .chunk_rerank_window_dispatch import score_source_plans
+from .chunk_rerank_window_scores import aggregate_window_scores
 from .chunk_rerank_windows import PreparationStopped, prepare_source_windows
 from .rerank_request_lifetime import rerank_state_for
 
@@ -184,7 +185,7 @@ class WindowSelectionScorer:
                 for row, plan in zip(rows, plans)
             )
         )
-        scores = []
+        slots = []
         for row, plan in zip(rows, plans):
             if self.clock() >= self.deadline or not self.rerank_state.can_admit():
                 return envelope()
@@ -215,22 +216,28 @@ class WindowSelectionScorer:
                             cached = envelope_hit.scores[0]
                     except (ValueError, TypeError):
                         pass
+            slots.append((row, plan, key, cache_key, cached))
+        results = score_source_plans(
+            {i: slot[1] for i, slot in enumerate(slots) if slot[4] is None},
+            provider=self.provider,
+            budget=self.budget,
+            state=self.rerank_state,
+            phase=phase,
+            deadline=self.deadline,
+            clock=self.clock,
+            on_submit=on_submit,
+        )
+        if results is None:
+            return envelope()
+        scores = []
+        for i, (row, plan, key, cache_key, cached) in enumerate(slots):
+            if self.clock() >= self.deadline or not self.rerank_state.can_admit():
+                return envelope()
             if cached is not None:
                 if not self.rerank_state.publish(lambda: scores.append(cached)):
                     return envelope()
                 continue
-            if self.provider is None:
-                return envelope()
-            result = score_window_plan(
-                plan,
-                scorer=self.provider,
-                budget=self.budget,
-                phase=phase,
-                timeout_seconds=max(0, self.deadline - self.clock()),
-                clock=self.clock,
-            )
-            if on_submit:
-                on_submit(result.attempted_pairs)
+            result = results[i]
             aggregate = aggregate_window_scores(result)
             if aggregate.prepared_input_scoring_coverage != "complete":
                 return envelope()
