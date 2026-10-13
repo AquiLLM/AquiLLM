@@ -25,6 +25,22 @@ def _metadata_database(scope, header, check):
         check()
 
 
+def _query_bindings(scope, query):
+    from lib.embeddings.document_contracts import digest
+    from lib.embeddings.document_provider import prepare_query
+    from lib.embeddings.utils import EmbeddingContractError
+
+    bindings = set()
+    if scope.query_compatibility is None:
+        bindings.add(digest({"version": "unprepared-query-v1", "query": query}))
+    if scope.space is not None and scope.query_compatibility in (None, scope.space.space_key):
+        try:
+            bindings.add(prepare_query(query, space=scope.space)[1])
+        except EmbeddingContractError:
+            pass
+    return frozenset(bindings)
+
+
 def try_native_snapshot(model, query, documents, scope, observation, config, limits,
                         initial_error, authorization, dependencies):
     from apps.documents.models import TextChunk
@@ -50,13 +66,12 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
     dependencies_before = dependency_header(dependencies)
     dense_container = scope.dense_rows
     dense_before = dense_container.copy()
+    query_bindings = _query_bindings(scope, query)
 
     def check():
-        from lib.embeddings.document_contracts import digest
-
         check_source_deadline()
         if (current_scope() is not scope or graph_source_runtime() is not scope.runtime
-                or scope.query_digest != digest({"version": "unprepared-query-v1", "query": query})
+                or scope.query_digest not in query_bindings
                 or not _same_header(header, _closed_header(base, scope))
                 or not scope.runtime.budget.can_publish()
                 or _OPERATION.get() is not operation

@@ -195,6 +195,7 @@ jobs:
           aquillm/apps/documents/tests/test_graph_admission_publication.py
           aquillm/apps/documents/tests/test_graph_admission_seeds.py
           aquillm/apps/documents/tests/test_graph_admission_provenance.py
+          aquillm/apps/documents/tests/test_graph_admission_query_binding.py
           aquillm/apps/documents/tests/test_source_body_batch.py
           aquillm/apps/documents/tests/test_source_body_batch_invariants.py
           aquillm/apps/documents/tests/test_source_body_publication.py
