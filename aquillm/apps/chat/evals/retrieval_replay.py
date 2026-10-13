@@ -8,14 +8,11 @@ from unittest.mock import patch
 
 from .replay_controls import EXPERIMENTS as EXPERIMENTS
 from .replay_controls import replay_runtime
+from .replay_generation import GenerationDenied, GenerationGuard
 from .replay_observations import fingerprint, summarize
 
 
 class MappingError(ValueError):
-    pass
-
-
-class GenerationDenied(RuntimeError):
     pass
 
 
@@ -127,28 +124,6 @@ def resolve_targets(targets, sources):
     return resolved
 
 
-class GenerationGuard:
-    def __init__(self, interface):
-        self._interface = interface
-        self.attempted = False
-        # Proposal observation needs metadata, never the provider's nested clients.
-        self.base_args = {"model": "unknown"}
-
-    def __getattr__(self, name):
-        value = getattr(self._interface, name)
-        if callable(value):
-
-            def denied(*args, **kwargs):
-                self.attempted = True
-                raise GenerationDenied("generation_prohibited")
-
-            return denied
-        # Never expose nested clients that could bypass the interface guard.
-        if value is None or isinstance(value, (str, int, float, bool)):
-            return value
-        raise GenerationDenied("interface_attribute_prohibited")
-
-
 class EventRecorder:
     def __init__(self):
         self.events = []
@@ -199,18 +174,20 @@ async def run_turn(
     original_search = getattr(pipeline, "_run_vector_search", None)
 
     def record_search(*args, **kwargs):
-        result = original_search(*args, **kwargs)
-        if not isinstance(result, dict) or "exception" in result:
-            search_failed.set()
         # Preservation acquisition has action events, rather than legacy search
         # events. Emit equivalent replay-only observations at the real boundary.
         from apps.chat.services.rag_config import rag_preservation_config
         from apps.chat.services.retrieval_query_runtime import query_proposals_enabled
 
-        if rag_preservation_config().active or query_proposals_enabled():
+        current_route = rag_preservation_config().active or query_proposals_enabled()
+        if current_route:
             from lib.replay_observation import prepared_queries, search_outcomes
 
             prepared_queries([args[1]], args[2], args[2])
+        result = original_search(*args, **kwargs)
+        if not isinstance(result, dict) or "exception" in result:
+            search_failed.set()
+        if current_route:
             search_outcomes([args[1]], [result])
         return result
 

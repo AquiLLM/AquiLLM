@@ -645,3 +645,104 @@ def test_current_real_pipeline_replay_has_packet_and_no_generation(
     assert result["generation_attempted"] is False
     assert result["sdk_started"] is False
     assert "private" not in json.dumps(result)
+
+
+def test_current_single_search_timing_includes_operation_interval(monkeypatch):
+    import lib.evidence_observation as observation
+
+    clock = [10.0]
+    monkeypatch.setattr(observation, "perf_counter", lambda: clock[0])
+
+    def search(consumer, question, top_k):
+        clock[0] = 10.375
+        return {"retrieval_status": "no_results"}
+
+    async def run(consumer, llm, convo, **kwargs):
+        pipeline._run_vector_search(consumer, "private", 10)
+        await pipeline.synthesize_from_evidence(
+            llm, convo, SimpleNamespace(chunks=[], retrieval_status="no_results")
+        )
+        return "handled"
+
+    pipeline = SimpleNamespace(
+        _run_vector_search=search,
+        run_direct_rag_turn=run,
+        synthesize_from_evidence=None,
+    )
+    result = asyncio.run(
+        replay.run_turn(
+            {"id": "Q1", "question": "private"},
+            [],
+            object(),
+            [1],
+            "current",
+            SimpleNamespace(RAG_CACHE_ENABLED=True),
+            SimpleNamespace(llm_interface=SimpleNamespace()),
+            pipeline,
+            evidence_text_mode="source",
+        )
+    )
+    assert result["success"] is True
+    assert result["timings_ms"]["retrieval"] == 375.0
+
+
+@pytest.mark.parametrize(
+    "provider_name,expected_context",
+    [
+        ("ClaudeInterface", 32000),
+        ("GeminiInterface", 36000),
+        ("OpenAIInterface", 2048),
+    ],
+)
+def test_guard_preserves_provider_capacity_and_denies_generation(
+    monkeypatch,
+    provider_name,
+    expected_context,
+):
+    from apps.chat.services.rag_context_budget import provider_context_capacity
+
+    monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "2048")
+    monkeypatch.setenv("CLAUDE_CONTEXT_LIMIT", "32000")
+    monkeypatch.setenv("GEMINI_CONTEXT_LIMIT", "36000")
+    interface = type(provider_name, (), {"get_message": lambda self: None})()
+    guard = replay.GenerationGuard(interface)
+    assert provider_context_capacity(guard)[0] == expected_context
+    assert provider_context_capacity(guard) == provider_context_capacity(interface)
+    with pytest.raises(replay.GenerationDenied):
+        guard.get_message()
+    assert guard.attempted is True
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize("provider_name", ["ClaudeInterface", "GeminiInterface"])
+def test_real_source_replay_uses_provider_specific_context_budget(
+    docs,
+    monkeypatch,
+    provider_name,
+):
+    from apps.chat.services import rag_pipeline
+    from apps.chat.tests.test_rag_preservation_routes import fake_search
+
+    user, document, _, _ = docs
+    fake_search(monkeypatch)
+    monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "2048")
+    monkeypatch.setenv("CLAUDE_CONTEXT_LIMIT", "32000")
+    monkeypatch.setenv("GEMINI_CONTEXT_LIMIT", "36000")
+    interface = type(provider_name, (), {"get_message": lambda self: None})()
+    result = asyncio.run(
+        replay.run_turn(
+            {"id": "Q1", "question": "Summarize the selected documents"},
+            [],
+            user,
+            [document.collection_id],
+            "current",
+            SimpleNamespace(RAG_CACHE_ENABLED=True),
+            SimpleNamespace(llm_interface=interface),
+            rag_pipeline,
+            evidence_text_mode="source",
+        )
+    )
+    assert result["success"] is True, result
+    assert result["packet"]
+    assert result["generation_attempted"] is False
+    assert result["sdk_started"] is False
