@@ -156,8 +156,65 @@ def freeze_active_representations(
 ) -> RepresentationSnapshotV1:
     if type(documents) is not tuple:
         _unavailable()
-    from .representation_scope import selection_for_document
-    snapshot = RepresentationSnapshotV1(tuple(selection_for_document(ref, using=using) for ref in documents))
+    from apps.documents.models import DocumentRepresentationState
+
+    from .representation_tuple_predicate import ExactTupleMembership
+
+    expected, document_ids = {}, set()
+    for ref in documents:
+        document_payload(ref)
+        key = ref.model_label, ref.pkid, ref.id
+        if key in expected or ref.id in document_ids:
+            _unavailable()
+        expected[key] = ref
+        document_ids.add(ref.id)
+    if not expected:
+        return validate_representation_snapshot(
+            RepresentationSnapshotV1(()), using=using
+        )
+    identity = ("model_label", "document_pkid", "document_id")
+    rows = (
+        DocumentRepresentationState.objects.using(using)
+        .filter(ExactTupleMembership(identity, tuple(expected)))
+        .order_by()
+        .values(
+            "model_label",
+            "document_pkid",
+            "document_id",
+            "active_generation_id",
+            "legacy_closed",
+            "legacy_source_hash",
+            "active_generation__canonical_sha256",
+            "active_generation__source_revision_sha256",
+        )[: len(expected) + 1]
+    )
+    states = {}
+    for row in rows:
+        key = row["model_label"], row["document_pkid"], row["document_id"]
+        if key not in expected or key in states:
+            _unavailable()
+        states[key] = row
+    selections = []
+    for ref in documents:
+        state = states.get((ref.model_label, ref.pkid, ref.id))
+        if state and state["active_generation_id"]:
+            selections.append(
+                RepresentationSelectionV1(
+                    ref,
+                    state["active_generation_id"],
+                    state["active_generation__canonical_sha256"],
+                    state["active_generation__source_revision_sha256"],
+                )
+            )
+        elif state and (
+            state["legacy_closed"] or state["legacy_source_hash"] != ref.source_hash
+        ):
+            _unavailable()
+        else:
+            selections.append(
+                RepresentationSelectionV1(ref, None, ref.source_hash, None)
+            )
+    snapshot = RepresentationSnapshotV1(tuple(selections))
     return validate_representation_snapshot(snapshot, using=using)
 
 
@@ -178,20 +235,24 @@ def _active_chunk_predicates(queryset, *, snapshot, document_id=None):
         selections = tuple(s for s in selections if s.document.id == document_id)
         if len(selections) != 1:
             _unavailable()
-    from .representation_scope import current_state_clause, _current_active_state_clause
+    from .representation_scope import _current_active_state_clause, _current_legacy_state_clause
     from .representation_tuple_predicate import ExactTupleMembership
     condition = Q(pk__in=[])
-    represented, active = {}, []
+    represented, active, legacy = {}, [], []
     for s in selections:
         ref = s.document
-        clause = Q(doc_id=ref.id, representation_generation_id=s.generation_key)
         if s.generation_key is None:
-            condition |= clause & current_state_clause(s, using=queryset.db)
+            legacy.append(s)
         else:
             active.append(s)
         represented.setdefault(ref.model_label, []).append(ref)
     if not selections:
         return queryset.filter(condition)
+    if legacy:
+        condition |= (
+            Q(doc_id__in=[s.document.id for s in legacy], representation_generation_id__isnull=True)
+            & _current_legacy_state_clause(tuple(legacy), using=queryset.db)
+        )
     if active:
         active_condition = Q(ExactTupleMembership(
             ("doc_id", "representation_generation_id"),

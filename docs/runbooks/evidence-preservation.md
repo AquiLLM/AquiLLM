@@ -124,8 +124,11 @@ rtk proxy python aquillm/apps/chat/evals/run_evidence_quality_eval.py --backend 
 
 For live runs, configure an explicitly isolated development database/provider
 environment and `RAG_EVAL_ISOLATED=1`. The runner never reads `.env`. Use synthetic
-data only. `--seed` explicitly creates an inactive evaluation principal, dedicated
-collections and authored chunk boundaries using real embeddings. It refuses an
+data only. `--seed` explicitly creates an active evaluation principal with an
+unusable password and no staff/superuser privileges, dedicated collections and
+authored chunk boundaries using real embeddings. Active status lets the fixture
+exercise ordinary retrieval authorization; unusable passwords prevent password
+login. Persisted deactivation still revokes retrieval access. It refuses an
 existing manifest. The same manifest (including actual document/chunk/vector
 bindings) must be reused across the four arms for each split. Record verified
 `runtime.answer_digest`, `reranker_digest`, `embedding_digest`, `hardware_digest`

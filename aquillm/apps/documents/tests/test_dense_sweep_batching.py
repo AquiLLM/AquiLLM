@@ -25,7 +25,7 @@ def test_empty_dense_snapshot_uses_bounded_fresh_scalar_sweeps(count, queries, t
     assert_scalar_reads(reads, queries)
     with dense_reads() as reads:
         assert query.validate_dense_snapshot(case.snapshot, captured, using="default") == ()
-    assert_scalar_reads(reads, queries)
+    assert_scalar_reads(reads, 0)
     assert freeze(case) == captured
 
 
@@ -37,7 +37,7 @@ def test_each_original_scope_boundary_keeps_fresh_authority_with_empty_dense(tra
         for _ in range(2):
             with scope.database(), dense_reads() as reads:
                 assert scope.validate() == ()
-            assert_scalar_reads(reads, 1)
+            assert_scalar_reads(reads, 0)
         CollectionPermission.objects.filter(user=case.owner, collection=case.collection).delete()
         with scope.database(), dense_reads() as reads:
             with pytest.raises(SourceScopeUnavailable, match="^source_scope_unavailable$"):
@@ -69,7 +69,7 @@ def test_final_batch_ready_owner_is_retained_in_capture_and_revalidation(transpo
     assert_scalar_reads(reads, 2)
     with dense_reads() as reads:
         assert query.validate_dense_snapshot(case.snapshot, captured, using="default") == (tail.generation_key,)
-    assert_scalar_reads(reads, 2)
+    assert_scalar_reads(reads, 1)
 
 
 def test_replacement_pointer_cannot_reenter_original_dense_snapshot(transport, monkeypatch, settings):

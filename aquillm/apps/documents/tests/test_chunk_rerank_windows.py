@@ -49,7 +49,7 @@ def test_unknown_counter_retains_full_source_and_unknown_coverage():
     source = SourceEvidence(1, "paper-a", 0, "r", "Δ " * 1500)
     plan = prepare_source_windows("q", source, pair_counter=lambda q, d: None)
     assert plan.source == source
-    assert plan.windows[-1].end == len(source.text)
+    assert plan.windows == ()  # Full source remains; unknown fit creates no windows.
     assert plan.preparation_coverage == "unknown"
 
 
@@ -89,7 +89,7 @@ def test_pool_preparation_stops_before_next_source_at_nested_deadline(
         for i in range(1, 4)
     )
     scorer = WindowSelectionScorer(
-        None,
+        SimpleNamespace(score_pair=lambda *_: pytest.fail("inference after deadline")),
         budget=budget,
         pair_counter=slow_count,
         clock=lambda: now[0],

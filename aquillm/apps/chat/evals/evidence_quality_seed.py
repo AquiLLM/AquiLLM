@@ -38,7 +38,8 @@ def seed_cases(cases, path):
         "cases": {},
     }
     with transaction.atomic():
-        user = User(username="evidence-eval-" + uuid4().hex, is_active=False)
+        # Real retrieval admission requires an active persisted principal.
+        user = User(username="evidence-eval-" + uuid4().hex, is_active=True)
         user.set_unusable_password()
         user.save(force_insert=True)
         manifest["user_id"] = user.pk
@@ -171,7 +172,7 @@ def create_conversation(case, manifest):
     from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 
     binding, sources = validate_case(case, manifest)
-    user = User.objects.get(pk=manifest["user_id"], is_active=False)
+    user = User.objects.get(pk=manifest["user_id"], is_active=True)
     messages = []
     all_sources = {s["source_id"]: s for s in case["sources"]}
     for turn in case["turns"]:

@@ -34,7 +34,7 @@ from lib.knowledge_graph.retrieval_config import load_django_hybrid_retrieval_se
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
+DOCUMENT_EMBEDDING_SPACE_KEY = os.getenv("DOCUMENT_EMBEDDING_SPACE_KEY", "").strip()
 # RAG retrieval caches (fail-open; disabled unless RAG_CACHE_ENABLED=1)
 RAG_CACHE_ENABLED = env_bool("RAG_CACHE_ENABLED", False)
 RAG_QUERY_EMBED_TTL_SECONDS = env_int("RAG_QUERY_EMBED_TTL_SECONDS", 300)

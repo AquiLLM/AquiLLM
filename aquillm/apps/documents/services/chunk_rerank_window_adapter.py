@@ -160,6 +160,8 @@ class WindowSelectionScorer:
 
         if (
             self.budget is None
+            or self.provider is None
+            or self.pair_counter is unknown_pair_count
             or len(rows) > 45
             or len(set(order)) != len(order)
             or self.clock() >= self.deadline

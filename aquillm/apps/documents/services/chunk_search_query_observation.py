@@ -19,10 +19,11 @@ def query_embedding(query):
     scope.query_digest = prepared_digest
     with scope.database():
         scope.validate()
+    cache_enabled = rag_cache._rag_enabled()
     key = rag_cache.stable_cache_key(
         "query-observation-v1", scope.space.space_key, prepared_digest
-    )
-    cached = rag_cache.cache_get(key)
+    ) if cache_enabled else None
+    cached = rag_cache.cache_get(key) if cache_enabled else None
     observation = None
     if cached is not None:
         try:
@@ -37,18 +38,19 @@ def query_embedding(query):
         )
         if observation.prepared_input_sha256 != prepared_digest:
             raise SourceScopeUnavailable("source_scope_unavailable")
-        payload = serialize_query_observation(observation, space=scope.space)
-        with scope.database():
-            scope.validate()
-            if not scope.runtime.budget.can_publish():
-                raise SourceScopeUnavailable("source_scope_unavailable")
-            scope.runtime.budget.publish(
-                lambda: rag_cache.cache_set(
-                    key,
-                    payload,
-                    rag_cache.query_embed_ttl(),
+        if cache_enabled:
+            payload = serialize_query_observation(observation, space=scope.space)
+            with scope.database():
+                scope.validate()
+                if not scope.runtime.budget.can_publish():
+                    raise SourceScopeUnavailable("source_scope_unavailable")
+                scope.runtime.budget.publish(
+                    lambda: rag_cache.cache_set(
+                        key,
+                        payload,
+                        rag_cache.query_embed_ttl(),
+                    )
                 )
-            )
     with scope.database():
         scope.validate()
     scope.query_compatibility = observation.compatibility_key

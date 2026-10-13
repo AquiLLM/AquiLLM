@@ -133,7 +133,7 @@ def finalize_ranking(snapshot, ranking, *, authorize, query, top_k):
     from .chunk_rerank_results import rank_only_result_for_chunks
     from .chunk_search_score_handoff import score_set_for_authorized_rows
 
-    ranked = tuple(authorize(ranking.ranked_results))
+    ranked = tuple(ranking.ranked_results)
     status = (
         ranking.score_set.status
         if ranking.score_set is not None

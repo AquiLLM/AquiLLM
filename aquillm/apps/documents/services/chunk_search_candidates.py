@@ -161,6 +161,24 @@ def collect_hybrid_candidate_snapshot(
         if scope is None:
             return queryset
         with scope.database():
+            runtime = scope.runtime
+            original = getattr(runtime, "_frozen_retrieval_scope", None)
+            # The eager source loader supplies this identical original SQL fence.
+            if (
+                original is not None
+                and original.runtime is runtime
+                and original.representation is scope.representation
+                and scope.authorization is not None
+                and original.authorization is scope.authorization
+                and scope.authorization is runtime.authorization
+                and original.using == scope.using
+                and scope.using == runtime.authorization.database_alias
+                and scope.requested_document_ids <= original.requested_document_ids
+            ):
+                scope.validate()
+                return queryset.using(scope.using).filter(
+                    doc_id__in=scope.requested_document_ids
+                )
             return scope.queryset(queryset.using(scope.using))
 
     if (

@@ -1,7 +1,8 @@
 """Fresh bounded scalar reads for one complete representation validation."""
-from django.db.models import CharField, F, Q, Value
+from django.db.models import CharField, F, Value
 
 from .representation_contracts import SourceScopeUnavailable
+from .representation_tuple_predicate import ExactTupleMembership
 
 
 def _unavailable():
@@ -17,11 +18,12 @@ def validate_document_rows(selections, *, using):
         _unavailable()
     if not expected:
         return
+    membership = ExactTupleMembership(("id",), tuple((value,) for value in expected))
     # One current SQL statement still visits every allowlisted concrete type.
     # UNION ALL preserves duplicate UUIDs; a global sentinel bounds hydration.
     owners = []
     for model in DESCENDED_FROM_DOCUMENT:
-        owners.append(model._base_manager.using(using).filter(id__in=expected).annotate(
+        owners.append(model._base_manager.using(using).filter(membership).annotate(
             _canonical=SourceSHA256(F("full_text")),
             _owner_model=Value(model._meta.label_lower, output_field=CharField()),
         ).order_by().values(
@@ -51,12 +53,10 @@ def validate_state_rows(selections, *, using):
                 for s in selections}
     if len(expected) != len(selections):
         _unavailable()
-    groups = {}
-    for label, pkid, document_id in expected:
-        groups.setdefault(label, []).append(Q(document_pkid=pkid, document_id=document_id))
-    condition = (Q(*(Q(Q(*pairs, _connector=Q.OR), model_label=label)
-                     for label, pairs in groups.items()), _connector=Q.OR)
-                 if groups else Q(pk__in=[]))
+    if not expected:
+        return
+    condition = ExactTupleMembership(
+        ("model_label", "document_pkid", "document_id"), tuple(expected))
     rows = DocumentRepresentationState.objects.using(using).filter(condition).order_by("pk").values(
         "pk", "model_label", "document_pkid", "document_id", "collection_id",
         "legacy_closed", "legacy_source_hash", "active_generation_id",
