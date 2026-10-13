@@ -145,10 +145,6 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_projection_database_routing.py
           aquillm/apps/knowledge_graph/tests/test_projection_representation_publication.py
           aquillm/apps/knowledge_graph/tests/test_canonical_cursor_deadline_postgres.py
-          aquillm/tests/integration/test_projection_database_deadline.py
-          aquillm/tests/integration/test_projection_database_fetch_deadline.py
-          aquillm/tests/integration/test_projection_representation_publication_races.py
-          aquillm/tests/integration/test_projection_representation_state_boundary.py
           aquillm/lib/knowledge_graph/tests/test_projection_timeout_config.py
           aquillm/lib/knowledge_graph/tests/test_retrieval_config.py
           --ds=aquillm.settings_projection_test -q --tb=short
@@ -429,6 +425,32 @@ jobs:
           python scripts/check_logging_conventions.py
           python scripts/check_retrieval_logging.py
           python scripts/check_file_lengths.py
+
+
+  projection-isolated:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Restricted projection database and publication contracts
+        run: >-
+          python scripts/run_rag_remediation_tests.py
+          --project aquillm-rag-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          --
+          aquillm/tests/integration/test_projection_database_deadline.py
+          aquillm/tests/integration/test_projection_database_fetch_deadline.py
+          aquillm/tests/integration/test_projection_representation_publication_races.py
+          aquillm/tests/integration/test_projection_representation_state_boundary.py
+          -q --tb=short
+      - name: Clean up the owned test stack
+        if: always()
+        run: >-
+          python scripts/run_rag_remediation_tests.py
+          --project aquillm-rag-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          --cleanup
 
   frontend-build:
     runs-on: ubuntu-latest
