@@ -1,0 +1,7 @@
+[
+  "[WARNING:aquillm.h100] AQUILLM_H100 {\"status\": \"installed\", \"mtp\": \"baseline\", \"split\": \"baseline\", \"prefill\": false, \"prefill_reason\": \"post-Genesis prefill method fingerprint mismatch\", \"prefill_profile\": null, \"prefill_qualification\": null, \"gdn\": \"native-fp16\", \"gdn_qualification\": \"experimental_pending_gpu_serving\", \"gdn_prefill_int64_offsets\": false}",
+  "(EngineCore pid=186) [WARNING:aquillm.h100] AQUILLM_H100 {\"status\": \"installed\", \"mtp\": \"baseline\", \"split\": \"baseline\", \"prefill\": true, \"prefill_reason\": \"measured_profile_and_runtime_abi_validated\", \"prefill_profile\": \"h100-long-prefill-dev-v1\", \"prefill_qualification\": \"experimental_pending_serving\", \"gdn\": \"native-fp16\", \"gdn_qualification\": \"experimental_pending_gpu_serving\", \"gdn_prefill_int64_offsets\": false}",
+  "(EngineCore pid=186) [WARNING:aquillm.h100] AQUILLM_H100 prefill_constructor revision_present=True revision_match=True configured_fa=2 backend_fa=2 kwargs_keys=() causal=True sliding_window=False soft_cap=False",
+  "(EngineCore pid=186) [WARNING:aquillm.h100] AQUILLM_H100 route_exercised gdn=native-fp16 shape=(1, 5, 16, 128) precision=fp16 gate_strides=((48, 1), (48, 1)) state_strides=(825664, 16384, 128, 1)",
+  "(EngineCore pid=186) [WARNING:aquillm.h100] AQUILLM_H100 route_exercised prefill runtime=aa04660c3a1e198b58608f37ebabf43a74a47eb9d684117cbe35e773c50e9671 cached_len=32768 query_len=4096"
+]

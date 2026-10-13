@@ -1,0 +1,16 @@
+{
+  "image": "sha256:f756553ca284565aa7030e1f3c3fda3778723d93197c186ec41a565047df2f5a",
+  "stage": "package-only real model startup, GDN replacement disabled",
+  "timestamp": "2026-10-10T19:22:08Z",
+  "error": "RuntimeError: cu_seqlens must have dtype torch.int64, got torch.int32",
+  "caller": "vllm.model_executor.layers.mamba.gdn.qwen_gdn_linear_attn.fi_chunk_gated_delta_rule",
+  "callee": "flashinfer.gdn_kernels.delta_rule_dsl.delta_rule_cp_sm90.cp_delta_rule_dsl_sm90",
+  "baseline_quality": {
+    "strict_passes": 32,
+    "long_passes": 6
+  },
+  "candidate_serving_results": null,
+  "action": "SIGTERM comparison runner; finally restored exact baseline, healthy, unrelated service IDs unchanged",
+  "fix_commit": "0f030b8b8fa295b90b96efd842c68ffeea003a02",
+  "fix": "Candidate-only wrapper widens int32 sequence offsets to int64 on-device before invoking the saved post-Genesis prefill caller."
+}

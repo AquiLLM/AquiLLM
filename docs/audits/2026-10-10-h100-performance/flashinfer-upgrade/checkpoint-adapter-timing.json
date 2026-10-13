@@ -1,0 +1,39 @@
+{
+  "kind": "full_adapter_including_pack_convert_checkpoints_scatter",
+  "T": 5,
+  "shape": [
+    1,
+    5,
+    16,
+    48,
+    128
+  ],
+  "state_stride": [
+    786560,
+    16384,
+    128,
+    1
+  ],
+  "repeats": 200,
+  "packages": {
+    "flashinfer-python": "0.6.18",
+    "nvidia-cutlass-dsl": "4.6.2",
+    "vllm": "0.23.1rc1.dev748+g2dfaae752",
+    "torch": "2.11.0+cu130",
+    "triton": "3.6.0"
+  },
+  "timings_us": {
+    "original": {
+      "eager": 50.74399948120117,
+      "cuda_graph": 14.479360580444336
+    },
+    "full_adapter": {
+      "eager": 230.0676727294922,
+      "cuda_graph": 24.24448013305664
+    }
+  },
+  "speedup": {
+    "eager": 0.22056118914570277,
+    "cuda_graph": 0.5972229761570408
+  }
+}

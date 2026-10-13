@@ -1,0 +1,431 @@
+{
+  "prefix": "native-fp16-fixed",
+  "kind": "screening_not_statistical_qualification",
+  "arms": {
+    "baseline": {
+      "strict": {
+        "requests": 32,
+        "passed": 32,
+        "failed_cases": []
+      },
+      "long": {
+        "requests": 6,
+        "passed": 6,
+        "failed_cases": []
+      },
+      "latency": {
+        "(512, 256)": {
+          "requests": 3,
+          "median_ttft_s": 0.1079380130104255,
+          "median_total_s": 1.7979731250088662,
+          "aggregate_decode_ms_per_token": 6.628563900644057,
+          "output_tokens_per_second": 142.3558704998978,
+          "output_hashes": [
+            "9718b5b4f374e2485708d3e1c60c3453700c0a17dc9ce4427bdfbe017afb2c7d"
+          ],
+          "input_hashes": [
+            "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7"
+          ]
+        },
+        "(8192, 256)": {
+          "requests": 3,
+          "median_ttft_s": 1.2755946450051852,
+          "median_total_s": 3.39426776500477,
+          "aggregate_decode_ms_per_token": 8.306714352939332,
+          "output_tokens_per_second": 75.43994734767395,
+          "output_hashes": [
+            "b0388f902e7427bff2104155df142eed01576403fc414cdcc15533af3b4e61cd"
+          ],
+          "input_hashes": [
+            "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da"
+          ]
+        },
+        "(32768, 256)": {
+          "requests": 3,
+          "median_ttft_s": 5.583706081000855,
+          "median_total_s": 9.01975060001132,
+          "aggregate_decode_ms_per_token": 13.473983018280896,
+          "output_tokens_per_second": 28.38479507701054,
+          "output_hashes": [
+            "b2dc23072479c455b1f4ae7c301fe4039e09670e043ffe6ebe7d46065e01b18a"
+          ],
+          "input_hashes": [
+            "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b"
+          ]
+        },
+        "(36864, 256)": {
+          "requests": 3,
+          "median_ttft_s": 7.4635319099907065,
+          "median_total_s": 11.053556942992145,
+          "aggregate_decode_ms_per_token": 14.080370647080997,
+          "output_tokens_per_second": 23.158048307324744,
+          "output_hashes": [
+            "d356647fa6e2e941328f0285879e87ea3d01e6ee61e9d69f769bd76743f9bf52"
+          ],
+          "input_hashes": [
+            "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49"
+          ]
+        }
+      },
+      "latency_total": {
+        "requests": 12,
+        "serial_output_tokens_per_second": 40.53018075547087
+      },
+      "latency_mtp": {
+        "status": "measured",
+        "deltas": {
+          "vllm:spec_decode_num_drafts": 1208.0,
+          "vllm:spec_decode_num_draft_tokens": 4832.0,
+          "vllm:spec_decode_num_accepted_tokens": 2880.0,
+          "vllm:spec_decode_num_accepted_tokens_per_pos": 2880.0
+        },
+        "draft_tokens": 4832.0,
+        "accepted_tokens": 2880.0,
+        "acceptance_rate": 0.5960264900662252,
+        "interval_includes_warmups": true
+      },
+      "decode": {
+        "(512, 1024)": {
+          "requests": 3,
+          "median_ttft_s": 0.1070799849985633,
+          "median_total_s": 5.165944626001874,
+          "aggregate_decode_ms_per_token": 4.94497348125983,
+          "output_tokens_per_second": 198.21393599493604,
+          "output_hashes": [
+            "8e10773198a20836bc7d244bbf225526a337af7d99ad526575cee22223c39889"
+          ],
+          "input_hashes": [
+            "f1e744c3c6a8f4c13ba3886b74c8aae123b22ecf8a58159e1eb2ee95c2ea5b57"
+          ]
+        }
+      },
+      "decode_total": {
+        "requests": 3,
+        "serial_output_tokens_per_second": 198.21393599493604
+      },
+      "decode_mtp": {
+        "status": "measured",
+        "deltas": {
+          "vllm:spec_decode_num_drafts": 1004.0,
+          "vllm:spec_decode_num_draft_tokens": 4016.0,
+          "vllm:spec_decode_num_accepted_tokens": 3092.0,
+          "vllm:spec_decode_num_accepted_tokens_per_pos": 3092.0
+        },
+        "draft_tokens": 4016.0,
+        "accepted_tokens": 3092.0,
+        "acceptance_rate": 0.7699203187250996,
+        "interval_includes_warmups": true
+      },
+      "load": [
+        {
+          "block": "1",
+          "concurrency": 2,
+          "requests": 4,
+          "seconds": 16.46281864499906,
+          "output_tokens_per_second": 62.20077023754752,
+          "median_ttft_seconds": 6.581823516491568,
+          "input_sha256": "d10e70a0362580a9a42ce6423c236e541ebbdfe452c586eddbf0d242c93197f2"
+        },
+        {
+          "block": "1",
+          "concurrency": 4,
+          "requests": 8,
+          "seconds": 32.88481414499984,
+          "output_tokens_per_second": 62.27798615402545,
+          "median_ttft_seconds": 14.135800815995026,
+          "input_sha256": "de9061286b0424b40bb88bb057fa121ca9119a7fd6201e7a8615c33b26e6075d"
+        }
+      ],
+      "load_mtp": [
+        {
+          "concurrency": 2,
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 267.0,
+            "vllm:spec_decode_num_draft_tokens": 1068.0,
+            "vllm:spec_decode_num_accepted_tokens": 758.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 758.0
+          },
+          "draft_tokens": 1068.0,
+          "accepted_tokens": 758.0,
+          "acceptance_rate": 0.7097378277153558,
+          "interval_includes_warmups": false
+        },
+        {
+          "concurrency": 4,
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 534.0,
+            "vllm:spec_decode_num_draft_tokens": 2136.0,
+            "vllm:spec_decode_num_accepted_tokens": 1516.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1516.0
+          },
+          "draft_tokens": 2136.0,
+          "accepted_tokens": 1516.0,
+          "acceptance_rate": 0.7097378277153558,
+          "interval_includes_warmups": false
+        }
+      ],
+      "cancellation_recovery": {
+        "passed": 2,
+        "failed": 0,
+        "scope": "Client close, bounded active-to-idle transition, token counters and quality recovery; scheduler abort and physical slot reuse not directly observed"
+      }
+    },
+    "candidate": {
+      "strict": {
+        "requests": 32,
+        "passed": 32,
+        "failed_cases": []
+      },
+      "long": {
+        "requests": 6,
+        "passed": 6,
+        "failed_cases": []
+      },
+      "latency": {
+        "(512, 256)": {
+          "requests": 3,
+          "median_ttft_s": 0.10839380900142714,
+          "median_total_s": 1.7898895120015368,
+          "aggregate_decode_ms_per_token": 6.594930562092557,
+          "output_tokens_per_second": 143.03055439408132,
+          "output_hashes": [
+            "9718b5b4f374e2485708d3e1c60c3453700c0a17dc9ce4427bdfbe017afb2c7d"
+          ],
+          "input_hashes": [
+            "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7"
+          ]
+        },
+        "(8192, 256)": {
+          "requests": 3,
+          "median_ttft_s": 1.271229353005765,
+          "median_total_s": 3.381609493008,
+          "aggregate_decode_ms_per_token": 8.275950760782234,
+          "output_tokens_per_second": 75.71042723385034,
+          "output_hashes": [
+            "a7de0b12d042dc0b97cdf6f455744fc69285473d4473f5d8a994d71d67383704"
+          ],
+          "input_hashes": [
+            "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da"
+          ]
+        },
+        "(32768, 256)": {
+          "requests": 3,
+          "median_ttft_s": 5.5803840220032725,
+          "median_total_s": 8.950870248998399,
+          "aggregate_decode_ms_per_token": 13.212905312432554,
+          "output_tokens_per_second": 28.603000531475228,
+          "output_hashes": [
+            "be97a6a6f2dc82540f11eaaae90322dc7c9789d176bfc68fcf350ce4a1c95afa"
+          ],
+          "input_hashes": [
+            "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b"
+          ]
+        },
+        "(36864, 256)": {
+          "requests": 3,
+          "median_ttft_s": 7.441231534990948,
+          "median_total_s": 11.003479425999103,
+          "aggregate_decode_ms_per_token": 13.968561180400071,
+          "output_tokens_per_second": 23.26445794864514,
+          "output_hashes": [
+            "d356647fa6e2e941328f0285879e87ea3d01e6ee61e9d69f769bd76743f9bf52"
+          ],
+          "input_hashes": [
+            "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49"
+          ]
+        }
+      },
+      "latency_total": {
+        "requests": 12,
+        "serial_output_tokens_per_second": 40.755972905918874
+      },
+      "latency_mtp": {
+        "status": "measured",
+        "deltas": {
+          "vllm:spec_decode_num_drafts": 1204.0,
+          "vllm:spec_decode_num_draft_tokens": 4816.0,
+          "vllm:spec_decode_num_accepted_tokens": 2896.0,
+          "vllm:spec_decode_num_accepted_tokens_per_pos": 2896.0
+        },
+        "draft_tokens": 4816.0,
+        "accepted_tokens": 2896.0,
+        "acceptance_rate": 0.6013289036544851,
+        "interval_includes_warmups": true
+      },
+      "decode": {
+        "(512, 1024)": {
+          "requests": 3,
+          "median_ttft_s": 0.10814471200865228,
+          "median_total_s": 5.144013352008187,
+          "aggregate_decode_ms_per_token": 4.921876508958029,
+          "output_tokens_per_second": 199.10414243473963,
+          "output_hashes": [
+            "8e10773198a20836bc7d244bbf225526a337af7d99ad526575cee22223c39889"
+          ],
+          "input_hashes": [
+            "f1e744c3c6a8f4c13ba3886b74c8aae123b22ecf8a58159e1eb2ee95c2ea5b57"
+          ]
+        }
+      },
+      "decode_total": {
+        "requests": 3,
+        "serial_output_tokens_per_second": 199.10414243473963
+      },
+      "decode_mtp": {
+        "status": "measured",
+        "deltas": {
+          "vllm:spec_decode_num_drafts": 1004.0,
+          "vllm:spec_decode_num_draft_tokens": 4016.0,
+          "vllm:spec_decode_num_accepted_tokens": 3092.0,
+          "vllm:spec_decode_num_accepted_tokens_per_pos": 3092.0
+        },
+        "draft_tokens": 4016.0,
+        "accepted_tokens": 3092.0,
+        "acceptance_rate": 0.7699203187250996,
+        "interval_includes_warmups": true
+      },
+      "load": [
+        {
+          "block": "1",
+          "concurrency": 2,
+          "requests": 4,
+          "seconds": 16.294081087995437,
+          "output_tokens_per_second": 62.844906347890074,
+          "median_ttft_seconds": 6.533270863998041,
+          "input_sha256": "d10e70a0362580a9a42ce6423c236e541ebbdfe452c586eddbf0d242c93197f2"
+        },
+        {
+          "block": "1",
+          "concurrency": 4,
+          "requests": 8,
+          "seconds": 32.37995660598972,
+          "output_tokens_per_second": 63.249003848916715,
+          "median_ttft_seconds": 13.898856443505792,
+          "input_sha256": "de9061286b0424b40bb88bb057fa121ca9119a7fd6201e7a8615c33b26e6075d"
+        }
+      ],
+      "load_mtp": [
+        {
+          "concurrency": 2,
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 262.0,
+            "vllm:spec_decode_num_draft_tokens": 1048.0,
+            "vllm:spec_decode_num_accepted_tokens": 759.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 759.0
+          },
+          "draft_tokens": 1048.0,
+          "accepted_tokens": 759.0,
+          "acceptance_rate": 0.7242366412213741,
+          "interval_includes_warmups": false
+        },
+        {
+          "concurrency": 4,
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 524.0,
+            "vllm:spec_decode_num_draft_tokens": 2096.0,
+            "vllm:spec_decode_num_accepted_tokens": 1518.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1518.0
+          },
+          "draft_tokens": 2096.0,
+          "accepted_tokens": 1518.0,
+          "acceptance_rate": 0.7242366412213741,
+          "interval_includes_warmups": false
+        }
+      ],
+      "cancellation_recovery": {
+        "passed": 2,
+        "failed": 0,
+        "scope": "Client close, bounded active-to-idle transition, token counters and quality recovery; scheduler abort and physical slot reuse not directly observed"
+      }
+    }
+  },
+  "comparison": {
+    "latency": {
+      "(512, 256)": {
+        "ttft_reduction_percent": -0.4222756916579806,
+        "total_latency_reduction_percent": 0.44959587520472244,
+        "decode_latency_reduction_percent": 0.507400080253162,
+        "serial_throughput_increase_percent": 0.4739417431921078,
+        "same_output_hashes": true
+      },
+      "(8192, 256)": {
+        "ttft_reduction_percent": 0.34221623746331087,
+        "total_latency_reduction_percent": 0.37293086088487915,
+        "decode_latency_reduction_percent": 0.37034609413544306,
+        "serial_throughput_increase_percent": 0.3585366847220328,
+        "same_output_hashes": false
+      },
+      "(32768, 256)": {
+        "ttft_reduction_percent": 0.059495592163893996,
+        "total_latency_reduction_percent": 0.7636613701141104,
+        "decode_latency_reduction_percent": 1.9376431267140726,
+        "serial_throughput_increase_percent": 0.7687406369243588,
+        "same_output_hashes": false
+      },
+      "(36864, 256)": {
+        "ttft_reduction_percent": 0.2987911791454634,
+        "total_latency_reduction_percent": 0.45304436618287536,
+        "decode_latency_reduction_percent": 0.7940804221947428,
+        "serial_throughput_increase_percent": 0.45949313132203073,
+        "same_output_hashes": true
+      }
+    },
+    "latency_serial_throughput_increase_percent": 0.5570963322622857,
+    "decode": {
+      "(512, 1024)": {
+        "ttft_reduction_percent": -0.9943286881327618,
+        "total_latency_reduction_percent": 0.4245355996132738,
+        "decode_latency_reduction_percent": 0.46707980112195013,
+        "serial_throughput_increase_percent": 0.44911395121396414,
+        "same_output_hashes": true
+      }
+    },
+    "decode_serial_throughput_increase_percent": 0.44911395121396414,
+    "load": [
+      {
+        "concurrency": 2,
+        "throughput_increase_percent": 1.0355757780531771,
+        "median_ttft_reduction_percent": 0.7376778239628012
+      },
+      {
+        "concurrency": 4,
+        "throughput_increase_percent": 1.559166817773705,
+        "median_ttft_reduction_percent": 1.6762005603610741
+      }
+    ]
+  },
+  "identity": {
+    "image": "sha256:04afb3a5b515998fa7a8a934012c62cbde127434fc4bf4e29f5c6530beb62e7d",
+    "base": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+    "commit": "0b6a7ee057972ddf9225a75a8ed528eaef0b7a98",
+    "checkout": "/home/exouser/AquiLLM-flashinfer",
+    "recipe": "Dockerfile.native-gdn-baseline"
+  },
+  "restoration": {
+    "restored_image": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+    "healthy": true,
+    "unrelated_services_unchanged": true
+  },
+  "memory": {
+    "sampling_interval_seconds": 5,
+    "scope": "Coarse NVML samples, not exact peaks",
+    "arms": {
+      "baseline": {
+        "healthy_samples": 49,
+        "min_model_gpu_mib": 38700,
+        "max_model_gpu_mib": 40736,
+        "min_sampled_gpu_headroom_mib": 14496
+      },
+      "candidate": {
+        "healthy_samples": 49,
+        "min_model_gpu_mib": 38700,
+        "max_model_gpu_mib": 40736,
+        "min_sampled_gpu_headroom_mib": 14496
+      }
+    }
+  }
+}

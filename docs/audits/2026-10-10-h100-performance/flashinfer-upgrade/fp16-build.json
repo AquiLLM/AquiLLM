@@ -1,0 +1,6 @@
+{
+  "image": "sha256:0e9d6dab02619863dd13c74f7fb03c40ee5cac87ba29172356d61fd7469081a7",
+  "base": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+  "commit": "6dd3678f5afac1b882b655928b818abc4e9661e2",
+  "checkout": "/home/exouser/AquiLLM-flashinfer"
+}
