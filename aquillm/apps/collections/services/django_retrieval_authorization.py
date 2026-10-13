@@ -93,6 +93,7 @@ class DjangoCollectionRetrievalPermissionPolicy:
             CollectionPermission.objects.using(database_alias)
             .filter(
                 user_id=principal_id,
+                user__is_active=True,
                 collection_id__in=selected_collection_ids,
                 permission__in=("VIEW", "EDIT", "MANAGE"),
             )
@@ -128,6 +129,7 @@ class DjangoCollectionRetrievalPermissionPolicy:
             CollectionPermission.objects.using(database_alias)
             .filter(
                 user_id=principal_id,
+                user__is_active=True,
                 collection_id__in=selected_collection_ids,
                 permission__in=("VIEW", "EDIT", "MANAGE"),
             )

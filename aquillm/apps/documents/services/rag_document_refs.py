@@ -33,6 +33,7 @@ def _validated_collection_allowlist(
 def rehydrate_documents_from_refs(
     refs: Sequence[Mapping[str, Any]],
     allowed_collection_ids: Sequence[int],
+    *, metadata_only: bool = False,
 ) -> list[Any]:
     from django.apps import apps
 
@@ -63,6 +64,11 @@ def rehydrate_documents_from_refs(
                 pkid__in=uniq_pks,
                 collection_id__in=collection_ids,
             )
+            if metadata_only:
+                qs = qs.defer(*[
+                    field.name for field in model._meta.concrete_fields
+                    if field.name in {"full_text", "extracted_caption"}
+                ])
         except Exception:
             continue
         for doc in qs:

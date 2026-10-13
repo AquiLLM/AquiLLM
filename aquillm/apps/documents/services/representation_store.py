@@ -3,7 +3,8 @@
 from uuid import UUID
 import re
 
-from django.db.models import Exists, F, Func, OuterRef, Q
+from django.contrib.postgres.expressions import ArraySubquery
+from django.db.models import BooleanField, F, Func, Q
 
 from lib.embeddings.document_contracts import digest, require_digest
 from .representation_contracts import (
@@ -16,6 +17,18 @@ from .representation_contracts import (
 
 class SourceSHA256(Func):
     template = "encode(sha256(convert_to(%(expressions)s, 'UTF8')), 'hex')"
+
+
+class OwnerIdMembership(Func):
+    """Parameter-safe UUID membership in one statement-local owner array."""
+
+    def __init__(self, owners):
+        super().__init__(F("doc_id"), ArraySubquery(owners), output_field=BooleanField())
+
+    def as_sql(self, compiler, connection, **extra_context):
+        lhs, lhs_params = compiler.compile(self.source_expressions[0])
+        rhs, rhs_params = compiler.compile(self.source_expressions[1])
+        return f"({lhs} = ANY({rhs}))", [*lhs_params, *rhs_params]
 
 
 def _unavailable():
@@ -187,8 +200,9 @@ def _active_chunk_predicates(queryset, *, snapshot, document_id=None):
 
     exact_owner = Q(pk__in=[])
     unique_owner = Q()
+    selected_ids = tuple(s.document.id for s in selections)
     for model in DESCENDED_FROM_DOCUMENT:
-        owners = model._base_manager.using(queryset.db).filter(id=OuterRef("doc_id"))
+        owners = model._base_manager.using(queryset.db).filter(id__in=selected_ids).order_by()
         refs = represented.get(model._meta.label_lower, ())
         if refs:
             exact_tuples = ExactTupleMembership(
@@ -200,11 +214,17 @@ def _active_chunk_predicates(queryset, *, snapshot, document_id=None):
             # the complete tuple fixes the stored hash before this single SHA check.
             exact = owners.annotate(_canonical=SourceSHA256(F("full_text"))).filter(
                 exact_tuples, _canonical=F("full_text_hash"))
-            exact_owner |= Q(Exists(exact))
+            # A bounded uncorrelated membership read hashes each selected owner
+            # once in this SQL statement, rather than its full body per chunk.
+            # ARRAY creates a statement-local InitPlan. Plain IN can become a
+            # nested semi-join that rescans even an uncorrelated owner query.
+            # Exact PK/UUID tuples admit at most len(refs) rows, so this limit
+            # cannot truncate valid owners or reduce lexical recall.
+            exact_owner |= Q(OwnerIdMembership(exact.values("id")[:len(refs)]))
             # Keep UUID/PK pairs: a different selected PK can acquire this UUID
             # after construction, and must then count as an unexpected owner.
             owners = owners.exclude(identities)
-        unique_owner &= ~Q(Exists(owners))
+        unique_owner &= ~Q(doc_id__in=owners.values("id"))
     return queryset.filter(condition & exact_owner & unique_owner)
 
 

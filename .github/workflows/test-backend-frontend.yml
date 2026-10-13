@@ -336,6 +336,7 @@ jobs:
       - name: Vocabulary permission and publication contracts
         run: >-
           python -m pytest
+          aquillm/apps/collections/tests/test_retrieval_principal_activity.py
           aquillm/apps/collections/tests/test_vocabulary_database_cleanup.py
           aquillm/apps/collections/tests/test_vocabulary_database_operator_limits.py
           aquillm/apps/collections/tests/test_vocabulary_deadline.py

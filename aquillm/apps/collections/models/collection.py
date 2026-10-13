@@ -80,7 +80,9 @@ class CollectionQuerySet(models.QuerySet):
         else:
             raise ValueError(f"Invalid Permission type {perm}")
 
-        return self.filter(id__in=[col_perm.collection.pk for col_perm in CollectionPermission.objects.filter(user=user, permission__in=perm_options)])
+        return self.filter(id__in=CollectionPermission.objects.filter(
+            user=user, permission__in=perm_options,
+        ).values("collection_id"))
 
 
 class Collection(models.Model):
@@ -196,7 +198,7 @@ class Collection(models.Model):
         return self.user_has_permission_in(user, ['MANAGE'])
     
     @classmethod
-    def get_user_accessible_documents(cls, user, collections: Optional[CollectionQuerySet] = None, perm='VIEW'):
+    def get_user_accessible_documents(cls, user, collections: Optional[CollectionQuerySet] = None, perm='VIEW', *, metadata_only=False):
         """Returns a list of documents, not a queryset."""
         from django.conf import settings
 
@@ -213,13 +215,19 @@ class Collection(models.Model):
                 return rag_cache.rehydrate_documents_from_refs(
                     cached_refs,
                     allowed_collection_ids=collection_ids,
+                    metadata_only=metadata_only,
                 )
 
         doc_types = _get_document_types()
-        documents = functools.reduce(
-            lambda l, r: l + r,
-            [list(x.objects.filter(collection__in=collections)) for x in doc_types],
-        )
+        documents = []
+        for model in doc_types:
+            query = model.objects.filter(collection__in=collections)
+            if metadata_only:
+                query = query.defer(*[
+                    field.name for field in model._meta.concrete_fields
+                    if field.name in {"full_text", "extracted_caption"}
+                ])
+            documents.extend(query)
         if getattr(settings, "RAG_CACHE_ENABLED", False):
             rag_cache.set_cached_doc_access_refs(
                 user.id,
