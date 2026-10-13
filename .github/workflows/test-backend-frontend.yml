@@ -94,6 +94,7 @@ jobs:
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_projection_database_routing.py
           aquillm/tests/integration/test_knowledge_graph_compose.py
+          aquillm/tests/integration/test_projection_job_compose.py
           aquillm/tests/integration/test_knowledge_graph_query_extractor_compose.py
           aquillm/tests/integration/test_task21_knowledge_graph_eval_compose.py
           -q --tb=short
@@ -125,6 +126,32 @@ jobs:
           aquillm/tests/integration/test_retrieval_authorization_propagation.py
           aquillm/tests/integration/test_production_retrieval_authorization_reachability.py
           -q --tb=short
+      - name: Projection job and database call contracts
+        env:
+          KG_REQUIRE_POSTGRES_TESTS: "1"
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_projection_job_budget.py
+          aquillm/apps/knowledge_graph/tests/test_projection_job_database.py
+          aquillm/apps/knowledge_graph/tests/test_projection_job_lifecycle.py
+          aquillm/apps/knowledge_graph/tests/test_projection_job_setup.py
+          aquillm/apps/knowledge_graph/tests/test_projection_runtime.py
+          aquillm/apps/knowledge_graph/tests/test_projection_transport_deadline.py
+          aquillm/apps/knowledge_graph/tests/test_projection_transaction_reentry.py
+          aquillm/apps/knowledge_graph/tests/test_projection_worker_heartbeat.py
+          aquillm/apps/knowledge_graph/tests/test_projection_worker_lease_failures.py
+          aquillm/apps/knowledge_graph/tests/test_projection_terminal_recovery.py
+          aquillm/apps/knowledge_graph/tests/test_projection_driver_lifecycle.py
+          aquillm/apps/knowledge_graph/tests/test_projection_database_routing.py
+          aquillm/apps/knowledge_graph/tests/test_projection_representation_publication.py
+          aquillm/apps/knowledge_graph/tests/test_canonical_cursor_deadline_postgres.py
+          aquillm/tests/integration/test_projection_database_deadline.py
+          aquillm/tests/integration/test_projection_database_fetch_deadline.py
+          aquillm/tests/integration/test_projection_representation_publication_races.py
+          aquillm/tests/integration/test_projection_representation_state_boundary.py
+          aquillm/lib/knowledge_graph/tests/test_projection_timeout_config.py
+          aquillm/lib/knowledge_graph/tests/test_retrieval_config.py
+          --ds=aquillm.settings_projection_test -q --tb=short
       - name: Graph retrieval latency contracts
         run: >-
           python -m pytest

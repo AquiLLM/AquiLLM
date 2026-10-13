@@ -68,13 +68,24 @@ def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
     settings = runtime.load_projection_runtime_settings(_projection_environment())
     observed: dict[str, object] = {}
 
-    def driver(uri, username, password, *, database, max_transaction_retry_time):
+    def driver(
+        uri,
+        username,
+        password,
+        *,
+        database,
+        max_transaction_retry_time,
+        connection_timeout,
+        connection_acquisition_timeout,
+    ):
         observed.update(
             uri=uri,
             username=username,
             password=password,
             database=database,
             max_transaction_retry_time=max_transaction_retry_time,
+            connection_timeout=connection_timeout,
+            connection_acquisition_timeout=connection_acquisition_timeout,
         )
         return SimpleNamespace(execute_read=lambda *_a, **_k: ())
 
@@ -89,6 +100,8 @@ def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
         "password": "writer-secret",
         "database": "projection",
         "max_transaction_retry_time": 0.0,
+        "connection_timeout": 5.0,
+        "connection_acquisition_timeout": 5.0,
     }
 
 
@@ -132,10 +145,10 @@ def test_postgres_factory_rejects_nonexact_state_repository_before_io(
 def test_postgres_factory_injects_frozen_hmac_versions_and_function_repository(
     monkeypatch,
 ) -> None:
+    from apps.knowledge_graph.projection.database_deadline import ProjectionOperation
     from apps.knowledge_graph.projection.state_repository import (
         FunctionProjectionStateRepository,
     )
-    from apps.knowledge_graph.projection.database_deadline import ProjectionOperation
 
     settings = runtime.load_projection_runtime_settings(_projection_environment())
     aliases = runtime.ProjectionDatabaseAliases(
@@ -157,7 +170,9 @@ def test_postgres_factory_injects_frozen_hmac_versions_and_function_repository(
         runtime, "PostgresProjectionRepository", repository, raising=False
     )
     operation = ProjectionOperation(settings.projection_timeout_ms)
-    function_repository = FunctionProjectionStateRepository(owner="worker-1", operation=operation)
+    function_repository = FunctionProjectionStateRepository(
+        owner="worker-1", operation=operation
+    )
 
     result = runtime.postgres_projection_repository(
         settings,

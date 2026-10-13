@@ -6,9 +6,9 @@ from uuid import UUID
 
 from django.utils import timezone
 
-from .memgraph_repository import MemgraphProjectionRepository
-from .driver_lifecycle import OwnedProjectionRepository, release_owned_repository
 from .database_deadline import current_operation, projection_operation
+from .driver_lifecycle import OwnedProjectionRepository, release_owned_repository
+from .memgraph_repository import MemgraphProjectionRepository
 from .projection_lease import (
     _backend_transient,
     _ProjectionLeaseHeartbeat,
@@ -120,8 +120,24 @@ def project_generation(
     *, projection_id: UUID, lease_owner: str
 ) -> ProjectionRunOutcomeV1:
     settings = _projection_settings()
-    with projection_operation(settings.projection_timeout_ms):
-        return _project_generation(projection_id=projection_id, lease_owner=lease_owner, settings=settings)
+    outcome = None
+    try:
+        with projection_operation(
+            getattr(settings, "projection_job_timeout_ms", 300000),
+            call_timeout_ms=min(settings.projection_timeout_ms, 5000),
+        ):
+            outcome = _project_generation(
+                projection_id=projection_id, lease_owner=lease_owner, settings=settings
+            )
+        return outcome
+    except TimeoutError:
+        if outcome is None:
+            raise
+        # A completed ready CAS (or handled ambiguous transition) must never
+        # become a staging retry merely because context cleanup crossed the end.
+        return ProjectionRunOutcomeV1(
+            outcome.projection_id, False, outcome.failure_code or "lease_lost"
+        )
 
 
 def _project_generation(*, projection_id, lease_owner, settings):
@@ -176,7 +192,7 @@ def _project_generation(*, projection_id, lease_owner, settings):
             graph = _memgraph_repository()
             if type(graph) is OwnedProjectionRepository:
                 owned_graph, graph = graph, graph.repository
-            timeout = settings.projection_timeout_ms / 1_000.0
+            timeout = min(settings.projection_timeout_ms, 5000) / 1_000.0
             graph.write_staging_generation(
                 bundle=bundle,
                 private_mapping_checksum=private_checksum,

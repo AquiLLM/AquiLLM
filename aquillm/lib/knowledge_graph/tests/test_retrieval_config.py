@@ -39,6 +39,7 @@ DEFAULTS: dict[str, object] = {
     "projection_retention": 2,
     "projection_max_lag_seconds": 300,
     "projection_timeout_ms": 5000,
+    "projection_job_timeout_ms": 300000,
     "query_extractor_url": "",
     "query_extractor_bearer_token": "",
     "query_extractor_model": "fastino/gliner2-base-v1",
