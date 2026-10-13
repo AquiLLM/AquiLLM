@@ -24,3 +24,11 @@ def captured_entity_links(queryset, identifiers):
     ):
         return queryset.filter(collection_entity_id__in=identifiers)
     return queryset.filter(_CapturedEntityIds(identifiers))
+
+
+_NATIVE_MEMBERSHIP_BINDING = {
+    "captured_entity_links": captured_entity_links,
+    "_CapturedEntityIds": _CapturedEntityIds,
+    "_CapturedEntityIds.__init__": _CapturedEntityIds.__init__,
+    "_CapturedEntityIds.as_sql": _CapturedEntityIds.as_sql,
+}

@@ -18,6 +18,8 @@ from .reconciler import (
 )
 from .runtime import ProjectionDatabaseAliases, load_projection_runtime_settings
 from .worker import project_generation
+# Register the dedicated job in workers before any producer dispatches it.
+from .membership_certificate_tasks import dispatch_membership_certificate
 
 _TRANSIENT = (ConnectionError, TimeoutError)
 _TASK_SETTINGS = load_projection_runtime_settings()
@@ -70,6 +72,13 @@ def project_knowledge_graph_projection(self, projection_id: str):
             lease_owner=f"celery-{self.request.id or uuid4()}",
         ),
     )
+    if outcome.ready:
+        # Separate best effort after project_generation has closed its operation.
+        # This must never reach _run_redacted's staging retry path.
+        try:
+            dispatch_membership_certificate(identifier)
+        except Exception:
+            pass
     return {"ready": outcome.ready, "failure_code": outcome.failure_code}
 
 

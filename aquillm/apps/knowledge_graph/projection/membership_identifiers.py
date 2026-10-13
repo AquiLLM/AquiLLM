@@ -148,3 +148,11 @@ class MembershipKeyEncoder:
         return self.codec.encode(
             Domain.AUTOMATIC_CANONICAL_IDENTITY, source=source
         ).value
+
+
+_NATIVE_MEMBERSHIP_BINDING = {
+    "Domain": Domain, "_current_binding": _current_binding,
+    "_generation_state": _generation_state, "MembershipKeyEncoder": MembershipKeyEncoder,
+    **{"MembershipKeyEncoder." + name: getattr(MembershipKeyEncoder, name)
+       for name in ("__init__", "_integer", "_discard", "_ready", "_encoded", "entity", "canonical")},
+}

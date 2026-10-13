@@ -22,6 +22,7 @@ from apps.knowledge_graph.projection.representation_inputs import (
 )
 
 from .graph_handoff import GraphCoverageV2
+from .membership_certificate_authority import certified_membership_checksums
 from .ready_metadata_v2 import validate_present_metadata
 from .ready_scope import (
     ReadyProjectionAuthorityV1,
@@ -87,10 +88,30 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
     states, artifacts, active_counts, inputs_by_artifact = fresh_metadata(
         rows, selected, using=using, check=check,
     )
+    from apps.knowledge_graph.projection import memberships, membership_certificate_contracts
+    certified = {}
+    if (getattr(settings, "membership_certificate_enabled", False)
+            and load_automatic_membership_assignments is memberships.load_automatic_membership_assignments
+            and membership_decision_checksum is memberships.membership_decision_checksum):
+        native_identity = membership_certificate_contracts.native_membership_identity(codec)
+        certified = certified_membership_checksums(
+            projections=rows, using=using, codec=codec, check=check,
+        )
+        if certified:
+            original_check = check
+
+            def check():
+                original_check()
+                if (native_identity is None
+                        or membership_certificate_contracts.native_membership_identity(codec) != native_identity
+                        or load_automatic_membership_assignments is not memberships.load_automatic_membership_assignments
+                        or membership_decision_checksum is not memberships.membership_decision_checksum):
+                    mismatch()
+
+            check()
     seen, result = set(), []
     for row in rows:
         check()
-        # No version/status filter may turn present unsupported authority into absence.
         if row.collection_id in seen:
             mismatch()
         seen.add(row.collection_id)
@@ -148,16 +169,17 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
                     if s.document.collection_id == row.collection_id
                 ):
                     mismatch()
-        assignments = load_automatic_membership_assignments(
-            collection_ids=(row.collection_id,),
-            using=using,
-            batch_size=5000,
-            codec=codec,
-            check=check,
-        )
-        check()
-        if membership_decision_checksum(assignments, check=check) != state.membership_checksum:
-            mismatch()
+        if certified.get(row.id) != state.membership_checksum:
+            assignments = load_automatic_membership_assignments(
+                collection_ids=(row.collection_id,),
+                using=using,
+                batch_size=5000,
+                codec=codec,
+                check=check,
+            )
+            check()
+            if membership_decision_checksum(assignments, check=check) != state.membership_checksum:
+                mismatch()
         inputs = inputs_by_artifact[row.artifact_id]
         if len(inputs) > 10_000:
             mismatch()

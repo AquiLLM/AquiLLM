@@ -16,6 +16,7 @@ from lib.knowledge_graph import retrieval_config as config
 # fmt: off
 DEFAULTS: dict[str, object] = {
     "memgraph_projection_enabled": False,
+    "membership_certificate_enabled": False,
     "memgraph_traversal_enabled": False,
     "graph_direct_enabled": False,
     "graph_extended_enabled": False,
@@ -297,4 +298,3 @@ def test_projection_dsn_accepts_percent_encoded_reserved_passwords(password: str
 def test_projection_dsn_password_structure_and_controls_fail_closed(dsn: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN"):
         config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": dsn})
-# fmt: on

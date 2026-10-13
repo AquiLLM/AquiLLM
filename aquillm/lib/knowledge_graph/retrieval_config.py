@@ -74,9 +74,10 @@ class HybridRetrievalSettings:
     graph_extended_max_seeds: int; graph_extended_max_depth: int; graph_extended_max_nodes: int; graph_extended_max_edges: int
     graph_extended_max_candidates: int; graph_fusion_rrf_k: int; direct_embedding_enabled: bool; direct_min_similarity: float
     direct_winner_margin: float; graph_eval_parity_backend: str; ppr_restart_mode: str; graph_remediation_mode: str
+    membership_certificate_enabled: bool = False
 _BOOL_DEFAULTS = dict.fromkeys((
     "KG_MEMGRAPH_PROJECTION_ENABLED", "KG_MEMGRAPH_TRAVERSAL_ENABLED",
-    "KG_GRAPH_DIRECT_ENABLED", "KG_GRAPH_EXTENDED_ENABLED", "KG_DIRECT_EMBEDDING_ENABLED",
+    "KG_GRAPH_DIRECT_ENABLED", "KG_GRAPH_EXTENDED_ENABLED", "KG_DIRECT_EMBEDDING_ENABLED", "KG_MEMBERSHIP_CERTIFICATE_ENABLED",
 ), "0")
 _INT_RULES = {
     "KG_PROJECTION_JOB_TIMEOUT_MS": ("300000", 100, 300000),
@@ -297,4 +298,3 @@ def select_evaluation_topology_backend(settings: HybridRetrievalSettings, *, cap
     if type(settings) is not HybridRetrievalSettings or settings.graph_eval_parity_backend != "postgres":
         raise HybridRetrievalConfigError("evaluation backend must be postgres")
     return "postgres"
-# fmt: on

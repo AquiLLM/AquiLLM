@@ -275,3 +275,14 @@ def advance_membership_state_locked(
         state.resolution_config_checksum = config
         state.save(using=using)
     return state
+
+
+# Defining-module capture precedes any optional certificate import.
+_NATIVE_MEMBERSHIP_BINDING = {name: globals()[name] for name in (
+    "MEMBERSHIP_REGISTRY_GENERATION", "load_automatic_membership_assignments",
+    "null_membership_decision_checksum", "membership_decision_checksum",
+    "_opaque_entity_key", "_opaque_membership_key", "_checked_rows",
+    "_load_membership_source_rows", "_membership_check", "_batch_size",
+    "_collection_ids", "AutomaticCanonicalMembershipV1", "sha256",
+    "ProjectionIdentifierDomain", "_MAX_BATCH")}
+_NATIVE_MEMBERSHIP_BINDING["json.dumps"] = json.dumps

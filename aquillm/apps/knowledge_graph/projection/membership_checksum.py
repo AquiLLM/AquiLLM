@@ -74,3 +74,10 @@ def membership_decision_checksum(
     digest.update(b"]")
     _checkpoint(check)
     return digest.hexdigest()
+
+
+_NATIVE_MEMBERSHIP_BINDING = {name: globals()[name] for name in (
+    "membership_decision_checksum", "_ordered_rows", "_payload", "_checkpoint",
+    "AutomaticCanonicalMembershipV1", "_SCALARS", "_FIELDS", "_BATCH_SIZE",
+    "_encode", "_provider_types", "sha256")}
+_NATIVE_MEMBERSHIP_BINDING["json.dumps"] = json.dumps

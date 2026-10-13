@@ -173,3 +173,10 @@ def _uuid(value: object, name: str) -> None:
         raise ValueError(f"{name} must be a canonical UUID") from error
     if value != str(parsed):
         raise ValueError(f"{name} must be a canonical lowercase UUID")
+
+
+_NATIVE_MEMBERSHIP_BINDING = {name: globals()[name] for name in (
+    "_encode", "_provider_types", "projection_checksum", "canonical_projection_bytes",
+    "_validate_top_level_records", "_key", "_token", "_count", "_uuid",
+    "fields", "sha256", "_MAX_COUNT", "_KEY_PATTERN")}
+_NATIVE_MEMBERSHIP_BINDING["json.dumps"] = json.dumps
