@@ -746,3 +746,29 @@ def test_real_source_replay_uses_provider_specific_context_budget(
     assert result["packet"]
     assert result["generation_attempted"] is False
     assert result["sdk_started"] is False
+
+
+def test_effective_report_distinguishes_graph_implementation(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "graph_mode_cli", Path(__file__).parents[1] / "scripts/replay_retrieval.py"
+    )
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    config = SimpleNamespace(vector_top_k=12, trigram_top_k=12)
+    # Effective loaded settings determine dispatch, even if ambient values differ.
+    monkeypatch.setenv("KG_GRAPH_REMEDIATION_MODE", "shadow")
+    reports = [
+        cli.effective_config(
+            SimpleNamespace(RAG_CACHE_ENABLED=False, KG_GRAPH_REMEDIATION_MODE=mode),
+            config,
+        )
+        for mode in ("legacy", "v2")
+    ]
+    assert reports[0]["graph_remediation_mode"] == "legacy"
+    assert reports[1]["graph_remediation_mode"] == "v2"
+    assert json.dumps(reports[0], sort_keys=True) != json.dumps(
+        reports[1], sort_keys=True
+    )

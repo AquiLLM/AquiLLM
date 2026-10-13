@@ -142,6 +142,9 @@ def effective_config(settings, config):
         "candidate_multiplier": getattr(settings, "RAG_CANDIDATE_MULTIPLIER", 3.0),
         "cache_enabled": settings.RAG_CACHE_ENABLED,
         "graph_overlay": getattr(settings, "KG_OVERLAY_ENABLED", False),
+        "graph_remediation_mode": getattr(
+            settings, "KG_GRAPH_REMEDIATION_MODE", "legacy"
+        ),
         "graph_direct": getattr(settings, "KG_GRAPH_DIRECT_ENABLED", False),
         "graph_extended": getattr(settings, "KG_GRAPH_EXTENDED_ENABLED", False),
         "rerank_character_cap": rerank_doc_char_limit(),
