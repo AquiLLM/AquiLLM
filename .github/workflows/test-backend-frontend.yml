@@ -180,6 +180,9 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_graph_runtime_authority_v2.py
           aquillm/apps/knowledge_graph/tests/test_graph_handoff_authority_v2.py
           aquillm/apps/knowledge_graph/tests/test_ready_materialization_v2.py
+          aquillm/apps/knowledge_graph/tests/test_ready_authority_work_v2.py
+          tests/test_projection_membership_checksum.py
+          tests/test_ready_authority_deadline.py
           aquillm/apps/knowledge_graph/tests/test_graph_runtime_v2.py
           aquillm/apps/knowledge_graph/tests/test_ready_subset_v2.py
           --ds=aquillm.settings_projection_test -q --tb=short
@@ -196,9 +199,13 @@ jobs:
           aquillm/apps/documents/tests/test_graph_admission_seeds.py
           aquillm/apps/documents/tests/test_graph_admission_provenance.py
           aquillm/apps/documents/tests/test_graph_admission_query_binding.py
+          aquillm/apps/documents/tests/test_graph_captured_owner_work.py
+          aquillm/apps/documents/tests/test_graph_captured_owner_fences.py
           aquillm/apps/documents/tests/test_source_body_batch.py
           aquillm/apps/documents/tests/test_source_body_batch_invariants.py
           aquillm/apps/documents/tests/test_source_body_publication.py
+          aquillm/apps/documents/tests/test_source_public_authorization_clone.py
+          aquillm/apps/documents/tests/test_closed_lexical_predicates.py
           aquillm/apps/documents/tests/test_scoped_source_consolidation.py
           aquillm/apps/documents/tests/test_scoped_source_races.py
           aquillm/apps/documents/tests/test_source_body_closed_operation.py

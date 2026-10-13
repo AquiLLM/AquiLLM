@@ -10,6 +10,7 @@ from django.db import connections, transaction
 from django.db.models.functions import MD5, Length
 
 from apps.collections.services.retrieval_authorization import (
+    RetrievalAuthorizationContext,
     revalidate_retrieval_authorization_context,
 )
 from lib.retrieval.turn_budget import TurnBudget
@@ -197,7 +198,9 @@ def _public_source_rows(queryset, runtime, refresh, require_existing):
                 original_header = scope_header(original)
             frozen_header = scope_header(frozen)
             check()
-            if frozen.runtime is not runtime or frozen.authorization is not authority:
+            if frozen.runtime is not runtime or not _same_public_authority(
+                frozen.authorization, authority
+            ):
                 raise SourceScopeUnavailable("source_scope_unavailable")
             prepared = _prepare_source_queryset(queryset, frozen)
             allowed = frozenset(
@@ -231,7 +234,17 @@ def _public_source_rows(queryset, runtime, refresh, require_existing):
         return rows
 
 
-def _prepare_source_queryset(queryset, frozen):
+def _same_public_authority(original, incoming):
+    """Equal pre-entry contexts may share the same original live capability."""
+    return original is incoming or (
+        type(original) is RetrievalAuthorizationContext
+        and type(incoming) is RetrievalAuthorizationContext
+        and original.reauthorization_capability is incoming.reauthorization_capability
+        and original == incoming
+    )
+
+
+def _prepare_source_queryset(queryset, frozen, *, document_ids=None):
     """Private SQL construction, consumed eagerly by a fresh-boundary caller."""
     from .representation_contracts import SourceScopeUnavailable
     from .representation_store import _active_chunk_predicates
@@ -244,6 +257,7 @@ def _prepare_source_queryset(queryset, frozen):
     queryset = _active_chunk_predicates(
         queryset.filter(doc_id__in=frozen.requested_document_ids),
         snapshot=frozen.representation,
+        **({} if document_ids is None else {"document_ids": document_ids}),
     )
     queryset.query.set_limits(low, high)
     return queryset

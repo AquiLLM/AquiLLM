@@ -2,7 +2,10 @@
 
 def read_captured_refs(plan, ids, *, baseline=(), order=False):
     from apps.documents.models import TextChunk
-    from apps.knowledge_graph.retrieval.graph_candidate_stage_v2 import _GraphSourceStage
+    from apps.knowledge_graph.retrieval.graph_candidate_stage_v2 import (
+        _GraphSourceStage,
+    )
+
     from .chunk_search_scoped_rows import _retain_dense
     from .graph_candidate_metadata import captured_query
 
@@ -21,7 +24,9 @@ def read_captured_refs(plan, ids, *, baseline=(), order=False):
             with scope.database():
                 check()
                 stage.initial_keys = set(scope.validate())
-                loaded = stage.read(query) if ids else ()
+                loaded = (
+                    stage.read_captured(tuple(refs[pk] for pk in ids)) if ids else ()
+                )
                 plan.populate(loaded, stage.staged)
                 merged = tuple({r.pk: r for r in (*baseline, *loaded)}.values())
                 rows, _ = stage.current(merged, stage.initial_keys)

@@ -63,29 +63,33 @@ def validate_original_scope(*, authorization, representation_snapshot):
 
 
 def load_authorities_v2(*, authorization, settings, representation_snapshot, codec):
-    from apps.knowledge_graph.models import (
-        CollectionArtifactInput,
-        CollectionGraphMembershipState,
-        CollectionGraphProjection,
-        GraphArtifact,
+    from apps.knowledge_graph.models import CollectionGraphProjection
+    from .ready_authority_reads_v2 import (
+        capture_authority_check, checked_rows, fresh_metadata,
     )
 
+    check = capture_authority_check()
     using = authorization.database_alias
     from apps.knowledge_graph.resolution.vocabulary_capture import capture_retrieval_vocabulary, validate_artifact
     vocabulary = capture_retrieval_vocabulary(authorization)
+    check()
     selected = {s.document.id: s for s in representation_snapshot.selections}
-    rows = tuple(
+    rows = tuple(checked_rows(
         CollectionGraphProjection.objects.using(using)
         .filter(
             collection_id__in=authorization.selected_collection_ids,
             state__in=("ready", "pending", "building"),
         )
-        .order_by("collection_id", "pk")[:129]
-    )
+        .order_by("collection_id", "pk")[:129], check,
+    ))
     if len(rows) > 128:
         mismatch()
+    states, artifacts, active_counts, inputs_by_artifact = fresh_metadata(
+        rows, selected, using=using, check=check,
+    )
     seen, result = set(), []
     for row in rows:
+        check()
         # No version/status filter may turn present unsupported authority into absence.
         if row.collection_id in seen:
             mismatch()
@@ -96,12 +100,8 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
             settings.projection_identifier_key_version,
         ):
             mismatch()
-        state = (
-            CollectionGraphMembershipState.objects.using(using)
-            .filter(collection_id=row.collection_id)
-            .first()
-        )
-        artifact = GraphArtifact.objects.using(using).filter(pk=row.artifact_id).first()
+        state = states.get(row.collection_id)
+        artifact = artifacts.get(row.artifact_id)
         if (
             state is None
             or artifact is None
@@ -132,23 +132,15 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
             mismatch()
         validate_present_metadata(projection=row, membership=state, artifact=artifact)
         validate_artifact(artifact, vocabulary, collection_id=row.collection_id)
-        if (
-            GraphArtifact.objects.using(using)
-            .filter(
-                scope_type="collection",
-                collection_scope_id=row.collection_id,
-                status="active",
-                evaluation_only=False,
-            )
-            .count()
-            != 1
-        ):
+        if active_counts.get(row.collection_id, 0) != 1:
             mismatch()
         captured = validate_record_binding(row)
         artifact_snapshot = validate_record_binding(artifact)
         for bound in (captured, artifact_snapshot):
+            check()
             if bound is not None:
                 validate_representation_snapshot(bound, using=using)
+                check()
                 by_document = {s.document.id: s for s in bound.selections}
                 if any(
                     by_document.get(d) != s
@@ -161,22 +153,17 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
             using=using,
             batch_size=1000,
             codec=codec,
+            check=check,
         )
-        if membership_decision_checksum(assignments) != state.membership_checksum:
+        check()
+        if membership_decision_checksum(assignments, check=check) != state.membership_checksum:
             mismatch()
-        inputs = tuple(
-            CollectionArtifactInput.objects.using(using)
-            .filter(
-                artifact_id=row.artifact_id,
-                document_id__in=selected,
-            )
-            .select_related("document_artifact")
-            .order_by("document_id")[:10_001]
-        )
+        inputs = inputs_by_artifact[row.artifact_id]
         if len(inputs) > 10_000:
             mismatch()
         documents = []
         for item in inputs:
+            check()
             da, source = item.document_artifact, selected[item.document_id].document
             if (
                 item.collection_id != row.collection_id
@@ -219,6 +206,8 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
             )
         except (TypeError, ValueError):
             mismatch()
+        check()
+    check()
     return tuple(result)
 
 

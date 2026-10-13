@@ -54,6 +54,29 @@ class _GraphSourceStage:
             raise SourceScopeUnavailable("graph_original_scope_unavailable")
 
     def read(self, query):
+        return self._read(query)
+
+    def read_captured(self, refs):
+        """Exact private references narrow SQL work, never full authority."""
+        from apps.documents.services.graph_candidate_metadata import (
+            SourceRankRef,
+            captured_query,
+        )
+
+        self.check()
+        if (
+            type(refs) is not tuple
+            or len(refs) > 45
+            or any(type(ref) is not SourceRankRef for ref in refs)
+            or len({ref.pk for ref in refs}) != len(refs)
+        ):
+            raise SourceScopeUnavailable("graph_original_scope_unavailable")
+        return self._read(
+            captured_query(TextChunk, refs, self.scope),
+            document_ids=frozenset(ref.doc_id for ref in refs),
+        )
+
+    def _read(self, query, *, document_ids=None):
         from apps.collections.services.retrieval_authorization import (
             revalidate_retrieval_authorization_context,
         )
@@ -67,7 +90,9 @@ class _GraphSourceStage:
         )
         allowed = frozenset(authority.document_ids)
         query = _prepare_source_queryset(
-            query.filter(doc_id__in=self.scope.requested_document_ids), self.original
+            query.filter(doc_id__in=self.scope.requested_document_ids),
+            self.original,
+            **({} if document_ids is None else {"document_ids": document_ids}),
         )
         rows = _source_body_rows(query, self.original, self.budget, allowed, self.cache)
         self.check()
@@ -80,7 +105,10 @@ class _GraphSourceStage:
     def current(self, rows, keys):
         from apps.documents.services.chunk_search_scoped_rows import _current_rows
 
-        rows, valid_fts = _current_rows(rows, self.staged, keys)
+        rows, valid_fts = _current_rows(
+            rows, self.staged, keys,
+            document_ids=frozenset(row.doc_id for row in rows),
+        )
         return tuple(rows), valid_fts
 
     def publish(self, rows, check):
@@ -95,7 +123,10 @@ class _GraphSourceStage:
             for pk in surviving:
                 self.scope.bodies.setdefault(pk, self.staged.bodies[pk])
                 dense = self.staged.dense_rows.get(pk)
-                if dense is not None and dense.embedding_generation_key in self.final_keys:
+                if (
+                    dense is not None
+                    and dense.embedding_generation_key in self.final_keys
+                ):
                     self.scope.dense_rows.setdefault(pk, dense)
                 if pk in self.staged.lexical_ids:
                     self.scope.lexical_ids.add(pk)
