@@ -76,11 +76,15 @@ def image_url(source):
 
 
 def attributed(sources):
-    # Literal expected A2 framing. Figure captions have two sentences.
+    # Literal fixture layout: retain caption spacing and both numeric/terminal references.
     quotes = []
-    for _, chunk in sources:
-        lines = chunk.content.replace(". ", ".\n").splitlines()
-        quotes.append("\n".join(f"> {line} [doc:{chunk.doc_id} chunk:{chunk.pk}]" for line in lines))
+    for doc, chunk in sources:
+        token = citation((doc, chunk))
+        if isinstance(doc, DocumentFigure):
+            figure, caption = chunk.content.split(". ", 1)
+            quotes.append(f"> {figure}. {token} {caption} {token}")
+        else:
+            quotes.append(f"> {chunk.content} {token}")
     return UNCERTAINTY + "\n\n" + "\n\n".join(quotes)
 
 

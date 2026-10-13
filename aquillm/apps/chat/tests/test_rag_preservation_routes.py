@@ -207,6 +207,8 @@ async def test_normal_model_tool_is_counted_once_and_synthesized_once(
     assert "uncertain" in published.content
     for chunk in chunks:
         citation = f"[doc:{doc.id} chunk:{chunk.pk}]"
-        assert f"> Aspect {chunk.chunk_number}. {citation}" in published.content
-        assert f"> Qualified tail: only below 1 Pa. {citation}" in published.content
+        assert (
+            f"> Aspect {chunk.chunk_number}. {citation} "
+            f"Qualified tail: only below 1 Pa. {citation}"
+        ) in published.content
     assert published._validated_answer.outcome == "partial"

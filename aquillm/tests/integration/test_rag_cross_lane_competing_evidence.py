@@ -19,6 +19,7 @@ from .persisted_graph_gateway_support import owned_gateway
 from .persisted_graph_projection_support import graph_configuration as graph_configuration
 from .persisted_graph_role_support import projection_roles as projection_roles
 from .persisted_graph_source_support import upload as upload
+from .structural_delivery_support import quote_for
 
 pytestmark = pytest.mark.django_db(transaction=True,
     databases=['default', 'projection_source', 'projection_state'])
@@ -112,9 +113,7 @@ async def test_distinct_evidence_competes_in_actual_graph_route(
                 for content in (stored, *(value for _, value in events)):
                     assert content.index(SIGNED) < content.index(OPPOSITION)
                     citation = f'[doc:{late.doc_id} chunk:{late.pk}]'
-                    quoted = ' '.join(line.removeprefix('> ').removesuffix(' ' + citation)
-                        for line in content.splitlines() if line.startswith('> ') and line.endswith(citation))
-                    assert ' '.join(quoted.split()) == ' '.join(late.content.split())
+                    assert quote_for(content, citation) == ' '.join(late.content.split())
             else:
                 # Honest prefix controls; never label their numerical score full-source coverage.
                 if ranking.score_set is not None:

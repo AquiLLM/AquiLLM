@@ -170,6 +170,8 @@ async def test_all_off_keeps_the_legacy_direct_route(docs, monkeypatch):
     assert message.content.startswith(
         "Support for an answer is uncertain in the selected evidence. "
         "These are attributed excerpts, not a conclusion about the question:\n\n")
-    assert f"> Aspect 0. {citation}\n> Qualified tail: only below 1 Pa. {citation}" in message.content
+    assert (
+        f"> Aspect 0. {citation} Qualified tail: only below 1 Pa. {citation}"
+    ) in message.content
     assert "Legacy answer" not in message.content
     assert message._validated_answer.outcome == "partial"

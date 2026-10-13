@@ -102,7 +102,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/lib/knowledge_graph/tests/test_gliner2_local.py": 714,
     "aquillm/lib/knowledge_graph/tests/test_query_extractor_client.py": 336,
     "aquillm/lib/llm/providers/complete_turn.py": 1055,
-    "aquillm/lib/llm/tests/test_rag_citations.py": 1410,
+    "aquillm/lib/llm/tests/test_rag_citations.py": 1408,
     "aquillm/lib/llm/tests/test_spin_tool_budget.py": 337,
     "aquillm/lib/llm/utils/context_packer.py": 427,
     "aquillm/lib/memory/mem0/memgraph_compat.py": 651,

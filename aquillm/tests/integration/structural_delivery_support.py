@@ -1,5 +1,6 @@
 """UNEXECUTED: structural baseline source/window delivery, never offline-order serving."""
 from contextlib import asynccontextmanager
+from itertools import groupby
 import re
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ from apps.documents.services.representation_media_acquisition import media_runti
 from apps.documents.services.chunk_rerank_window_adapter import WindowSelectionScorer
 from lib.evidence_observation import observe
 from lib.llm.turn_context import current_turn
+from lib.llm.providers.rag_citations import find_uncited_numeric_claims
 from .cross_lane_competing_support import CompetingProvider
 from .cross_lane_graph_route_observation import graph_route_observation
 from .cross_lane_publication_support import consumer_for, retrieve
@@ -90,6 +92,16 @@ async def structural_turn(source, question, monkeypatch):
 
 
 def quote_for(content, citation):
-    text = ' '.join(line.removeprefix('> ').removesuffix(' ' + citation)
-        for line in content.splitlines() if line.startswith('> ') and line.endswith(citation))
-    return ' '.join(text.split())
+    """Recover complete blocks for one identity, including uncited original lines."""
+    assert not find_uncited_numeric_claims(content)
+    text = []
+    for quoted, lines in groupby(content.splitlines(), lambda line: line.startswith('> ')):
+        if not quoted:
+            continue
+        block = [line.removeprefix('> ') for line in lines]
+        refs = set(re.findall(r'\[doc:[^\]\s]+\s+chunk:\d+\]', '\n'.join(block)))
+        if citation in refs:
+            assert refs == {citation}, 'a quote block combines different source identities'
+            text.extend(line.replace(' ' + citation, '') for line in block)
+    assert text, 'the requested source has no attributed quote block'
+    return ' '.join(' '.join(text).split())
