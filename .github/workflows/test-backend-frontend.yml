@@ -376,6 +376,7 @@ jobs:
           tests/test_check_logging_conventions.py
           tests/test_check_retrieval_logging.py
           tests/test_replay_retrieval.py
+          tests/test_replay_target_preflight.py
           -x -vv --tb=short --durations=20
       - name: Logging and file-size guardrails
         run: |

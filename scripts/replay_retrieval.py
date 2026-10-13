@@ -95,18 +95,27 @@ def selected_modes(args):
 
 
 def selected_sources(user, collections):
-    from apps.chat.refs import CollectionsRef
-    from apps.chat.services.tool_wiring.source_documents import (
-        document_metadata,
-        selected_document_metadata,
-    )
+    """Offline gold oracle under cache-off replay controls, outside serving tools."""
+    from django.contrib.auth import get_user_model
+
+    from apps.collections.models import Collection
     from apps.documents.models import TextChunk
 
-    sources = []
-    for metadata in selected_document_metadata(user, CollectionsRef(collections)):
-        document = document_metadata(metadata.id)
-        if document is None or not document.collection.user_can_view(user):
+    def authorize(document=None):
+        if not user.is_active or not get_user_model().objects.filter(
+            pk=user.pk, is_active=True
+        ).exists():
+            raise ValueError("principal_inactive")
+        if document is not None and not document.collection.user_can_view(user):
             raise ValueError("source_authorization_failed")
+
+    authorize()
+    documents = Collection.get_user_accessible_documents(
+        user, Collection.objects.filter(pk__in=collections), metadata_only=True
+    )
+    sources = []
+    for document in documents:
+        authorize(document)
         sources.append(
             {
                 "source": document.full_text,
@@ -121,6 +130,10 @@ def selected_sources(user, collections):
                 ],
             }
         )
+        authorize(document)
+    authorize()
+    for document in documents:
+        authorize(document)
     return sources
 
 
