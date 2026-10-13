@@ -25,6 +25,10 @@ def validated_seed_baseline(baseline, *, authorization, settings):
         or baseline.graph_seed_error
     ):
         return None, {"not_ready"}
+    if baseline.source_admission is not None:
+        from apps.documents.services.graph_admission_seeds import native_seed_baseline
+
+        return native_seed_baseline(baseline, authorization=authorization, settings=settings)
     rows = validate_rows(baseline.baseline_candidates, scope=scope)
     by_id = {r.pk: r for r in rows}
     if rows != baseline.baseline_candidates or any(
@@ -58,6 +62,11 @@ def validated_seed_baseline(baseline, *, authorization, settings):
 def group_baseline_view(baseline, group):
     if baseline is None:
         return None
+    from apps.documents.services.graph_admission_seeds import group_native_seed_view
+
+    native = group_native_seed_view(baseline, group)
+    if native is not None:
+        return native
     allowed = {
         r.pk
         for r in baseline.baseline_candidates

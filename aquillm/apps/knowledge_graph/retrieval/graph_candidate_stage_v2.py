@@ -35,6 +35,7 @@ class _GraphSourceStage:
         self.pending = {}
         self.cache = ChainMap(self.pending, header[0][4])
         self.initial_keys = set()
+        self.final_keys = frozenset()
 
     def check(self):
         check_source_deadline()
@@ -93,6 +94,9 @@ class _GraphSourceStage:
             check()
             for pk in surviving:
                 self.scope.bodies.setdefault(pk, self.staged.bodies[pk])
+                dense = self.staged.dense_rows.get(pk)
+                if dense is not None and dense.embedding_generation_key in self.final_keys:
+                    self.scope.dense_rows.setdefault(pk, dense)
                 if pk in self.staged.lexical_ids:
                     self.scope.lexical_ids.add(pk)
                 if pk in self.staged.fts_rows:

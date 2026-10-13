@@ -18,17 +18,18 @@ from apps.documents.services.source_deadline import (
     source_remaining_ms,
 )
 from apps.documents.services.source_loading import bounded_source_database
+from apps.documents.services.graph_admission_adapter import (
+    captured_admission, deferred_baseline, order_graph_pool, selector_body_reader,
+    observe_published_graph,
+)
+from apps.documents.services.graph_admission_seeds import validate_final_native_seeds
 
 from .graph_candidate_stage_v2 import _GraphSourceStage
 from .production_runtime import _NATIVE_GRAPH_RUN_V2, ProductionHybridBranchRuntime
 
 
 def _settings_values(settings):
-    return (
-        {field.name: getattr(settings, field.name) for field in fields(settings)}
-        if is_dataclass(settings)
-        else vars(settings)
-    )
+    return {f.name: getattr(settings, f.name) for f in fields(settings)} if is_dataclass(settings) else vars(settings)
 
 
 def _same_references(captured, current):
@@ -56,6 +57,7 @@ def _try_closed_graph_pool(
     if header is None:
         return None
     stage = _GraphSourceStage(scope, base, header)
+    admission = getattr(snapshot, "source_admission", None)
     dependencies_header = (
         dependencies.runtime,
         dependencies.settings,
@@ -80,6 +82,9 @@ def _try_closed_graph_pool(
         if operation is not None and not operation.active():
             raise SourceScopeUnavailable("graph_original_scope_unavailable")
         stage.check()
+        if getattr(snapshot, "source_admission", None) is not admission:
+            raise SourceScopeUnavailable("graph_original_scope_unavailable")
+        captured_admission(snapshot, scope, query=query)
         if (
             not _same_references(
                 dependencies_header,
@@ -136,7 +141,7 @@ def _try_closed_graph_pool(
                 phase_check()
                 with bounded_source_database(stage.runtime, scope.using):
                     phase_check()
-                    result, final_rows = _run_closed_graph(
+                    result, final_rows, selected_pks = _run_closed_graph(
                         stage,
                         snapshot,
                         query,
@@ -146,10 +151,12 @@ def _try_closed_graph_pool(
                         deadline,
                         phase_check,
                         diagnostics,
+                        admission,
                     )
             # Both preparation and DB cleanup precede publication under the same lock.
             phase_check()
             stage.publish(final_rows, phase_check)
+            observe_published_graph(selected_pks)
             return result
     except Exception:
         # Mid-operation identity/lifetime loss cannot switch to a fresh authority.
@@ -164,14 +171,10 @@ def _try_closed_graph_pool(
 
 
 def _run_closed_graph(
-    stage, snapshot, query, authorization, graph, settings, deadline, check, diagnostics
+    stage, snapshot, query, authorization, graph, settings, deadline, check, diagnostics, admission
 ):
     from dataclasses import asdict
 
-    from apps.documents.services.chunk_search_rank_policy import (
-        ordered_candidates,
-        snapshot_channels,
-    )
     from apps.documents.services.chunk_search_scoped_rows import _retain_dense
     from apps.documents.services.hybrid_graph_v2 import bounded_pool_v2
     from apps.knowledge_graph.resolution.vocabulary_authority import validate_ready
@@ -214,7 +217,7 @@ def _run_closed_graph(
             codec=graph.codec,
             document_codec=document_codec,
             deadline=deadline,
-            body_reader=stage.read,
+            body_reader=selector_body_reader(admission, stage),
         )
         stage.fingerprints(fingerprints)
         check()
@@ -238,10 +241,7 @@ def _run_closed_graph(
         requested_document_ids=scope.requested_document_ids,
         execute=execute,
     )
-    if (
-        type(envelope) is not GraphRuntimeEnvelopeV2
-        or envelope.selection is not selected
-    ):
+    if type(envelope) is not GraphRuntimeEnvelopeV2 or envelope.selection is not selected:
         raise ValueError("V2 replaced captured selection")
     envelope.__post_init__()
     rows = _materialize_rows(
@@ -259,12 +259,11 @@ def _run_closed_graph(
     if current != rows:
         raise ValueError("V2 evidence changed after selection hydration")
     baseline_ids = {row.pk for row in baseline}
-    combined = baseline + tuple(row for row in rows if row.pk not in baseline_ids)
-    ordered, _ = ordered_candidates(
-        combined,
-        snapshot_channels(snapshot),
+    baseline = deferred_baseline(admission, stage, baseline)
+    combined = baseline + tuple(row for row in rows if row.pk not in {b.pk for b in baseline})
+    ordered = order_graph_pool(
+        snapshot, combined,
         query=query,
-        exact_rows=snapshot.exact_results,
         scope=stage.staged,
         graph_authority=graph_selection_digest_v2(selected),
         graph_policy=envelope.handoff.algorithm_signature,
@@ -280,14 +279,21 @@ def _run_closed_graph(
         codec=graph.codec,
     )
     keys = stage.initial_keys & set(scope.validate())
+    stage.final_keys = frozenset(keys)
+    validate_final_native_seeds(snapshot, keys)
     final, valid_fts = stage.current(ordered, keys)
     final = tuple(_retain_dense(final, stage.staged, keys, valid_fts))
     if final != ordered:
         raise ValueError("V2 final source fence changed")
     check()
-    added = len({row.pk for row in final} - baseline_ids)
-    observations = diagnostics("hit" if added else "miss", added)
-    observations["graph_coverage_v2"] = asdict(envelope.handoff.coverage)
-    observations["frontier_budget"] = asdict(envelope.frontier_budget)
-    observations["frontier_invocations"] = [asdict(envelope.frontier_invocation)]
-    return (final, observations), final
+    added = len(({row.pk for row in final} & {row.pk for row in rows}) - baseline_ids)
+    observations = {**diagnostics("hit" if added else "miss", added),
+                    "graph_coverage_v2": asdict(envelope.handoff.coverage)}
+    observations.update(frontier_budget=asdict(envelope.frontier_budget),
+                        frontier_invocations=[asdict(envelope.frontier_invocation)])
+    if admission is not None:
+        observations["source_admission"] = {
+            **admission.diagnostics(), "graph_selected": len(rows), "graph_novel_selected": added,
+        }
+    selected_pks = tuple(dict.fromkeys(row.pk for row in rows if row.pk in {r.pk for r in final}))
+    return (final, observations), final, selected_pks

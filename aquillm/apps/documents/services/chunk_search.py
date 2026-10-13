@@ -26,11 +26,7 @@ from apps.documents.services.chunk_search_authorization import (
 )
 from apps.documents.services.chunk_search_candidates import (
     _exact_term_query as _candidate_exact_term_query,
-)
-from apps.documents.services.chunk_search_candidates import (
     _salient_exact_terms as _candidate_salient_exact_terms,
-)
-from apps.documents.services.chunk_search_candidates import (
     collect_hybrid_candidate_snapshot,
     freeze_authorized_document_scope,
 )
@@ -280,8 +276,7 @@ def text_chunk_search(
             hybrid_graph_dependencies,
             overlay_enabled and hybrid_requested and graph_preflight_status is None,
         )
-        initial_vector_error: str | None = None
-        query_embedding: object | None = None
+        initial_vector_error, query_embedding = None, None
         try:
             query_embedding = load_query_embedding(query)
             if getattr(query_embedding, "compatibility_key", None) is None:
@@ -311,6 +306,8 @@ def text_chunk_search(
                 if hybrid_requested and graph_preflight_status is None
                 else None
             ),
+            _graph_dependencies=(hybrid_graph_dependencies if overlay_enabled
+                and hybrid_requested and graph_preflight_status is None else None),
         )
         graph_chunk_ids: tuple[int, ...] = ()
         graph_diagnostics: dict[str, object] = {}
@@ -348,6 +345,9 @@ def text_chunk_search(
                 graph_config,
                 preflight_status=graph_preflight_status,
             )
+
+        if getattr(snapshot, "source_admission", None) is not None and hybrid_pool is not None:
+            snapshot = snapshot.source_admission.refresh_snapshot(snapshot, hybrid_pool)
 
         authorized_rows = _bind_search_authorizer(
             authorized_search_rows, authorization_context, hybrid_requested

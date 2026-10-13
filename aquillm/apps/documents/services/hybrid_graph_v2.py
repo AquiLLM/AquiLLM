@@ -60,14 +60,21 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
 
     def fallback():
         try:
-            rows, _ = reauthorized_baseline(snapshot.baseline_candidates, authorization)
+            from .graph_admission_adapter import fallback_baseline
+
+            if getattr(snapshot, "source_admission", None) is not None:
+                validate_requested_authorization(scope.runtime, authorization, snapshot.documents)
+            rows, _ = reauthorized_baseline(fallback_baseline(snapshot), authorization)
             if scope is not None:
                 rows = tuple(
                     r
                     for r in validate_rows(rows, scope=scope)
                     if r.doc_id in scope.requested_document_ids
                 )
-            return bounded_pool_v2(rows, rows), diagnostics("error")
+            observation = diagnostics("error")
+            if getattr(snapshot, "source_admission", None) is not None:
+                observation["source_admission"] = snapshot.source_admission.diagnostics()
+            return bounded_pool_v2(rows, rows), observation
         except Exception:
             return (), diagnostics("error")
 

@@ -67,7 +67,10 @@ def _prepare_extended_branch(
     if settings.graph_extended_enabled is not True:
         return ExtendedBranchFailureReason.EXTENDED_NO_SEEDS
     graph_seeds = getattr(baseline, "graph_seeds", None)
-    candidates = getattr(baseline, "baseline_candidates", None)
+    from apps.documents.services.graph_admission_seeds import native_seed_rows
+
+    metadata = native_seed_rows(baseline, authorization=authorization, settings=settings)
+    candidates = metadata if metadata is not None else getattr(baseline, "baseline_candidates", None)
     if (
         type(graph_seeds) is not tuple
         or type(candidates) is not tuple

@@ -13,6 +13,25 @@ def _emit(event, make_data):
         mark_failed()
 
 
+def graph_selected_sources_v2(pks):
+    """Private provenance emitted only after the native graph owner publishes."""
+
+    def data():
+        if (
+            type(pks) is not tuple
+            or len(pks) > 45
+            or any(
+                type(pk) is not int or not 0 < pk <= 9_223_372_036_854_775_807
+                for pk in pks
+            )
+            or len(set(pks)) != len(pks)
+        ):
+            raise ValueError("invalid_published_graph_source_ids")
+        return {"chunk_ids": pks}
+
+    _emit("graph_selected_sources_v2", data)
+
+
 def prepared_queries(queries, requested_top_k, candidate_top_k):
     _emit(
         "rag_prepared_queries",
@@ -94,6 +113,9 @@ def retrieval_stages(
         if overlay_enabled:
             if hybrid_pool is not None:
                 baseline_ids = {row.pk for row in snapshot.baseline_candidates}
+                admission = getattr(snapshot, "source_admission", None)
+                if admission is not None:
+                    baseline_ids.update(admission.baseline_order)
                 graph_rows = [row for row in hybrid_pool if row.pk not in baseline_ids]
             else:
                 graph_rows = ranking.graph_candidates

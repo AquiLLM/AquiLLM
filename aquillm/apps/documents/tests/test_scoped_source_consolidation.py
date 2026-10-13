@@ -4,7 +4,6 @@ from dataclasses import replace
 
 import pytest
 from django.db import connection
-from django.db.models.query import QuerySet
 from django.test.utils import CaptureQueriesContext
 
 from apps.collections.models import CollectionPermission
@@ -24,6 +23,8 @@ from apps.documents.tests.test_source_metadata_closed_operation import captured
 from lib.embeddings.tests.test_document_provider import transport as transport
 from lib.retrieval.operation import operation_scope
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+
+from .source_body_test_hooks import install_body_hook
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -109,10 +110,9 @@ def test_actual_io_then_mutation_never_publishes_positive_state(
         else:
             runtime._frozen_retrieval_scope = replace(runtime._frozen_retrieval_scope)
 
-    real_first, real_current = QuerySet.first, materialization._current_rows
+    real_current = materialization._current_rows
 
-    def first(queryset):
-        row = real_first(queryset)
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None and not fired:
             assert row.pk == expected[0][0]
             change()
@@ -125,7 +125,8 @@ def test_actual_io_then_mutation_never_publishes_positive_state(
             change()
         return result
 
-    monkeypatch.setattr(QuerySet, "first", first if phase == "body" else real_first)
+    if phase == "body":
+        install_body_hook(monkeypatch, first)
     monkeypatch.setattr(
         materialization,
         "_current_rows",
@@ -181,10 +182,8 @@ def test_vocabulary_detachment_discards_pending_cache_and_bound_observations(
         version=version,
         expected_revision=0,
     )
-    real_first = QuerySet.first
 
-    def first(queryset):
-        row = real_first(queryset)
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None and not fetched:
             fetched.append(row.pk)
             pin.delete()
@@ -200,7 +199,7 @@ def test_vocabulary_detachment_discards_pending_cache_and_bound_observations(
                     runtime, "source", "closed-body-control", vocabulary, None
                 ),
             )
-            monkeypatch.setattr(QuerySet, "first", first)
+            install_body_hook(monkeypatch, first)
             with pytest.raises(ValueError, match="pins changed"):
                 materialization.scoped_rows(query, scope, lexical="full_text")
             assert len(fetched) == 1
@@ -229,16 +228,16 @@ def test_body_digest_and_length_races_never_publish_stale_bytes(
         scope = freeze_search_scope((doc,), using="default")
     query = TextChunk.objects.filter(doc_id=doc.id)
     expected = tuple(query.values_list("pk", "doc_id", "content"))
-    real_first, attempted = QuerySet.first, []
+    attempted = []
 
-    def first(queryset):
+    def first(queryset, row):
         if queryset.model is TextChunk and not attempted:
             attempted.append(expected[0][0])
             content = "x" * (len(expected[0][2]) + (100 if change == "growing" else 0))
             TextChunk.objects.filter(pk=expected[0][0]).update(content=content)
-        return real_first(queryset)
+        return row
 
-    monkeypatch.setattr(QuerySet, "first", first)
+    install_body_hook(monkeypatch, first, before=True)
     try:
         with source_runtime_scope(scope.runtime):
             assert materialization.scoped_rows(query, scope, lexical=True) == ()
@@ -258,10 +257,9 @@ def test_dense_generation_restored_after_entry_cannot_acquire_a_vote(
 
     _, scope, query, _ = captured(1, "ready", transport, monkeypatch, settings)
     key = scope.dense.generation_keys[0]
-    real_first, fetched = QuerySet.first, []
+    fetched = []
 
-    def first(queryset):
-        row = real_first(queryset)
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None and not fetched:
             fetched.append(row.pk)
             EmbeddingGeneration.objects.filter(pk=key).update(state="ready")
@@ -284,7 +282,7 @@ def test_dense_generation_restored_after_entry_cannot_acquire_a_vote(
             assert len(ranked) == 1
             scope.dense_rows.update({r.chunk_id: r for r in ranked})
             EmbeddingGeneration.objects.filter(pk=key).update(state="failed")
-            monkeypatch.setattr(QuerySet, "first", first)
+            install_body_hook(monkeypatch, first)
             assert materialization.scoped_rows(query, scope) == ()
             assert len(fetched) == 1
             assert_unpublished(scope)

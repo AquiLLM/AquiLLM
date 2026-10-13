@@ -39,8 +39,44 @@ def _safe_graph_reasons(reasons):
     ] or None
 
 
+def _published_graph_sources(events):
+    seen, captured = set(), False
+    for name, data in events:
+        if name != "graph_selected_sources_v2":
+            continue
+        captured = True
+        values = data.get("chunk_ids")
+        if (
+            type(values) is not tuple
+            or len(values) > 45
+            or any(
+                type(pk) is not int or not 0 < pk <= 9_223_372_036_854_775_807
+                for pk in values
+            )
+            or len(set(values)) != len(values)
+        ):
+            return None, "invalid"
+        seen.update(values)
+        if len(seen) > 45:
+            return None, "invalid"
+    return (seen, "captured") if captured else (None, "unavailable")
+
+
+def _source_provenance(row, graph_sources):
+    # PK identities are meaningful only across reports with matching corpus fences.
+    pk = _identity(row)
+    valid = type(pk) is int and 0 < pk <= 9_223_372_036_854_775_807
+    return {
+        "source_identity_sha256": fingerprint(f"text-chunk:{pk}") if valid else None,
+        "graph_selected_source": (
+            pk in graph_sources if valid and graph_sources is not None else None
+        ),
+    }
+
+
 def summarize(events, packet, targets):
     stages = [data for name, data in events if name == "retrieval_stages"]
+    graph_sources, graph_provenance = _published_graph_sources(events)
     result = {
         "stages": [],
         "targets": [],
@@ -49,9 +85,23 @@ def summarize(events, packet, targets):
                 "text_sha256": fingerprint(_text(row)),
                 "characters": len(_text(row)),
                 "rank": rank,
+                **_source_provenance(row, graph_sources),
             }
             for rank, row in enumerate(packet, 1)
         ],
+        "graph_source_provenance": {
+            "status": graph_provenance,
+            "selected_count": len(graph_sources) if graph_sources is not None else None,
+            "packet_count": (
+                sum(
+                    _source_provenance(row, graph_sources)["graph_selected_source"]
+                    is True
+                    for row in packet
+                )
+                if graph_sources is not None
+                else None
+            ),
+        },
         "graph_stage_timings": {"status": "unavailable"},
         "timings_ms": {},
         "budget": {"limits": None, "observed": None, "completion": None},

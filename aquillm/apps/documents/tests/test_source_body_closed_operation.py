@@ -5,18 +5,36 @@ from unittest.mock import patch
 
 import pytest
 from django.db import connection, transaction
-from django.db.models.query import QuerySet
 from django.test.utils import CaptureQueriesContext
 
 from apps.collections.models import CollectionPermission
-from apps.collections.services.django_retrieval_authorization import build_selected_scope_authorization_context
-from apps.documents.models import DocumentRepresentationState, PDFDocument, RawTextDocument, TextChunk
-from apps.documents.services.chunk_search_scope import FrozenRetrievalScope, freeze_search_scope
+from apps.collections.services.django_retrieval_authorization import (
+    build_selected_scope_authorization_context,
+)
+from apps.documents.models import (
+    DocumentRepresentationState,
+    PDFDocument,
+    RawTextDocument,
+    TextChunk,
+)
+from apps.documents.services.chunk_search_scope import (
+    FrozenRetrievalScope,
+    freeze_search_scope,
+)
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
-from apps.documents.services.source_loading import SourcePreparationLimited, SourceRuntime, source_query_rows, source_runtime_scope
+from apps.documents.services.source_loading import (
+    SourcePreparationLimited,
+    SourceRuntime,
+    source_query_rows,
+    source_runtime_scope,
+)
 from lib.retrieval.operation import operation_scope
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
-from .representation_support import retained as retained, upload as upload, activate
+
+from .representation_support import activate
+from .representation_support import retained as retained
+from .representation_support import upload as upload
+from .source_body_test_hooks import install_body_hook
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -130,7 +148,6 @@ def commit_source_change(case, change):
 @pytest.mark.parametrize("change", ["permission", "other_owner", "other_generation", "collision", "budget", "operation"])
 def test_change_after_real_body_fetch_blocks_final_return_and_cache_reuse(bodies, monkeypatch, change):
     case = bodies
-    original_first = QuerySet.first
     fetched = []
     writer_pids = []
     with connection.cursor() as cursor:
@@ -139,8 +156,7 @@ def test_change_after_real_body_fetch_blocks_final_return_and_cache_reuse(bodies
     with source_runtime_scope(case.runtime), operation_scope(case.runtime.budget) as operation:
         scope = capture(case)
         original_other = case.other.full_text
-        def first(queryset):
-            row = original_first(queryset)
+        def first(queryset, row):
             if queryset.model is TextChunk and row is not None and not fetched:
                 fetched.append((row.pk, row.content))
                 if change in {"permission", "other_owner", "other_generation", "collision"}:
@@ -151,7 +167,7 @@ def test_change_after_real_body_fetch_blocks_final_return_and_cache_reuse(bodies
                 else:
                     operation.live = False
             return row
-        monkeypatch.setattr(QuerySet, "first", first)
+        install_body_hook(monkeypatch, first)
         error = ValueError if change == "collision" else SourceScopeUnavailable
         message = "^permission policy returned duplicate scope rows$" if change == "collision" else "^source_scope_unavailable$"
         with pytest.raises(error, match=message):

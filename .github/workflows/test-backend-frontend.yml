@@ -175,12 +175,36 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_races.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_contexts.py
+          aquillm/apps/knowledge_graph/tests/test_graph_seed_allocation_v2.py
           aquillm/apps/knowledge_graph/tests/test_graph_hydration_operation.py
           aquillm/apps/knowledge_graph/tests/test_graph_runtime_authority_v2.py
           aquillm/apps/knowledge_graph/tests/test_graph_handoff_authority_v2.py
           aquillm/apps/knowledge_graph/tests/test_ready_materialization_v2.py
           aquillm/apps/knowledge_graph/tests/test_graph_runtime_v2.py
           aquillm/apps/knowledge_graph/tests/test_ready_subset_v2.py
+          --ds=aquillm.settings_projection_test -q --tb=short
+      - name: Graph source admission and body publication contracts
+        env:
+          KG_REQUIRE_POSTGRES_TESTS: "1"
+        run: >-
+          python -m pytest
+          tests/test_graph_source_admission_policy.py
+          tests/test_graph_replay_provenance.py
+          aquillm/apps/documents/tests/test_graph_source_admission.py
+          aquillm/apps/documents/tests/test_graph_admission_channels.py
+          aquillm/apps/documents/tests/test_graph_admission_publication.py
+          aquillm/apps/documents/tests/test_graph_admission_seeds.py
+          aquillm/apps/documents/tests/test_graph_admission_provenance.py
+          aquillm/apps/documents/tests/test_source_body_batch.py
+          aquillm/apps/documents/tests/test_source_body_batch_invariants.py
+          aquillm/apps/documents/tests/test_source_body_publication.py
+          aquillm/apps/documents/tests/test_scoped_source_consolidation.py
+          aquillm/apps/documents/tests/test_scoped_source_races.py
+          aquillm/apps/documents/tests/test_source_body_closed_operation.py
+          aquillm/apps/documents/tests/test_source_metadata_closed_operation.py
+          aquillm/apps/documents/tests/test_source_row_exact_document.py
+          aquillm/apps/documents/tests/test_issue4_retrieval_observation.py
+          tests/test_replay_retrieval.py
           --ds=aquillm.settings_projection_test -q --tb=short
       - name: Projected PPR restart contracts
         run: >-
