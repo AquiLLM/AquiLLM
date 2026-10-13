@@ -49,12 +49,12 @@ def validate_captured_selection(*, selected, authorization, settings, codec):
 
 
 def materialize_graph_candidates_v2(*, selected, refs, authorization):
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
     from apps.documents.services.source_deadline import check_source_deadline
     from apps.documents.services.source_loading import (
         bounded_source_database,
     )
 
-    from apps.documents.services.graph_source_runtime import graph_source_runtime
     runtime = graph_source_runtime()
     if runtime is None:
         return _materialize(selected=selected, refs=refs, authorization=authorization)
@@ -69,16 +69,7 @@ def materialize_graph_candidates_v2(*, selected, refs, authorization):
         return rows if runtime.budget.can_publish() else ()
 
 
-def _materialize(*, selected, refs, authorization):
-    from apps.documents.models import TextChunk
-    from apps.documents.services.graph_source_runtime import graph_source_runtime
-    from apps.knowledge_graph.models import ProjectionChunkReference
-
-    from .ready_materialization import (
-        DjangoPrivateChunkMapRepository,
-        materialize_selected_ready_chunks,
-    )
-
+def _materialize_inputs(selected, refs):
     if type(selected) is not SelectedGraphScopeV2:
         raise TypeError("selection must be exact")
     if (
@@ -91,6 +82,69 @@ def _materialize(*, selected, refs, authorization):
         )
     if len({r.chunk_key for r in refs}) != len(refs):
         raise ValueError("duplicate candidate keys")
+
+
+def _materialize(*, selected, refs, authorization):
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
+    from apps.documents.services.source_loading import source_query_rows
+
+    _materialize_inputs(selected, refs)
+    if not refs:
+        return ()
+    try:
+        settings = load_projection_runtime_settings()
+        codec = projection_identifier_codec(settings)
+        validate_captured_selection(
+            selected=selected,
+            authorization=authorization,
+            settings=settings,
+            codec=codec,
+        )
+
+        def read(query):
+            runtime = graph_source_runtime()
+            return source_query_rows(
+                query,
+                runtime=runtime,
+                require_existing=getattr(runtime, "_frozen_retrieval_scope", None)
+                is not None,
+            )
+
+        result = _materialize_rows(
+            selected=selected,
+            refs=refs,
+            authorization=authorization,
+            codec=codec,
+            body_reader=read,
+        )
+        validate_captured_selection(
+            selected=selected,
+            authorization=authorization,
+            settings=settings,
+            codec=codec,
+        )
+        return result
+    except (
+        SourceScopeUnavailable,
+        ValidationError,
+        ObjectDoesNotExist,
+        ValueError,
+        KeyError,
+    ):
+        return ()
+
+
+def _materialize_rows(*, selected, refs, authorization, codec, body_reader):
+    """Private exact eager reversal; owning callers retain fresh whole boundaries."""
+    from apps.documents.models import TextChunk
+    from apps.knowledge_graph.models import ProjectionChunkReference
+
+    from .ready_materialization import (
+        DjangoPrivateChunkMapRepository,
+        materialize_selected_ready_chunks,
+    )
+
+    _materialize_inputs(selected, refs)
     if not refs:
         return ()
     groups = {g.group_checksum: g for g in selected.groups}
@@ -109,23 +163,12 @@ def _materialize(*, selected, refs, authorization):
                 s.generation_key for s in selections.values()
             }:
                 return ()
-        settings = load_projection_runtime_settings()
-        codec = projection_identifier_codec(settings)
-        validate_captured_selection(
-            selected=selected,
-            authorization=authorization,
-            settings=settings,
-            codec=codec,
-        )
 
         class ActiveRepository(DjangoPrivateChunkMapRepository):
             def load_chunk_objects(
                 self, *, chunk_predicates, authorized_document_ids, database_alias
             ):
-                from apps.documents.services.source_loading import source_query_rows
-
-                runtime = graph_source_runtime()
-                return source_query_rows(
+                return body_reader(
                     active_chunk_scope(
                         TextChunk.objects.using(database_alias).filter(
                             pk__in=tuple(row[0] for row in chunk_predicates),
@@ -133,8 +176,6 @@ def _materialize(*, selected, refs, authorization):
                         ),
                         snapshot=selected.representation_snapshot,
                     ).order_by("pk"),
-                    runtime=runtime,
-                    require_existing=getattr(runtime, "_frozen_retrieval_scope", None) is not None,
                 )
 
         result = {}
@@ -196,12 +237,6 @@ def _materialize(*, selected, refs, authorization):
                 }:
                     return ()
                 result[ref.chunk_key] = chunk
-        validate_captured_selection(
-            selected=selected,
-            authorization=authorization,
-            settings=settings,
-            codec=codec,
-        )
         return tuple(result[r.chunk_key] for r in refs)
     except (
         SourceScopeUnavailable,

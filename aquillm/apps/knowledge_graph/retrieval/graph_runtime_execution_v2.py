@@ -42,6 +42,41 @@ def execute_graph_v2(
         representation_snapshot=representation_snapshot,
         requested_document_ids=requested_document_ids,
     )
+    return _execute_captured_graph_v2(
+        query=query,
+        runtime=runtime,
+        authorization=authorization,
+        representation_snapshot=representation_snapshot,
+        budget=budget,
+        settings=settings,
+        deadline=deadline,
+        baseline=baseline,
+        requested_document_ids=requested_document_ids,
+        caps=caps,
+        frontier=frontier,
+        selected=selected,
+        hydrate=load_selection_inputs_v2,
+    )
+
+
+def _execute_captured_graph_v2(
+    *,
+    query,
+    runtime,
+    authorization,
+    representation_snapshot,
+    budget,
+    settings,
+    deadline,
+    baseline,
+    requested_document_ids,
+    caps,
+    frontier,
+    selected,
+    hydrate,
+):
+    """Private eager core; native owner or public caller captures before entry."""
+    frontier.check_active()
     if (
         selected.representation_snapshot != representation_snapshot
         or selected.authorization_context_signature
@@ -182,7 +217,7 @@ def execute_graph_v2(
             from .graph_evidence_selection_v2 import partial_coverage
 
             coverage = partial_coverage(coverage)
-        inputs = load_selection_inputs_v2(
+        inputs = hydrate(
             selected=selected,
             references=admitted,
             authorization=authorization,

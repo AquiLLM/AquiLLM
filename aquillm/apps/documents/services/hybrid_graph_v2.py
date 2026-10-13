@@ -71,6 +71,21 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
         except Exception:
             return (), diagnostics("error")
 
+    from apps.knowledge_graph.retrieval.graph_candidate_operation_v2 import (
+        _try_closed_graph_pool,
+    )
+
+    closed = _try_closed_graph_pool(
+        snapshot,
+        query,
+        authorization,
+        dependencies,
+        diagnostics=diagnostics,
+        fallback=fallback,
+    )
+    if closed is not None:
+        return closed
+
     try:
         if getattr(settings, "graph_remediation_mode", None) != "v2":
             raise ValueError("production graph mode is not v2")

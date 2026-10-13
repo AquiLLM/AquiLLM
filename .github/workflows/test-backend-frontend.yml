@@ -171,6 +171,21 @@ jobs:
           aquillm/apps/documents/tests/test_hybrid_graph_orchestration.py
           aquillm/apps/documents/tests/test_hybrid_graph_diagnostics.py
           -q --tb=short
+      - name: Graph candidate publication contracts
+        env:
+          KG_REQUIRE_POSTGRES_TESTS: "1"
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py
+          aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_races.py
+          aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_contexts.py
+          aquillm/apps/knowledge_graph/tests/test_graph_hydration_operation.py
+          aquillm/apps/knowledge_graph/tests/test_graph_runtime_authority_v2.py
+          aquillm/apps/knowledge_graph/tests/test_graph_handoff_authority_v2.py
+          aquillm/apps/knowledge_graph/tests/test_ready_materialization_v2.py
+          aquillm/apps/knowledge_graph/tests/test_graph_runtime_v2.py
+          aquillm/apps/knowledge_graph/tests/test_ready_subset_v2.py
+          --ds=aquillm.settings_projection_test -q --tb=short
       - name: Projected PPR restart contracts
         run: >-
           python -m pytest

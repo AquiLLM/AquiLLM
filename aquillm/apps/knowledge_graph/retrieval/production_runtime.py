@@ -296,4 +296,5 @@ class ProductionHybridBranchRuntime:
             )
 
 
+_NATIVE_GRAPH_RUN_V2 = ProductionHybridBranchRuntime.run_v2
 __all__ = ["ProductionHybridBranchRuntime", "graph_candidates"]

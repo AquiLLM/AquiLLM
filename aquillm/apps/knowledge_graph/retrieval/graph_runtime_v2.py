@@ -66,6 +66,36 @@ def run_graph_v2(
     baseline=None,
     requested_document_ids=None,
 ) -> GraphRuntimeEnvelopeV2:
+    from .graph_runtime_execution_v2 import execute_graph_v2
+
+    return _run_graph_v2(
+        query=query,
+        runtime=runtime,
+        authorization=authorization,
+        representation_snapshot=representation_snapshot,
+        budget=budget,
+        settings=settings,
+        deadline=deadline,
+        baseline=baseline,
+        requested_document_ids=requested_document_ids,
+        execute=execute_graph_v2,
+    )
+
+
+def _run_graph_v2(
+    *,
+    query,
+    runtime,
+    authorization,
+    representation_snapshot,
+    budget,
+    settings,
+    deadline,
+    baseline,
+    requested_document_ids,
+    execute,
+):
+    """Private runner shared with the eager native operation; no permit escapes."""
     if getattr(settings, "graph_remediation_mode", "legacy") != "v2":
         raise ValueError("whole V2 runtime requires explicit v2 mode")
     if (
@@ -101,11 +131,10 @@ def run_graph_v2(
         capture_frontier_budget_v2,
         publish_frontier_budget_v2,
     )
-    from .graph_runtime_execution_v2 import execute_graph_v2
 
     handoff = None
     try:
-        selected, handoff = execute_graph_v2(
+        selected, handoff = execute(
             query=query,
             runtime=runtime,
             authorization=authorization,
@@ -138,6 +167,7 @@ def run_graph_v2(
 def run_bound_graph_v2(**kwargs):
     """All SQL phases and final selection share the original absolute deadline."""
     from apps.documents.services.graph_source_runtime import graph_source_runtime
+
     runtime = graph_source_runtime()
     if (
         runtime is None
