@@ -11,6 +11,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      - AQUILLM_ALLOCATOR=${WEB_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      - PYTHONMALLOC=${WEB_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       - APP_EMBED_FALLBACK_POLICY=local-only
       - RAG_DIRECT_ENABLED=${RAG_DIRECT_ENABLED:-1}
       - C_FORCE_ROOT=1
@@ -83,6 +85,8 @@ services:
     build: {context: ../.., dockerfile: deploy/docker/web/Dockerfile.prod}
     restart: unless-stopped
     environment:
+      AQUILLM_ALLOCATOR: ${SCHEDULER_APPLICATION_MAINTENANCE_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${SCHEDULER_APPLICATION_MAINTENANCE_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       APP_EMBED_FALLBACK_POLICY: local-only
       SECRET_KEY: scheduler-only
       DJANGO_DEBUG: "0"
@@ -113,6 +117,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      - AQUILLM_ALLOCATOR=${WORKER_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      - PYTHONMALLOC=${WORKER_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       - APP_EMBED_FALLBACK_POLICY=local-only
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
@@ -172,6 +178,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      AQUILLM_ALLOCATOR: ${WORKER_KNOWLEDGE_GRAPH_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${WORKER_KNOWLEDGE_GRAPH_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       APP_EMBED_FALLBACK_POLICY: local-only
       POSTGRES_HOST: db
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
@@ -226,6 +234,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      AQUILLM_ALLOCATOR: ${SCHEDULER_KNOWLEDGE_GRAPH_MAINTENANCE_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${SCHEDULER_KNOWLEDGE_GRAPH_MAINTENANCE_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       APP_EMBED_FALLBACK_POLICY: local-only
       SECRET_KEY: scheduler-only
       DJANGO_DEBUG: "0"
@@ -260,6 +270,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      AQUILLM_ALLOCATOR: ${WORKER_KNOWLEDGE_GRAPH_SCHEMA_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${WORKER_KNOWLEDGE_GRAPH_SCHEMA_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       APP_EMBED_FALLBACK_POLICY: local-only
       SECRET_KEY: schema-worker-only
       DJANGO_DEBUG: "0"
@@ -329,6 +341,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      AQUILLM_ALLOCATOR: ${KNOWLEDGE_GRAPH_QUERY_GATEWAY_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${KNOWLEDGE_GRAPH_QUERY_GATEWAY_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       KG_MEMGRAPH_URI: bolt://memgraph-knowledge-graph:7687
       KG_MEMGRAPH_DATABASE: ${KG_MEMGRAPH_DATABASE:-memgraph}
       KG_MEMGRAPH_QUERY_USERNAME: ${KG_MEMGRAPH_QUERY_USERNAME:-}
@@ -353,6 +367,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment: &kg-extractor-env
+      AQUILLM_ALLOCATOR: ${KNOWLEDGE_GRAPH_QUERY_EXTRACTOR_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${KNOWLEDGE_GRAPH_QUERY_EXTRACTOR_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       KG_QUERY_EXTRACTOR_URL: http://knowledge-graph-query-extractor:8000
       KG_QUERY_EXTRACTOR_BEARER_TOKEN: ${KG_QUERY_EXTRACTOR_BEARER_TOKEN:-}
       KG_QUERY_EXTRACTOR_BUILD_HASH: ${KG_QUERY_EXTRACTOR_BUILD_HASH:-}
@@ -387,6 +403,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment: &kg-projection-env
+      AQUILLM_ALLOCATOR: ${WORKER_KNOWLEDGE_GRAPH_PROJECTION_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${WORKER_KNOWLEDGE_GRAPH_PROJECTION_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       APP_EMBED_FALLBACK_POLICY: local-only
       SECRET_KEY: ${SECRET_KEY:-}
       GOOGLE_OAUTH2_CLIENT_ID:
@@ -431,6 +449,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      - AQUILLM_ALLOCATOR=${WORKER_MEMORY_PROMOTION_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      - PYTHONMALLOC=${WORKER_MEMORY_PROMOTION_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       - APP_EMBED_FALLBACK_POLICY=local-only
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
@@ -601,6 +621,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      - AQUILLM_ALLOCATOR=${VLLM_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      - PYTHONMALLOC=${VLLM_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
       - TRITON_CACHE_DIR=/root/.cache/huggingface/aquillm-main/triton
@@ -641,6 +663,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      - AQUILLM_ALLOCATOR=${VLLM_OCR_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      - PYTHONMALLOC=${VLLM_OCR_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
       - VLLM_MODEL=${OCR_VLLM_MODEL:-Qwen/Qwen3.5-4B}
@@ -683,6 +707,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      - AQUILLM_ALLOCATOR=${VLLM_TRANSCRIBE_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      - PYTHONMALLOC=${VLLM_TRANSCRIBE_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
       - VLLM_MODEL=${TRANSCRIBE_VLLM_MODEL:-openai/whisper-large-v3-turbo}
@@ -725,6 +751,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      - AQUILLM_ALLOCATOR=${VLLM_EMBED_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      - PYTHONMALLOC=${VLLM_EMBED_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
       - VLLM_API_KEY=EMPTY
@@ -775,6 +803,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      - AQUILLM_ALLOCATOR=${VLLM_RERANK_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      - PYTHONMALLOC=${VLLM_RERANK_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       - VLLM_HOST=0.0.0.0
       - VLLM_PORT=8000
       - VLLM_API_KEY=EMPTY

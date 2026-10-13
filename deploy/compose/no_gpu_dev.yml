@@ -69,6 +69,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      AQUILLM_ALLOCATOR: ${WEB_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${WEB_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       <<: *common-env
       KG_QUERY_EXTRACTOR_URL: http://knowledge-graph-query-extractor:8000
       KG_QUERY_EXTRACTOR_BEARER_TOKEN: ${KG_QUERY_EXTRACTOR_BEARER_TOKEN:-}
@@ -114,6 +116,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      AQUILLM_ALLOCATOR: ${WORKER_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${WORKER_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       <<: *common-env
       KG_MEMGRAPH_URI:
       KG_MEMGRAPH_DATABASE:
@@ -147,6 +151,8 @@ services:
     env_file:
       - ../../.env
     environment:
+      AQUILLM_ALLOCATOR: ${WORKER_KNOWLEDGE_GRAPH_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${WORKER_KNOWLEDGE_GRAPH_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       <<: *common-env
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
       KG_BUILD_ENABLED: ${KG_BUILD_ENABLED:-0}
@@ -193,6 +199,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      AQUILLM_ALLOCATOR: ${WORKER_KNOWLEDGE_GRAPH_SCHEMA_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${WORKER_KNOWLEDGE_GRAPH_SCHEMA_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       SECRET_KEY: schema-worker-only
       DJANGO_DEBUG: "0"
       GOOGLE_OAUTH2_CLIENT_ID: disabled
@@ -261,6 +269,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      AQUILLM_ALLOCATOR: ${KNOWLEDGE_GRAPH_QUERY_GATEWAY_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${KNOWLEDGE_GRAPH_QUERY_GATEWAY_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       KG_MEMGRAPH_URI: bolt://memgraph-knowledge-graph:7687
       KG_MEMGRAPH_DATABASE: ${KG_MEMGRAPH_DATABASE:-memgraph}
       KG_MEMGRAPH_QUERY_USERNAME: ${KG_MEMGRAPH_QUERY_USERNAME:-}
@@ -285,6 +295,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      AQUILLM_ALLOCATOR: ${KNOWLEDGE_GRAPH_QUERY_EXTRACTOR_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${KNOWLEDGE_GRAPH_QUERY_EXTRACTOR_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       KG_QUERY_EXTRACTOR_URL: http://knowledge-graph-query-extractor:8000
       KG_QUERY_EXTRACTOR_BEARER_TOKEN: ${KG_QUERY_EXTRACTOR_BEARER_TOKEN:-}
       KG_QUERY_EXTRACTOR_BUILD_HASH: ${KG_QUERY_EXTRACTOR_BUILD_HASH:-}
@@ -319,6 +331,8 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      AQUILLM_ALLOCATOR: ${WORKER_KNOWLEDGE_GRAPH_PROJECTION_ALLOCATOR:-${AQUILLM_ALLOCATOR:-mimalloc}}
+      PYTHONMALLOC: ${WORKER_KNOWLEDGE_GRAPH_PROJECTION_PYTHONMALLOC:-${AQUILLM_PYTHONMALLOC:-default}}
       SECRET_KEY: ${SECRET_KEY:-}
       GOOGLE_OAUTH2_CLIENT_ID:
       GOOGLE_OAUTH2_CLIENT_SECRET:
