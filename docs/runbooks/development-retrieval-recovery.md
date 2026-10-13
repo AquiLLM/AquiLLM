@@ -92,6 +92,21 @@ Warm-up consumes its own bounded startup allowance. Request retrieval keeps its
 original 15-second ledger; diagnostic runs with a longer deadline are not release
 acceptance results.
 
+Exercise the real chat consumer as well as the retrieval replay. Chat preparation
+uses the same request allowance, so a successful standalone replay does not prove
+that acquisition, final evidence selection, model dispatch and answer persistence
+fit the live path. Require a saved, validated answer with citations; a persisted
+limited answer is a failed release smoke test.
+
+If current graph membership assignments disagree with a ready projection's
+registry checksum, leave graph retrieval disabled in the serving configuration
+and retain that failure in graph-on comparisons. Do not substitute absent-graph
+semantics, overwrite checksums, or replay projections blindly: projection replay
+copies existing registry authority. Diagnose the current membership state and
+measure readiness cost before using the locked membership advancement/build
+workflow for a scoped repair. Repairing a checksum does not establish that graph
+readiness and traversal fit the request budget.
+
 ## Comparison scope and failure accounting
 
 Confirm that the historical principal, collection, and source hashes still exist

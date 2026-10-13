@@ -20,16 +20,24 @@ def authorized_search_rows(
     scope = current_scope()
 
     def reauthorize(current):
-        if hybrid_requested or is_exact_authorization_context(authorization_context):
-            try:
-                return reauthorized_baseline(tuple(current), authorization_context)[0]
-            except Exception:
-                return ()
-        return current
+        return _incoming_search_rows(
+            current,
+            authorization_context=authorization_context,
+            hybrid_requested=hybrid_requested,
+        )
 
     if scope:
         return _closed_authorized_rows(rows, scope=scope, reauthorize=reauthorize)
     return tuple(reauthorize(validate_rows(rows)))
+
+
+def _incoming_search_rows(rows, *, authorization_context, hybrid_requested):
+    if hybrid_requested or is_exact_authorization_context(authorization_context):
+        try:
+            return reauthorized_baseline(tuple(rows), authorization_context)[0]
+        except Exception:
+            return ()
+    return rows
 
 
 def finalize_search_rows(snapshot, ranked, *, authorize, pool=(), fallback_limit=None):
@@ -68,6 +76,16 @@ def finalize_search_rows(snapshot, ranked, *, authorize, pool=(), fallback_limit
             if coverage is not None and coverage.status != "disabled":
                 coverage = current_full_text_coverage(scope)
             scope.validate()
+
+    return _finish_search_rows(
+        snapshot, groups, retained, scope, keys, full_text_ids, coverage, fallback_limit
+    )
+
+
+def _finish_search_rows(
+    snapshot, groups, retained, scope, keys, full_text_ids, coverage, fallback_limit
+):
+    """Pure filtering/fusion of already checked rows; no authority I/O."""
 
     def keep(row, *, dense_only=False):
         if id(row) not in retained:
@@ -109,7 +127,9 @@ def finalize_search_rows(snapshot, ranked, *, authorize, pool=(), fallback_limit
     )
     final_ranked = [row for row in groups[2] if keep(row)]
     if scope and scope.fts_invalid_ids and fallback_limit is not None:
-        final_ranked = list(reconcile_candidate_order(pool)[:fallback_limit])
+        final_ranked = list(
+            reconcile_candidate_order(pool, scope=scope)[:fallback_limit]
+        )
     return replace(
         snapshot,
         vector_results=vectors,
@@ -122,7 +142,7 @@ def finalize_search_rows(snapshot, ranked, *, authorize, pool=(), fallback_limit
         exact_results=exact,
         exact_chunk_ids=tuple(row.pk for row in exact),
         baseline_candidates=reconcile_candidate_order(
-            retain(snapshot.baseline_candidates)
+            retain(snapshot.baseline_candidates), scope=scope
         ),
         fusion_v2=fusion,
     ), (vectors, trigrams, final_ranked)
@@ -132,6 +152,13 @@ def finalize_ranking(snapshot, ranking, *, authorize, query, top_k):
     """Keep final union authorization and score serialization in one handoff."""
     from .chunk_rerank_results import rank_only_result_for_chunks
     from .chunk_search_score_handoff import score_set_for_authorized_rows
+    from .closed_search_finalizer import _finalize_closed_ranking
+
+    closed = _finalize_closed_ranking(
+        snapshot, ranking, authorize=authorize, query=query, top_k=top_k
+    )
+    if closed is not None:
+        return closed
 
     ranked = tuple(ranking.ranked_results)
     status = (

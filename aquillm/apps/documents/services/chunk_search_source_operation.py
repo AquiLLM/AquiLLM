@@ -93,7 +93,7 @@ def _same_header(left, right):
 def _closed_scoped_rows(queryset, scope, header, lexical):
     from . import chunk_search_scoped_rows as row_operations
 
-    def read(staged, original, budget, allowed, cache):
+    def read(staged, original, budget, allowed, cache, initial_keys):
         query = _prepare_source_queryset(queryset, original)
         rows = (
             _source_body_rows(query, original, budget, allowed, cache)
@@ -108,7 +108,9 @@ def _closed_scoped_rows(queryset, scope, header, lexical):
     )
 
 
-def _closed_row_operation(queryset, scope, header, read, *, full_text=False):
+def _closed_row_operation(
+    queryset, scope, header, read, *, full_text=False, finish=None, check=None
+):
     """Consume a private eager reader; shared fresh fences own all publication."""
     from apps.collections.services.retrieval_authorization import (
         revalidate_retrieval_authorization_context,
@@ -132,7 +134,14 @@ def _closed_row_operation(queryset, scope, header, read, *, full_text=False):
         )
         allowed = frozenset(authority.document_ids)
         rows = tuple(
-            read(staged, original, budget, allowed, ChainMap(pending, header[0][4]))
+            read(
+                staged,
+                original,
+                budget,
+                allowed,
+                ChainMap(pending, header[0][4]),
+                initial_keys,
+            )
         )
         rows, valid_fts = row_operations._current_rows(rows, staged, initial_keys)
         final_keys = initial_keys & set(scope.validate())
@@ -142,11 +151,16 @@ def _closed_row_operation(queryset, scope, header, read, *, full_text=False):
         check_source_deadline()
         surviving = {row.pk for row in rows}
         identities = {(row.pk, row_operations.fingerprint(row)) for row in rows}
+        completed = []
 
-        def publish():
+        def check_identity():
             # Check inside the ledger gate too: its clock/liveness callbacks may
             # reenter this RLock before invoking the publication callback.
             check_source_deadline()
+            if not budget.can_publish():
+                raise SourceScopeUnavailable("source_scope_unavailable")
+            if check:
+                check()
             if (
                 not _same_header(header, _closed_header(queryset, scope))
                 or scope.fusion_v2 is not fusion
@@ -157,6 +171,11 @@ def _closed_row_operation(queryset, scope, header, read, *, full_text=False):
                 )
             ):
                 raise SourceScopeUnavailable("source_scope_unavailable")
+
+        def publish():
+            check_identity()
+            result = finish(rows, staged, final_keys, valid_fts) if finish else rows
+            check_identity()
             for pk in surviving:
                 scope.bodies.setdefault(pk, staged.bodies[pk])
                 if pk in staged.lexical_ids:
@@ -170,10 +189,13 @@ def _closed_row_operation(queryset, scope, header, read, *, full_text=False):
                     if (row.pk, row_operations.fingerprint(row)) in identities
                 }
             )
+            if finish:
+                scope.fusion_v2 = staged.fusion_v2
+            completed.append(result)
 
         if not budget.publish(publish):
             raise SourceScopeUnavailable("source_scope_unavailable")
-        return rows
+        return completed[0]
     finally:
         # Negative evidence is sticky even if the final policy/deadline aborts.
         # Old integer PKs must never prune a replacement semantic scope's fusion.

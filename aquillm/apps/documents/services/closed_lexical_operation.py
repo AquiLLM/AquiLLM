@@ -46,7 +46,7 @@ def _collect_closed_lexical(model, documents, scope, query, limits):
     terms = extract_exact_terms(query)
     channels, timing = [], []
 
-    def read(staged, original, budget, allowed, cache):
+    def read(staged, original, budget, allowed, cache, initial_keys):
         def bodies(queryset):
             prepared = _prepare_source_queryset(queryset, original)
             result = (

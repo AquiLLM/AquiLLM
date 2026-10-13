@@ -72,6 +72,7 @@ from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 from .chunk_search_lifetime import enter_search, graph_preflight
 from .chunk_search_revalidation import ranking_status, reconcile_candidate_order
 from .chunk_search_scoped_rows import ranked_rows
+from .closed_search_finalizer import _bind_search_authorizer
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
@@ -261,13 +262,6 @@ def text_chunk_search(
             overlay_enabled, authorization_context, hybrid_graph_dependencies
         )
 
-        def authorized_rows(rows):
-            return authorized_search_rows(
-                rows,
-                authorization_context=authorization_context,
-                hybrid_requested=hybrid_requested,
-            )
-
         graph_config, graph_scope, graph_preflight_status, search_documents = (
             graph_preflight(
                 overlay_enabled,
@@ -355,6 +349,9 @@ def text_chunk_search(
                 preflight_status=graph_preflight_status,
             )
 
+        authorized_rows = _bind_search_authorizer(
+            authorized_search_rows, authorization_context, hybrid_requested
+        )
         if hybrid_pool is not None:
             ranking = materialize_and_rerank_candidates(
                 model_cls,
