@@ -33,6 +33,10 @@ def test_unknown_profile_cannot_silently_select_default():
 
 
 def baseline_module(monkeypatch):
+    import aquillm_vllm_h100.gdn_mixed as gdn_mixed
+    # These tests isolate prefill/MTP installation; GDN has its own captured
+    # method/closed-install regression suite and never imports local CUDA here.
+    monkeypatch.setattr(gdn_mixed, "install_gdn_mixed", lambda: {"installed": True})
     original = lambda **kwargs: "baseline"
     module = SimpleNamespace(call_p67_splitk=original)
     monkeypatch.setitem(sys.modules, "sndr.engines.vllm.kernels_legacy", SimpleNamespace(p67_multi_query_kernel=module))

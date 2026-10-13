@@ -1,0 +1,4 @@
+[ERROR:aquillm.h100] AQUILLM_H100 {"status": "inactive", "reason": "model outside the qualified H100 geometry"}
+E   TypeError: causal_conv1d_fn() got an unexpected keyword argument 'num_accepted_tokens'
+<aquillm-h100-gdn-mixed>:123: TypeError
+1 failed, 1 warning in 1.26s
