@@ -333,6 +333,22 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_extended_seed_lookup.py
           --ds=aquillm.settings_projection_test -q --tb=short
 
+      - name: Vocabulary permission and publication contracts
+        run: >-
+          python -m pytest
+          aquillm/apps/collections/tests/test_vocabulary_database_cleanup.py
+          aquillm/apps/collections/tests/test_vocabulary_database_operator_limits.py
+          aquillm/apps/collections/tests/test_vocabulary_deadline.py
+          aquillm/apps/collections/tests/test_vocabulary_history.py
+          aquillm/apps/collections/tests/test_vocabulary_management.py
+          aquillm/apps/collections/tests/test_vocabulary_migration.py
+          aquillm/apps/collections/tests/test_vocabulary_nested_publication.py
+          aquillm/apps/collections/tests/test_vocabulary_permission_queries.py
+          aquillm/apps/collections/tests/test_vocabulary_provenance_migration.py
+          aquillm/apps/collections/tests/test_vocabulary_scope.py
+          aquillm/apps/collections/tests/test_vocabulary_transaction_provenance.py
+          --ds=aquillm.settings_projection_test -q --tb=short
+
       - name: Chat, retrieval, document, and deployment regressions
         run: >-
           python -m pytest

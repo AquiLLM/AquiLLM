@@ -1,5 +1,6 @@
 """Bounded current collection permissions and immutable attachment coordinates."""
 from django.contrib.auth import get_user_model
+from django.db import connections
 
 from apps.collections.models import Collection, CollectionPermission
 from .vocabulary_database import check_read_deadline
@@ -24,13 +25,49 @@ def collection_path(collection_id, using):
 def require_permission(actor, collection_id, using, permission="VIEW"):
     check_read_deadline()
     User = get_user_model()
-    if not isinstance(actor, User) or not actor.is_authenticated or not User.objects.using(using).filter(pk=actor.pk, is_active=True).exists():
+    if not isinstance(actor, User) or not actor.is_authenticated:
         raise PermissionError("authenticated vocabulary actor required")
-    path = collection_path(collection_id, using)
     choices = ("MANAGE",) if permission == "MANAGE" else ("VIEW", "EDIT", "MANAGE")
-    if not CollectionPermission.objects.using(using).filter(user_id=actor.pk, collection_id__in=path, permission__in=choices).exists():
+    connection = connections[using]
+    quote = connection.ops.quote_name
+    collections = quote(Collection._meta.db_table)
+    permissions = quote(CollectionPermission._meta.db_table)
+    users = quote(User._meta.db_table)
+    user_pk = quote(User._meta.pk.column)
+    # Every caller still gets a fresh authority read. Resolve the bounded path,
+    # active actor and inherited grant in the same database statement instead
+    # of one round trip per ancestor plus separate user and permission reads.
+    with connection.cursor() as cursor:
+        cursor.execute(f"""
+            WITH RECURSIVE lineage AS (
+                SELECT id, parent_id, ARRAY[id]::bigint[] AS path
+                FROM {collections} WHERE id = %s
+                UNION ALL
+                SELECT c.id, c.parent_id, l.path || c.id::bigint
+                FROM {collections} c JOIN lineage l ON c.id = l.parent_id
+                WHERE cardinality(l.path) < %s AND NOT c.id = ANY(l.path)
+            )
+            SELECT
+                ARRAY(SELECT id FROM lineage ORDER BY cardinality(path)),
+                (SELECT parent_id FROM lineage ORDER BY cardinality(path) DESC LIMIT 1),
+                EXISTS(SELECT 1 FROM {users} WHERE {user_pk} = %s AND is_active),
+                EXISTS(SELECT 1 FROM {permissions}
+                       WHERE user_id = %s AND collection_id IN (SELECT id FROM lineage)
+                         AND permission = ANY(%s))
+        """, [collection_id, MAX_DEPTH, actor.pk, actor.pk, list(choices)])
+        path, terminal_parent, active, allowed = cursor.fetchone()
+    check_read_deadline()
+    if not active:
+        raise PermissionError("authenticated vocabulary actor required")
+    if not path and collection_id is not None:
+        raise ValueError("vocabulary collection unavailable")
+    if terminal_parent is not None:
+        if terminal_parent in path or len(path) >= MAX_DEPTH:
+            raise ValueError("invalid vocabulary ancestor path")
+        raise ValueError("vocabulary collection unavailable")
+    if not allowed:
         raise PermissionError("current vocabulary permission required")
-    return path
+    return tuple(path)
 
 
 def read_pins(selected, using, actor=None):
