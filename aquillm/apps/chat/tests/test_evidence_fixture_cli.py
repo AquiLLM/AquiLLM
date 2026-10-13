@@ -5,13 +5,12 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from uuid import uuid4
 
 
-def test_actual_fixture_cli_reports_preserve_frozen_cases_and_block_activation():
+def test_actual_fixture_cli_reports_preserve_frozen_cases_and_block_activation(tmp_path):
     root = Path(__file__).resolve().parents[4]
     evaluation = root / "aquillm/apps/chat/evals"
-    destination = Path("/artifacts/r5-fixture-controls") / uuid4().hex
+    destination = tmp_path / "r5-fixture-controls"
     destination.mkdir(parents=True)
     quality = evaluation / "evidence_quality_cases.json"
     operational = evaluation / "evidence_operational_cases.json"
