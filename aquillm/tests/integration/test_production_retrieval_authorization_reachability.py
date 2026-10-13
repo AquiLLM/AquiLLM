@@ -105,7 +105,7 @@ def test_chat_document_tool_builds_current_authorization_at_execution(monkeypatc
     )
     monkeypatch.setattr(
         chat_authorization,
-        "build_production_retrieval_authorization_context",
+        "build_selected_scope_authorization_context",
         lambda **kwargs: (observed.setdefault("build", kwargs), capability)[1],
     )
     monkeypatch.setattr(
@@ -136,7 +136,7 @@ def test_direct_rag_vector_route_reaches_same_authorization_builder(monkeypatch)
     )
     monkeypatch.setattr(
         chat_authorization,
-        "build_production_retrieval_authorization_context",
+        "build_selected_scope_authorization_context",
         lambda **_kwargs: capability,
     )
     monkeypatch.setattr(
@@ -169,7 +169,7 @@ def test_no_production_capability_never_constructs_or_schedules_graph_runtime(
     )
     monkeypatch.setattr(
         chat_authorization,
-        "build_production_retrieval_authorization_context",
+        "build_selected_scope_authorization_context",
         lambda **_kwargs: None,
     )
 
@@ -281,7 +281,7 @@ def test_enabled_web_and_chat_routes_reach_projection_source_authority(
         )
         monkeypatch.setattr(
             chat_authorization,
-            "build_production_retrieval_authorization_context",
+            "build_selected_scope_authorization_context",
             lambda **_kwargs: context,
         )
         monkeypatch.setattr(
