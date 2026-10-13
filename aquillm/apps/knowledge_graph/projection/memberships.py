@@ -91,10 +91,11 @@ def _load_membership_source_rows(
     )
     entity_rows = tuple(_checked_rows(entities.iterator(chunk_size=batch_size), check))
     entity_ids = tuple(row[0] for row in entity_rows)
+    from .membership_source_query import captured_entity_links
+
     links = (
-        CanonicalEntityLink.objects.using(using)
+        captured_entity_links(CanonicalEntityLink.objects.using(using).all(), entity_ids)
         .filter(
-            collection_entity_id__in=entity_ids,
             outcome="automatic",
             status="active",
             canonical_entity__status="active",
@@ -149,9 +150,11 @@ def load_automatic_membership_assignments(
         raise ValueError("using must be a nonempty database alias")
     if codec is None:
         raise RuntimeError("projection identifier codec is not configured")
+    from .membership_identifiers import MembershipKeyEncoder
+
     check = _membership_check(check)
     check()
-    encoder = codec
+    encoder = MembershipKeyEncoder(codec, generation)
     assignments = []
     for (
         entity_id,
@@ -165,11 +168,11 @@ def load_automatic_membership_assignments(
         batch_size=size,
         check=check,
     ), check):
-        entity_key = _opaque_entity_key(encoder, generation, entity_id)
+        entity_key = encoder.entity(entity_id)
         membership_key = (
             None
             if canonical_id is None
-            else _opaque_membership_key(encoder, canonical_id)
+            else encoder.canonical(canonical_id)
         )
         assignments.append(
             AutomaticCanonicalMembershipV1(

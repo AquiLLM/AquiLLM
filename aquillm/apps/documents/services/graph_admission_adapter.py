@@ -41,11 +41,15 @@ def order_graph_pool(snapshot, rows, *, scope, query, **kwargs):
     )[0]
 
 
-def fallback_baseline(snapshot):
+def fallback_baseline(snapshot, *, admit_deferred=True):
     plan = getattr(snapshot, "source_admission", None)
     if plan is None:
         return snapshot.baseline_candidates
-    return plan._closed_read(plan.top_up_ids(), baseline=snapshot.baseline_candidates, order=True)
+    ids = plan.top_up_ids() if admit_deferred else ()
+    rows = plan._closed_read(ids, baseline=snapshot.baseline_candidates, order=True)
+    plan.counts["fallback_top_up_skipped"] = not admit_deferred
+    plan.counts["fallback_top_up_count"] = len({r.pk for r in rows} - set(plan.initial_ids))
+    return rows
 
 
 def observe_published_graph(pks):

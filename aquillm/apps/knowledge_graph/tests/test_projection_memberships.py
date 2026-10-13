@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import sys
 
 import pytest
 
@@ -126,3 +127,37 @@ def test_membership_keys_are_hmac_domain_separated_and_not_plain_pk_hashes(
         baseline.automatic_membership_key
         != memberships.sha256(b"automatic-canonical-identity-v1\x0091").hexdigest()
     )
+
+
+def test_membership_loader_prepares_keys_per_call_and_rereads_source(monkeypatch):
+    codec = HmacSha256ProjectionIdentifierCodec(b"secret-a", key_version="key-v1")
+    generation = "generation-a"
+    source_calls, frame_calls = [], []
+    expected_entities = {memberships._opaque_entity_key(codec, generation, pk)
+                         for pk in range(1, 130)}
+    expected_keys = [memberships._opaque_membership_key(codec, pk) for pk in (91, 92)]
+
+    def current_rows(**kwargs):
+        source_calls.append(kwargs["collection_ids"])
+        return tuple((pk, "resolver-v1", A, 90 + len(source_calls), B)
+                     for pk in range(1, 130))
+
+    def profile(frame, event, arg):
+        if event == "call" and frame.f_code is codec.frame.__func__.__code__:
+            frame_calls.append(True)
+
+    monkeypatch.setattr(memberships, "_load_membership_source_rows", current_rows)
+    previous = sys.getprofile()
+    sys.setprofile(profile)
+    try:
+        calls = [memberships.load_automatic_membership_assignments(
+            collection_ids=(7,), using="default", batch_size=5000,
+            codec=codec, generation=generation,
+        ) for _ in range(2)]
+    finally:
+        sys.setprofile(previous)
+    assert source_calls == [(7,), (7,)]
+    for rows, key in zip(calls, expected_keys):
+        assert {row.entity_key for row in rows} == expected_entities
+        assert {row.automatic_membership_key for row in rows} == {key}
+    assert len(frame_calls) == 4  # Two domain prefixes per fresh invocation.

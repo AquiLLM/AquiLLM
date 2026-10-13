@@ -58,13 +58,15 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
             ),
         }
 
-    def fallback():
+    def fallback(*, admit_deferred=True):
         try:
             from .graph_admission_adapter import fallback_baseline
 
             if getattr(snapshot, "source_admission", None) is not None:
                 validate_requested_authorization(scope.runtime, authorization, snapshot.documents)
-            rows, _ = reauthorized_baseline(fallback_baseline(snapshot), authorization)
+            rows, _ = reauthorized_baseline(
+                fallback_baseline(snapshot, admit_deferred=admit_deferred), authorization
+            )
             if scope is not None:
                 rows = tuple(
                     r

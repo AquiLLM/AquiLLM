@@ -101,6 +101,7 @@ def _try_closed_graph_pool(
         ):
             raise SourceScopeUnavailable("graph_original_scope_unavailable")
 
+    deadline = None
     try:
         bound = capture_operation_bound(stage.budget)
         timeout = settings.graph_overall_timeout_ms
@@ -165,7 +166,7 @@ def _try_closed_graph_pool(
         except Exception:
             return (), diagnostics("error")
         stage.withdraw()
-        return fallback()
+        return fallback(admit_deferred=deadline is None or clock() < deadline)
     finally:
         stage.withdraw()
 

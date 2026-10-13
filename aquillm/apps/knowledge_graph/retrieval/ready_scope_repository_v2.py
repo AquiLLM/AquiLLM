@@ -151,7 +151,7 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
         assignments = load_automatic_membership_assignments(
             collection_ids=(row.collection_id,),
             using=using,
-            batch_size=1000,
+            batch_size=5000,
             codec=codec,
             check=check,
         )

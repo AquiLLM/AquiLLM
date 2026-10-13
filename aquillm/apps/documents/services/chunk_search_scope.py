@@ -93,9 +93,10 @@ class FrozenRetrievalScope:
             current = revalidate_retrieval_authorization_context(
                 context=self.authorization
             )
+            docs, cols = map(frozenset, (current.document_ids, current.collection_ids))
             if any(
-                s.document.id not in current.document_ids
-                or s.document.collection_id not in current.collection_ids
+                s.document.id not in docs
+                or s.document.collection_id not in cols
                 for s in self.representation.selections
             ):
                 raise SourceScopeUnavailable("source_scope_unavailable")
