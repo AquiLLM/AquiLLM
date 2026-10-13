@@ -1,5 +1,6 @@
 """Fresh serving proof accepts only native signed evidence."""
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -230,6 +231,7 @@ assert authority.certified_membership_checksums(
 """
     result = subprocess.run(
         [sys.executable, "-c", "NAME=" + repr(name) + "\n" + script],
+        cwd=Path(__file__).resolve().parents[3],
         capture_output=True,
         text=True,
         env=dict(os.environ),

@@ -1,5 +1,6 @@
 """Signed proof binds exact native semantics, key and projection occurrence."""
 
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -232,6 +233,7 @@ assert c.native_membership_identity(codec) is None
     script = "MODULE=" + repr(module) + "\nNAME=" + repr(name) + "\n" + script
     result = subprocess.run(
         [sys.executable, "-c", script],
+        cwd=Path(__file__).resolve().parents[3],
         capture_output=True,
         text=True,
         env=dict(os.environ),
