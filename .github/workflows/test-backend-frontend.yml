@@ -148,6 +148,24 @@ jobs:
           aquillm/lib/knowledge_graph/tests/test_projection_timeout_config.py
           aquillm/lib/knowledge_graph/tests/test_retrieval_config.py
           --ds=aquillm.settings_projection_test -q --tb=short
+      - name: Fresh membership certificate contracts
+        env:
+          KG_REQUIRE_POSTGRES_TESTS: "1"
+        run: >-
+          python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_membership_certificate_authority.py
+          aquillm/apps/knowledge_graph/tests/test_membership_certificate_automation.py
+          aquillm/apps/knowledge_graph/tests/test_membership_certificate_contracts.py
+          aquillm/apps/knowledge_graph/tests/test_membership_certificate_dispatch_lifetime.py
+          aquillm/apps/knowledge_graph/tests/test_membership_certificate_serving_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_membership_certificate_store.py
+          aquillm/apps/knowledge_graph/tests/test_membership_certificate_store_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_membership_certification.py
+          aquillm/apps/knowledge_graph/tests/test_membership_certification_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_membership_source_fingerprint.py
+          aquillm/apps/knowledge_graph/tests/test_membership_source_fingerprint_postgres.py
+          aquillm/lib/knowledge_graph/tests/test_membership_certificate_config.py
+          --ds=aquillm.settings_projection_test -q --tb=short
       - name: Graph retrieval latency contracts
         run: >-
           python -m pytest
@@ -203,6 +221,9 @@ jobs:
           aquillm/apps/documents/tests/test_graph_admission_seeds.py
           aquillm/apps/documents/tests/test_graph_admission_provenance.py
           aquillm/apps/documents/tests/test_graph_admission_query_binding.py
+          aquillm/apps/documents/tests/test_graph_metadata_worker.py
+          aquillm/apps/documents/tests/test_graph_metadata_overlap.py
+          aquillm/apps/documents/tests/test_representation_tool_scope.py
           aquillm/apps/documents/tests/test_graph_captured_owner_work.py
           aquillm/apps/documents/tests/test_graph_captured_owner_fences.py
           aquillm/apps/documents/tests/test_fresh_authorization_membership_work.py

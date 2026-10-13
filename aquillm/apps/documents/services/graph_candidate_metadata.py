@@ -96,13 +96,64 @@ def _full_text_metadata(model, query, scope, limit):
     )
 
 
-def capture_metadata(model, query, scope, limits, observation, check):
+def _lexical_spec(scope, query, limits):
+    from .graph_metadata_worker import LexicalMetadataSpec
+    original = scope.runtime._frozen_retrieval_scope
+    return LexicalMetadataSpec(scope.using, original.representation,
+        frozenset(original.requested_document_ids), frozenset(scope.requested_document_ids),
+        query, limits.trigram, limits.exact, limits.trigram_similarity_min)
+
+
+def _lexical_text(spec):
+    from apps.documents.models import TextChunk
+    from .representation_store import _active_chunk_predicates
+    return _active_chunk_predicates(TextChunk.objects.using(spec.alias).filter(
+        doc_id__in=spec.requested_ids, modality=TextChunk.Modality.TEXT,
+    ).filter(doc_id__in=spec.original_ids), snapshot=spec.representation)
+
+
+def _trigram_refs(text, query, limit, similarity):
+    return rank_refs(text.annotate(similarity=TrigramSimilarity("content", query)
+        ).filter(similarity__gt=similarity).order_by("-similarity", "pk")[:limit])
+
+
+def _exact_refs(text, query, limit):
+    terms = extract_exact_terms(query)
+    refs = rank_refs(ranked_exact_queryset(text, terms, limit=limit), exact=True) if terms else ()
+    return refs, tuple(terms)
+
+
+def capture_metadata(model, query, scope, limits, observation, check, *,
+                     allow_lexical_overlap=False):
+    check()
+    initial_keys = set(scope.validate())
+    job, profile, connection = None, None, None
+    try:
+        if (allow_lexical_overlap and not controls()["full_text"]
+                and observation is not None and scope.dense is not None
+                and initial_keys and limits.vector > 0):
+            from django.db import connections
+            from .graph_metadata_worker import capture_parent_profile, start_lexical_metadata
+            connection = connections[scope.using]
+            profile = capture_parent_profile(connection, check=check)
+            if profile is not None:
+                job = start_lexical_metadata(_lexical_spec(scope, query, limits),
+                    parent_profile=profile, runtime=scope.runtime,
+                    budget=scope.runtime.budget, check=check)
+        return _capture_metadata(model, query, scope, limits, observation, check,
+                                 initial_keys, job, profile, connection)
+    finally:
+        if job is not None:
+            job.invalidate()
+
+
+def _capture_metadata(model, query, scope, limits, observation, check,
+                      initial_keys, job, profile, connection):
     from .embedding_index_query import rank_compatible_chunks
 
     original = scope.runtime._frozen_retrieval_scope
     channels, dense, timings = {}, {}, {}
     check()
-    initial_keys = set(scope.validate())
     started = perf_counter()
     vectors = ()
     vector_error = None
@@ -131,6 +182,13 @@ def capture_metadata(model, query, scope, limits, observation, check):
     channels["dense"] = vectors
     timings["vector"] = (perf_counter() - started) * 1000
     check()
+    lexical = None
+    if job is not None:
+        from .graph_metadata_worker import PreDataIneligible, accept_parent_profile
+        lexical = job.result()
+        accept_parent_profile(connection, profile, check=check)
+        if isinstance(lexical, PreDataIneligible):
+            lexical = None
     text = _prepare_source_queryset(model.objects.using(scope.using).filter(
         doc_id__in=scope.requested_document_ids, modality=model.Modality.TEXT,
     ), original)
@@ -146,19 +204,16 @@ def capture_metadata(model, query, scope, limits, observation, check):
             trigram_limit -= limits.trigram // 2
     channels["full_text"] = full_text
     started = perf_counter()
-    channels["trigram"] = rank_refs(text.annotate(
-        similarity=TrigramSimilarity("content", query)
-    ).filter(similarity__gt=limits.trigram_similarity_min).order_by(
-        "-similarity", "pk"
-    )[:trigram_limit])
-    timings["trigram"] = (perf_counter() - started) * 1000
+    channels["trigram"] = (lexical.trigram if lexical is not None else
+        _trigram_refs(text, query, trigram_limit, limits.trigram_similarity_min))
+    timings["trigram"] = (lexical.trigram_ms if lexical is not None else
+                            (perf_counter() - started) * 1000)
     check()
     started = perf_counter()
-    terms = extract_exact_terms(query)
-    channels["exact"] = rank_refs(ranked_exact_queryset(
-        text, terms, limit=limits.exact
-    ), exact=True) if terms else ()
-    timings["exact"] = (perf_counter() - started) * 1000
+    channels["exact"], terms = ((lexical.exact, lexical.terms) if lexical is not None
+                               else _exact_refs(text, query, limits.exact))
+    timings["exact"] = (lexical.exact_ms if lexical is not None else
+                          (perf_counter() - started) * 1000)
     check()
     final_keys = initial_keys & set(scope.validate())
     channels["dense"] = tuple(r for r in vectors
@@ -172,4 +227,6 @@ def capture_metadata(model, query, scope, limits, observation, check):
             if ref.pk in captured and captured[ref.pk].fingerprint != ref.fingerprint:
                 raise SourceScopeUnavailable("source_scope_unavailable")
             captured[ref.pk] = ref
+    if job is not None:
+        accept_parent_profile(connection, profile, check=check)
     return channels, dense, terms, timings, coverage, vector_error

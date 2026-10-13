@@ -107,21 +107,21 @@ Files: new projection/membership_source_fingerprint.py; new focused PostgreSQL
 tests test_membership_source_fingerprint.py and support module only if needed.
 Do not edit memberships.py or redefine its checksum.
 
-- [ ] Reproduce the missing behavior with a real PostgreSQL fixture containing
+- [x] Reproduce the missing behavior with a real PostgreSQL fixture containing
   active automatic, inactive/manual, explicit-null and empty-collection cases.
-- [ ] Assert exact relation parity with _load_membership_source_rows and the
+- [x] Assert exact relation parity with _load_membership_source_rows and the
   current full F; mutate relevant entity/artifact/link/canonical fields through
   raw SQL and ORM and verify changed F cannot preserve accepted H.
-- [ ] Include Unicode/escaping, large IDs, duplicate links, wrong requested sets,
+- [x] Include Unicode/escaping, large IDs, duplicate links, wrong requested sets,
   null versus empty values and malformed cross-scope mappings already admitted
   by the old loader. Do not add a stricter join that hides those inputs.
-- [ ] Implement ordered typed JSON aggregation and SHA256 with explicit UTF-8
+- [x] Implement ordered typed JSON aggregation and SHA256 with explicit UTF-8
   and format prefix; preserve every input row. No LIMIT on source entities.
-- [ ] Add original-check expiry before SQL, after execute/fetch and during result
+- [x] Add original-check expiry before SQL, after execute/fetch and during result
   validation; confirm exact result coverage and transaction-isolation rejection.
-- [ ] Run focused real PostgreSQL tests and capture RED/GREEN receipts. Review
+- [x] Run focused real PostgreSQL tests and capture RED/GREEN receipts. Review
   actual statement count and compare old full derivation on the same snapshot.
-- [ ] Freeze source hashes and obtain independent review before dependent tasks.
+- [x] Freeze source hashes and obtain independent review before dependent tasks.
 
 ## Task 2: signed certificate and protected storage
 
@@ -129,19 +129,19 @@ Files: new model membership_certificates.py, models/__init__.py export,
 migration0016 plus private SQL module if needed, contracts and store modules,
 pure tests and focused PostgreSQL storage/role tests.
 
-- [ ] Write failing controls for tampered/wrong-occurrence payloads, malformed
+- [x] Write failing controls for tampered/wrong-occurrence payloads, malformed
   types/keys, changed actual secret under the same version, unsupported/custom
   codecs, changed native functions and mid-operation identity change.
-- [ ] Implement exact payload validation, distinct HMAC domains and constant-time
+- [x] Implement exact payload validation, distinct HMAC domains and constant-time
   verification. No key material in repr, exceptions, logs or receipts.
-- [ ] Write failing database controls for stale projection/generation/state,
+- [x] Write failing database controls for stale projection/generation/state,
   forged shape, missing grant, source-role write denial, PUBLIC execute denial,
   concurrent prior-signature CAS and idempotent repeated valid evidence.
-- [ ] Implement additive model/table and narrow state publication function.
+- [x] Implement additive model/table and narrow state publication function.
   Follow existing lock order, fixed search_path and qualified object names.
-- [ ] Run migration forward/backward in isolated DB, Django migration-state
+- [x] Run migration forward/backward in isolated DB, Django migration-state
   consistency and focused pure/PostgreSQL tests; freeze and review.
-- [ ] No live schema changes or broad role changes in this task.
+- [x] No live schema changes or broad role changes in this task.
 
 Tasks 1 and 2 may proceed in parallel with disjoint files. Root serializes DB waves.
 
@@ -151,50 +151,50 @@ Files: membership_certification.py, focused snapshot helper if needed,
 dedicated certificate task module, minimal projection/tasks.py post-ready dispatch,
 bounded maintenance management command, focused snapshot/task/command tests.
 
-- [ ] Build a real two-connection regression that changes membership inputs
+- [x] Build a real two-connection regression that changes membership inputs
   between H and F. Show READ COMMITTED can be torn; top-level RR must bind both
   computations to one snapshot.
-- [ ] Reject preexisting/nested source transactions. Start RR READ ONLY before
+- [x] Reject preexisting/nested source transactions. Start RR READ ONLY before
   the existing projection_database helper's first pg_settings query.
-- [ ] Capture ready projection, artifact/state and previous certificate signature;
+- [x] Capture ready projection, artifact/state and previous certificate signature;
   compute H and complete existing F; require F equal both expected checksums.
-- [ ] Recheck original operation and native identity after source transaction
+- [x] Recheck original operation and native identity after source transaction
   cleanup, then publish via the restricted state alias/CAS. No long source locks.
-- [ ] Prove a source mutation after snapshot cannot yield accepted proof against
+- [x] Prove a source mutation after snapshot cannot yield accepted proof against
   fresh H, and a rebuilt occurrence prevents stale CAS. Check timeout/cleanup
   and job revocation leave no new accepted proof.
-- [ ] Add best-effort bounded dispatch after project_generation returned ready
+- [x] Add best-effort bounded dispatch after project_generation returned ready
   and its operation closed. Certification failure must never retry staging or
   change ready=True. No dispatch when disabled or not ready.
-- [ ] Add bounded management command to certify current ready occurrences,
+- [x] Add bounded management command to certify current ready occurrences,
   reporting counts and typed failures only. It must not rebuild Memgraph or
   rewrite expected membership checksums.
-- [ ] Verify task broker publication has a finite bound, job <=300s and each
+- [x] Verify task broker publication has a finite bound, job <=300s and each
   native call <=5s or tighter inherited limit. No new periodic scheduler.
-- [ ] Run focused tests and independent review.
+- [x] Run focused tests and independent review.
 
 ## Task 4: fresh serving proof at both existing boundaries
 
 Files: membership_certificate_authority.py; minimal ready_scope_repository_v2.py;
 existing HybridRetrievalSettings/loaders and .env.example; focused integration tests.
 
-- [ ] Add default-off KG_MEMBERSHIP_CERTIFICATE_ENABLED with existing strict bool
+- [x] Add default-off KG_MEMBERSHIP_CERTIFICATE_ENABLED with existing strict bool
   parsing and runtime settings capture; projection config includes the same flag.
-- [ ] At the existing whole-authority loader, prepare fresh certificates/H in a
+- [x] At the existing whole-authority loader, prepare fresh certificates/H in a
   bounded batch, preserving per-row version/state/artifact checks and full original
   scope checks. Skip only load_automatic_membership_assignments/checksum for a
   verified native certificate entry matching the already validated expected C.
-- [ ] A miss/custom/unsupported/non-PostgreSQL path retains full F. Any deadline or
+- [x] A miss/custom/unsupported/non-PostgreSQL path retains full F. Any deadline or
   source-context identity loss rejects normally; it never renews an operation.
-- [ ] Test changed source/permissions/representation/vocabulary/graph generation
+- [x] Test changed source/permissions/representation/vocabulary/graph generation
   between initial and final boundaries; existing shared failures must still
   invalidate all graph additions. No certificate can turn present bad authority
   into absence.
-- [ ] Test wrong signature/key/identity, partially returned fingerprints, duplicate
+- [x] Test wrong signature/key/identity, partially returned fingerprints, duplicate
   links, pending/building authority and lazy-import/native replacements.
-- [ ] Verify a valid hit invokes one fresh input-fingerprint query per boundary
+- [x] Verify a valid hit invokes one fresh input-fingerprint query per boundary
   and no full per-entity Python derivation, using actual DB query observations.
-- [ ] Run legacy/custom/off-path and graph publication/cancellation regressions;
+- [x] Run legacy/custom/off-path and graph publication/cancellation regressions;
   obtain independent review.
 
 Task 4 can develop against frozen Tasks1/2 while Task3 certification tests run,

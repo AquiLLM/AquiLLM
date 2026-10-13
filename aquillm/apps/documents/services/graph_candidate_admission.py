@@ -3,6 +3,7 @@
 from copy import deepcopy
 from contextlib import contextmanager
 from dataclasses import replace
+from threading import get_ident
 
 from .chunk_search_graph_seeds import build_graph_seeds
 from .chunk_search_rank_policy import controls
@@ -71,6 +72,8 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
     def check():
         check_source_deadline()
         if (current_scope() is not scope or graph_source_runtime() is not scope.runtime
+                or (get_ident() == parent_thread
+                    and connections[scope.using] is not parent_connection)
                 or scope.query_digest not in query_bindings
                 or not _same_header(header, _closed_header(base, scope))
                 or not scope.runtime.budget.can_publish()
@@ -85,11 +88,22 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 or scope.dense_rows is not dense_container or dense_container != dense_before):
             raise SourceScopeUnavailable("source_admission_original_scope_unavailable")
 
+    from django.db import connections
+    parent_connection = connections[scope.using]
+    parent_thread = get_ident()
+    allow_lexical_overlap = (
+        parent_connection.vendor == "postgresql"
+        and not parent_connection.in_atomic_block
+        and parent_connection.get_autocommit()
+        and not parent_connection.execute_wrappers
+    )
+    check()
     with _metadata_database(scope, header, check):
         check()
         validate_requested_authorization(scope.runtime, authorization, documents)
         channels, dense, terms, timings, coverage, error = capture_metadata(
-            model, query, scope, limits, observation, check
+            model, query, scope, limits, observation, check,
+            allow_lexical_overlap=allow_lexical_overlap,
         )
         from apps.knowledge_graph.retrieval.graph_runtime_v2 import _caps
 
