@@ -10,6 +10,7 @@ RUN pip install --no-cache-dir soundfile
 
 COPY --chmod=755 ./deploy/scripts/vllm_start.sh /vllm_start.sh
 COPY --chmod=755 ./deploy/scripts/parse_vllm_extra_args.py /parse_vllm_extra_args.py
+COPY --chmod=755 ./deploy/scripts/kv_cache_config.py /kv_cache_config.py
 COPY ./deploy/docker/vllm/chat_templates /templates
 
 EXPOSE 8000
