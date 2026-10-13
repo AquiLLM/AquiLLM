@@ -135,6 +135,7 @@ def _public_source_rows(queryset, runtime, refresh, require_existing):
     )
     using = queryset.db
     original = getattr(runtime, "_frozen_retrieval_scope", None)
+    original_bound = original is not None
     frozen = None
     frozen_header = None
 
@@ -177,7 +178,10 @@ def _public_source_rows(queryset, runtime, refresh, require_existing):
             or _OPERATION.get() is not operation
             or _DEADLINE.get() is not deadline
             or queryset.db != using
-            or getattr(runtime, "_frozen_retrieval_scope", None) is not original
+            or (
+                original_bound
+                and getattr(runtime, "_frozen_retrieval_scope", None) is not original
+            )
             or (original is not None and not same_scope(original, original_header))
             or (frozen is not None and not same_scope(frozen, frozen_header))
         ):
@@ -188,6 +192,13 @@ def _public_source_rows(queryset, runtime, refresh, require_existing):
     check()
     pending = {}
     with lock:
+        if not original_bound:
+            # Another first reader may install the original while we wait.
+            # Bind absence only under the original lock; existing entry pins
+            # retain their captured identity/header throughout this call.
+            original = getattr(runtime, "_frozen_retrieval_scope", None)
+            original_header = scope_header(original) if original is not None else None
+            original_bound = True
         check()
         with bounded_source_database(runtime, using):
             check()
