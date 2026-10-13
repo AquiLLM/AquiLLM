@@ -20,11 +20,6 @@ _SKIP_PARTS = frozenset({"migrations", "__pycache__", "node_modules", "tests"})
 _BASELINE_VIOLATIONS: Counter[tuple[str, str, str]] = Counter(
     {
         (
-            "aquillm/apps/chat/consumers/chat.py",
-            "warning",
-            "Failed to queue conversation indexing task for convo %s: %s",
-        ): 1,
-        (
             "aquillm/apps/chat/services/conversation_indexing.py",
             "info",
             "Indexed conversation %s into %d chunks",
@@ -33,16 +28,6 @@ _BASELINE_VIOLATIONS: Counter[tuple[str, str, str]] = Counter(
             "aquillm/apps/chat/services/conversation_indexing.py",
             "warning",
             "index_conversation: no conversation %s",
-        ): 1,
-        (
-            "aquillm/apps/chat/services/conversation_indexing.py",
-            "warning",
-            "Batch embedding failed for conversation %s: %s",
-        ): 1,
-        (
-            "aquillm/apps/chat/services/conversation_indexing.py",
-            "warning",
-            "Per-window embedding failed for conversation %s window %s: %s",
         ): 1,
         (
             "aquillm/apps/chat/services/conversation_search.py",
