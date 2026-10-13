@@ -12,6 +12,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "aquillm"))
+from apps.chat.evals.replay_controls import (  # noqa: E402
+    MODE_CHOICES,
+    MODE_DEFAULTS,
+    validate_modes,
+)
 from apps.chat.evals.retrieval_replay import (  # noqa: E402
     EXPERIMENTS,
     fingerprint,
@@ -62,8 +67,16 @@ def parse_args(argv=None):
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--repetitions", type=positive, default=1)
     parser.add_argument("--experiment", choices=EXPERIMENTS, default="baseline")
+    for name, choices in MODE_CHOICES.items():
+        parser.add_argument(
+            "--" + name.replace("_", "-"), choices=choices, default=MODE_DEFAULTS[name]
+        )
     parser.add_argument("--revision", type=full_revision)
     args = parser.parse_args(argv)
+    try:
+        validate_modes(args.experiment, selected_modes(args))
+    except ValueError:
+        parser.error("treatment modes require --experiment current")
     if (
         args.repetitions > 10
         or len(args.collection_ids) > 64
@@ -75,6 +88,10 @@ def parse_args(argv=None):
     if args.output.resolve() == args.manifest.resolve():
         parser.error("output must differ from manifest")
     return args
+
+
+def selected_modes(args):
+    return {name: getattr(args, name) for name in MODE_CHOICES}
 
 
 def selected_sources(user, collections):
@@ -111,11 +128,13 @@ def effective_config(settings, config):
     from dataclasses import asdict
 
     from apps.chat.services import rag_config
+    from apps.chat.services.retrieval_query_runtime import configured_proposal_controls
     from apps.documents.services.chunk_rerank_config import (
         rerank_doc_char_limit,
         rerank_pair_token_limit,
         rerank_text_mode,
     )
+    from lib.retrieval.turn_budget import TurnLimits
 
     return {
         "vector_cap": config.vector_top_k,
@@ -134,6 +153,10 @@ def effective_config(settings, config):
         "candidate_top_k": rag_config.direct_rag_candidate_top_k(),
         "max_queries": rag_config.direct_rag_max_queries(),
         "token_budget": rag_config.evidence_token_budget(),
+        "proposal_controls": configured_proposal_controls(),
+        "turn_limits": asdict(
+            TurnLimits(actions=min(3, rag_config.direct_rag_max_queries()))
+        ),
     }
 
 
@@ -143,6 +166,7 @@ def main(argv=None):
         "schema_version": 1,
         "success": False,
         "experiment": args.experiment,
+        "modes": selected_modes(args),
         "requested": {
             "question_count": None,
             "collection_count": len(args.collection_ids),
@@ -170,7 +194,14 @@ def main(argv=None):
         from apps.chat.services import rag_pipeline
 
         config = apps.get_app_config("aquillm")
-        with replay_runtime(args.experiment, settings, config, rag_pipeline, None):
+        with replay_runtime(
+            args.experiment,
+            settings,
+            config,
+            rag_pipeline,
+            None,
+            **selected_modes(args),
+        ):
             user = get_user_model().objects.get(pk=args.principal_id)
             if not user.is_active:
                 raise ValueError("principal_inactive")
@@ -195,6 +226,7 @@ def main(argv=None):
                         settings,
                         config,
                         rag_pipeline,
+                        **selected_modes(args),
                     )
                     row["repetition"] = repetition
                     report["turns"].append(row)

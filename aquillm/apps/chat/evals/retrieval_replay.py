@@ -1,23 +1,14 @@
 """Sequential, retrieval-only replay; raw observations never leave this process."""
 
-import hashlib
 import json
-import os
 import re
-from contextlib import ExitStack, contextmanager, nullcontext
+from contextlib import nullcontext
 from threading import Event, Lock
 from unittest.mock import patch
 
-EXPERIMENTS = (
-    "baseline",
-    "graph-off",
-    "direct-only",
-    "extended-only",
-    "depth30",
-    "depth60",
-    "full-text",
-    "depth60-full",
-)
+from .replay_controls import EXPERIMENTS as EXPERIMENTS
+from .replay_controls import replay_runtime
+from .replay_observations import fingerprint, summarize
 
 
 class MappingError(ValueError):
@@ -26,10 +17,6 @@ class MappingError(ValueError):
 
 class GenerationDenied(RuntimeError):
     pass
-
-
-def fingerprint(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def load_manifest(path):
@@ -144,6 +131,8 @@ class GenerationGuard:
     def __init__(self, interface):
         self._interface = interface
         self.attempted = False
+        # Proposal observation needs metadata, never the provider's nested clients.
+        self.base_args = {"model": "unknown"}
 
     def __getattr__(self, name):
         value = getattr(self._interface, name)
@@ -176,190 +165,6 @@ class EventRecorder:
             self._closed = True
 
 
-@contextmanager
-def replay_runtime(experiment, settings, config, pipeline, recorder):
-    if experiment not in EXPERIMENTS:
-        raise ValueError("experiment_unknown")
-    env = {
-        "RAG_DIRECT_ENABLED": "1",
-        "RAG_RERANK_TEXT_MODE": "legacy",
-        "RAG_EVIDENCE_TEXT_MODE": "legacy",
-        "RAG_DOCUMENT_CAPACITY_MODE": "legacy",
-        "RAG_FOLLOWUP_EVIDENCE_ENABLED": "0",
-        "RAG_ITERATIVE_RETRIEVAL_ENABLED": "0",
-        "RAG_RERANK_SHADOW_SCORING_ENABLED": "0",
-    }
-    attributes = [
-        (settings, "RAG_CACHE_ENABLED", False),
-        (pipeline, "synthesize_from_evidence", recorder),
-    ]
-    if experiment == "graph-off":
-        attributes.append((settings, "KG_OVERLAY_ENABLED", False))
-    if experiment in ("direct-only", "extended-only"):
-        attributes.extend(
-            [
-                (settings, "KG_OVERLAY_ENABLED", True),
-                (settings, "KG_GRAPH_DIRECT_ENABLED", experiment == "direct-only"),
-                (settings, "KG_GRAPH_EXTENDED_ENABLED", experiment == "extended-only"),
-            ]
-        )
-        env.update(
-            KG_GRAPH_DIRECT_ENABLED=str(int(experiment == "direct-only")),
-            KG_GRAPH_EXTENDED_ENABLED=str(int(experiment == "extended-only")),
-        )
-        if experiment == "extended-only":
-            env["KG_DIRECT_EMBEDDING_ENABLED"] = "0"
-            attributes.append((settings, "KG_DIRECT_EMBEDDING_ENABLED", False))
-    if experiment in ("depth30", "depth60", "depth60-full"):
-        depth = 30 if experiment == "depth30" else 60
-        attributes.extend(
-            [
-                (config, "vector_top_k", depth),
-                (config, "trigram_top_k", depth),
-                (settings, "RAG_CANDIDATE_MULTIPLIER", 4.0),
-            ]
-        )
-    if experiment in ("full-text", "depth60-full"):
-        env["APP_RERANK_DOC_CHAR_LIMIT"] = "2048"
-    with ExitStack() as stack:
-        stack.enter_context(patch.dict(os.environ, env))
-        for obj, name, value in attributes:
-            stack.enter_context(patch.object(obj, name, value, create=True))
-        yield
-
-
-def _identity(row):
-    return row.get("chunk_id", row.get("id", row.get("i")))
-
-
-def _text(row):
-    return row.get("text") or row.get("x") or row.get("content") or ""
-
-
-def _safe_graph_reasons(reasons):
-    from apps.knowledge_graph.retrieval.branch_contracts import (
-        DirectBranchFailureReason,
-        ExtendedBranchFailureReason,
-        SharedBranchFailureReason,
-    )
-
-    if type(reasons) not in (list, tuple):
-        return None
-    allowed = {
-        reason.value
-        for enum in (
-            DirectBranchFailureReason,
-            ExtendedBranchFailureReason,
-            SharedBranchFailureReason,
-        )
-        for reason in enum
-    }
-    # Exact strings only: never stringify arbitrary diagnostics or exceptions.
-    return [
-        reason for reason in reasons if type(reason) is str and reason in allowed
-    ] or None
-
-
-def summarize(events, packet, targets):
-    stages = [data for name, data in events if name == "retrieval_stages"]
-    result = {
-        "stages": [],
-        "targets": [],
-        "packet": [
-            {
-                "text_sha256": fingerprint(_text(row)),
-                "characters": len(_text(row)),
-                "rank": rank,
-            }
-            for rank, row in enumerate(packet, 1)
-        ],
-        "graph_stage_timings": {"status": "unavailable"},
-        "timings_ms": {},
-    }
-    for stage in stages:
-        graph = stage.get("graph", {})
-        result["stages"].append(
-            {
-                "effective_limits": stage.get("effective_limits"),
-                "pool_count": len(stage.get("materialized_union", [])),
-                "rerank_count": len(stage.get("post_rerank", [])),
-                "baseline_branch_counts": {
-                    key: len(rows)
-                    for key, rows in stage.get("baseline_branches", {}).items()
-                },
-                "graph": {
-                    "reasons": _safe_graph_reasons(graph.get("reasons")),
-                    "ready": graph.get("ready"),
-                    "status": graph.get("status"),
-                    "branch_statuses": graph.get("branch_statuses"),
-                    "candidate_provenance": graph.get("candidate_provenance"),
-                    "unique_count": len(graph["candidates"])
-                    if graph.get("candidates") is not None
-                    else None,
-                    "readiness_failure_count": stage.get("readiness_failure_count"),
-                },
-            }
-        )
-    for target in targets:
-        identities = set(target["chunk_ids"])
-
-        def ranks(key):
-            return [
-                row.get("rank", rank)
-                for stage in stages
-                for rank, row in enumerate(stage.get(key, []), 1)
-                if _identity(row) in identities
-            ]
-
-        packet_ranks = [
-            rank for rank, row in enumerate(packet, 1) if _identity(row) in identities
-        ]
-        coverage = (
-            None
-            if target.get("answer") is None
-            else any(
-                target["answer"] in _text(row)
-                for row in packet
-                if _identity(row) in identities
-            )
-        )
-        result["targets"].append(
-            {
-                "source_sha256": target["source_sha256"],
-                "pool_ranks": ranks("materialized_union"),
-                "rerank_ranks": ranks("post_rerank"),
-                "packet_ranks": packet_ranks,
-                "answer_span_covered": coverage,
-            }
-        )
-    stamps = {}
-    for name, data in events:
-        if "at" in data:
-            stamps.setdefault(name, []).append(data["at"])
-        if name == "rag_prepared_queries":
-            result["prepared"] = {
-                "query_count": len(data.get("queries", [])),
-                "requested_top_k": data.get("requested_top_k"),
-                "candidate_top_k": data.get("candidate_top_k"),
-            }
-        if name == "rag_search_outcomes":
-            result["search_statuses"] = [
-                row["status"] for row in data.get("queries", [])
-            ]
-        if name == "rag_final_selection":
-            result["packet_limits"] = data.get("limits")
-    for label, first, last in (
-        ("retrieval", "rag_prepared_queries", "rag_search_outcomes"),
-        ("selection", "rag_search_outcomes", "rag_final_selection"),
-    ):
-        result["timings_ms"][label] = (
-            round((max(stamps[last]) - min(stamps[first])) * 1000, 3)
-            if first in stamps and last in stamps
-            else None
-        )
-    return result
-
-
 def turn_succeeded(
     outcome, *, packet_recorded, observer_failed, sdk_started, generation_attempted
 ):
@@ -371,7 +176,15 @@ def turn_succeeded(
 
 
 async def run_turn(
-    question, targets, user, collections, experiment, settings, config, pipeline
+    question,
+    targets,
+    user,
+    collections,
+    experiment,
+    settings,
+    config,
+    pipeline,
+    **modes,
 ):
     from time import perf_counter
     from types import SimpleNamespace
@@ -389,16 +202,34 @@ async def run_turn(
         result = original_search(*args, **kwargs)
         if not isinstance(result, dict) or "exception" in result:
             search_failed.set()
+        # Preservation acquisition has action events, rather than legacy search
+        # events. Emit equivalent replay-only observations at the real boundary.
+        from apps.chat.services.rag_config import rag_preservation_config
+        from apps.chat.services.retrieval_query_runtime import query_proposals_enabled
+
+        if rag_preservation_config().active or query_proposals_enabled():
+            from lib.replay_observation import prepared_queries, search_outcomes
+
+            prepared_queries([args[1]], args[2], args[2])
+            search_outcomes([args[1]], [result])
         return result
 
-    packet, recorded = [], False
+    packet, recorded, retrieval_status = [], False, None
 
     async def record_packet(llm, conversation, evidence, stream_func=None):
-        nonlocal packet, recorded
+        nonlocal packet, recorded, retrieval_status
         packet, recorded = list(evidence.chunks), True
+        retrieval_status = getattr(evidence, "retrieval_status", "results_found")
+        from apps.chat.services.rag_config import (
+            direct_rag_top_k,
+            evidence_token_budget,
+        )
+        from lib.replay_observation import final_selection
+
+        final_selection(evidence, direct_rag_top_k(), evidence_token_budget)
         return conversation
 
-    def deny_rewrite(*args, **kwargs):
+    async def deny_rewrite(*args, **kwargs):
         guard.attempted = True
         raise GenerationDenied("generation_prohibited")
 
@@ -409,12 +240,12 @@ async def run_turn(
         user=user, col_ref=CollectionsRef(collections), convo=conversation
     )
     start, outcome, error = perf_counter(), None, None
-    from apps.chat.services import rag_query
+    from apps.chat.services import retrieval_query_runtime
 
     with (
-        replay_runtime(experiment, settings, config, pipeline, record_packet),
+        replay_runtime(experiment, settings, config, pipeline, record_packet, **modes),
         patch.object(config, "llm_interface", guard),
-        patch.object(rag_query, "_llm_rewrite_query", deny_rewrite),
+        patch.object(retrieval_query_runtime, "_rewrite", deny_rewrite),
         patch.object(pipeline, "_run_vector_search", record_search)
         if original_search is not None
         else nullcontext(),
@@ -451,6 +282,7 @@ async def run_turn(
         and complete
         and bool(statuses)
         and all(status == "ok" for status in statuses)
+        and retrieval_status not in ("partial", "context_limited")
     )
     result.update(
         id=question["id"],
@@ -461,6 +293,7 @@ async def run_turn(
         sdk_started=observation.sdk_started.is_set(),
         generation_attempted=guard.attempted,
         search_result_failed=search_failed.is_set(),
+        retrieval_status=retrieval_status,
         elapsed_ms=round((perf_counter() - start) * 1000, 3),
     )
     return result

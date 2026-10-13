@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from apps.chat.evals import retrieval_replay as replay
+from apps.chat.tests.test_rag_source_document_tools import docs as docs
 
 
 def test_manifest_required_and_validated(tmp_path):
@@ -188,9 +189,9 @@ def test_run_turn_records_and_fails_closed(behavior):
             except replay.GenerationDenied:
                 pass
         if behavior == "rewrite":
-            from apps.chat.services import rag_query
+            from apps.chat.services import retrieval_query_runtime
 
-            rag_query._llm_rewrite_query("secret", convo)
+            await retrieval_query_runtime._rewrite("secret", llm, None)
         publish("rag_prepared_queries", {"queries": ["secret"], "candidate_top_k": 15})
         publish(
             "rag_search_outcomes",
@@ -431,3 +432,216 @@ def test_invalid_graph_reason_container_is_not_copied(reasons):
         [("retrieval_stages", {"graph": {"reasons": reasons}})], [], []
     )
     assert result["stages"][0]["graph"]["reasons"] is None
+
+
+def test_baseline_disables_ambient_query_proposals(monkeypatch):
+    from apps.chat.services.retrieval_query_runtime import query_proposals_enabled
+
+    monkeypatch.setenv("RAG_QUERY_REWRITE_ENABLED", "1")
+    monkeypatch.setenv("RAG_VOCABULARY_QUERY_ENABLED", "1")
+    with replay.replay_runtime(
+        "baseline",
+        SimpleNamespace(RAG_CACHE_ENABLED=True),
+        SimpleNamespace(),
+        SimpleNamespace(synthesize_from_evidence=None),
+        None,
+    ):
+        assert query_proposals_enabled() is False
+    assert query_proposals_enabled() is True
+
+
+def test_current_modes_are_independent_and_restored(monkeypatch):
+    from apps.chat.services.rag_config import rag_preservation_config
+    from apps.chat.services.retrieval_query_runtime import configured_proposal_controls
+
+    monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "legacy")
+    settings = SimpleNamespace(
+        RAG_CACHE_ENABLED=True,
+        KG_OVERLAY_ENABLED=False,
+        KG_GRAPH_DIRECT_ENABLED=False,
+        KG_GRAPH_EXTENDED_ENABLED=False,
+    )
+    with replay.replay_runtime(
+        "current",
+        settings,
+        SimpleNamespace(),
+        SimpleNamespace(synthesize_from_evidence=None),
+        None,
+        rerank_text_mode="windowed",
+        evidence_text_mode="source",
+        document_capacity_mode="budgeted",
+        query_mode="vocabulary",
+        graph_mode="both",
+    ):
+        preservation = rag_preservation_config()
+        assert preservation.error is None
+        assert preservation.active
+        assert preservation.rerank_text_mode == "windowed"
+        assert preservation.evidence_text_mode == "source"
+        assert preservation.document_capacity_mode == "budgeted"
+        assert configured_proposal_controls()["vocabulary"] is True
+        assert configured_proposal_controls()["rewrite"] is False
+        assert settings.KG_OVERLAY_ENABLED and settings.KG_GRAPH_DIRECT_ENABLED
+        assert settings.KG_GRAPH_EXTENDED_ENABLED
+    assert rag_preservation_config().evidence_text_mode == "legacy"
+    assert settings.KG_OVERLAY_ENABLED is False
+
+
+def test_limited_packet_is_a_failed_quality_outcome():
+    from lib.evidence_observation import publish
+
+    async def run(consumer, llm, convo, **kwargs):
+        publish("rag_prepared_queries", {"queries": ["private"]})
+        publish("rag_search_outcomes", {"queries": [{"status": "ok"}]})
+        publish("rag_final_selection", {"limits": {}})
+        await pipeline.synthesize_from_evidence(
+            llm, convo, SimpleNamespace(chunks=[], retrieval_status="context_limited")
+        )
+        return "handled"
+
+    pipeline = SimpleNamespace(run_direct_rag_turn=run, synthesize_from_evidence=None)
+    result = asyncio.run(
+        replay.run_turn(
+            {"id": "Q1", "question": "private"},
+            [],
+            object(),
+            [1],
+            "baseline",
+            SimpleNamespace(RAG_CACHE_ENABLED=True),
+            SimpleNamespace(llm_interface=SimpleNamespace()),
+            pipeline,
+        )
+    )
+    assert result["success"] is False
+    assert result["retrieval_status"] == "context_limited"
+
+
+def test_budget_summary_omits_ledger_arguments_and_identities():
+    result = replay.summarize(
+        [
+            (
+                "ledger_start",
+                {"ledger_id": "private", "limits": {"retrieval_ms": 15000}},
+            ),
+            (
+                "ledger",
+                {
+                    "arguments": ["private"],
+                    "after": {
+                        "actions": 1,
+                        "sources": 2,
+                        "remaining_ms": 1250,
+                        "closed": "deadline",
+                    },
+                },
+            ),
+            (
+                "turn_complete",
+                {"actions": 1, "planner_calls": 0, "stop_reason": "deadline"},
+            ),
+            (
+                "query_proposals",
+                {
+                    "configured": {"vocabulary": True, "rewrite": False},
+                    "query_digests": ["a" * 64],
+                    "configured_model": "private",
+                },
+            ),
+        ],
+        [],
+        [],
+    )
+    assert result["budget"]["limits"] == {"retrieval_ms": 15000}
+    assert result["budget"]["observed"]["remaining_ms"] == 1250
+    assert result["budget"]["completion"]["stop_reason"] == "deadline"
+    assert result["proposals"]["query_count"] == 1
+    assert "private" not in json.dumps(result)
+
+
+def test_cli_current_modes_require_explicit_treatment_label():
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "current_cli", Path(__file__).parents[1] / "scripts/replay_retrieval.py"
+    )
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    base = [
+        "--manifest",
+        "questions.json",
+        "--principal-id",
+        "1",
+        "--collection-ids",
+        "1",
+        "--output",
+        "report.json",
+    ]
+    with pytest.raises(SystemExit):
+        cli.parse_args(base + ["--evidence-text-mode", "source"])
+    args = cli.parse_args(
+        base
+        + [
+            "--experiment",
+            "current",
+            "--evidence-text-mode",
+            "source",
+            "--rerank-text-mode",
+            "windowed",
+            "--query-mode",
+            "vocabulary",
+        ]
+    )
+    assert args.evidence_text_mode == "source"
+    assert args.rerank_text_mode == "windowed"
+    assert args.query_mode == "vocabulary"
+
+
+@pytest.mark.django_db(transaction=True)
+@pytest.mark.parametrize(
+    "modes",
+    [
+        {"evidence_text_mode": "source"},
+        {"rerank_text_mode": "windowed"},
+        {"document_capacity_mode": "budgeted"},
+        {"query_mode": "vocabulary"},
+        {
+            "evidence_text_mode": "source",
+            "rerank_text_mode": "windowed",
+            "document_capacity_mode": "budgeted",
+            "query_mode": "vocabulary",
+        },
+    ],
+)
+def test_current_real_pipeline_replay_has_packet_and_no_generation(
+    docs, monkeypatch, modes
+):
+    from apps.chat.services import rag_pipeline
+    from apps.chat.tests.test_rag_preservation_routes import fake_search
+
+    user, document, chunks, _ = docs
+    fake_search(monkeypatch)
+    monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "32000")
+    settings = SimpleNamespace(RAG_CACHE_ENABLED=True)
+    config = SimpleNamespace(
+        llm_interface=SimpleNamespace(base_args={"model": "private"})
+    )
+    result = asyncio.run(
+        replay.run_turn(
+            {"id": "Q1", "question": "Summarize the selected documents"},
+            [],
+            user,
+            [document.collection_id],
+            "current",
+            settings,
+            config,
+            rag_pipeline,
+            **modes,
+        )
+    )
+    assert result["success"] is True, result
+    assert result["packet"]
+    assert result["budget"]["limits"]["retrieval_ms"] == 15000
+    assert result["generation_attempted"] is False
+    assert result["sdk_started"] is False
+    assert "private" not in json.dumps(result)

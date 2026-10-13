@@ -16,7 +16,6 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/chat/consumers/chat.py": 301,
     "aquillm/apps/chat/consumers/chat_receive.py": 439,
     "aquillm/apps/chat/evals/evidence_review_packet.py": 310,
-    "aquillm/apps/chat/evals/retrieval_replay.py": 466,
     "aquillm/apps/chat/services/collection_prompt_skills.py": 406,
     "aquillm/apps/chat/services/tool_wiring/documents.py": 325,
     "aquillm/apps/chat/tests/test_chat_connection_lifecycle.py": 534,
