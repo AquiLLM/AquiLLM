@@ -136,6 +136,8 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_topology_gateway_service.py
           aquillm/apps/knowledge_graph/tests/test_topology_gateway_concurrency.py
           aquillm/apps/knowledge_graph/tests/test_projection_concurrent_reads.py
+          tests/test_graph_caller_deadline.py
+          tests/test_graph_caller_admission.py
           aquillm/apps/knowledge_graph/tests/test_retrieval_scheduler_lifecycle.py
           aquillm/apps/knowledge_graph/tests/test_retrieval_overlap.py
           aquillm/apps/knowledge_graph/tests/test_retrieval_overlap_failures.py
@@ -316,6 +318,8 @@ jobs:
           aquillm/apps/documents/tests/test_chunk_rerank_window_scores.py
           aquillm/apps/documents/tests/test_chunk_rerank_windows.py
           aquillm/apps/documents/tests/test_pair_worker_lifecycle.py
+          aquillm/apps/documents/tests/test_pair_worker_refresh.py
+          aquillm/apps/documents/tests/test_pair_worker_publication.py
           aquillm/apps/documents/tests/test_rerank_http_cache.py
           aquillm/apps/documents/tests/test_retrieval_log_redaction.py
           aquillm/lib/llm/tests/test_budget_observation.py
