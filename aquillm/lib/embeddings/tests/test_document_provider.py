@@ -27,6 +27,7 @@ def chunk(text="source"):
 @pytest.fixture
 def transport(monkeypatch):
     calls = []
+    monkeypatch.setenv("APP_EMBED_BASE_URL", "http://fake-models:8000/v1")
 
     def create(**kwargs):
         calls.append(kwargs)
