@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 import structlog
 from django.apps import apps
-from django.contrib.postgres.search import TrigramSimilarity
-from django.db.models import Q
-from pgvector.django import L2Distance
+from django.db.models.base import ModelBase
 
 from apps.documents.services.chunk_search_graph_seeds import (
     build_graph_seeds as _build_graph_seeds,
@@ -22,8 +19,12 @@ from apps.documents.services.chunk_search_limits import _candidate_limits
 from apps.documents.services.hybrid_graph_authorization import (
     documents_match_retrieval_authorization,
 )
-from apps.documents.services.source_loading import source_query_rows
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+
+from .chunk_search_exact_terms import _exact_term_query as _exact_term_query
+from .chunk_search_exact_terms import _salient_exact_terms as _salient_exact_terms
+from .chunk_search_scope import current_scope, freeze_search_scope
+from .chunk_search_scoped_rows import dense_rows
 
 if TYPE_CHECKING:
     from apps.knowledge_graph.retrieval import (
@@ -31,13 +32,12 @@ if TYPE_CHECKING:
         GraphExpansionSeed,
     )
 
+from .chunk_search_rank_policy import ordered_candidates
+from .lexical_collection import collect_lexical
+
 logger = structlog.stdlib.get_logger(__name__)
 
 _DATABASE_ID_MAX = 2**63 - 1
-_EXACT_STOPWORDS = frozenset(
-    "about after answer before could document documents explain information "
-    "selected should through where which would".split()
-)
 
 
 class CandidateScopeLimit(ValueError):
@@ -74,47 +74,10 @@ class HybridCandidateSnapshot:
     pre_dedupe_count: int
     graph_seed_error: bool
     effective_limits: object | None = None
-
-
-def _salient_exact_terms(query: str, *, max_terms: int = 8) -> list[str]:
-    """Extract exact fallback terms that are likely to matter for recall."""
-
-    terms: list[str] = []
-    seen: set[str] = set()
-
-    def add(term: str) -> None:
-        cleaned = term.strip(" \t\r\n\"'`.,;:!?()[]{}")
-        if len(cleaned) < 3:
-            return
-        key = cleaned.lower()
-        if key in seen or key in _EXACT_STOPWORDS:
-            return
-        seen.add(key)
-        terms.append(cleaned)
-
-    for quoted in re.findall(r'"([^\"]{3,96})"|\'([^\']{3,96})\'', query or ""):
-        add(quoted[0] or quoted[1])
-
-    for token in re.findall(r"[A-Za-z0-9][A-Za-z0-9_./:+-]{2,}", query or ""):
-        lowered = token.lower()
-        has_symbol = any(ch in token for ch in "-_./:+")
-        has_digit = any(ch.isdigit() for ch in token)
-        uppercase_count = sum(1 for ch in token if ch.isupper())
-        is_acronym = uppercase_count >= 2
-        is_long_domain_word = len(token) >= 10 and lowered not in _EXACT_STOPWORDS
-        if has_symbol or has_digit or is_acronym or is_long_domain_word:
-            add(token)
-        if len(terms) >= max_terms:
-            break
-
-    return terms[:max_terms]
-
-
-def _exact_term_query(terms: list[str]) -> Q:
-    query = Q()
-    for term in terms:
-        query |= Q(content__icontains=term)
-    return query
+    full_text_results: tuple[object, ...] = ()
+    full_text_chunk_ids: tuple[int, ...] = ()
+    full_text_coverage: object | None = None
+    fusion_v2: object | None = None
 
 
 def freeze_authorized_document_scope(
@@ -173,6 +136,33 @@ def collect_hybrid_candidate_snapshot(
     """Acquire vector/trigram/exact rows once and prepare the pre-rerank pool."""
 
     documents_snapshot = tuple(documents)
+    scope = current_scope()
+    if scope is None and isinstance(model_cls, ModelBase):
+        scope = freeze_search_scope(
+            documents_snapshot,
+            using=model_cls.objects.db,
+            authorization=authorization_context,
+        )
+        from lib.embeddings.document_contracts import digest
+
+        scope = replace(
+            scope,
+            bodies={},
+            dense_rows={},
+            lexical_ids=set(),
+            fts_rows={},
+            fts_invalid_ids=set(),
+            fusion_v2=None,
+            query_digest=digest({"version": "unprepared-query-v1", "query": query}),
+        )
+
+    def candidates():
+        queryset = model_cls.objects.filter_by_documents(documents_snapshot)
+        if scope is None:
+            return queryset
+        with scope.database():
+            return scope.queryset(queryset.using(scope.using))
+
     if (
         authorization_context is not None
         and not documents_match_retrieval_authorization(
@@ -192,18 +182,10 @@ def collect_hybrid_candidate_snapshot(
     )
     vector_started = perf_counter()
     if query_embedding is None:
-        vector_results = model_cls.objects.none()
         vector_rows: tuple[object, ...] = ()
     else:
         try:
-            vector_results = (
-                model_cls.objects.filter_by_documents(documents_snapshot)
-                .exclude(embedding__isnull=True)
-                .defer("embedding")
-                .order_by(L2Distance("embedding", query_embedding))[: limits.vector]
-            )
-            # Force database evaluation inside the vector-only fail-open seam.
-            vector_rows = source_query_rows(vector_results)
+            vector_rows = dense_rows(model_cls, query_embedding, scope, limits.vector)
         except Exception:
             vector_error = RetrievalLogReason.UPSTREAM_UNAVAILABLE.value
             logger.warning(
@@ -214,37 +196,19 @@ def collect_hybrid_candidate_snapshot(
                     elapsed_ms=0.0,
                 ),
             )
-            vector_results = model_cls.objects.none()
             vector_rows = ()
     vector_ms = (perf_counter() - vector_started) * 1000
 
-    trigram_started = perf_counter()
-    trigram_results = (
-        model_cls.objects.filter_by_documents(documents_snapshot)
-        .filter(modality=model_cls.Modality.TEXT)
-        .annotate(similarity=TrigramSimilarity("content", query))
-        .filter(similarity__gt=limits.trigram_similarity_min)
-        .order_by("-similarity")[: limits.trigram]
-    )
-    trigram_rows = source_query_rows(trigram_results)
-    trigram_ms = (perf_counter() - trigram_started) * 1000
-
-    exact_started = perf_counter()
-    exact_terms = _salient_exact_terms(query)
-    if exact_terms:
-        exact_results = (
-            model_cls.objects.filter_by_documents(documents_snapshot)
-            .filter(modality=model_cls.Modality.TEXT)
-            .filter(_exact_term_query(exact_terms))
-            .order_by("doc_id", "chunk_number")[: limits.exact]
-        )
-        exact_rows = source_query_rows(exact_results)
-    else:
-        exact_results = model_cls.objects.none()
-        exact_rows = ()
-    exact_ms = (perf_counter() - exact_started) * 1000
-
-    all_rows = (*vector_rows, *trigram_rows, *exact_rows)
+    (
+        trigram_rows,
+        exact_rows,
+        full_text_rows,
+        exact_terms,
+        trigram_ms,
+        exact_ms,
+        coverage,
+    ) = collect_lexical(model_cls, candidates, scope, query, limits)
+    all_rows = (*vector_rows, *trigram_rows, *exact_rows, *full_text_rows)
     baseline: list[object] = []
     seen_ids: set[object] = set()
     for candidate in all_rows:
@@ -253,6 +217,19 @@ def collect_hybrid_candidate_snapshot(
             continue
         seen_ids.add(identifier)
         baseline.append(candidate)
+
+    baseline, fusion = ordered_candidates(
+        baseline,
+        {
+            "dense": tuple(row.pk for row in vector_rows),
+            "exact": tuple(row.pk for row in exact_rows),
+            "trigram": tuple(row.pk for row in trigram_rows),
+            "full_text": tuple(row.pk for row in full_text_rows),
+        },
+        query=query,
+        exact_rows=exact_rows,
+        scope=scope,
+    )
 
     graph_seeds: tuple[GraphExpansionSeed, ...] = ()
     graph_seed_error = False
@@ -277,7 +254,7 @@ def collect_hybrid_candidate_snapshot(
         exact_chunk_ids=tuple(getattr(row, "pk") for row in exact_rows),
         baseline_candidates=tuple(baseline),
         graph_seeds=graph_seeds,
-        exact_terms=tuple(exact_terms),
+        exact_terms=tuple(t.text for t in exact_terms),
         vector_error=vector_error,
         vector_ms=vector_ms,
         trigram_ms=trigram_ms,
@@ -285,6 +262,10 @@ def collect_hybrid_candidate_snapshot(
         pre_dedupe_count=len(all_rows),
         graph_seed_error=graph_seed_error,
         effective_limits=limits,
+        full_text_results=full_text_rows,
+        full_text_chunk_ids=tuple(row.pk for row in full_text_rows),
+        full_text_coverage=coverage,
+        fusion_v2=fusion,
     )
 
 

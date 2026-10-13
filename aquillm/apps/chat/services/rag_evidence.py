@@ -8,6 +8,7 @@ from typing import Any
 from apps.chat.services.rag_config import evidence_token_budget, max_snippets_per_doc
 from apps.chat.services.rag_legacy_selection import diversify_evidence_chunks
 from apps.chat.services.rag_selection_types import EvidenceSelection
+from lib.llm.answer_support import AnswerSupport
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
 from lib.retrieval.evidence import PreparedEvidence
 
@@ -55,6 +56,7 @@ class EvidencePacket:
     coverage_assessment: object | None = None
     auxiliary_handoff: tuple | None = None
     auxiliary_figures: tuple = ()
+    answer_support: AnswerSupport | None = None
 
 
 def _estimate_tokens(text: str) -> int:

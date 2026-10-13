@@ -2,13 +2,20 @@
 
 from __future__ import annotations
 
+from .coreference_components import (
+    _METHOD_PRECEDENCE,
+    _HARD_CANNOT_LINK_METHODS,
+    _DisjointSet,
+    _constrain_component_merges,
+)
+
 import json
 import re
 import unicodedata
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
 from collections.abc import Iterable, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from hashlib import sha256
 from itertools import combinations, islice
 
@@ -18,7 +25,7 @@ from apps.knowledge_graph.extraction.pipeline import (
 )
 from apps.knowledge_graph.extraction.windows import sanitize_graph_source_text
 
-from . import DOCUMENT_RESOLVER_VERSION
+from . import DOCUMENT_RESOLVER_VERSION, resolver_version_for_policy
 from .coreference_types import (
     _HASH,
     ClusterMembership,
@@ -43,6 +50,8 @@ from .coreference_validation import (
     _validated_source_text,
     _validated_span,
 )
+from .identity_policy import IdentityEndpointV2, decide_identity_v2
+from .vocabulary_policy import bind_digest, component_veto, endpoint_terms
 from .normalization import normalize_entity_label, parse_stable_identifier
 
 MAX_DOCUMENT_MENTIONS = 65_536
@@ -76,29 +85,6 @@ _PRONOUN_LABELS = frozenset(
         "we",
     )
 )
-_METHOD_PRECEDENCE = {
-    "stable_identifier": 0,
-    "defined_acronym": 1,
-    "ontology_alias": 2,
-    "normalized_name": 3,
-    "singleton": 4,
-}
-_HARD_CANNOT_LINK_METHODS = frozenset(
-    (
-        "ambiguous_acronym",
-        "component_conflict",
-        "conflicting_stable_identifiers",
-        "incompatible_entity_types",
-        "lowercase_acronym",
-        "pre_definition_acronym",
-        "pronoun_only",
-        "source_mismatch",
-        "undefined_acronym",
-        "version_mismatch",
-    )
-)
-
-
 @dataclass(frozen=True, slots=True)
 class ResolutionResult:
     """Complete immutable partition and direct decision audit."""
@@ -204,34 +190,6 @@ class _AcronymDefinition:
     full_mention_id: str
     acronym_mention_id: str
     definition_start: int
-
-
-class _DisjointSet:
-    def __init__(self, size: int) -> None:
-        self._parents = list(range(size))
-        self._sizes = [1] * size
-
-    def find(self, item: int) -> int:
-        parent = self._parents[item]
-        while parent != self._parents[parent]:
-            self._parents[parent] = self._parents[self._parents[parent]]
-            parent = self._parents[parent]
-        self._parents[item] = parent
-        return parent
-
-    def union(self, left: int, right: int) -> int:
-        left_root = self.find(left)
-        right_root = self.find(right)
-        if left_root == right_root:
-            return left_root
-        if self._sizes[left_root] < self._sizes[right_root] or (
-            self._sizes[left_root] == self._sizes[right_root]
-            and left_root > right_root
-        ):
-            left_root, right_root = right_root, left_root
-        self._parents[right_root] = left_root
-        self._sizes[left_root] += self._sizes[right_root]
-        return left_root
 
 
 def _value(source: object, name: str, default: object = None) -> object:
@@ -439,7 +397,7 @@ def _prepare_source_contexts(
                 raise ExtractionCapacityError(
                     ExtractionCapacityCode.CHARACTER_LIMIT,
                     "aggregate unique source context exceeds the "
-                    f"{_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS}-character limit"
+                    f"{_MAX_UNIQUE_SOURCE_CONTEXT_CHARACTERS}-character limit",
                 )
             context_digest = _source_context_digest(
                 source_key=source_key,
@@ -855,11 +813,64 @@ def _name_identifier_conflicts(
     return frozenset(key for key, values in identifiers.items() if len(values) > 1)
 
 
+def _apply_contextual_pair_policy(
+    original: PairDecision,
+    left: _MentionView,
+    right: _MentionView,
+    expansions: Mapping[tuple[str, str], tuple[_AcronymDefinition, ...]],
+) -> PairDecision:
+    binding = _acronym_decision(left, right, expansions)
+    policy = decide_identity_v2(
+        left=IdentityEndpointV2(
+            left.entity_type,
+            left.normalized_label,
+            left.identifier,
+            left.version_signature or "",
+            left.document_id,
+        ),
+        right=IdentityEndpointV2(
+            right.entity_type,
+            right.normalized_label,
+            right.identifier,
+            right.version_signature or "",
+            right.document_id,
+        ),
+        explicit_local_binding=binding is not None and binding.accepted,
+    )
+    if policy.outcome == "rejected":
+        decision = _rejected(left, right, policy.reason, policy.reason)
+        outcome = "rejected"
+    elif original.accepted:
+        decision = original
+        outcome = policy.outcome
+    elif (
+        original.method in {"undefined_acronym", "source_mismatch"}
+        and left.normalized_label == right.normalized_label
+    ):
+        decision = original
+        outcome = "candidate"
+    else:
+        decision = original
+        outcome = "rejected"
+    return PairDecision(
+        decision.left_mention_id,
+        decision.right_mention_id,
+        outcome == "automatic",
+        decision.method,
+        decision.confidence,
+        f"Candidate: {policy.reason}."
+        if outcome == "candidate"
+        else decision.explanation,
+        outcome=outcome,
+    )
+
+
 def _sparse_candidate_decisions(
     mentions: tuple[_MentionView, ...],
     *,
     expansions: Mapping[tuple[str, str], tuple[_AcronymDefinition, ...]],
     conflict_blocks: frozenset[tuple[str, str]],
+    identity_policy: str = "legacy",
 ) -> tuple[PairDecision, ...]:
     """Audit only pairs that can merge or conservatively block a merge."""
 
@@ -930,9 +941,8 @@ def _sparse_candidate_decisions(
         )
         if is_acronym_block:
             continue
-        requires_complete_audit = (
-            name_key in conflict_blocks
-            or any(mention.is_pronoun for mention in group)
+        requires_complete_audit = name_key in conflict_blocks or any(
+            mention.is_pronoun for mention in group
         )
         if requires_complete_audit:
             add_complete(group)
@@ -974,13 +984,47 @@ def _sparse_candidate_decisions(
             (mention for mention in unique_group if not mention.is_acronym),
             unique_group[0],
         )
-        anchor_decisions = tuple(
-            _decide_pair(
+        if identity_policy == "contextual_v2":
+            # A repeated full form has no anchor by itself. Prefer an acronym
+            # at/after its local definition, so every star edge can retain that
+            # provenance when the contextual policy removes plain-name edges.
+            equivalent_anchor = next(
+                (
+                    mention
+                    for mention in unique_group
+                    if mention.is_acronym
+                    and any(
+                        definition.coordinate_scope == mention.coordinate_scope
+                        and mention.start >= definition.definition_start
+                        for definition in expansions.get(
+                            (mention.entity_type, mention.acronym_shape_key),
+                            (),
+                        )
+                    )
+                ),
+                equivalent_anchor,
+            )
+
+        def anchor_decision(mention: _MentionView) -> PairDecision:
+            decision = _decide_pair(
                 equivalent_anchor,
                 mention,
                 expansions=expansions,
                 conflict_blocks=conflict_blocks,
             )
+            return (
+                _apply_contextual_pair_policy(
+                    decision,
+                    equivalent_anchor,
+                    mention,
+                    expansions,
+                )
+                if identity_policy == "contextual_v2"
+                else decision
+            )
+
+        anchor_decisions = tuple(
+            anchor_decision(mention)
             for mention in unique_group
             if mention is not equivalent_anchor
         )
@@ -1246,114 +1290,6 @@ def _decide_pair(
     )
 
 
-def _constrain_component_merges(
-    mentions: tuple[_MentionView, ...],
-    decisions: tuple[PairDecision, ...],
-) -> tuple[tuple[PairDecision, ...], tuple[PairDecision, ...]]:
-    """Accept candidate edges only when their complete components are compatible."""
-
-    indexes = {mention.mention_id: index for index, mention in enumerate(mentions)}
-    decision_indexes = {
-        frozenset((decision.left_mention_id, decision.right_mention_id)): index
-        for index, decision in enumerate(decisions)
-    }
-    hard_conflicts: dict[int, dict[int, PairDecision]] = defaultdict(dict)
-    for decision in decisions:
-        if decision.accepted or decision.method not in _HARD_CANNOT_LINK_METHODS:
-            continue
-        left_index = indexes[decision.left_mention_id]
-        right_index = indexes[decision.right_mention_id]
-        hard_conflicts[left_index][right_index] = decision
-        hard_conflicts[right_index][left_index] = decision
-    component_forbidden: dict[int, set[int]] = {
-        index: set(hard_conflicts[index]) for index in range(len(mentions))
-    }
-
-    candidates = sorted(
-        (decision for decision in decisions if decision.accepted),
-        key=lambda decision: (
-            _METHOD_PRECEDENCE[decision.method],
-            min(
-                indexes[decision.left_mention_id],
-                indexes[decision.right_mention_id],
-            ),
-            max(
-                indexes[decision.left_mention_id],
-                indexes[decision.right_mention_id],
-            ),
-        ),
-    )
-    constrained = list(decisions)
-    disjoint_set = _DisjointSet(len(mentions))
-    component_members: dict[int, set[int]] = {
-        index: {index} for index in range(len(mentions))
-    }
-    merge_edges: list[PairDecision] = []
-    for candidate in candidates:
-        left_root = disjoint_set.find(indexes[candidate.left_mention_id])
-        right_root = disjoint_set.find(indexes[candidate.right_mention_id])
-        if left_root == right_root:
-            continue
-        left_members = component_members[left_root]
-        right_members = component_members[right_root]
-        blocked_right = component_forbidden[left_root].intersection(right_members)
-        blockers = [
-            decision
-            for right_index in blocked_right
-            for left_index, decision in hard_conflicts[right_index].items()
-            if left_index in left_members
-        ]
-        if blockers:
-            blocker = min(
-                blockers,
-                key=lambda decision: (
-                    decision.method,
-                    min(
-                        indexes[decision.left_mention_id],
-                        indexes[decision.right_mention_id],
-                    ),
-                    max(
-                        indexes[decision.left_mention_id],
-                        indexes[decision.right_mention_id],
-                    ),
-                ),
-            )
-            suppressed = PairDecision(
-                left_mention_id=candidate.left_mention_id,
-                right_mention_id=candidate.right_mention_id,
-                accepted=False,
-                method="component_conflict",
-                confidence=0.0,
-                explanation=(
-                    "Rejected: component merge would violate "
-                    f"{blocker.method} between {blocker.left_mention_id} and "
-                    f"{blocker.right_mention_id}."
-                ),
-            )
-            pair_key = frozenset(
-                (candidate.left_mention_id, candidate.right_mention_id)
-            )
-            constrained[decision_indexes[pair_key]] = suppressed
-            continue
-        if len(left_members) < len(right_members):
-            left_members, right_members = right_members, left_members
-        left_members.update(right_members)
-        left_forbidden = component_forbidden[left_root]
-        right_forbidden = component_forbidden[right_root]
-        if len(left_forbidden) < len(right_forbidden):
-            left_forbidden, right_forbidden = right_forbidden, left_forbidden
-        left_forbidden.update(right_forbidden)
-        new_root = disjoint_set.union(left_root, right_root)
-        component_members.pop(left_root)
-        component_members.pop(right_root)
-        component_forbidden.pop(left_root)
-        component_forbidden.pop(right_root)
-        component_members[new_root] = left_members
-        component_forbidden[new_root] = left_forbidden
-        merge_edges.append(candidate)
-    return tuple(constrained), tuple(merge_edges)
-
-
 def _cluster_key(
     *,
     mentions: tuple[_MentionView, ...],
@@ -1362,9 +1298,10 @@ def _cluster_key(
     normalized_label: str,
     version_signature: str,
     identifier: str,
+    resolver_version: str = DOCUMENT_RESOLVER_VERSION,
 ) -> str:
     value = {
-        "resolver_version": DOCUMENT_RESOLVER_VERSION,
+        "resolver_version": resolver_version,
         "ontology_checksum": ontology_checksum,
         "document_ids": sorted({mention.document_id for mention in mentions}),
         "member_keys": sorted(mention.member_key for mention in mentions),
@@ -1382,6 +1319,7 @@ def _build_clusters(
     merge_edges: tuple[PairDecision, ...],
     *,
     ontology_checksum: str,
+    resolver_version: str = DOCUMENT_RESOLVER_VERSION,
 ) -> tuple[ResolvedCluster, ...]:
     disjoint_set = _DisjointSet(len(mentions))
     indexes = {mention.mention_id: index for index, mention in enumerate(mentions)}
@@ -1474,6 +1412,7 @@ def _build_clusters(
                 cluster_key=_cluster_key(
                     mentions=ordered,
                     ontology_checksum=ontology_checksum,
+                    resolver_version=resolver_version,
                     entity_type=representative.entity_type,
                     normalized_label=representative.normalized_label,
                     version_signature=version_signature,
@@ -1508,7 +1447,14 @@ def _result_payload(
         "input_fingerprint": input_fingerprint,
         "mention_ids": mention_ids,
         "clusters": [asdict(cluster) for cluster in clusters],
-        "decisions": [asdict(decision) for decision in decisions],
+        "decisions": [
+            {
+                key: value
+                for key, value in asdict(decision).items()
+                if key != "outcome" or value is not None
+            }
+            for decision in decisions
+        ],
     }
 
 
@@ -1538,10 +1484,15 @@ def resolution_result_checksum(result: ResolutionResult) -> str:
 
 
 def resolve_document_mentions(
-    mentions: Iterable[object], ontology: object
+    mentions: Iterable[object],
+    ontology: object,
+    *,
+    identity_policy: str = "legacy",
+    vocabulary=None, collection_id=None,
 ) -> ResolutionResult:
     """Partition one bounded document's mentions using deterministic exact rules."""
 
+    resolver_version = resolver_version_for_policy("document", identity_policy)
     try:
         bounded = tuple(islice(iter(mentions), MAX_DOCUMENT_MENTIONS + 1))
     except TypeError as exc:
@@ -1549,7 +1500,7 @@ def resolve_document_mentions(
     if len(bounded) > MAX_DOCUMENT_MENTIONS:
         raise ValueError(f"document mention cap exceeded ({MAX_DOCUMENT_MENTIONS})")
     sources = _prepare_source_contexts(bounded)
-    input_fingerprint = _resolution_input_fingerprint(bounded, sources)
+    input_fingerprint = bind_digest(_resolution_input_fingerprint(bounded, sources), vocabulary)
     type_index, ontology_checksum = _ontology_type_index(ontology)
     adapted = tuple(
         sorted(
@@ -1583,15 +1534,32 @@ def resolve_document_mentions(
             adapted,
             expansions=expansions,
             conflict_blocks=conflict_blocks,
+            identity_policy=identity_policy,
         )
-    decisions, merge_edges = _constrain_component_merges(adapted, candidate_decisions)
+    if identity_policy == "contextual_v2":
+        by_id = {mention.mention_id: mention for mention in adapted}
+        candidate_decisions = tuple(
+            _apply_contextual_pair_policy(
+                original,
+                by_id[original.left_mention_id],
+                by_id[original.right_mention_id],
+                expansions,
+            )
+            for original in candidate_decisions
+        )
+    from .vocabulary_resolution import document_veto_decisions
+    candidate_decisions = document_veto_decisions(
+        adapted, candidate_decisions, vocabulary, collection_id)
+    decisions, merge_edges = _constrain_component_merges(
+        adapted, candidate_decisions, vocabulary, collection_id)
     clusters = _build_clusters(
         adapted,
         merge_edges,
         ontology_checksum=ontology_checksum,
+        resolver_version=resolver_version,
     )
     payload = _result_payload(
-        resolver_version=DOCUMENT_RESOLVER_VERSION,
+        resolver_version=resolver_version,
         ontology_checksum=ontology_checksum,
         input_fingerprint=input_fingerprint,
         mention_ids=mention_ids,
@@ -1599,7 +1567,7 @@ def resolve_document_mentions(
         decisions=decisions,
     )
     return ResolutionResult(
-        resolver_version=DOCUMENT_RESOLVER_VERSION,
+        resolver_version=resolver_version,
         ontology_checksum=ontology_checksum,
         input_fingerprint=input_fingerprint,
         mention_ids=mention_ids,

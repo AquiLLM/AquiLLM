@@ -6,6 +6,24 @@ from .memgraph import MemgraphProjectedTopologyLoader
 from .postgres import PostgresParityCapability, PostgresProjectedTopologyLoader
 
 
+def create_canonical_frontier_loader_v2(*, selection, codec, gateway_client):
+    """Explicit private V2 entry point; legacy factory remains unchanged."""
+    from apps.knowledge_graph.projection.frontier_adapter_v2 import (
+        Neo4jCanonicalFrontierAdapterV2,
+    )
+
+    from .frontier_gateway_client_v2 import FrontierGatewayClientV2
+    from .frontier_loader_v2 import canonical_frontier_loader_v2
+
+    return canonical_frontier_loader_v2(
+        selection=selection,
+        codec=codec,
+        adapter=Neo4jCanonicalFrontierAdapterV2(
+            FrontierGatewayClientV2(gateway_client)
+        ),
+    )
+
+
 def create_projected_topology_loader(*, backend: str, driver: object):
     if backend != "memgraph":
         raise ValueError("production topology backend must be memgraph")

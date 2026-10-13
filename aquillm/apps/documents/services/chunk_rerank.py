@@ -17,7 +17,7 @@ from apps.documents.services.chunk_rerank_local_vllm import (
 )
 from apps.documents.services.chunk_rerank_parse import (
     fallback_rerank,
-    ordered_queryset_from_ids,
+    queryset_from_scored_result,
 )
 from apps.documents.services.chunk_rerank_payload import rerank_document_payload
 from apps.documents.services.chunk_rerank_results import (
@@ -108,12 +108,16 @@ def _strict_local_rerank_chunks(
     return ranked
 
 
-def rerank_chunks(model_cls: type[TextChunk], query: str, chunks, top_k: int):
+def rerank_chunks(
+    model_cls: type[TextChunk], query: str, chunks, top_k: int, *, turn_budget=None
+):
     chunks_list = list(chunks)
     provider = rerank_provider()
     if provider in ("auto", "local", "vllm"):
         try:
-            local_results = rerank_via_local_vllm(model_cls, query, chunks_list, top_k)
+            local_results = rerank_via_local_vllm(
+                model_cls, query, chunks_list, top_k, turn_budget=turn_budget
+            )
             if local_results.exists():
                 return local_results
         except Exception:
@@ -125,35 +129,12 @@ def rerank_chunks(model_cls: type[TextChunk], query: str, chunks, top_k: int):
                     elapsed_ms=0.0,
                 ),
             )
-        if provider in ("local", "vllm"):
-            return fallback_rerank(model_cls, chunks_list, top_k)
+        return fallback_rerank(model_cls, chunks_list, top_k)
 
-    cohere = apps.get_app_config("aquillm").cohere_client  # type: ignore
-    if cohere is None:
-        return fallback_rerank(model_cls, chunks_list, top_k)
-    try:
-        response = cohere.rerank(
-            model="rerank-english-v3.0",
-            query=query,
-            documents=[
-                {"content": chunk.content, "id": chunk.pk} for chunk in chunks_list
-            ],
-            rank_fields=["content"],
-            top_n=top_k,
-            return_documents=True,
-        )
-        ranked_list = [result.document.id for result in response.results]
-        if not ranked_list:
-            return fallback_rerank(model_cls, chunks_list, top_k)
-        return ordered_queryset_from_ids(model_cls, ranked_list)
-    except Exception:
-        logger.warning(
-            "obs.rag.cohere_rerank_failed",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE, count=0, elapsed_ms=0.0
-            ),
-        )
-        return fallback_rerank(model_cls, chunks_list, top_k)
+    result = rerank_chunks_scored(
+        model_cls, query, chunks_list, top_k, turn_budget=turn_budget
+    )
+    return queryset_from_scored_result(model_cls, result)
 
 
 def rerank_chunks_scored(
@@ -167,13 +148,12 @@ def rerank_chunks_scored(
 ) -> ScoredRerankResult:
     """Capture provider scores from the ranking call, without replaying inference."""
     chunks_list = list(chunks)
+    from .rerank_request_lifetime import rerank_state_for
+
+    state = rerank_state_for(turn_budget)
+    turn_budget = state.budget
     from .chunk_rerank_window_acquisition import dispatch_windowed
 
-    windowed = dispatch_windowed(
-        query, chunks_list, top_k, turn_budget, window_scorer, shadow=True
-    )
-    if windowed is not None:
-        return windowed
     candidate_ids = tuple(chunk.pk for chunk in chunks_list)
     pool = fingerprint_pool(
         tuple(
@@ -203,9 +183,23 @@ def rerank_chunks_scored(
         )
 
     provider = rerank_provider()
+    if not state.can_admit():
+        return unavailable(candidate_ids[:top_k])
+    windowed = dispatch_windowed(
+        query, chunks_list, top_k, turn_budget, window_scorer, shadow=True
+    )
+    if windowed is not None:
+        return windowed
     if provider in ("auto", "local", "vllm"):
         try:
-            local = rerank_via_local_vllm_scored(model_cls, query, chunks_list, top_k)
+            local = rerank_via_local_vllm_scored(
+                model_cls,
+                query,
+                chunks_list,
+                top_k,
+                turn_budget=turn_budget,
+                rerank_state=state,
+            )
             if local.ranked_ids:
                 return local
         except Exception:
@@ -217,79 +211,18 @@ def rerank_chunks_scored(
                     elapsed_ms=0.0,
                 ),
             )
-        if provider in ("local", "vllm"):
-            return unavailable(candidate_ids[:top_k])
+        return unavailable(candidate_ids[:top_k])
 
     cohere = apps.get_app_config("aquillm").cohere_client  # type: ignore
     if cohere is None:
         return unavailable(candidate_ids[:top_k])
-    try:
-        response = cohere.rerank(
-            model="rerank-english-v3.0",
-            query=query,
-            documents=[
-                {"content": chunk.content, "id": chunk.pk} for chunk in chunks_list
-            ],
-            rank_fields=["content"],
-            top_n=len(chunks_list),
-            return_documents=True,
-        )
-        ranked_ids = tuple(result.document.id for result in response.results)
-        if not ranked_ids:
-            return unavailable(candidate_ids[:top_k])
-        by_id = {chunk.pk: chunk for chunk in chunks_list}
-        if (
-            len(ranked_ids) != len(candidate_ids)
-            or len(set(ranked_ids)) != len(candidate_ids)
-            or set(ranked_ids) != set(candidate_ids)
-        ):
-            return unavailable(ranked_ids)
-        scores_by_id = {}
-        for result in response.results:
-            value = getattr(result, "relevance_score", None)
-            if type(value) not in (int, float):
-                return unavailable(ranked_ids)
-            chunk = by_id[result.document.id]
-            scores_by_id[chunk.pk] = PassageScore(
-                chunk.pk,
-                chunk.doc_id,
-                chunk.chunk_number,
-                fingerprint_text(chunk.content),
-                fingerprint_pair(query, chunk.content),
-                float(value),
-            )
-        from math import isfinite
+    from .chunk_rerank_cohere import score_cohere
 
-        if not all(isfinite(score.value) for score in scores_by_id.values()):
-            return unavailable(ranked_ids)
-        scores = tuple(scores_by_id[pk] for pk in candidate_ids)
-        stable_ranked = tuple(
-            sorted(
-                candidate_ids,
-                key=lambda pk: (-scores_by_id[pk].value, candidate_ids.index(pk)),
-            )
-        )
-        return ScoredRerankResult(
-            stable_ranked[:top_k],
-            RerankScoreSet(
-                "v2",
-                query_fp,
-                fingerprint_text("cohere:rerank-english-v3.0"),
-                pool,
-                "listwise",
-                "complete",
-                candidate_ids,
-                scores,
-            ),
-        )
-    except Exception:
-        logger.warning(
-            "obs.rag.cohere_rerank_failed",
-            **retrieval_log_fields(
-                reason=RetrievalLogReason.UPSTREAM_UNAVAILABLE, count=0, elapsed_ms=0.0
-            ),
-        )
-        return unavailable(candidate_ids[:top_k])
+    return score_cohere(
+        cohere, query, chunks_list, top_k, state=state, turn_budget=turn_budget,
+        candidate_ids=candidate_ids, query_fp=query_fp, pool=pool,
+        unavailable=unavailable,
+    )
 
 
 __all__ = [

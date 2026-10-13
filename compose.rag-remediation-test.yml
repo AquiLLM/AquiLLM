@@ -1,0 +1,122 @@
+# No shared .env, published ports, host mounts, or externally routed networks.
+x-labels: &labels
+  io.aquillm.rag-remediation-test: v1
+services:
+  app:
+    build:
+      context: .
+      dockerfile: deploy/docker/test/Dockerfile.rag-remediation
+    labels: *labels
+    networks: [isolated]
+    volumes:
+      - artifacts:/artifacts
+      - frontend-build:/frontend-build
+    environment:
+      RAG_REMEDIATION_TEST: "1"
+      DJANGO_SETTINGS_MODULE: aquillm.settings_rag_remediation_test
+      DJANGO_DEBUG: "1"
+      DJANGO_TESTING: "1"
+      SECRET_KEY: rag-synthetic-secret
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      POSTGRES_NAME: rag_test
+      POSTGRES_USER: rag_test
+      POSTGRES_PASSWORD: rag-synthetic-password
+      DJANGO_CACHE_REDIS_URL: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://redis:6379/2
+      CELERY_RESULT_BACKEND: redis://redis:6379/3
+      OPENAI_BASE_URL: http://fake-models:8000/v1
+      ANTHROPIC_BASE_URL: http://fake-models:8000
+      APP_EMBED_BASE_URL: http://fake-models:8000/v1
+      APP_RERANK_BASE_URL: http://fake-models:8000/v1
+      VLLM_BASE_URL: http://fake-models:8000/v1
+      MEM0_LLM_BASE_URL: http://fake-models:8000/v1
+      MEM0_EMBED_BASE_URL: http://fake-models:8000/v1
+      INGEST_TRANSCRIBE_OPENAI_BASE_URL: http://fake-models:8000/v1
+      APP_OCR_QWEN_BASE_URL: http://fake-models:8000/v1
+      KG_QUERY_EXTRACTOR_URL: http://fake-models:8000
+      KG_TOPOLOGY_GATEWAY_URL: http://fake-models.internal:8000
+      KG_TOPOLOGY_GATEWAY_BEARER_TOKEN: rag-synthetic-key
+      KG_MEMGRAPH_URI: bolt://memgraph:7687
+      KG_PROJECTION_POSTGRES_SOURCE_DSN: postgresql://aquillm_projection_source:rag-synthetic-password@db:5432/rag_test
+      KG_PROJECTION_POSTGRES_STATE_DSN: postgresql://aquillm_projection_state:rag-synthetic-password@db:5432/rag_test
+      OPENAI_API_KEY: rag-synthetic-key
+      GEMINI_API_KEY: rag-synthetic-key
+      ANTHROPIC_API_KEY: rag-synthetic-key
+      COHERE_API_KEY: rag-synthetic-key
+      APP_EMBED_API_KEY: rag-synthetic-key
+      APP_RERANK_API_KEY: rag-synthetic-key
+      LLM_CHOICE: OPENAI
+      MEM0_ENABLED: "0"
+      KG_REQUIRE_POSTGRES_TESTS: "1"
+      DJANGO_ALLOWED_HOSTS: app
+      DJANGO_CSRF_TRUSTED_ORIGINS: http://app:8000
+      TOKENIZERS_PARALLELISM: "false"
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      memgraph: {condition: service_started}
+      fake-models: {condition: service_started}
+  db:
+    image: pgvector/pgvector:pg16
+    labels: *labels
+    networks: [isolated]
+    volumes: [postgres:/var/lib/postgresql/data]
+    environment:
+      POSTGRES_USER: rag_test
+      POSTGRES_PASSWORD: rag-synthetic-password
+      POSTGRES_DB: rag_test
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U rag_test -d rag_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  redis:
+    image: redis:7.4-bookworm
+    labels: *labels
+    networks: [isolated]
+    volumes: [redis:/data]
+    command: [redis-server, --save, "", --appendonly, "no"]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  memgraph:
+    image: memgraph/memgraph-mage:3.8.1
+    labels: *labels
+    networks: [isolated]
+    volumes: [memgraph:/var/lib/memgraph]
+    command: [--log-level=WARNING]
+  fake-models:
+    build:
+      context: .
+      dockerfile: deploy/docker/test/Dockerfile.rag-remediation
+    labels: *labels
+    networks:
+      isolated:
+        aliases: [fake-models.internal]
+    command: [python, scripts/rag_remediation_fake_models.py]
+  frontend:
+    profiles: [browser]
+    build:
+      context: .
+      dockerfile: deploy/docker/test/Dockerfile.rag-remediation-browser
+    labels: *labels
+    networks: [isolated]
+    volumes:
+      - artifacts:/artifacts
+      - frontend-build:/frontend-build
+    command: [sleep, infinity]
+networks:
+  isolated:
+    internal: true
+    labels: *labels
+volumes:
+  postgres: {labels: *labels}
+  artifacts: {labels: *labels}
+  frontend-build: {labels: *labels}
+  memgraph: {labels: *labels}
+  redis: {labels: *labels}

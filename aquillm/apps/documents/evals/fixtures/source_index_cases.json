@@ -1,0 +1,60 @@
+{
+  "version": "synthetic-source-index-fidelity-v1",
+  "cases": [
+    {
+      "id": "signed",
+      "source": {"format": "text", "filename": "signed.txt", "prefix": "Synthetic calibration note. ", "repeat": 160, "text": "Measured loss -12.50 kg; gain +7.25 kg. Unicode loss \u22124 kg."},
+      "outputs": [{"id": "signed", "quality": "complete", "issues": [], "cells": [], "facts": [
+        {"text": "Measured loss -12.50 kg", "region": {"kind": "paragraph"}},
+        {"text": "Unicode loss \u22124 kg", "region": {"kind": "paragraph"}}
+      ]}]
+    },
+    {
+      "id": "columns",
+      "source": {"format": "text", "filename": "columns.csv", "text": "Product,Domestic,Foreign,Delta\nWidget,,7,-4\n"},
+      "outputs": [{"id": "columns", "quality": "complete", "issues": [], "cells": [
+        {"address": "B2", "text": null, "formula": null, "value_status": "blank", "header_keys": ["Domestic"], "sheet": null},
+        {"address": "C2", "text": "7", "formula": null, "value_status": "literal", "header_keys": ["Foreign"], "sheet": null},
+        {"address": "D2", "text": "-4", "formula": null, "value_status": "literal", "header_keys": ["Delta"], "sheet": null}
+      ], "facts": [
+        {"text": "B2 Domestic=<blank> C2 Foreign=7 D2 Delta=-4", "region": {"kind": "table"}}
+      ]}]
+    },
+    {
+      "id": "formula",
+      "source": {"format": "xlsx", "filename": "formula.xlsx", "sheet": "Metrics", "rows": [["Label", "Value", "Delta"], ["Profit", "=50+20", -3.5]]},
+      "outputs": [{"id": "formula", "quality": "partial", "issues": ["formula_cache_unavailable"], "cells": [
+        {"address": "B2", "text": null, "formula": "=50+20", "value_status": "uncached", "header_keys": ["Value"], "sheet": "Metrics"},
+        {"address": "C2", "text": "-3.5", "formula": null, "value_status": "literal", "header_keys": ["Delta"], "sheet": "Metrics"}
+      ], "facts": [
+        {"text": "B2 formula==50+20 value=<unknown>", "region": {"kind": "table", "sheet": "Metrics"}}
+      ]}]
+    },
+    {
+      "id": "ordered",
+      "source": {"format": "docx", "filename": "ordered.docx", "heading": "Signed measurements", "before": "Before the table: -2.75 kg.", "rows": [["Sample", "Delta"], ["Alpha", "+6.25"]], "after": "After the table: threshold \u2264 9."},
+      "outputs": [{"id": "ordered", "quality": "complete", "issues": [], "cells": [
+        {"address": "B2", "text": "+6.25", "formula": null, "value_status": "literal", "header_keys": ["Delta"], "sheet": null}
+      ], "facts": [
+        {"text": "Before the table: -2.75 kg.", "region": {"kind": "paragraph"}},
+        {"text": "B2 Delta=+6.25", "region": {"kind": "table"}},
+        {"text": "After the table: threshold \u2264 9.", "region": {"kind": "paragraph"}}
+      ]}]
+    },
+    {
+      "id": "archive",
+      "source": {"format": "zip", "filename": "occurrences.zip", "members": [
+        {"filename": "repeat.txt", "text": "Archive loss -8 kg."},
+        {"filename": "repeat.txt", "text": "Archive loss -8 kg."},
+        {"filename": "empty.txt", "text": ""},
+        {"filename": "unknown.bin", "text": "opaque-synthetic"}
+      ]},
+      "outputs": [
+        {"id": "archive:0", "ordinal": 0, "member_path": "repeat.txt", "quality": "complete", "issues": [], "cells": [], "facts": [{"text": "Archive loss -8 kg.", "region": {"kind": "paragraph"}}]},
+        {"id": "archive:1", "ordinal": 1, "member_path": "repeat.txt", "quality": "complete", "issues": [], "cells": [], "facts": [{"text": "Archive loss -8 kg.", "region": {"kind": "paragraph"}}]},
+        {"id": "archive:2", "ordinal": 2, "member_path": "empty.txt", "quality": "unsupported", "issues": ["empty_extraction"], "cells": [], "facts": []},
+        {"id": "archive:3", "ordinal": 3, "member_path": "unknown.bin", "quality": "unsupported", "issues": ["unsupported_member"], "cells": [], "facts": []}
+      ]
+    }
+  ]
+}

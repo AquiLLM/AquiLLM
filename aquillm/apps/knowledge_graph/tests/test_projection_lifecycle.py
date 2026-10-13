@@ -263,7 +263,9 @@ def test_activation_canonical_and_invalidation_hooks_are_transactional():
 
     root = Path(__file__).parents[1]
     assembly = (root / "graph" / "assembly.py").read_text(encoding="utf-8")
-    canonical = (root / "resolution" / "canonical.py").read_text(encoding="utf-8")
+    canonical = (root / "resolution" / "canonical_registry_publication.py").read_text(
+        encoding="utf-8"
+    )
     invalidation = (root / "graph" / "invalidation.py").read_text(encoding="utf-8")
 
     assert "enqueue_activated_collection_projection(" in assembly

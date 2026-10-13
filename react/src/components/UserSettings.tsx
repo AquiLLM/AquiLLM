@@ -15,6 +15,15 @@ const themeDescriptions: Record<string, string> = {
     'Maximum contrast everywhere: bold borders, stark black‑on‑white text, and clear focus indicators.',
 };
 
+interface ProfileMemory {
+  id: number;
+  fact: string;
+  revision: number;
+  origin_label: string;
+  source_label: string;
+  reconciliation_status: string;
+}
+
 const UserSettings: React.FC = () => {
   const [themeSettings, setThemeSettings] = useState({
     color_scheme: 'aquillm_default_dark',
@@ -22,6 +31,59 @@ const UserSettings: React.FC = () => {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [memories, setMemories] = useState<ProfileMemory[]>([]);
+  const [memoryLoading, setMemoryLoading] = useState(true);
+  const [memoryError, setMemoryError] = useState<string | null>(null);
+  const [editingMemory, setEditingMemory] = useState<number | null>(null);
+  const [replacement, setReplacement] = useState('');
+  const [busyMemory, setBusyMemory] = useState<number | null>(null);
+  const [reconciliation, setReconciliation] = useState<string[]>([]);
+
+  const loadMemories = async () => {
+    setMemoryError(null);
+    try {
+      const response = await fetch('/api/profile-memory/', { credentials: 'include', headers: { Accept: 'application/json' } });
+      if (!response.ok) throw new Error('Unable to load profile memories.');
+      const data = await response.json();
+      setMemories(data.facts);
+      setReconciliation(data.reconciliations.map((item: { reconciliation_status: string }) => item.reconciliation_status));
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Unable to load profile memories.');
+    } finally {
+      setMemoryLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadMemories(); }, []);
+
+  const changeMemory = async (memory: ProfileMemory, method: 'PATCH' | 'DELETE') => {
+    setBusyMemory(memory.id);
+    setMemoryError(null);
+    try {
+      const response = await fetch(`/api/profile-memory/${memory.id}/`, {
+        method, credentials: 'include',
+        headers: { 'Content-Type': 'application/json', 'X-CSRFToken': getCookie('csrftoken') },
+        body: JSON.stringify(method === 'PATCH'
+          ? { replacement, expected_revision: memory.revision }
+          : { expected_revision: memory.revision }),
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || 'Unable to update memory.');
+      setMemories(current => method === 'DELETE'
+        ? current.filter(item => item.id !== memory.id)
+        : current.map(item => item.id === memory.id ? data.fact : item));
+      setEditingMemory(null);
+      setReplacement('');
+      if (data.reconciliation_status === 'pending' || data.reconciliation_status === 'failed')
+        setReconciliation(current => [...current, data.reconciliation_status]);
+      // Reload also shows reconciliation for the erased, superseded version.
+      await loadMemories();
+    } catch (err) {
+      setMemoryError(err instanceof Error ? err.message : 'Unable to update memory.');
+    } finally {
+      setBusyMemory(null);
+    }
+  };
 
   // Fetch current settings on mount.
   useEffect(() => {
@@ -91,6 +153,28 @@ const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
   return (
     <div className="p-[30px]">
       <h2 className="mb-6 text-2xl font-bold">User Settings</h2>
+
+      <section className="mb-8 p-6 bg-scheme-shade_3 border border-border-mid_contrast rounded-lg" aria-labelledby="profile-memory-heading">
+        <h3 id="profile-memory-heading" className="text-lg font-semibold mb-2">Profile Memory</h3>
+        <p className="mb-4">Manage remembered preferences and background.</p>
+        <p className="mb-4">Deleting a memory may also hide older context whose origin cannot be verified.</p>
+        {memoryError && <div role="alert">{memoryError}</div>}
+        {memoryError && <button type="button" onClick={() => void loadMemories()}>Reload memories</button>}
+        {memoryLoading ? <p>Loading memories...</p> : memories.length === 0 && <p>No active profile memories.</p>}
+        {memories.map(memory => <article key={memory.id} className="mb-4 border rounded p-3">
+          <p>{memory.fact}</p>
+          <p className="text-text-dimmed">Origin: {memory.origin_label} · Source: {memory.source_label}</p>
+          {editingMemory === memory.id ? <form onSubmit={event => { event.preventDefault(); void changeMemory(memory, 'PATCH'); }}>
+            <label htmlFor={`memory-replacement-${memory.id}`}>Replacement for memory {memory.id}</label>
+            <input id={`memory-replacement-${memory.id}`} value={replacement} onChange={event => setReplacement(event.target.value)} maxLength={2000} required className="border rounded p-2 w-full bg-scheme-shade_3" />
+            <button type="submit" disabled={busyMemory !== null}>Save correction</button>
+            <button type="button" onClick={() => setEditingMemory(null)} disabled={busyMemory !== null}>Cancel correction</button>
+          </form> : <button type="button" aria-label={`Correct memory ${memory.id}`} disabled={busyMemory !== null} onClick={() => { setEditingMemory(memory.id); setReplacement(memory.fact); }}>Correct</button>}
+          <button type="button" aria-label={`Delete memory ${memory.id}`} disabled={busyMemory !== null} onClick={() => void changeMemory(memory, 'DELETE')}>Delete</button>
+        </article>)}
+        {reconciliation.includes('pending') && <p role="status">External deletion pending.</p>}
+        {reconciliation.includes('failed') && <p role="status">External deletion could not be confirmed.</p>}
+      </section>
 
       {/* Zotero Integration Section */}
       <div className="mb-8 p-6 bg-scheme-shade_3 border border-border-mid_contrast rounded-lg">

@@ -1,4 +1,4 @@
-# Offline eval cases for the direct RAG pipeline.
+# Owned-harness persisted eval cases for the direct RAG pipeline.
 # Each case is exercised by run_rag_eval.py with mocked retrieval and LLM.
 #
 # Fields:
@@ -26,7 +26,7 @@ cases:
 
   - id: collection_backed_question
     description: "Implicit collection-backed question (no search verb)"
-    message: "What does this paper say about spectral analysis?"
+    message: "What do the selected papers say about spectral analysis?"
     collection_ids: [42]
     mock_retrieval_status: results_found
     mock_retrieved_count: 2
@@ -54,7 +54,7 @@ cases:
     expect_outcome: handled
     expect_retrieval_called: true
     expect_content_contains:
-      - "no relevant passages"
+      - "could not produce"
 
   - id: no_collections
     description: "RAG intent but no collections → prompt to select"

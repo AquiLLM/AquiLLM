@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+from .persistence_values import (
+    _QUERY_ITERATOR_BATCH_SIZE,
+    _record_value,
+    _json_value,
+    _bounded_rows,
+)
+
 import json
 import re
-from collections.abc import Mapping
-from datetime import date, datetime
+from dataclasses import asdict
 from hashlib import sha256
-from itertools import islice
-from math import isfinite
-from uuid import UUID
 
+from . import DOCUMENT_CONTEXTUAL_RESOLVER_VERSION
 from .commit_validation import resolution_commit_is_valid
 from .coreference import (
     MAX_DOCUMENT_DECISIONS,
@@ -21,12 +25,12 @@ from .coreference import (
     ResolvedCluster,
     resolution_input_fingerprint,
     resolution_result_checksum,
+    resolve_document_mentions,
 )
 from .coreference_types import _is_hash
 from .source_exclusions import resolvable_mentions, source_exclusion_audit
 
 _HASH = re.compile(r"[0-9a-f]{64}")
-_QUERY_ITERATOR_BATCH_SIZE = 1_000
 _SOURCE_FIELDS = (
     "id",
     "artifact_id",
@@ -76,56 +80,12 @@ class ResolutionPersistenceError(RuntimeError):
     """Raised when a resolution write cannot preserve its immutable snapshot."""
 
 
-def _record_value(record: object, field: str) -> object:
-    if isinstance(record, Mapping):
-        return record.get(field)
-    return getattr(record, field, None)
-
-
-def _json_value(value: object) -> object:
-    if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, (date, datetime)):
-        return value.isoformat()
-    if isinstance(value, float):
-        if not isfinite(value):
-            raise ValueError("mention fingerprint values must be finite")
-        return value
-    if isinstance(value, Mapping):
-        if not all(isinstance(key, str) for key in value):
-            raise ValueError("mention metadata keys must be strings")
-        return {key: _json_value(value[key]) for key in sorted(value)}
-    if isinstance(value, (tuple, list)):
-        return [_json_value(item) for item in value]
-    raise ValueError(f"unsupported mention fingerprint value: {type(value).__name__}")
-
-
-def _bounded_rows(values, maximum: int, label: str) -> tuple[object, ...]:
-    if type(maximum) is not int or maximum < 1:
-        raise ValueError("resolution row cap must be a positive integer")
-    query_count = getattr(values, "count", None)
-    query_iterator = getattr(values, "iterator", None)
-    if callable(query_count) and callable(query_iterator):
-        count = query_count()
-        if type(count) is not int or count < 0:
-            raise ValueError(f"{label} count is invalid")
-        if count > maximum:
-            raise ValueError(f"{label} cap exceeded ({maximum})")
-        records = tuple(
-            islice(
-                query_iterator(chunk_size=min(maximum, _QUERY_ITERATOR_BATCH_SIZE)),
-                maximum + 1,
-            )
-        )
-        if len(records) > maximum:
-            raise ValueError(f"{label} cap exceeded ({maximum})")
-        return records
-    records = tuple(islice(iter(values), maximum + 1))
-    if len(records) > maximum:
-        raise ValueError(f"{label} cap exceeded ({maximum})")
-    return records
+def _contextual_decision_audit(result):
+    return {
+        "identity_policy": "contextual_v2",
+        "resolver_version": result.resolver_version,
+        "decisions": [asdict(decision) for decision in result.decisions],
+    }
 
 
 def source_mention_fingerprint(mentions) -> str:
@@ -345,7 +305,10 @@ def _validate_source_snapshot(artifact, result, mention_records) -> str:
             "resolution result input fingerprint must be an exact lowercase "
             "SHA-256 digest"
         )
-    if resolution_input_fingerprint(accepted) != result.input_fingerprint:
+    from .vocabulary_builds import document_artifact_policy
+    from .vocabulary_policy import bind_digest
+    vocabulary = document_artifact_policy(artifact, using=artifact._state.db or "default")
+    if bind_digest(resolution_input_fingerprint(accepted), vocabulary) != result.input_fingerprint:
         raise ResolutionPersistenceError(
             "resolution result does not match current mention source context"
         )
@@ -530,6 +493,12 @@ def _existing_resolution(
         exclusion_audit=exclusion_audit,
     ):
         raise ResolutionPersistenceError("existing resolution commit marker is invalid")
+    if result.resolver_version == DOCUMENT_CONTEXTUAL_RESOLVER_VERSION and stats.get(
+        "contextual_identity_decisions"
+    ) != _contextual_decision_audit(result):
+        raise ResolutionPersistenceError(
+            "contextual identity decision audit is invalid"
+        )
     entity_rows = _bounded_rows(
         entity_query,
         MAX_DOCUMENT_MENTIONS,
@@ -609,6 +578,7 @@ def persist_document_resolution(
     build_run_id,
     result,
     *,
+    ontology=None,
     lease_owner=None,
     lease_generation=None,
 ):
@@ -689,6 +659,23 @@ def persist_document_resolution(
                 "result ontology checksum does not match extraction snapshot"
             )
         source_fingerprint = _validate_source_snapshot(artifact, result, mentions)
+        if result.resolver_version == DOCUMENT_CONTEXTUAL_RESOLVER_VERSION:
+            try:
+                if ontology is None or ontology.checksum != result.ontology_checksum:
+                    raise ValueError("captured ontology snapshot is required")
+                from .vocabulary_builds import document_replay_context
+                replayed = resolve_document_mentions(
+                    resolvable_mentions(mentions),
+                    ontology,
+                    identity_policy="contextual_v2",
+                    **document_replay_context(artifact),
+                )
+                if replayed != result:
+                    raise ValueError("decisions differ from captured contextual policy")
+            except (AttributeError, TypeError, ValueError) as exc:
+                raise ResolutionPersistenceError(
+                    "contextual identity policy replay failed"
+                ) from exc
         exclusion_audit = source_exclusion_audit(mentions, relations)
         ontology_checksum = artifact.ontology_checksum
         existing = _existing_resolution(
@@ -741,6 +728,11 @@ def persist_document_resolution(
             **stats,
             "resolution_rows_fingerprint": rows_fingerprint,
             "resolution_commit": marker,
+            **(
+                {"contextual_identity_decisions": _contextual_decision_audit(result)}
+                if result.resolver_version == DOCUMENT_CONTEXTUAL_RESOLVER_VERSION
+                else {}
+            ),
         }
         run.save(update_fields=["stats"])
         return entity_rows

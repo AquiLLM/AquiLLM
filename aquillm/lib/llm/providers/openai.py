@@ -35,14 +35,6 @@ from .request_observability import (
     safe_stage,
 )
 
-try:
-    from aquillm.settings import DEBUG
-except ImportError:
-    DEBUG = False
-
-if DEBUG:
-    from pprint import pp
-
 
 gpt_enc = encoding_for_model("gpt-4o")
 logger = structlog.stdlib.get_logger(__name__)
@@ -157,9 +149,6 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
                         provider="openai",
                         kind="transport_retry" if attempt else synthesis_phase,
                     )
-                    if DEBUG:
-                        print("OpenAI SDK Response:")
-                        pp(response)
                     text = response.choices[0].message.content
                     tool_call_payload: dict | None = None
                     raw_tool_call = (

@@ -7,6 +7,7 @@ from time import monotonic
 
 import structlog
 
+from .graph_query_contracts import GraphRelationRequestV2
 from .ppr import PPRAlgorithmConfig
 from .ppr_policy import PPRPolicySignalsV1
 from .ppr_seed_support import PreparedPPRSeedsV1
@@ -14,6 +15,10 @@ from .projected_ppr import ProjectedPPRResultV1, ppr_projected_v1
 from .projected_ppr_execution import (
     execute_adaptive_projected_ppr,
     prepare_projected_ppr_policy,
+)
+from .projected_relation_ranking_v2 import (
+    rank_relations_v2,
+    relation_algorithm_signature_v2,
 )
 from .projected_types import ProjectedAuthorizedGraphSnapshotV1
 from .topology.contracts import HybridBranchKind, ProjectedSeedV1
@@ -30,12 +35,39 @@ def rank_projected_for_mode(
     mode: str,
     branch: HybridBranchKind,
     deadline_check: Callable[[], None],
+    remediation_mode: str = "legacy",
+    relation_request: GraphRelationRequestV2 | None = None,
 ) -> tuple[ProjectedPPRResultV1, str | None]:
     """Keep fixed/shadow on legacy identity and adaptive on one new execution."""
     if type(mode) is not str or mode not in ("fixed", "shadow", "adaptive"):
         raise ValueError("unsupported PPR restart mode")
     if type(branch) is not HybridBranchKind:
         raise TypeError("branch must be an exact HybridBranchKind")
+    if type(remediation_mode) is not str or remediation_mode not in (
+        "legacy",
+        "shadow",
+        "v2",
+    ):
+        raise ValueError("unsupported graph remediation mode")
+    if remediation_mode == "shadow":
+        raise ValueError(
+            "graph remediation shadow requires an isolated evaluation adapter"
+        )
+    if remediation_mode == "v2":
+        if mode != "fixed":
+            raise ValueError("relation V2 cannot combine with a PPR restart treatment")
+        if type(relation_request) is not GraphRelationRequestV2:
+            raise TypeError("relation V2 requires an exact relation request")
+        ranking = rank_relations_v2(
+            snapshot=snapshot,
+            seeds=seeds,
+            config=config,
+            request=relation_request,
+            deadline_check=deadline_check,
+        )
+        return ranking, relation_algorithm_signature_v2(config)
+    if relation_request is not None:
+        raise ValueError("legacy dispatch cannot silently discard relation intent")
     started = monotonic()
     if mode == "fixed":
         ranking = ppr_projected_v1(snapshot=snapshot, seeds=seeds, config=config)

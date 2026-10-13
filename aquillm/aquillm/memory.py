@@ -34,6 +34,7 @@ from lib.memory import (
     has_remember_intent,
     heuristic_facts_from_turn,
     normalize_remember_fact,
+    parse_memory_intent, validate_fact_candidates,
     search_mem0_episodic_memories,
     search_mem0_episodic_memories_async,
     use_mem0,
@@ -72,74 +73,61 @@ def _is_duplicate_episodic_memory_error(exc: IntegrityError) -> bool:
     return "unique_episodic_per_assistant_msg" in message
 
 
-def _promote_profile_facts(user: User, facts: list[str]) -> None:
-    """Persist durable facts into local profile memory for prompt injection."""
-    for fact in facts:
-        normalized = (fact or "").strip()
-        if not normalized:
-            continue
-        UserMemoryFact.objects.get_or_create(
-            user=user,
-            fact=normalized,
-            defaults={"category": _categorize_profile_fact(normalized)},
-        )
-
-
 def promote_profile_facts_for_turn(
     user_id: int,
     user_content: str,
     assistant_content: str,
+    *, source_conversation_id=None, source_message_uuid=None, source_content_digest=None,
+    provider_memory_ids=(), provider_wrote=False, provider_receipt_complete=False,
 ) -> int:
     """Extract and persist durable facts for a completed turn."""
+    from apps.memory.services.profile_facts import source_is_current, promote_source_payload
+    intent = parse_memory_intent(user_content)
+    if intent.kind != 'affirmative' or source_conversation_id is None or source_message_uuid is None or not source_content_digest:
+        return 0
     user = User.objects.filter(id=user_id).first()
     if user is None:
-        logger.warning("obs.memory.profile_promotion_skipped", user_id=user_id)
         return 0
-
-    facts = extract_stable_facts(user_content, assistant_content)
-    facts = clean_stable_facts(list(dict.fromkeys(facts)))
-    if not facts and has_remember_intent(user_content):
-        remembered = normalize_remember_fact(user_content)
-        if remembered:
-            facts = [remembered]
-            logger.info("obs.memory.remember_fallback_used")
-
-    if not facts:
-        facts = heuristic_facts_from_turn(user_content, assistant_content)
-        if facts:
-            logger.info("obs.memory.heuristic_fallback_used", fact_count=len(facts))
-
-    facts = clean_stable_facts(list(dict.fromkeys(facts)))
-    if facts:
-        _promote_profile_facts(user, facts)
-    return len(facts)
+    current = source_is_current(user_id=user_id, conversation_id=source_conversation_id,
+                                message_uuid=source_message_uuid, digest=source_content_digest)
+    if current:
+        # Candidates are constrained to source spans; durable text is always the
+        # accepted source payload. Neither assistant text nor a model receipt
+        # establishes provenance. Empty extraction has only this scoped fallback.
+        candidates = validate_fact_candidates(user_content, extract_stable_facts(user_content, ''))
+        logger.info('obs.memory.profile_candidates_validated', candidate_count=len(candidates), scoped_fallback=not bool(candidates))
+    return promote_source_payload(user=user, user_content=user_content,
+        source_conversation_id=source_conversation_id, source_message_uuid=source_message_uuid,
+        source_content_digest=source_content_digest, provider_memory_ids=provider_memory_ids, provider_wrote=provider_wrote, provider_receipt_complete=provider_receipt_complete)
 
 
 def _enqueue_profile_fact_promotion(
     user_id: int,
     user_content: str,
     assistant_content: str,
+    *, source_conversation_id=None, source_message_uuid=None, source_content_digest=None,
+    provider_memory_ids=(), provider_wrote=False, provider_receipt_complete=False,
 ) -> None:
     """Send durable-fact promotion to a lower-priority worker queue."""
     try:
         from .tasks import promote_profile_facts_task
 
-        promote_profile_facts_task.delay(
-            user_id=user_id,
-            user_content=user_content,
-            assistant_content=assistant_content,
-        )
+        if parse_memory_intent(user_content).kind != 'affirmative':
+            return
+        promote_profile_facts_task.delay(user_id=user_id, source_conversation_id=source_conversation_id,
+            source_message_uuid=source_message_uuid, source_content_digest=source_content_digest,
+            provider_memory_ids=list(provider_memory_ids), provider_wrote=provider_wrote, provider_receipt_complete=provider_receipt_complete)
     except Exception as exc:
         logger.warning(
             "obs.memory.promotion_enqueue_error",
-            user_id=user_id,
-            error=str(exc),
             error_type=type(exc).__name__,
         )
         fact_count = promote_profile_facts_for_turn(
             user_id=user_id,
             user_content=user_content,
             assistant_content=assistant_content,
+            source_conversation_id=source_conversation_id, source_message_uuid=source_message_uuid,
+            source_content_digest=source_content_digest, provider_memory_ids=provider_memory_ids, provider_wrote=provider_wrote, provider_receipt_complete=provider_receipt_complete,
         )
         logger.info(
             "obs.memory.inline_promotion_completed",
@@ -153,34 +141,19 @@ def _add_mem0_memory(
     assistant_content: str,
     conversation_id: int,
     assistant_message_uuid: str,
+    *, source_message_uuid=None, source_content_digest=None,
 ) -> None:
-    """Queue profile promotion separately and send the raw turn to Mem0 intelligent infer."""
-    wrote = add_mem0_memory_with_client(
-        user_id=str(user.id),
-        user_content=user_content,
-        assistant_content=assistant_content,
-        conversation_id=conversation_id,
-        assistant_message_uuid=assistant_message_uuid,
-        strict=True,
-    )
-    # A provider failure raises before either promotion or a local dual-write
-    # receipt can make the durable job appear complete. No-add inference is a
-    # successful response and may still promote useful profile facts.
-    _enqueue_profile_fact_promotion(
-        user_id=user.id,
-        user_content=user_content,
-        assistant_content=assistant_content,
-    )
-    if wrote:
-        logger.info("obs.memory.intelligent_write_succeeded")
-        return
-
-    logger.warning("obs.memory.intelligent_write_no_adds")
+    """Source-bound write with a bounded, complete provider receipt."""
+    from . import memory as api
+    from .memory_write import add_source_memory
+    add_source_memory(api, user, user_content, assistant_content, conversation_id, assistant_message_uuid,
+                      source_message_uuid=source_message_uuid, source_content_digest=source_content_digest)
 
 
 def get_user_profile_facts(user: User):
     """Return all profile facts for the user (tone, goals, project, etc.)."""
-    return list(UserMemoryFact.objects.filter(user=user).order_by('category', 'created_at'))
+    from apps.memory.services.profile_facts import get_active_profile_facts
+    return get_active_profile_facts(user)
 
 
 def _get_episodic_memories_pgvector(
@@ -220,10 +193,12 @@ def get_episodic_memories(
             exclude_conversation_id=exclude_conversation_id,
         )
         if mem0_results:
-            return mem0_results
-    return _get_episodic_memories_pgvector(
+            from apps.memory.services.profile_facts import filter_reconciled_memories
+            return filter_reconciled_memories(user, mem0_results)
+    from apps.memory.services.profile_facts import filter_reconciled_memories
+    return filter_reconciled_memories(user, _get_episodic_memories_pgvector(
         user, query.strip(), top_k, exclude_conversation_id
-    )
+    ))
 
 
 async def get_episodic_memories_async(
@@ -243,16 +218,19 @@ async def get_episodic_memories_async(
             exclude_conversation_id=exclude_conversation_id,
         )
         if mem0_results:
-            return mem0_results
+            from apps.memory.services.profile_facts import filter_reconciled_memories
+            return await database_sync_to_async(filter_reconciled_memories)(user, mem0_results)
     # Embedding is a blocking network call followed by ORM work. Keep it off
     # Channels' thread-sensitive database lane so a latency-budget cancellation
     # is not forced to wait for the underlying embedding request to return.
-    return await database_sync_to_async(
+    memories = await database_sync_to_async(
         _get_episodic_memories_pgvector,
         thread_sensitive=False,
     )(
         user, query.strip(), top_k, exclude_conversation_id
     )
+    from apps.memory.services.profile_facts import filter_reconciled_memories
+    return await database_sync_to_async(filter_reconciled_memories)(user, memories)
 
 
 def get_last_user_message_text(convo: 'Conversation') -> str:
@@ -302,15 +280,11 @@ async def _get_episodic_memories_with_latency_budget(
         logger.warning(
             "obs.memory.episodic_injection_timeout",
             timeout_seconds=timeout_seconds,
-            user_id=getattr(user, "id", None),
-            query=query[:180] if isinstance(query, str) else "",
         )
         return []
     except Exception as exc:
         logger.warning(
             "obs.memory.episodic_injection_error",
-            user_id=getattr(user, "id", None),
-            error=str(exc),
             error_type=type(exc).__name__,
         )
         return []
@@ -330,14 +304,13 @@ def augment_conversation_with_memory(
     profile_facts = get_user_profile_facts(user)
     query = get_last_user_message_text(convo)
     episodic = get_episodic_memories(user, query, top_k=EPISODIC_TOP_K, exclude_conversation_id=exclude_conversation_id)
+    profile_facts = get_user_profile_facts(user)
     logger.info(
         "obs.memory.injection",
-        user_id=user.id,
-        query=query[:180] if isinstance(query, str) else "",
         profile_fact_count=len(profile_facts),
         episodic_memory_count=len(episodic),
     )
-    block = format_memories_for_system(profile_facts, episodic)
+    block = format_memories_for_system(profile_facts, episodic, max_chars=_remaining_memory_chars(convo, base_system))
     convo.system = (base_system or "").rstrip() + block
 
 
@@ -366,16 +339,24 @@ async def augment_conversation_with_memory_async(
     else:
         profile_facts = await profile_task
         episodic = []
+    # A concurrent settings change may finish while episodic I/O is pending.
+    # Re-read before formatting rather than injecting the earlier profile copy.
+    profile_facts = await database_sync_to_async(get_user_profile_facts)(user)
     logger.info(
         "obs.memory.injection_async",
-        user_id=user.id,
-        query=query[:180] if isinstance(query, str) else "",
         profile_fact_count=len(profile_facts),
         episodic_memory_count=len(episodic),
         episodic_lookup_skipped=not include_episodic,
     )
-    block = format_memories_for_system(profile_facts, episodic)
+    block = format_memories_for_system(profile_facts, episodic, max_chars=_remaining_memory_chars(convo, base_system))
     convo.system = (base_system or "").rstrip() + block
+
+
+def _remaining_memory_chars(convo, base_system):
+    from apps.chat.consumers.utils import CHAT_MAX_TOKENS
+    from lib.llm.utils.prompt_budget import remaining_memory_chars
+    messages = [message.model_dump(mode='json') for message in convo.messages]
+    return remaining_memory_chars(system_text=base_system or '', message_dicts=messages, max_tokens=CHAT_MAX_TOKENS)
 
 
 def create_episodic_memories_for_conversation(db_convo) -> None:
@@ -390,12 +371,14 @@ def create_episodic_memories_for_conversation(db_convo) -> None:
         )
     )
     prev_content = ""
+    source_message_uuid = None
     for m in messages:
         role = m['role']
-        content = (m['content'] or "").strip()
+        content = m['content'] or ''
         msg_uuid = m['message_uuid']
         if role == 'user' or (role == 'tool' and content):
             prev_content = content
+            source_message_uuid = str(msg_uuid) if role == 'user' else None
             continue
         if role != 'assistant':
             continue
@@ -413,14 +396,21 @@ def create_episodic_memories_for_conversation(db_convo) -> None:
         user_excerpt = prev_content[:500]
         assistant_excerpt = content[:500]
         memory_content = f"User: {user_excerpt}\nAssistant: {assistant_excerpt}"
-        if use_mem0():
+        from apps.memory.services.profile_facts import content_digest
+        digest = content_digest(prev_content)
+        if use_mem0() and source_message_uuid is not None:
             _add_mem0_memory(
                 user=db_convo.owner,
-                user_content=user_excerpt,
+                user_content=prev_content,
                 assistant_content=assistant_excerpt,
                 conversation_id=db_convo.id,
                 assistant_message_uuid=str(msg_uuid),
+                source_message_uuid=source_message_uuid, source_content_digest=digest,
             )
+        elif not use_mem0() and source_message_uuid is not None:
+            _enqueue_profile_fact_promotion(user_id=db_convo.owner_id, user_content=prev_content,
+                assistant_content='', source_conversation_id=db_convo.id, source_message_uuid=source_message_uuid,
+                source_content_digest=digest)
         if (not use_mem0()) or MEM0_DUAL_WRITE_LOCAL:
             try:
                 EpisodicMemory.objects.create(
@@ -434,7 +424,5 @@ def create_episodic_memories_for_conversation(db_convo) -> None:
                     raise
                 logger.info(
                     "obs.memory.duplicate_episodic_skipped",
-                    user_id=db_convo.owner_id,
-                    assistant_message_uuid=msg_uuid,
                 )
         prev_content = ""

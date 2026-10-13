@@ -120,10 +120,11 @@ def test_search_graph_db_batches_edge_queries(monkeypatch):
     graph_obj.graph = types.SimpleNamespace(query=fake_query)
     graph_obj.embedding_model = types.SimpleNamespace(embed=lambda _node: [0.1, 0.2])
     graph_obj.threshold = 0.7
-    graph_obj._nearest_nodes = lambda *_args, **_kwargs: [
+    graph_obj._fetch_candidate_nodes_with_stats = lambda *_args, **_kwargs: ([], {})
+    graph_obj._nearest_nodes_with_stats = lambda *_args, **_kwargs: ([
         {"node_id": 1, "similarity": 0.95},
         {"node_id": 3, "similarity": 0.91},
-    ]
+    ], {})
     graph_obj._base_params = lambda filters: {"user_id": filters["user_id"]}
     graph_obj._node_props = lambda filters, name_param=None: "user_id: $user_id"
 
@@ -140,15 +141,16 @@ def test_search_graph_db_fetches_seeded_candidates_once(monkeypatch):
 
     fetch_calls: list[list[str]] = []
 
-    def fake_query(_cypher, _params=None):
+    def fake_query(_cypher, params=None):
         return []
 
     graph_obj = module.CompatibleMemgraphMemoryGraph.__new__(module.CompatibleMemgraphMemoryGraph)
     graph_obj.graph = types.SimpleNamespace(query=fake_query)
     graph_obj.embedding_model = types.SimpleNamespace(embed=lambda _node: [0.1, 0.2])
     graph_obj.threshold = 0.7
-    graph_obj._fetch_candidate_nodes = lambda filters, node_list=None: fetch_calls.append(list(node_list or [])) or []
-    graph_obj._nearest_nodes = lambda *_args, **_kwargs: []
+    graph_obj._fetch_candidate_nodes_with_stats = lambda filters, node_list=None: (
+        fetch_calls.append(list(node_list or [])) or [], {})
+    graph_obj._nearest_nodes_with_stats = lambda *_args, **_kwargs: ([], {})
     graph_obj._base_params = lambda filters: {"user_id": filters["user_id"]}
     graph_obj._node_props = lambda filters, name_param=None: "user_id: $user_id"
 
@@ -230,7 +232,7 @@ def test_fetch_candidate_nodes_falls_back_to_generic_scan_when_no_useful_seeds(m
 def test_search_graph_db_logs_timing_breakdown(monkeypatch):
     module = _load_memgraph_compat_module(monkeypatch)
 
-    info_logs: list[tuple[str, tuple[object, ...]]] = []
+    info_logs: list[tuple[str, dict[str, object]]] = []
 
     graph_obj = module.CompatibleMemgraphMemoryGraph.__new__(module.CompatibleMemgraphMemoryGraph)
     graph_obj.graph = types.SimpleNamespace(query=lambda *_args, **_kwargs: [])
@@ -262,13 +264,21 @@ def test_search_graph_db_logs_timing_breakdown(monkeypatch):
     monkeypatch.setattr(
         module.logger,
         "info",
-        lambda message, *args: info_logs.append((message, args)),
+        lambda message, **fields: info_logs.append((message, fields)),
     )
 
     graph_obj._search_graph_db(["memgraph"], {"user_id": "1"}, limit=5)
 
-    assert info_logs[0][0] == (
-        "Memgraph graph search stats: strategy=%s candidate_limit=%d seed_names=%d "
-        "seed_tokens=%d fetched_candidates=%d score_mode=%s valid_candidates=%d "
-        "passed_threshold=%d query_nodes=%d fetch_ms=%.2f score_ms=%.2f edge_query_ms=%.2f total_ms=%.2f"
-    )
+    assert len(info_logs) == 1 and info_logs[0][0] == "obs.memory.graph_search_stats"
+    stats = info_logs[0][1]["extra"]
+    assert {key: stats[key] for key in (
+        "strategy", "candidate_limit", "seed_names", "seed_tokens",
+        "fetched_candidates", "score_mode", "valid_candidates",
+        "passed_threshold", "query_nodes", "fetch_ms", "score_ms",
+    )} == {
+        "strategy": "seeded", "candidate_limit": 17, "seed_names": 1,
+        "seed_tokens": 2, "fetched_candidates": 1, "score_mode": "numpy",
+        "valid_candidates": 1, "passed_threshold": 1, "query_nodes": 1,
+        "fetch_ms": 1.5, "score_ms": 0.7,
+    }
+    assert stats["edge_query_ms"] >= 0 and stats["total_ms"] >= stats["edge_query_ms"]

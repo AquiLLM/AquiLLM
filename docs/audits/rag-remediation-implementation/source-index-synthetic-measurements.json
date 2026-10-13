@@ -1,0 +1,749 @@
+{
+  "version": "synthetic-source-index-rehearsal-v1",
+  "code_revision": "eeeeaab767b594851ad8e1785b65ace9415b2966",
+  "test_command": "rtk proxy python scripts/run_rag_remediation_tests.py --project aquillm-rag-integration -- aquillm/apps/documents/tests/test_source_index_rollout_fidelity.py::test_measurement_output_can_be_retained_without_private_data -q -s --tb=short",
+  "result": "1 passed, 6 startup warnings, 0.76s",
+  "raw_log_sha256": "de9b8c51e8e120bf1b1b954fb7c15120a6aecaf384b094c937a9e60d17a279a1",
+  "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+  "all_source_bytes_unchanged": true,
+  "measurements": {
+    "cases": [
+      {
+        "case_id": "signed",
+        "input_sha256": "13cdcc8305f9111b9488b542b526d44aaed07150b9d002624247fd41ed3e9b9b",
+        "missing_outputs": [],
+        "passed": true,
+        "unexpected_outputs": []
+      },
+      {
+        "case_id": "columns",
+        "input_sha256": "a1be00a9d5b267415b93d5f98b398946fd8d2d8944dd76fdf35acdce16137abe",
+        "missing_outputs": [],
+        "passed": true,
+        "unexpected_outputs": []
+      },
+      {
+        "case_id": "formula",
+        "input_sha256": "1f38a827942e4bcf59e6b0b2fb9675d8d3eb6d621f98aaf131e6997f284f74ad",
+        "missing_outputs": [],
+        "passed": true,
+        "unexpected_outputs": []
+      },
+      {
+        "case_id": "ordered",
+        "input_sha256": "118ebaa88bbb278d7289cb52926239d2c2516fcf2179bb23d01d90cc82d19415",
+        "missing_outputs": [],
+        "passed": true,
+        "unexpected_outputs": []
+      },
+      {
+        "case_id": "archive",
+        "input_sha256": "17564f23799ae30c1914960a34f39f187f5d327cdeadfdac625d70a0b3b5aea4",
+        "missing_outputs": [],
+        "passed": true,
+        "unexpected_outputs": []
+      }
+    ],
+    "comparison": "both_chunkers_receive_same_real_extracted_canonical_text",
+    "fixed_character_config": {
+      "chunk_overlap": 384,
+      "chunk_size": 2048
+    },
+    "fixture_fidelity_passed": true,
+    "fixture_sha256": "b59290e9a5cdc89d0fe343a17872a2f0c188a452be6dc7a8a784341b26c5d220",
+    "measurement_scope": "single_process_single_sample_python_allocations_only_no_provider",
+    "outputs": [
+      {
+        "artifact_sha256": "13cdcc8305f9111b9488b542b526d44aaed07150b9d002624247fd41ed3e9b9b",
+        "canonical_codepoints": 4539,
+        "canonical_sha256": "13cdcc8305f9111b9488b542b526d44aaed07150b9d002624247fd41ed3e9b9b",
+        "extraction": {
+          "cells": {
+            "expected": 0,
+            "matched": 0,
+            "recall": null
+          },
+          "facts": {
+            "expected": 2,
+            "matched": 2,
+            "recall": 1.0
+          },
+          "passed": true,
+          "quality_and_issues_preserved": true
+        },
+        "extraction_observation": {
+          "elapsed_ms": 0.216541,
+          "peak_python_bytes": 43393,
+          "scope": "case_all_outputs_shared"
+        },
+        "issue_codes": [],
+        "occurrence_preserved": true,
+        "output_id": "signed",
+        "parser_key": "native-txt-ordered-v1",
+        "quality": "complete",
+        "source_bytes": 4541,
+        "variants": {
+          "fixed_character": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 5309,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.481033,
+              "peak_python_bytes": 14163
+            },
+            "redundant_source_tokens": 768,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 5309,
+            "support_spans": {
+              "expected": 2,
+              "matched": 2,
+              "recall": 1.0
+            },
+            "window_count": 3
+          },
+          "structural": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 5309,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.734856,
+              "peak_python_bytes": 19090
+            },
+            "redundant_source_tokens": 768,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 5309,
+            "support_spans": {
+              "expected": 2,
+              "matched": 2,
+              "recall": 1.0
+            },
+            "window_count": 3
+          }
+        }
+      },
+      {
+        "artifact_sha256": "a1be00a9d5b267415b93d5f98b398946fd8d2d8944dd76fdf35acdce16137abe",
+        "canonical_codepoints": 141,
+        "canonical_sha256": "e88ff806aaa0edcca90d5f966facf96171317006bc4fbfa983bfb40b41104d01",
+        "extraction": {
+          "cells": {
+            "expected": 3,
+            "matched": 3,
+            "recall": 1.0
+          },
+          "facts": {
+            "expected": 1,
+            "matched": 1,
+            "recall": 1.0
+          },
+          "passed": true,
+          "quality_and_issues_preserved": true
+        },
+        "extraction_observation": {
+          "elapsed_ms": 0.444722,
+          "peak_python_bytes": 18605,
+          "scope": "case_all_outputs_shared"
+        },
+        "issue_codes": [],
+        "occurrence_preserved": true,
+        "output_id": "columns",
+        "parser_key": "native-csv-ordered-v1",
+        "quality": "complete",
+        "source_bytes": 44,
+        "variants": {
+          "fixed_character": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 141,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.130886,
+              "peak_python_bytes": 2304
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 0.48226950354609927,
+            "source_region_recall": 1.0,
+            "source_tokens": 141,
+            "support_spans": {
+              "expected": 1,
+              "matched": 1,
+              "recall": 1.0
+            },
+            "window_count": 1
+          },
+          "structural": {
+            "embedding_context_tokens": 47,
+            "embedding_tokens": 188,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.323016,
+              "peak_python_bytes": 2562
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 141,
+            "support_spans": {
+              "expected": 1,
+              "matched": 1,
+              "recall": 1.0
+            },
+            "window_count": 2
+          }
+        }
+      },
+      {
+        "artifact_sha256": "1f38a827942e4bcf59e6b0b2fb9675d8d3eb6d621f98aaf131e6997f284f74ad",
+        "canonical_codepoints": 148,
+        "canonical_sha256": "5774e49f0d7c4d39d7e7329ce4b415b64321dee277e13856ba21c8fe1be3a7a5",
+        "extraction": {
+          "cells": {
+            "expected": 2,
+            "matched": 2,
+            "recall": 1.0
+          },
+          "facts": {
+            "expected": 1,
+            "matched": 1,
+            "recall": 1.0
+          },
+          "passed": true,
+          "quality_and_issues_preserved": true
+        },
+        "extraction_observation": {
+          "elapsed_ms": 15.491023,
+          "peak_python_bytes": 171510,
+          "scope": "case_all_outputs_shared"
+        },
+        "issue_codes": [
+          "formula_cache_unavailable"
+        ],
+        "occurrence_preserved": true,
+        "output_id": "formula",
+        "parser_key": "native-xlsx-ordered-v2",
+        "quality": "partial",
+        "source_bytes": 17789,
+        "variants": {
+          "fixed_character": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 148,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.218751,
+              "peak_python_bytes": 2032
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 0.5608108108108109,
+            "source_region_recall": 1.0,
+            "source_tokens": 148,
+            "support_spans": {
+              "expected": 1,
+              "matched": 1,
+              "recall": 1.0
+            },
+            "window_count": 1
+          },
+          "structural": {
+            "embedding_context_tokens": 82,
+            "embedding_tokens": 230,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.511065,
+              "peak_python_bytes": 2601
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 148,
+            "support_spans": {
+              "expected": 1,
+              "matched": 1,
+              "recall": 1.0
+            },
+            "window_count": 2
+          }
+        }
+      },
+      {
+        "artifact_sha256": "118ebaa88bbb278d7289cb52926239d2c2516fcf2179bb23d01d90cc82d19415",
+        "canonical_codepoints": 153,
+        "canonical_sha256": "45bcd782d6307fd43a19e7adc6a52be63a5248a73093354f2560795c54b47392",
+        "extraction": {
+          "cells": {
+            "expected": 1,
+            "matched": 1,
+            "recall": 1.0
+          },
+          "facts": {
+            "expected": 3,
+            "matched": 3,
+            "recall": 1.0
+          },
+          "passed": true,
+          "quality_and_issues_preserved": true
+        },
+        "extraction_observation": {
+          "elapsed_ms": 30.750534,
+          "peak_python_bytes": 877207,
+          "scope": "case_all_outputs_shared"
+        },
+        "issue_codes": [],
+        "occurrence_preserved": true,
+        "output_id": "ordered",
+        "parser_key": "native-docx-ordered-v2",
+        "quality": "complete",
+        "source_bytes": 829051,
+        "variants": {
+          "fixed_character": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 155,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.178959,
+              "peak_python_bytes": 2016
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 0.20915032679738563,
+            "source_region_recall": 1.0,
+            "source_tokens": 155,
+            "support_spans": {
+              "expected": 3,
+              "matched": 3,
+              "recall": 1.0
+            },
+            "window_count": 1
+          },
+          "structural": {
+            "embedding_context_tokens": 137,
+            "embedding_tokens": 292,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.476183,
+              "peak_python_bytes": 4252
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 155,
+            "support_spans": {
+              "expected": 3,
+              "matched": 3,
+              "recall": 1.0
+            },
+            "window_count": 5
+          }
+        }
+      },
+      {
+        "archive_lineage": [
+          {
+            "archive_ordinal": 0,
+            "container_sha256": "17564f23799ae30c1914960a34f39f187f5d327cdeadfdac625d70a0b3b5aea4",
+            "member_path": "repeat.txt"
+          }
+        ],
+        "artifact_sha256": "344867fcbd076f4d66596c50f73f426fdb8fc94ec858d8d6c60d9039f5388027",
+        "canonical_codepoints": 19,
+        "canonical_sha256": "344867fcbd076f4d66596c50f73f426fdb8fc94ec858d8d6c60d9039f5388027",
+        "extraction": {
+          "cells": {
+            "expected": 0,
+            "matched": 0,
+            "recall": null
+          },
+          "facts": {
+            "expected": 1,
+            "matched": 1,
+            "recall": 1.0
+          },
+          "passed": true,
+          "quality_and_issues_preserved": true
+        },
+        "extraction_observation": {
+          "elapsed_ms": 47.95605,
+          "peak_python_bytes": 999279,
+          "scope": "case_all_outputs_shared"
+        },
+        "issue_codes": [],
+        "occurrence_key": "1c8efaeeb8e0783821a03d696faf4530aa95b75faa433ce11f29e2bd2dbf72d3",
+        "occurrence_preserved": true,
+        "output_id": "archive:0",
+        "parser_key": "native-txt-ordered-v1",
+        "quality": "complete",
+        "source_bytes": 19,
+        "variants": {
+          "fixed_character": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 19,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.163618,
+              "peak_python_bytes": 2000
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 19,
+            "support_spans": {
+              "expected": 1,
+              "matched": 1,
+              "recall": 1.0
+            },
+            "window_count": 1
+          },
+          "structural": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 19,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.268473,
+              "peak_python_bytes": 1908
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 19,
+            "support_spans": {
+              "expected": 1,
+              "matched": 1,
+              "recall": 1.0
+            },
+            "window_count": 1
+          }
+        }
+      },
+      {
+        "archive_lineage": [
+          {
+            "archive_ordinal": 1,
+            "container_sha256": "17564f23799ae30c1914960a34f39f187f5d327cdeadfdac625d70a0b3b5aea4",
+            "member_path": "repeat.txt"
+          }
+        ],
+        "artifact_sha256": "344867fcbd076f4d66596c50f73f426fdb8fc94ec858d8d6c60d9039f5388027",
+        "canonical_codepoints": 19,
+        "canonical_sha256": "344867fcbd076f4d66596c50f73f426fdb8fc94ec858d8d6c60d9039f5388027",
+        "extraction": {
+          "cells": {
+            "expected": 0,
+            "matched": 0,
+            "recall": null
+          },
+          "facts": {
+            "expected": 1,
+            "matched": 1,
+            "recall": 1.0
+          },
+          "passed": true,
+          "quality_and_issues_preserved": true
+        },
+        "extraction_observation": {
+          "elapsed_ms": 47.95605,
+          "peak_python_bytes": 999279,
+          "scope": "case_all_outputs_shared"
+        },
+        "issue_codes": [],
+        "occurrence_key": "301ce1255fe84e3035d46cb578aecbc7d7fafe5bd0547be9a7884e07a00badfa",
+        "occurrence_preserved": true,
+        "output_id": "archive:1",
+        "parser_key": "native-txt-ordered-v1",
+        "quality": "complete",
+        "source_bytes": 19,
+        "variants": {
+          "fixed_character": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 19,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.122296,
+              "peak_python_bytes": 1968
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 19,
+            "support_spans": {
+              "expected": 1,
+              "matched": 1,
+              "recall": 1.0
+            },
+            "window_count": 1
+          },
+          "structural": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 19,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.174738,
+              "peak_python_bytes": 1908
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": 1.0,
+            "source_region_precision": 1.0,
+            "source_region_recall": 1.0,
+            "source_tokens": 19,
+            "support_spans": {
+              "expected": 1,
+              "matched": 1,
+              "recall": 1.0
+            },
+            "window_count": 1
+          }
+        }
+      },
+      {
+        "archive_lineage": [
+          {
+            "archive_ordinal": 2,
+            "container_sha256": "17564f23799ae30c1914960a34f39f187f5d327cdeadfdac625d70a0b3b5aea4",
+            "member_path": "empty.txt"
+          }
+        ],
+        "artifact_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "canonical_codepoints": 0,
+        "canonical_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "extraction": {
+          "cells": {
+            "expected": 0,
+            "matched": 0,
+            "recall": null
+          },
+          "facts": {
+            "expected": 0,
+            "matched": 0,
+            "recall": null
+          },
+          "passed": true,
+          "quality_and_issues_preserved": true
+        },
+        "extraction_observation": {
+          "elapsed_ms": 47.95605,
+          "peak_python_bytes": 999279,
+          "scope": "case_all_outputs_shared"
+        },
+        "issue_codes": [
+          "empty_extraction"
+        ],
+        "occurrence_key": "932c179192d8087dbdbffe9575214bd3f5cb2bf19e93755dcfb49987e26b3986",
+        "occurrence_preserved": true,
+        "output_id": "archive:2",
+        "parser_key": "archive-accounting-v1",
+        "quality": "unsupported",
+        "source_bytes": 0,
+        "variants": {
+          "fixed_character": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 0,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.027882,
+              "peak_python_bytes": 1076
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": null,
+            "source_region_precision": null,
+            "source_region_recall": null,
+            "source_tokens": 0,
+            "support_spans": {
+              "expected": 0,
+              "matched": 0,
+              "recall": null
+            },
+            "window_count": 0
+          },
+          "structural": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 0,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.141387,
+              "peak_python_bytes": 1908
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": null,
+            "source_region_precision": null,
+            "source_region_recall": null,
+            "source_tokens": 0,
+            "support_spans": {
+              "expected": 0,
+              "matched": 0,
+              "recall": null
+            },
+            "window_count": 0
+          }
+        }
+      },
+      {
+        "archive_lineage": [
+          {
+            "archive_ordinal": 3,
+            "container_sha256": "17564f23799ae30c1914960a34f39f187f5d327cdeadfdac625d70a0b3b5aea4",
+            "member_path": "unknown.bin"
+          }
+        ],
+        "artifact_sha256": "fd7e19241666545c7bb592b014457c1ccbaddfe3c5d5c0c7540a8dfcb6e80614",
+        "canonical_codepoints": 0,
+        "canonical_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "extraction": {
+          "cells": {
+            "expected": 0,
+            "matched": 0,
+            "recall": null
+          },
+          "facts": {
+            "expected": 0,
+            "matched": 0,
+            "recall": null
+          },
+          "passed": true,
+          "quality_and_issues_preserved": true
+        },
+        "extraction_observation": {
+          "elapsed_ms": 47.95605,
+          "peak_python_bytes": 999279,
+          "scope": "case_all_outputs_shared"
+        },
+        "issue_codes": [
+          "unsupported_member"
+        ],
+        "occurrence_key": "65ba4ba187fd0c355f196f25e4e2c232db1067622607e7715d6348c1c32a2213",
+        "occurrence_preserved": true,
+        "output_id": "archive:3",
+        "parser_key": "archive-accounting-v1",
+        "quality": "unsupported",
+        "source_bytes": 16,
+        "variants": {
+          "fixed_character": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 0,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.026592,
+              "peak_python_bytes": 1076
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": null,
+            "source_region_precision": null,
+            "source_region_recall": null,
+            "source_tokens": 0,
+            "support_spans": {
+              "expected": 0,
+              "matched": 0,
+              "recall": null
+            },
+            "window_count": 0
+          },
+          "structural": {
+            "embedding_context_tokens": 0,
+            "embedding_tokens": 0,
+            "invalid_windows": 0,
+            "observation": {
+              "elapsed_ms": 0.131167,
+              "peak_python_bytes": 1932
+            },
+            "redundant_source_tokens": 0,
+            "source_coverage": null,
+            "source_region_precision": null,
+            "source_region_recall": null,
+            "source_tokens": 0,
+            "support_spans": {
+              "expected": 0,
+              "matched": 0,
+              "recall": null
+            },
+            "window_count": 0
+          }
+        }
+      }
+    ],
+    "quality_gate": "not_evaluated",
+    "structural_config": {
+      "chunker_key": "canonical-source-v1:fb41200240d6039edabd036e5dbbb1adcc129c64bb9d1c8771dac2c5bb5f6b47",
+      "max_tokens": 2048,
+      "overlap_tokens": 384
+    },
+    "token_unit": "synthetic-utf8-byte-tokens-v1",
+    "version": "synthetic-source-index-measurements-v1"
+  },
+  "summary": {
+    "fixture_sha256": "b59290e9a5cdc89d0fe343a17872a2f0c188a452be6dc7a8a784341b26c5d220",
+    "measurement_scope": "single_process_single_sample_python_allocations_only_no_provider",
+    "token_unit": "synthetic-utf8-byte-tokens-v1",
+    "quality_gate": "not_evaluated",
+    "case_count": 5,
+    "output_count": 8,
+    "fixture_fidelity_passed": true,
+    "variants": {
+      "fixed_character": {
+        "window_count": 8,
+        "source_tokens": 5791,
+        "embedding_tokens": 5791,
+        "embedding_context_tokens": 0,
+        "redundant_source_tokens": 768,
+        "invalid_windows": 0,
+        "total_elapsed_ms": 1.350017,
+        "largest_single_output_peak_python_bytes": 14163
+      },
+      "structural": {
+        "window_count": 14,
+        "source_tokens": 5791,
+        "embedding_tokens": 6057,
+        "embedding_context_tokens": 266,
+        "redundant_source_tokens": 768,
+        "invalid_windows": 0,
+        "total_elapsed_ms": 2.760885,
+        "largest_single_output_peak_python_bytes": 19090
+      }
+    },
+    "extraction": {
+      "case_observations": {
+        "signed": {
+          "elapsed_ms": 0.216541,
+          "peak_python_bytes": 43393,
+          "scope": "case_all_outputs_shared"
+        },
+        "columns": {
+          "elapsed_ms": 0.444722,
+          "peak_python_bytes": 18605,
+          "scope": "case_all_outputs_shared"
+        },
+        "formula": {
+          "elapsed_ms": 15.491023,
+          "peak_python_bytes": 171510,
+          "scope": "case_all_outputs_shared"
+        },
+        "ordered": {
+          "elapsed_ms": 30.750534,
+          "peak_python_bytes": 877207,
+          "scope": "case_all_outputs_shared"
+        },
+        "archive": {
+          "elapsed_ms": 47.95605,
+          "peak_python_bytes": 999279,
+          "scope": "case_all_outputs_shared"
+        }
+      },
+      "total_elapsed_ms": 94.85887,
+      "largest_case_peak_python_bytes": 999279
+    }
+  },
+  "limitations": [
+    "Synthetic fixture correctness only; quality_gate is not_evaluated.",
+    "Single process and sample; timings are not p95 or production capacity.",
+    "Synthetic UTF-8 byte-token units are not provider token counts.",
+    "No provider or GPU operation; no production cost measurement.",
+    "Integrated generation/rollback rehearsal remains pending."
+  ]
+}

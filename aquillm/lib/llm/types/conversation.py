@@ -1,13 +1,18 @@
 """Conversation type for managing LLM message sequences."""
-from typing import Any
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel
 
 from .messages import LLM_Message, UserMessage, AssistantMessage, ToolMessage
-from .tools import LLMTool
+from .tools import LLMTool, ToolChoice
 
 
 class Conversation(BaseModel):
-    """A conversation with system prompt and message history."""
+    """Lossless message history, including interrupted turns.
+
+    A user message is persisted before provider work. A failed or cancelled turn
+    can therefore leave adjacent user messages after the next append. Historical
+    transcripts must preserve those messages and their feedback identities.
+    Message-local tool invariants are validated by the individual message types.
+    """
     system: str
     messages: list[LLM_Message] = []
 
@@ -48,6 +53,8 @@ class Conversation(BaseModel):
         authorized_tool = tool_dict.get(last.tool_call_name or "")
         if authorized_tool is not None:
             last.tools = [authorized_tool]
+            if last.tool_choice is None:
+                last.tool_choice = ToolChoice(type="auto")
             return
 
         # A saved tool call can outlive its permission or implementation. Record a
@@ -69,19 +76,6 @@ class Conversation(BaseModel):
         from django.apps import apps
         return cls(system=apps.get_app_config('aquillm').system_prompt).model_dump()
 
-    @classmethod
-    @model_validator(mode='after')
-    def validate_flip_flop(cls, data: Any) -> Any:
-        """Validate that messages alternate between user and assistant."""
-        def isUser(m: LLM_Message):
-            return isinstance(m, UserMessage) or (isinstance(m, ToolMessage) and m.for_whom == 'assistant')
-
-        for a, b in zip(data.messages, data.messages[1:]):
-            if isinstance(a, AssistantMessage) and isinstance(b, AssistantMessage):
-                raise ValueError("Conversation has adjacent assistant messages")
-            if isUser(a) and isUser(b):
-                raise ValueError("Conversation has adjacent user messages")
-        return data
 
 
 __all__ = ['Conversation']

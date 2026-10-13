@@ -86,6 +86,7 @@ def test_whole_document_size_guard_counts_citation_expansion():
     chunks = [SimpleNamespace(id=71, chunk_number=1, content="First passage.")]
     queryset = MagicMock()
     queryset.only.return_value.order_by.return_value = chunks
+    document.chunks = queryset
     chat_ref = SimpleNamespace(
         chat=SimpleNamespace(
             llm_if=SimpleNamespace(token_count=token_count),
@@ -101,10 +102,6 @@ def test_whole_document_size_guard_counts_citation_expansion():
         patch(
             "apps.chat.services.tool_wiring.documents.Document.get_by_id",
             return_value=document,
-        ),
-        patch(
-            "apps.chat.services.tool_wiring.documents.TextChunk.objects.filter",
-            return_value=queryset,
         ),
     ):
         tool = whole_document_tool(

@@ -77,6 +77,19 @@ def hybrid_graph_candidate_pool(
         or not (direct_enabled or extended_enabled)
     ):
         return baseline, diagnostics("miss")
+    mode = getattr(settings, "graph_remediation_mode", "legacy")
+    if mode == "v2":
+        from .hybrid_graph_v2 import hybrid_graph_candidate_pool_v2
+
+        return hybrid_graph_candidate_pool_v2(
+            snapshot, query, authorization, dependencies
+        )
+    if mode != "legacy":
+        try:
+            current, _ = reauthorized_baseline(baseline, authorization)
+        except Exception:
+            current = ()
+        return current, diagnostics("miss" if mode == "shadow" else "error")
     overall_timeout_ms = getattr(settings, "graph_overall_timeout_ms", None)
     if type(overall_timeout_ms) is not int or not 1 <= overall_timeout_ms <= 5_000:
         return baseline, diagnostics("error")
@@ -226,9 +239,11 @@ def hybrid_graph_candidate_pool(
             return final_baseline, diagnostics("error")
         graph_count = fused.diagnostics.graph_only_selected
         branch_diagnostics.fusion = fused.diagnostics
-        return fused.rerank_candidates, diagnostics(
-            "hit" if graph_count else "miss", graph_count
-        )
+        from .chunk_search_rank_policy import fuse_validated_graph
+
+        return fuse_validated_graph(
+            snapshot, fused, query, ready_checksum
+        ), diagnostics("hit" if graph_count else "miss", graph_count)
     except Exception:
         return final_baseline, diagnostics("error")
 

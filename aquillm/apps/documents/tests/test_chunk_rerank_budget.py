@@ -76,7 +76,7 @@ def test_invalid_rerank_limits_fall_back_to_deployment_defaults(monkeypatch):
     assert rerank_template_reserve_tokens() == 96
 
 
-def test_single_score_retries_context_overflow_with_tighter_pair(monkeypatch):
+def test_single_score_context_overflow_stops_without_request_retry(monkeypatch):
     payloads: list[dict] = []
 
     class Response:
@@ -114,12 +114,8 @@ def test_single_score_retries_context_overflow_with_tighter_pair(monkeypatch):
         reserve_tokens=256,
     )
 
-    assert result == (7, 0.75)
-    assert len(payloads) == 2
-    assert len(payloads[1]["text_2"]) < len(payloads[0]["text_2"])
-    assert count_rerank_tokens(
-        payloads[1]["text_1"], payloads[1]["text_2"]
-    ) <= 256
+    assert result is None
+    assert len(payloads) == 1
 
 
 def test_single_score_preserves_locally_budgeted_evidence_for_server_fit(monkeypatch):

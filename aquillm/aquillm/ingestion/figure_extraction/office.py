@@ -52,33 +52,45 @@ def _normalize_image(image_bytes: bytes, content_type: str) -> tuple[bytes, str]
     return image_bytes, ext
 
 
-def _extract_via_pdf(data: bytes, source_format: str, filename: str) -> Iterator[ExtractedFigure] | None:
-    """
-    Try to extract figures by converting to PDF first.
-    
-    Returns None if conversion is not available or fails.
-    """
+def _extract_via_pdf(data: bytes, source_format: str, filename: str) -> tuple[ExtractedFigure, ...]:
+    from .office_convert import convert_figures_pdf
+    from .pdf import extract_figures as extract_pdf_figures
+    outcome = convert_figures_pdf(data, source_format, filename)
+    if outcome.status != 'converted':
+        return ()
+    figures = []
     try:
-        from .office_convert import convert_to_pdf, is_libreoffice_available
-        from .pdf import extract_figures as extract_pdf_figures
-    except ImportError:
-        return None
-    
-    if not is_libreoffice_available():
-        logger.debug("obs.figures.libreoffice_unavailable", source_format=source_format)
-        return None
+        for figure in extract_pdf_figures(outcome.pdf_bytes, filename):
+            figure.location_metadata['converted_from'] = source_format
+            figures.append(figure)
+    except Exception:
+        logger.debug('obs.figures.converted_extract_failed', source_format=source_format)
+    return tuple(figures)
 
-    pdf_bytes = convert_to_pdf(data, source_format, filename)
-    if not pdf_bytes:
-        logger.debug("obs.figures.convert_failed", source_format=source_format, filename=filename or source_format)
-        return None
 
-    logger.info("obs.figures.convert_used", source_format=source_format.upper(), filename=filename)
-    
-    # Update location metadata to indicate conversion was used
-    for figure in extract_pdf_figures(pdf_bytes, filename):
-        figure.location_metadata["converted_from"] = source_format
-        yield figure
+def _extract_office_figures(data, source_format, filename, direct):
+    from hashlib import sha256
+    seen = set()
+    total = 0
+    try:
+        converted = _extract_via_pdf(data, source_format, filename)
+    except Exception:
+        converted = ()
+    for factory in (lambda: iter(converted), lambda: direct(data, filename)):
+        try:
+            iterator = factory()
+            for figure in iterator:
+                digest = sha256(figure.image_bytes).hexdigest()
+                if digest in seen:
+                    continue
+                seen.add(digest)
+                figure.figure_index = total
+                yield figure
+                total += 1
+                if total >= MAX_IMAGES_PER_DOCUMENT:
+                    return
+        except Exception:
+            logger.debug('obs.figures.extract_failed', source_format=source_format)
 
 
 def _extract_docx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
@@ -144,6 +156,13 @@ def _extract_docx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
 
 def _extract_pptx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
     """Extract embedded raster images directly from PPTX."""
+    def ordered_shapes(shapes):
+        for shape in shapes:
+            if shape.shape_type == MSO_SHAPE_TYPE.GROUP:
+                yield from ordered_shapes(shape.shapes)
+            else:
+                yield shape
+
     try:
         from pptx import Presentation
         from pptx.enum.shapes import MSO_SHAPE_TYPE
@@ -165,13 +184,13 @@ def _extract_pptx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
                 break
             
             slide_title = ""
-            for shape in slide.shapes:
+            for shape in ordered_shapes(slide.shapes):
                 if shape.has_text_frame and shape.text.strip():
                     if hasattr(shape, 'is_placeholder') and shape.is_placeholder:
                         slide_title = shape.text.strip()[:200]
                         break
             
-            for shape in slide.shapes:
+            for shape in ordered_shapes(slide.shapes):
                 if total_extracted >= MAX_IMAGES_PER_DOCUMENT:
                     break
                 
@@ -230,51 +249,9 @@ def _extract_pptx_direct(data: bytes, filename: str = "") -> Iterator[ExtractedF
         logger.info("obs.figures.extract_done", source_format="pptx", figure_count=total_extracted, filename=filename)
 
 
-def extract_figures_docx(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
-    """
-    Extract figures from a DOCX file.
-    
-    First tries PDF conversion (to capture vector graphics like charts),
-    falls back to direct extraction if LibreOffice is not available.
-    
-    Args:
-        data: Raw DOCX bytes
-        filename: Optional filename for logging
-        
-    Yields:
-        ExtractedFigure for each valid image found
-    """
-    # Try PDF conversion first (captures vector graphics)
-    pdf_result = _extract_via_pdf(data, "docx", filename)
-    if pdf_result is not None:
-        yield from pdf_result
-        return
-    
-    # Fall back to direct extraction
-    logger.debug("obs.figures.direct_fallback", source_format="docx", filename=filename)
-    yield from _extract_docx_direct(data, filename)
+def extract_figures_docx(data: bytes, filename: str = '') -> Iterator[ExtractedFigure]:
+    yield from _extract_office_figures(data, 'docx', filename, _extract_docx_direct)
 
 
-def extract_figures_pptx(data: bytes, filename: str = "") -> Iterator[ExtractedFigure]:
-    """
-    Extract figures from a PPTX file.
-    
-    First tries PDF conversion (to capture vector graphics like charts and diagrams),
-    falls back to direct extraction if LibreOffice is not available.
-    
-    Args:
-        data: Raw PPTX bytes
-        filename: Optional filename for logging
-        
-    Yields:
-        ExtractedFigure for each valid image found
-    """
-    # Try PDF conversion first (captures vector graphics)
-    pdf_result = _extract_via_pdf(data, "pptx", filename)
-    if pdf_result is not None:
-        yield from pdf_result
-        return
-    
-    # Fall back to direct extraction
-    logger.debug("obs.figures.direct_fallback", source_format="pptx", filename=filename)
-    yield from _extract_pptx_direct(data, filename)
+def extract_figures_pptx(data: bytes, filename: str = '') -> Iterator[ExtractedFigure]:
+    yield from _extract_office_figures(data, 'pptx', filename, _extract_pptx_direct)

@@ -1,244 +1,82 @@
-from unittest.mock import patch
-
+"""Media bytes remain distinct from text and exact source-owned figure parents."""
+from dataclasses import replace
+from hashlib import sha256
 import pytest
-from django.contrib.auth.models import User
-from django.core.files.uploadedfile import SimpleUploadedFile
-
-from aquillm.ingestion.types import ExtractedTextPayload
-from aquillm.models import (
-    Collection,
-    DocumentFigure,
-    ImageUploadDocument,
-    IngestionBatch,
-    IngestionBatchItem,
-    MediaUploadDocument,
-    RawTextDocument,
-)
+from apps.documents.models import DocumentFigure, ImageUploadDocument, MediaUploadDocument, RawTextDocument
+from apps.ingestion.models import SourceArtifact
 from aquillm.tasks import ingest_uploaded_file_task
+from .output_support import upload
+
+pytestmark = pytest.mark.django_db(transaction=True)
 
 
-@pytest.mark.django_db
-@patch("aquillm.models.create_chunks.delay", lambda *_args, **_kwargs: None)
-def test_ingest_task_dual_saves_media_and_text(monkeypatch, settings, tmp_path):
-    settings.STORAGES = {
-        "default": {
-            "BACKEND": "django.core.files.storage.FileSystemStorage",
-            "OPTIONS": {"location": str(tmp_path)},
-        },
-        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
-    }
-
-    user = User.objects.create_user(username="dual-save-user", password="pw12345")
-    collection = Collection.objects.create(name="Dual Save Collection")
-    batch = IngestionBatch.objects.create(user=user, collection=collection)
-    item = IngestionBatchItem.objects.create(
-        batch=batch,
-        source_file=SimpleUploadedFile("mixed.zip", b"placeholder", content_type="application/zip"),
-        original_filename="mixed.zip",
-        content_type="application/zip",
-        file_size_bytes=11,
-    )
-
-    payloads = [
-        ExtractedTextPayload(
-            title="whiteboard-photo",
-            normalized_type="image_ocr",
-            full_text="diagram text",
-            modality="image",
-            media_bytes=b"\x89PNG...",
-            media_filename="whiteboard.png",
-            media_content_type="image/png",
-            provider="qwen",
-            model="qwen-ocr",
-        ),
-        ExtractedTextPayload(
-            title="meeting-audio",
-            normalized_type="audio_transcript",
-            full_text="meeting transcript",
-            modality="audio",
-            media_bytes=b"ID3...",
-            media_filename="meeting.mp3",
-            media_content_type="audio/mpeg",
-            provider="openai",
-            model="whisper-large-v3",
-        ),
-        ExtractedTextPayload(
-            title="project-notes",
-            normalized_type="txt",
-            full_text="plain text notes",
-            modality="text",
-        ),
-    ]
-
-    monkeypatch.setattr("aquillm.ingestion.parsers.extract_text_payloads", lambda *_args, **_kwargs: payloads)
-
-    ingest_uploaded_file_task(item.id)
+def test_ingest_task_dual_saves_media_and_text(upload, monkeypatch):
+    monkeypatch.setattr('aquillm.ingestion.parsers.extract_text_from_image',
+        lambda *a, **k: {'extracted_text': 'diagram text', 'provider': 'fake', 'model': 'ocr'})
+    monkeypatch.setattr('aquillm.ingestion.parsers.transcribe_media_bytes', lambda *a, **k: 'meeting transcript')
+    item = upload((('whiteboard.png', b'image-pixels'), ('meeting.mp3', b'audio-samples'),
+                   ('project-notes.txt', b'plain text notes')))
+    ingest_uploaded_file_task.run(item.pk)
     item.refresh_from_db()
-
-    assert item.status == IngestionBatchItem.Status.SUCCESS
+    assert item.status == 'partial'  # Existing OCR/transcription has no native structure.
     assert len(item.document_ids) == 3
-    assert ImageUploadDocument.objects.filter(collection=collection).count() == 1
-    assert MediaUploadDocument.objects.filter(collection=collection).count() == 1
-    assert RawTextDocument.objects.filter(collection=collection, title="project-notes").count() == 1
-
-    outputs = item.parser_metadata.get("outputs", [])
-    assert len(outputs) == 3
-    assert any(output.get("modality") == "image" and output.get("raw_media_saved") for output in outputs)
-    assert any(output.get("modality") == "audio" and output.get("raw_media_saved") for output in outputs)
-    assert any(output.get("modality") == "text" and output.get("text_extracted") for output in outputs)
+    image, audio = ImageUploadDocument.objects.get(), MediaUploadDocument.objects.get()
+    assert image.image_file.read() == b'image-pixels'
+    assert audio.media_file.read() == b'audio-samples'
+    assert image.full_text == 'diagram text' and audio.full_text == 'meeting transcript'
+    assert RawTextDocument.objects.get().full_text == 'plain text notes'
+    assert all(row['status'] == 'success' for row in item.parser_metadata['outputs'])
+    assert all(row['source_occurrence_id'] for row in item.parser_metadata['outputs'])
 
 
-@pytest.mark.django_db
-@patch("aquillm.models.create_chunks.delay", lambda *_args, **_kwargs: None)
-def test_ingest_task_allows_multiple_no_text_figures(monkeypatch, settings, tmp_path):
-    settings.STORAGES = {
-        "default": {
-            "BACKEND": "django.core.files.storage.FileSystemStorage",
-            "OPTIONS": {"location": str(tmp_path)},
-        },
-        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
-    }
+def figures(monkeypatch, captions):
+    from aquillm.ingestion import parsers
+    original = parsers.extract_text_payloads
+    def extract(*args, **kwargs):
+        outputs = original(*args, **kwargs)
+        if str(args[0]).endswith('.zip'):
+            for index, caption in enumerate(captions):
+                outputs.append(replace(outputs[0], normalized_type='document_figure', modality='image',
+                    title=f'Figure {index}', full_text=caption, media_bytes=f'pixels-{index}'.encode(),
+                    metadata={'figure_index': index, 'source_format': 'pptx'}))
+        return outputs
+    monkeypatch.setattr(parsers, 'extract_text_payloads', extract)
 
-    user = User.objects.create_user(username="figure-user", password="pw12345")
-    collection = Collection.objects.create(name="Figure Collection")
-    batch = IngestionBatch.objects.create(user=user, collection=collection)
-    item = IngestionBatchItem.objects.create(
-        batch=batch,
-        source_file=SimpleUploadedFile("slides.pptx", b"pptx", content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation"),
-        original_filename="slides.pptx",
-        content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        file_size_bytes=4,
-    )
 
-    payloads = [
-        ExtractedTextPayload(
-            title="slides",
-            normalized_type="pptx",
-            full_text="slide deck text",
-            modality="text",
-        ),
-        ExtractedTextPayload(
-            title="slide-1-figure",
-            normalized_type="document_figure",
-            full_text="",
-            modality="image",
-            media_bytes=b"\x89PNGfigure1",
-            media_filename="slide1.png",
-            media_content_type="image/png",
-            metadata={
-                "source_format": "pptx",
-                "source_document_title": "slides",
-                "figure_index": 0,
-                "location_metadata": {"slide_number": 1},
-            },
-        ),
-        ExtractedTextPayload(
-            title="slide-2-figure",
-            normalized_type="document_figure",
-            full_text="",
-            modality="image",
-            media_bytes=b"\x89PNGfigure2",
-            media_filename="slide2.png",
-            media_content_type="image/png",
-            metadata={
-                "source_format": "pptx",
-                "source_document_title": "slides",
-                "figure_index": 1,
-                "location_metadata": {"slide_number": 2},
-            },
-        ),
-    ]
-
-    monkeypatch.setattr("aquillm.ingestion.parsers.extract_text_payloads", lambda *_args, **_kwargs: payloads)
-
-    ingest_uploaded_file_task(item.id)
+def test_no_text_figures_keep_artifacts_and_explicit_failures(upload, monkeypatch):
+    figures(monkeypatch, ['', ''])
+    item = upload((('slides.txt', b'slide deck text'),))
+    ingest_uploaded_file_task.run(item.pk)
     item.refresh_from_db()
-
-    assert item.status == IngestionBatchItem.Status.SUCCESS
-    source_doc = RawTextDocument.objects.get(collection=collection, title="slides")
-    assert DocumentFigure.objects.filter(collection=collection).count() == 0
-
-    figures = list(DocumentFigure.objects.all())
-    assert len(figures) == 2
-    assert len({figure.collection_id for figure in figures}) == 1
-    assert figures[0].collection.parent_id == collection.id
-    assert figures[0].collection.name.endswith(" - Figures")
-    assert all(figure.parent_object_id == source_doc.id for figure in figures)
+    assert item.status == 'partial'
+    assert RawTextDocument.objects.count() == 1 and not DocumentFigure.objects.exists()
+    assert [row['error_code'] for row in item.parser_metadata['outputs']] == [None, 'empty_extraction', 'empty_extraction']
+    for index in range(2):
+        assert SourceArtifact.objects.filter(sha256=sha256(f'pixels-{index}'.encode()).hexdigest()).exists()
 
 
-@pytest.mark.django_db
-@patch("aquillm.models.create_chunks.delay", lambda *_args, **_kwargs: None)
-def test_ingest_task_allows_duplicate_figure_text(monkeypatch, settings, tmp_path):
-    settings.STORAGES = {
-        "default": {
-            "BACKEND": "django.core.files.storage.FileSystemStorage",
-            "OPTIONS": {"location": str(tmp_path)},
-        },
-        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
-    }
-
-    user = User.objects.create_user(username="figure-text-user", password="pw12345")
-    collection = Collection.objects.create(name="Figure Text Collision Collection")
-    batch = IngestionBatch.objects.create(user=user, collection=collection)
-    item = IngestionBatchItem.objects.create(
-        batch=batch,
-        source_file=SimpleUploadedFile("slides.pptx", b"pptx", content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation"),
-        original_filename="slides.pptx",
-        content_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
-        file_size_bytes=4,
-    )
-
-    payloads = [
-        ExtractedTextPayload(
-            title="slides",
-            normalized_type="pptx",
-            full_text="repeated slides text",
-            modality="text",
-        ),
-        ExtractedTextPayload(
-            title="slide-1-figure",
-            normalized_type="document_figure",
-            full_text="Repeated extracted caption",
-            modality="image",
-            media_bytes=b"\x89PNGfigureA",
-            media_filename="slide1.png",
-            media_content_type="image/png",
-            metadata={
-                "source_format": "pptx",
-                "source_document_title": "slides",
-                "figure_index": 0,
-                "location_metadata": {"slide_number": 1},
-            },
-        ),
-        ExtractedTextPayload(
-            title="slide-2-figure",
-            normalized_type="document_figure",
-            full_text="Repeated extracted caption",
-            modality="image",
-            media_bytes=b"\x89PNGfigureB",
-            media_filename="slide2.png",
-            media_content_type="image/png",
-            metadata={
-                "source_format": "pptx",
-                "source_document_title": "slides",
-                "figure_index": 1,
-                "location_metadata": {"slide_number": 2},
-            },
-        ),
-    ]
-
-    monkeypatch.setattr("aquillm.ingestion.parsers.extract_text_payloads", lambda *_args, **_kwargs: payloads)
-
-    ingest_uploaded_file_task(item.id)
+def test_duplicate_figure_text_is_collision_without_fabricated_retrieval_text(upload, monkeypatch):
+    figures(monkeypatch, ['Repeated extracted caption', 'Repeated extracted caption'])
+    item = upload((('slides.txt', b'slide deck text'),))
+    ingest_uploaded_file_task.run(item.pk)
     item.refresh_from_db()
+    assert item.status == 'partial'
+    parent, figure = RawTextDocument.objects.get(), DocumentFigure.objects.get()
+    assert figure.parent_document.id == parent.id
+    assert figure.full_text == 'Repeated extracted caption'
+    assert item.parser_metadata['outputs'][-1]['error_code'] == 'content_hash_collision'
+    assert len(item.document_ids) == 2
 
-    assert item.status == IngestionBatchItem.Status.SUCCESS
-    source_doc = RawTextDocument.objects.get(collection=collection, title="slides")
-    assert DocumentFigure.objects.filter(collection=collection).count() == 0
 
-    figures = list(DocumentFigure.objects.all())
-    assert len(figures) == 2
-    assert len({figure.collection_id for figure in figures}) == 1
-    assert figures[0].collection.parent_id == collection.id
-    assert figures[0].collection.name.endswith(" - Figures")
-    assert all(figure.parent_object_id == source_doc.id for figure in figures)
+def test_distinct_figures_publish_two_exact_children(upload, monkeypatch):
+    figures(monkeypatch, ['first caption', 'second caption'])
+    item = upload((('slides.txt', b'slide deck text'),))
+    ingest_uploaded_file_task.run(item.pk)
+    item.refresh_from_db()
+    assert item.status == 'success' and len(item.document_ids) == 3
+    parent = RawTextDocument.objects.get()
+    children = list(DocumentFigure.objects.all())
+    assert len(children) == 2
+    assert len({child.collection_id for child in children}) == 1
+    assert all(child.parent_document.id == parent.id for child in children)
+    assert children[0].collection.parent_id == parent.collection_id

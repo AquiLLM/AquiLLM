@@ -44,6 +44,23 @@ ORIGINAL_FIELDS = (
     "source_validation_complete",
     "source_bindings",
     "error",
+    "primary_question",
+    "source_scope",
+    "support_decision",
+    "support_delivery_binding",
+    "support_packet_identity",
+    "runtime_identity",
+    "policy_identity",
+    "final_stream",
+    "final_delta",
+    "persisted_answer",
+    "final_message_id",
+    "publication_capture_complete",
+    "corpus_sha256",
+    "domain",
+    "support_question",
+    "score_metadata",
+    "lane_observations",
 )
 
 
@@ -87,6 +104,8 @@ def review_subject(row):
         ):
             return None
         original = {key: row[key] for key in ORIGINAL_FIELDS if key in row}
+        if "support_decision" in row:
+            original["depth"] = row.get("depth")
         return {
             "schema": "evidence-review-subject-v1",
             "observation_sha256": digest(original),
@@ -133,6 +152,10 @@ def quality_review_errors(reports):
                 or not case
                 or row.get("code_revision") != report.get("revision")
                 or row.get("snapshot", {}).get("source") != digest(case["sources"])
+                or (
+                    "support_decision" in row
+                    and row.get("primary_question") != case["question"]
+                )
                 or any(row.get(k) != v for k, v in review_claims(case, review).items())
             ):
                 errors.append(f"{mode}: missing/stale human observation review")

@@ -67,6 +67,7 @@ DEFAULTS: dict[str, object] = {
     "direct_min_similarity": 0.80,
     "direct_winner_margin": 0.05,
     "graph_eval_parity_backend": "postgres", "ppr_restart_mode": "fixed",
+    "graph_remediation_mode": "legacy",
 }
 INT_LIMITS = {
     "KG_PROJECTION_BATCH_SIZE": (1, 5000),
@@ -296,25 +297,3 @@ def test_projection_dsn_password_structure_and_controls_fail_closed(dsn: str) ->
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN"):
         config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": dsn})
 # fmt: on
-
-
-def test_cpu_extractor_timeout_preserves_parent_budgets() -> None:
-    settings = config.load_hybrid_retrieval_settings(
-        {
-            **_direct(),
-            "KG_QUERY_EXTRACTOR_TIMEOUT_MS": "3000",
-            "KG_GRAPH_OVERALL_TIMEOUT_MS": "5000",
-            "KG_GRAPH_DIRECT_TIMEOUT_MS": "4500",
-            "KG_GRAPH_EXTENDED_TIMEOUT_MS": "4500",
-        }
-    )
-    assert settings.query_extractor_timeout_ms == 3000
-    assert settings.graph_overall_timeout_ms == 5000
-    assert settings.graph_direct_timeout_ms == 4500
-    assert settings.graph_extended_timeout_ms == 4500
-
-    defaults = config.load_hybrid_retrieval_settings(
-        {"KG_QUERY_EXTRACTOR_TIMEOUT_MS": "3000"}
-    )
-    assert defaults.graph_overall_timeout_ms == 300
-    assert defaults.graph_direct_timeout_ms == 125

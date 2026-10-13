@@ -29,10 +29,11 @@ def isolated_memgraph_container():
 
 @pytest.mark.container
 def test_memgraph_repository_stage_read_validate_ready_delete_end_to_end(
-    isolated_memgraph_container,
+    isolated_memgraph_container, request,
 ) -> None:
     target = isolated_memgraph_container
     driver = Neo4jMemgraphDriver(target["uri"], "", "", database=target["database"])
+    request.addfinalizer(driver.close)
     repository = MemgraphProjectionRepository(driver)
     repository.ensure_schema(timeout_seconds=5.0)
     bundle = _closed_bundle()
@@ -86,7 +87,7 @@ def test_memgraph_repository_stage_read_validate_ready_delete_end_to_end(
 
 @pytest.mark.container
 def test_batched_projection_roundtrip_retry_indexes_and_rollback_at_live_timeout(
-    isolated_memgraph_container,
+    isolated_memgraph_container, request,
 ):
     from dataclasses import asdict
     from time import perf_counter
@@ -115,6 +116,7 @@ def test_batched_projection_roundtrip_retry_indexes_and_rollback_at_live_timeout
             return result
 
     driver = TimedDriver()
+    request.addfinalizer(driver.close)
     repository = MemgraphProjectionRepository(driver)
     bundle = _large_bundle()
     checksum = projection_checksum(bundle)

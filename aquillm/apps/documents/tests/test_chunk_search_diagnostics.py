@@ -10,96 +10,9 @@ from django.test import override_settings
 from apps.documents.services.chunk_search import text_chunk_search
 
 
-class _Modality:
-    TEXT = "text"
-
-
-class _SliceList:
-    def __init__(self, rows, count_val: int = 0):
-        self._rows = rows
-        self._count_val = count_val
-
-    def __getitem__(self, s):
-        return list(self._rows)
-
-    def count(self):
-        return self._count_val
-
-
-class _VecChain:
-    def __init__(self, rows, count_val: int = 0):
-        self._rows = rows
-        self._count_val = count_val
-
-    def defer(self, *fields: str):
-        return self
-
-    def order_by(self, *a):
-        return _SliceList(self._rows, self._count_val)
-
-    def count(self):
-        return self._count_val
-
-
-class _ExcludeChain:
-    """Represents the result of .exclude(embedding__isnull=True)."""
-
-    def __init__(self, rows, count_val: int = 0):
-        self._rows = rows
-        self._count_val = count_val
-
-    def defer(self, *fields: str):
-        return self
-
-    def order_by(self, *a):
-        return _SliceList(self._rows, self._count_val)
-
-    def count(self):
-        return self._count_val
-
-
-class _TriChain:
-    def __init__(self, rows):
-        self._rows = rows
-
-    def annotate(self, **k):
-        return self
-
-    def filter(self, *args, **k):
-        return self
-
-    def order_by(self, *a):
-        return _SliceList(self._rows)
-
-
-class _QRoot:
-    """Query root supporting vector, trigram, and count chains."""
-
-    def __init__(self, vec_rows, tri_rows, count_val: int = 0):
-        self._vec = vec_rows
-        self._tri = tri_rows
-        self._count_val = count_val
-
-    def exclude(self, **k):
-        return _ExcludeChain(self._vec, self._count_val)
-
-    def filter(self, *args, **k):
-        return _TriChain(self._tri)
-
-    def count(self):
-        return self._count_val
-
-
-class _ModelCls:
-    Modality = _Modality
-    objects = MagicMock()
-
-
-def _make_cfg():
-    cfg = MagicMock()
-    cfg.vector_top_k = 30
-    cfg.trigram_top_k = 30
-    return cfg
+from apps.documents.tests.chunk_search_diagnostics_support import (
+    _Modality, _ModelCls, _QRoot, _SliceList, _make_cfg,
+)
 
 
 @override_settings(RAG_CACHE_ENABLED=False, KG_OVERLAY_ENABLED=False)
@@ -218,13 +131,11 @@ def test_vector_error_captured_in_diagnostics(
 
 @override_settings(RAG_CACHE_ENABLED=False)
 @patch("apps.documents.services.chunk_search.apps.get_app_config")
-@patch("apps.documents.services.chunk_search.rerank_chunks")
 @patch("aquillm.utils.get_embedding")
-def test_no_vector_error_when_embed_succeeds(mock_embed, mock_rerank, mock_app_cfg):
-    """vector_error is None when embedding succeeds."""
+def test_raw_embedding_success_does_not_claim_compatibility(mock_embed, mock_app_cfg):
+    """A successful historical raw-vector path provides no observed compatibility."""
     mock_embed.return_value = [0.1] * 16
     chunks = [MagicMock(pk=i, content=f"chunk{i}") for i in range(3)]
-    mock_rerank.return_value = chunks
     mock_app_cfg.return_value = _make_cfg()
 
     mc = _ModelCls
@@ -234,7 +145,9 @@ def test_no_vector_error_when_embed_succeeds(mock_embed, mock_rerank, mock_app_c
         mc, "query with results", 3, [MagicMock()]
     )
 
-    assert diagnostics["vector_error"] is None
+    assert diagnostics["vector_error"] == "embedding_unavailable"
+    assert tuple(_vec) == ()
+    mock_embed.assert_not_called()
 
 
 @override_settings(RAG_CACHE_ENABLED=False)

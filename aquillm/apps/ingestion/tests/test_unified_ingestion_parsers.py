@@ -14,8 +14,8 @@ def test_detect_type_for_known_extensions():
 def test_extract_csv_rows_into_text():
     payloads = extract_text_payloads("data.csv", b"name,score\nalice,9\n")
     assert len(payloads) == 1
-    assert "name, score" in payloads[0].full_text
-    assert "alice, 9" in payloads[0].full_text
+    assert payloads[0].full_text == 'row=1 A1 value=name B1 value=score\nrow=2 A2 name=alice B2 score=9'
+    assert payloads[0].extraction.elements[-1].cells[1].address == 'B2'
 
 
 def test_extract_json_to_pretty_text():

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
+from time import time
+from apps.documents.services.rerank_transport_policy import RerankProtocolV1
 
 from apps.documents.services import rag_cache
 from apps.documents.services.chunk_rerank_budget import count_rerank_tokens
@@ -30,7 +32,19 @@ def _configure_reranker(monkeypatch, *, capability=None):
     )
     monkeypatch.setattr(rag_cache, "get_cached_rerank_result", lambda *_args: None)
     monkeypatch.setattr(
-        rag_cache, "get_cached_rerank_capability", lambda *_args: capability
+        rag_cache,
+        "get_cached_rerank_capability",
+        lambda *_args, **_kwargs: (
+            RerankProtocolV1(
+                capability["endpoint"],
+                capability["shape"],
+                "reranker",
+                time() - 1,
+                time() + 300,
+            ).as_cache_entry()
+            if capability
+            else None
+        ),
     )
     monkeypatch.setattr(rag_cache, "set_cached_rerank_result", lambda *_args: None)
     monkeypatch.setattr(rag_cache, "set_cached_rerank_capability", lambda *_args: None)
@@ -40,7 +54,10 @@ def _configure_reranker(monkeypatch, *, capability=None):
 def test_shared_query_keeps_every_uneven_document_pair_within_budget(
     mock_ordered, monkeypatch
 ):
-    _configure_reranker(monkeypatch)
+    _configure_reranker(
+        monkeypatch,
+        capability={"endpoint": "http://reranker/rerank", "shape": "rerank_documents"},
+    )
     monkeypatch.setattr(
         "apps.documents.services.chunk_rerank_local_vllm.rerank_model_is_qwen3_vl",
         lambda: False,
@@ -54,7 +71,15 @@ def test_shared_query_keeps_every_uneven_document_pair_within_budget(
 
     def post(_endpoint, *, json, **_kwargs):
         payloads.append(json)
-        return _Response(200, {"results": [{"index": 0}]})
+        return _Response(
+            200,
+            {
+                "results": [
+                    {"index": 0, "relevance_score": 0.9},
+                    {"index": 1, "relevance_score": 0.2},
+                ]
+            },
+        )
 
     monkeypatch.setattr(
         "apps.documents.services.chunk_rerank_local_vllm.requests.post", post
@@ -107,11 +132,11 @@ def test_cached_batch_score_capability_goes_directly_to_score(
 
 
 @patch("apps.documents.services.chunk_rerank_local_vllm.ordered_queryset_from_ids")
-def test_failed_cached_batch_score_falls_back_to_rerank_discovery(
+def test_failed_cached_batch_score_returns_authorized_rank_without_discovery(
     mock_ordered, monkeypatch
 ):
     capability = {
-        "endpoint": "http://cached/score",
+        "endpoint": "http://reranker/score",
         "shape": "score_batch_text_pairs",
     }
     _configure_reranker(monkeypatch, capability=capability)
@@ -141,18 +166,17 @@ def test_failed_cached_batch_score_falls_back_to_rerank_discovery(
 
     ranked = rerank_via_local_vllm(object, "query", rows, 1)
 
-    assert ranked == (2,)
-    assert endpoints[0] == "http://cached/score"
-    assert any(endpoint.endswith("/rerank") for endpoint in endpoints[1:])
-    assert deleted == [("http://reranker/v1", "reranker")]
+    assert ranked == (1,)
+    assert endpoints == ["http://reranker/score"]
+    assert deleted == []
 
 
 @patch("apps.documents.services.chunk_rerank_local_vllm.ordered_queryset_from_ids")
-def test_malformed_cached_batch_response_falls_back_to_rerank_discovery(
+def test_malformed_cached_batch_response_returns_authorized_rank_without_discovery(
     mock_ordered, monkeypatch
 ):
     capability = {
-        "endpoint": "http://cached/score",
+        "endpoint": "http://reranker/score",
         "shape": "score_batch_text_pairs",
     }
     _configure_reranker(monkeypatch, capability=capability)
@@ -189,7 +213,6 @@ def test_malformed_cached_batch_response_falls_back_to_rerank_discovery(
 
     ranked = rerank_via_local_vllm(object, "query", rows, 1)
 
-    assert ranked == (2,)
-    assert endpoints[0] == "http://cached/score"
-    assert any(endpoint.endswith("/rerank") for endpoint in endpoints[1:])
-    assert deleted == [("http://reranker/v1", "reranker")]
+    assert ranked == (1,)
+    assert endpoints == ["http://reranker/score"]
+    assert deleted == []

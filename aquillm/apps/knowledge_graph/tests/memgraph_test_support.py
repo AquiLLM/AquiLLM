@@ -71,6 +71,12 @@ def _verified_cleanup(name: str, network: str, volume: str, run_label: str) -> N
 
 @pytest.fixture
 def isolated_memgraph_container():
+    from apps.knowledge_graph.tests.owned_memgraph_test_support import owned_memgraph
+
+    with owned_memgraph() as target:
+        if target is not None:
+            yield target
+            return
     if os.environ.get("KG_REQUIRE_MEMGRAPH_TESTS") != "1":
         pytest.skip("set KG_REQUIRE_MEMGRAPH_TESTS=1 for isolated Memgraph tests")
     run_label = uuid.uuid4().hex

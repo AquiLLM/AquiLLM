@@ -121,6 +121,8 @@ def _caps(value) -> None:
     for item, maximum in zip(fields(value), (64, 10_000, 128, 2, 200, 1_000, 3_000, 3, 2), strict=True): _count(getattr(value, item.name), item.name, 1, maximum)
     if value.max_scope_collections > value.max_scope_documents or value.max_evidence_per_edge > value.max_evidence_rows: raise ValueError("snapshot caps are incoherent")
 def _algorithm(value) -> None:
+    vector = tuple(getattr(value, name) for name in _ALGORITHM_TAGS)
+    if vector == ("canonical_frontier_v2", "frontier_transition_v2", "frontier_evidence_v2", "frontier_seed_v2"): return
     for name, expected in _ALGORITHM_TAGS.items():
         if getattr(value, name) != expected: raise ValueError(f"{name} must be {expected}")
 def _audit(value) -> None:
@@ -139,7 +141,9 @@ _SPECIAL = {
 def _validate_snapshot(s) -> None:
     _exact(s.algorithm, ProjectedAlgorithmSignatureV1, "algorithm"); _exact(s.caps, ProjectedSnapshotCapsV1, "caps"); _exact(s.allowed_scope, ProjectedAllowedScopeV1, "allowed_scope")
     _count(s.load_max_hops, "load_max_hops", 1, s.caps.max_hops); _rows(s.identity_keys, str, "identities", s.caps.max_nodes, _opaque_key)
-    if not s.identity_keys: raise ValueError("identity_keys must not be empty")
+    if not s.identity_keys:
+        if s.algorithm.algorithm_version != "canonical_frontier_v2": raise ValueError("identity_keys must not be empty")
+        if s.seed_identities or s.relation_groups or s.mentions or s.audit_rows: raise ValueError("empty identities require a closed empty V2 graph")
     specs = (
         (s.seed_identities, ProjectedSeedIdentityV1, s.caps.max_nodes, _seed_key),
         (s.relation_groups, ProjectedRelationGroupV1, s.caps.max_edges * 2, _group_key),

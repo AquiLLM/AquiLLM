@@ -11,11 +11,14 @@ from apps.chat.tests.chat_message_test_support import _FakeLLMInterface, stub_ex
 from apps.chat.tests.test_direct_rag_websocket_smoke import (
     _append_payload,
     _consumer,
-    _mock_user_and_convo,
+    _persisted_user_and_convo,
     _results_payload,
 )
 from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
+from lib.llm.answer_publication import LIMITED_ANSWER
+from lib.llm.tests.publication_fixture_support import UNCERTAINTY
+from apps.chat.tests.persisted_direct_test_support import close_direct_worker
 
 DOC = "11111111-1111-4111-8111-111111111111"
 
@@ -31,10 +34,16 @@ async def test_websocket_command_retrieves_before_model_and_publishes_final_delt
     monkeypatch,
     command,
     tool_name,
+    close_direct_worker,
 ):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "0")
     order = []
-    answer = "The paper describes calibration [doc:doc-a chunk:1]."
+    case, user, db = await _persisted_user_and_convo(_results_payload()["result"])
+    raw = case.rows(_results_payload())
+    document_id = str(case.documents["doc-a"].id)
+    command = command.replace(DOC, document_id)
+    answer = case.text("The paper describes calibration [doc:doc-a chunk:1].")
+    expected = UNCERTAINTY + "\n\n> " + raw["result"][0]["text"] + " " + raw["result"][0]["citation"]
     llm = _FakeLLMInterface(
         [
             LLMResponse(
@@ -56,12 +65,11 @@ async def test_websocket_command_retrieves_before_model_and_publishes_final_delt
         order.append("search")
         assert kwargs["search_string"] == "calibration"
         if tool_name == "search_single_document":
-            assert kwargs["doc_id"] == DOC
-        return _results_payload()
+            assert kwargs["doc_id"] == document_id
+        return raw
 
     llm.get_message = get_message
     monkeypatch.setattr(manual_search_turn, tool_name + "_tool", lambda *args: search)
-    user, db = _mock_user_and_convo()
     consumer = _consumer(user, db, llm)
     with (
         patch(
@@ -74,11 +82,12 @@ async def test_websocket_command_retrieves_before_model_and_publishes_final_delt
         ),
         patch("apps.chat.consumers.chat_receive.run_llm_spin", new=AsyncMock()) as spin,
     ):
-        await handle_chat_receive(consumer, _append_payload(command, [1]))
+        await handle_chat_receive(consumer, _append_payload(command, case.collections((1,))))
     assert order == ["search", "model"]
     spin.assert_not_called()
     assert consumer.convo.messages[0].content == command
-    assert consumer.convo[-1].content.startswith(answer)
+    assert consumer.convo[-1].content == expected
+    assert consumer.convo[-1]._validated_answer.outcome == "partial"
     assert isinstance(consumer.convo[-2], ToolMessage)
     assert consumer.convo[-2].tool_name == tool_name
     assert consumer.last_sent_sequence == len(consumer.convo) - 1
@@ -91,14 +100,14 @@ async def test_websocket_command_retrieves_before_model_and_publishes_final_delt
     ]
     assert any(
         any(
-            answer in msg.get("content", "")
+            expected == msg.get("content", "")
             for msg in p.get("delta", {}).get("messages", [])
         )
         for p in payloads
     )
 
 
-async def test_reconnect_pending_manual_command_uses_requested_search(monkeypatch):
+async def test_reconnect_pending_manual_command_uses_requested_search(monkeypatch, close_direct_worker):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "0")
     calls = []
     monkeypatch.setattr(
@@ -106,11 +115,11 @@ async def test_reconnect_pending_manual_command_uses_requested_search(monkeypatc
         "vector_search_tool",
         lambda *args: lambda **kwargs: calls.append(kwargs) or {"result": []},
     )
-    user, db = _mock_user_and_convo()
+    case, user, db = await _persisted_user_and_convo()
     consumer = _consumer(user, db, _FakeLLMInterface([]))
     consumer.convo += UserMessage(content="/collection calibration")
     pending = consumer.convo
-    db.selected_collection_ids = [1]
+    db.selected_collection_ids = case.collections((1,))
     db.system_prompt = "sys"
     consumer.accept = AsyncMock()
     consumer._ChatConsumer__get_all_user_collections = AsyncMock()
@@ -134,5 +143,6 @@ async def test_reconnect_pending_manual_command_uses_requested_search(monkeypatc
         await consumer.connect()
     assert len(calls) == 1
     assert calls[0]["search_string"] == "calibration"
-    assert "no relevant passages" in consumer.convo[-1].content
+    assert consumer.convo[-1].content == LIMITED_ANSWER
+    assert consumer.llm_if.calls == []
     spin.assert_not_called()

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextvars import copy_context
 from math import isfinite
 from time import monotonic
 from typing import Protocol
@@ -128,7 +129,7 @@ def score_missing_pairs(
             pending = {}
             remaining = deadline - clock()
             if remaining > 0:
-                future = executor.submit(scorer.score_pool, pairs, remaining)
+                future = executor.submit(copy_context().run, scorer.score_pool, pairs, remaining)
                 pending[future] = -1
                 if on_submit is not None:
                     on_submit(len(rows))
@@ -148,7 +149,7 @@ def score_missing_pairs(
                     remaining = deadline - clock()
                     if remaining <= 0:
                         break
-                    future = executor.submit(scorer.score_pair, pairs[index], remaining)
+                    future = executor.submit(copy_context().run, scorer.score_pair, pairs[index], remaining)
                     pending[future] = index
                     if on_submit is not None:
                         on_submit(1)

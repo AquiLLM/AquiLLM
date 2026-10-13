@@ -6,9 +6,11 @@ import pytest
 from django.contrib.auth.models import User
 
 from apps.collections.models import Collection
-from apps.documents.models import DocumentFigure, RawTextDocument, TextChunk
+from apps.documents.models import DocumentFigure, DocumentRepresentationState, RawTextDocument, TextChunk
 from apps.documents.models.chunk_publication import ChunkPublication
-from apps.documents.tasks.chunking import _commit_chunks, create_chunks
+from apps.documents.tasks.chunking import create_chunks
+from .representation_support import retained as retained, upload as upload
+from .test_representation_tasks import delivery
 
 
 @pytest.fixture
@@ -72,44 +74,44 @@ def test_content_save_publishes_exact_identity_only_after_commit(
     assert not document.ingestion_complete
 
 
-def test_stale_chunk_publication_preserves_current_evidence(document):
-    TextChunk.objects.bulk_create([chunk_for(document)])
-    stale_hash = document.full_text_hash
+@pytest.mark.django_db(transaction=True)
+def test_stale_chunk_publication_preserves_current_evidence(retained):
+    document, _, old = retained
+    envelope = delivery(document)
+    assert create_chunks.run(**envelope) == "activated"
+    document.refresh_from_db()
+    state = DocumentRepresentationState.objects.get(document_id=document.id)
+    predecessor = state.active_generation_id
+    history = list(TextChunk.objects.filter(doc_id=document.id).order_by("pk").values_list("pk", "content"))
     document.full_text = "changed source"
     document.save(dont_rechunk=True)
-    assert (
-        _commit_chunks(
-            document,
-            [chunk_for(document, "obsolete")],
-            expected_source_hash=stale_hash,
-            using="default",
-        )
-        == "stale"
-    )
-    assert list(document.chunks.values_list("content", flat=True)) == ["old evidence"]
+    assert not document.chunks.exists()
+    assert create_chunks.run(**envelope) == "stale"
+    state.refresh_from_db()
+    assert state.active_generation_id == predecessor
+    assert not document.chunks.exists()
+    assert list(TextChunk.objects.filter(doc_id=document.id).order_by("pk").values_list("pk", "content")) == history
+    assert TextChunk.objects.get(pk=old.pk).content == old.content
 
 
-def test_chunk_publication_is_atomic_and_idempotent(document):
-    TextChunk.objects.bulk_create([chunk_for(document)])
-    assert (
-        _commit_chunks(
-            document,
-            [chunk_for(document, "new evidence")],
-            expected_source_hash=document.full_text_hash,
-            using="default",
-        )
-        == "committed"
-    )
-    assert (
-        _commit_chunks(
-            document,
-            [chunk_for(document, "duplicate job")],
-            expected_source_hash=document.full_text_hash,
-            using="default",
-        )
-        == "already_committed"
-    )
-    assert list(document.chunks.values_list("content", flat=True)) == ["new evidence"]
+@pytest.mark.django_db(transaction=True)
+def test_chunk_publication_is_atomic_and_idempotent(retained):
+    document, output, old = retained
+    envelope = delivery(document)
+    assert create_chunks.run(**envelope) == "activated"
+    document.refresh_from_db()
+    state = DocumentRepresentationState.objects.get(document_id=document.id)
+    generation = state.active_generation_id
+    current = list(document.chunks.values_list("pk", "content"))
+    assert current and old.pk not in {pk for pk, _ in current}
+    assert state.active_generation.extraction_revision_id == output.extraction_revision_id
+    assert create_chunks.run(**envelope) == "stale"
+    assert create_chunks.run(str(document.id), document.full_text_hash,
+        document._meta.label_lower, document.pkid) == "already_committed"
+    state.refresh_from_db()
+    assert state.active_generation_id == generation and state.generations.count() == 1
+    assert list(document.chunks.values_list("pk", "content")) == current
+    assert TextChunk.objects.get(pk=old.pk).content == old.content
 
 
 @pytest.mark.parametrize(

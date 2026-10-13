@@ -144,7 +144,7 @@ def ingest_uploads_status(request, batch_id):
     batch = IngestionBatch.objects.filter(id=batch_id).first()
     if batch is None:
         return JsonResponse({"error": "Batch not found."}, status=404)
-    if batch.user != request.user and not batch.collection.user_can_view(request.user):
+    if not batch.collection.user_can_view(request.user):
         return JsonResponse({"error": "Permission denied."}, status=403)
 
     items = list(
@@ -162,8 +162,17 @@ def ingest_uploads_status(request, batch_id):
         )
     )
 
-    counts = {"queued": 0, "processing": 0, "success": 0, "error": 0}
+    from apps.ingestion.services.output_status import item_snapshot, legacy_authorized_ids, legacy_metadata
+    by_id = {row.pk: row for row in batch.items.all()}
+    counts = {"queued": 0, "processing": 0, "success": 0, "partial": 0, "error": 0}
     for item in items:
+        row = by_id[item['id']]
+        if row.manifest_complete:
+            item['status'], item['document_ids'], item['parser_metadata'] = item_snapshot(row, using=row._state.db, user=request.user)
+        else:
+            item['document_ids'] = legacy_authorized_ids(row, request.user, using=row._state.db)
+            item['parser_metadata'] = legacy_metadata(row, item['document_ids'])
+        item['error_message'] = 'ingestion_failed' if item['status'] == 'error' else ''
         state = item["status"]
         if state in counts:
             counts[state] += 1

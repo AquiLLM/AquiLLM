@@ -123,38 +123,13 @@ def test_projection_authority_reads_never_use_function_only_state_alias(
 
 def test_worker_state_repository_calls_only_fixed_function_names(monkeypatch) -> None:
     from apps.knowledge_graph.projection import state_repository
+    from apps.knowledge_graph.projection.database_deadline import ProjectionOperation
+    from apps.knowledge_graph.tests.projection_function_adapter_support import recording_connection
 
-    calls: list[tuple[str, tuple[object, ...]]] = []
-
-    class Cursor:
-        description = (
-            ("projection_id",),
-            ("owner",),
-            ("expires_at",),
-            ("attempt_count",),
-        )
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_args):
-            return None
-
-        def execute(self, sql, params):
-            calls.append((sql, tuple(params)))
-
-        def fetchone(self):
-            return None
-
-    class Connection:
-        def cursor(self):
-            return Cursor()
-
-    monkeypatch.setattr(
-        state_repository, "connections", {"projection_state": Connection()}
-    )
+    operation = ProjectionOperation(12000)
+    calls, scopes = recording_connection(monkeypatch, state_repository)
     repository = state_repository.FunctionProjectionStateRepository(
-        state_using="projection_state", source_using="projection_source"
+        state_using="projection_state", source_using="projection_source", operation=operation
     )
     repository.claim(
         projection_id=state_repository.UUID("00000000-0000-0000-0000-000000000001"),
@@ -173,6 +148,8 @@ def test_worker_state_repository_calls_only_fixed_function_names(monkeypatch) ->
             ),
         )
     ]
+    assert scopes == [("projection_state", operation)]
+    assert scopes[0][1] is operation
     source = inspect.getsource(state_repository.FunctionProjectionStateRepository)
     assert '.using("projection_state")' not in source
     assert "UPDATE " not in source

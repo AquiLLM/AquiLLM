@@ -92,6 +92,10 @@ def _ready_rows(authorities):
                 "ontology_version": row.ontology_version,
                 "ontology_checksum": row.ontology_checksum,
                 "embedding_model_signature": row.embedding_model_signature,
+                "metadata": {},
+                "scope_type": "collection",
+                "resolver_version": row.resolver_version,
+                "resolution_config_checksum": row.resolution_config_checksum,
             }
         )
         inputs.extend(
@@ -99,6 +103,11 @@ def _ready_rows(authorities):
                 "artifact_id": row.artifact_id,
                 "document_id": document_id,
                 "document_artifact_id": artifact_id,
+                "collection_id": row.collection_id,
+                "document_artifact__metadata": {},
+                "document_artifact__scope_type": "document",
+                "document_artifact__resolver_version": row.resolver_version,
+                "document_artifact__resolution_config_checksum": row.resolution_config_checksum,
             }
             for document_id, artifact_id in row.documents
         )

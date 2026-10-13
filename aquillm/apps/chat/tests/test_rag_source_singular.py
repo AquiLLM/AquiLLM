@@ -13,7 +13,7 @@ def test_singular_cue_binds_to_preceding_explicit_source(compact, reference):
     history.messages[2].content = "B result [doc:paper-a chunk:8]."
     source = {
         "citation": "[doc:paper-z chunk:7]",
-        "title": "Z Paper",
+        "title": '"Z Paper"',
     }.get(reference)
     expected_doc = "paper-z"
     if reference == "uuid":
@@ -35,7 +35,14 @@ def test_singular_cue_after_two_explicit_sources_is_ambiguous(compact):
     history = _history(compact=compact)
     history.messages[2].content = "B result [doc:paper-a chunk:8]."
     anchors = resolve_source_anchors(
-        "Compare Z Paper and A Paper, then explain its methods", history
+        'Compare "Z Paper" and "A Paper", then explain its methods', history
     )
     assert anchors.document_ids == ("paper-z", "paper-a")
     assert anchors.unresolved_references == ("its",)
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_unquoted_name_with_uncertain_suffix_does_not_grant_history(compact):
+    anchors = resolve_source_anchors("Explain Z Paper and its methods", _history(compact=compact))
+    assert anchors.document_ids == ()
+    assert anchors.source_constraints == ("Z Paper and its methods",)

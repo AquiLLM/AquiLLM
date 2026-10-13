@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from functools import partial
 from hmac import compare_digest
 from os import environ
 from time import monotonic
-from typing import Any, Final
+from typing import Final
 
 from apps.knowledge_graph.projection.memgraph_driver import Neo4jMemgraphDriver
 from apps.knowledge_graph.projection.topology_adapter import (
@@ -25,12 +24,21 @@ from .gateway_contracts import (
     SCHEMA_CHECKSUM,
     SCHEMA_VERSION,
     GatewayFailureReason,
-    TopologyGatewayFailureV1,
     TopologyGatewaySuccessV1,
     decode_request,
     encode_response,
 )
 from .gateway_workers import GATEWAY_WORKERS
+from .gateway_wire import (
+    _header_values as _header_values,
+    _single_header as _single_header,
+    _response_headers as _response_headers,
+    _respond as _respond,
+    _failure as _failure,
+    _read_body as _read_body,
+    _wire_valid as _wire_valid,
+    _length as _length,
+)
 
 _FAMILY_CAPS: Final = {
     TopologyQueryName.GENERATION_MANIFESTS: 128,
@@ -75,107 +83,6 @@ def _get_runtime(
     if _runtime.settings != settings:
         raise RuntimeError("topology gateway configuration drift")
     return _runtime
-
-
-def _header_values(scope: dict[str, Any], name: bytes) -> tuple[bytes, ...]:
-    return tuple(
-        value
-        for key, value in scope.get("headers", ())
-        if type(key) is bytes and type(value) is bytes and key.lower() == name
-    )
-
-
-def _single_header(scope: dict[str, Any], name: bytes) -> bytes | None:
-    values = _header_values(scope, name)
-    return values[0] if len(values) == 1 else None
-
-
-def _response_headers(
-    body: bytes, *, version=SCHEMA_VERSION, checksum=SCHEMA_CHECKSUM
-) -> list[tuple[bytes, bytes]]:
-    return [
-        (b"content-type", b"application/json"),
-        (b"content-length", str(len(body)).encode()),
-        (b"x-topology-schema-version", version.encode()),
-        (b"x-topology-schema-checksum", checksum.encode()),
-    ]
-
-
-async def _respond(
-    send: Callable[..., Awaitable[None]],
-    status: int,
-    body: bytes,
-    *,
-    version=SCHEMA_VERSION,
-    checksum=SCHEMA_CHECKSUM,
-) -> None:
-    await send(
-        {
-            "type": "http.response.start",
-            "status": status,
-            "headers": _response_headers(body, version=version, checksum=checksum),
-        }
-    )
-    await send({"type": "http.response.body", "body": body})
-
-
-async def _failure(
-    send: Callable[..., Awaitable[None]],
-    reason: GatewayFailureReason,
-    *,
-    version=SCHEMA_VERSION,
-    checksum=SCHEMA_CHECKSUM,
-) -> None:
-    value = TopologyGatewayFailureV1(reason)
-    await _respond(
-        send,
-        value.status,
-        encode_response(value),
-        version=version,
-        checksum=checksum,
-    )
-
-
-async def _read_body(
-    receive: Callable[..., Awaitable[dict[str, Any]]], expected: int
-) -> bytes | None:
-    chunks: list[bytes] = []
-    size = 0
-    while True:
-        message = await receive()
-        if message.get("type") != "http.request":
-            return None
-        chunk = message.get("body", b"")
-        if type(chunk) is not bytes:
-            return None
-        size += len(chunk)
-        if size > expected:
-            return None
-        chunks.append(chunk)
-        if not message.get("more_body", False):
-            body = b"".join(chunks)
-            return body if len(body) == expected else None
-
-
-def _wire_valid(
-    scope: dict[str, Any], *, version=SCHEMA_VERSION, checksum=SCHEMA_CHECKSUM
-) -> bool:
-    return (
-        _single_header(scope, b"content-type") == b"application/json"
-        and _single_header(scope, b"x-topology-schema-version") == version.encode()
-        and _single_header(scope, b"x-topology-schema-checksum") == checksum.encode()
-        and not _header_values(scope, b"transfer-encoding")
-    )
-
-
-def _length(scope: dict[str, Any], maximum: int) -> int | None:
-    raw = _single_header(scope, b"content-length")
-    if raw is None or not raw.isascii():
-        return None
-    text = raw.decode("ascii")
-    if not text.isdecimal() or (len(text) > 1 and text[0] == "0"):
-        return None
-    return maximum + 1 if len(text) > len(str(maximum)) else int(text)
 
 
 def _mapped_reason(error: TopologyLoadError) -> GatewayFailureReason:
@@ -344,6 +251,10 @@ async def app(scope, receive, send) -> None:
         from .gateway_snapshot_service import topology_snapshot
 
         await topology_snapshot(scope, receive, send)
+    elif route == ("POST", "/v2/topology/frontier"):
+        from .frontier_gateway_service_v2 import topology_frontier
+
+        await topology_frontier(scope, receive, send)
     else:
         await _respond(send, 404, b'{"reason":"not_found"}')
 

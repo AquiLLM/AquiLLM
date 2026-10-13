@@ -14,19 +14,17 @@ from json import dumps
 from django.core.serializers.json import DjangoJSONEncoder
 from django.db import transaction
 
-from lib.llm.providers.visibility import (
-    assistant_content_for_frontend,
-    sanitize_assistant_text,
-)
+from lib.llm.providers.visibility import assistant_content_for_frontend
 
 from .llm import (
     AssistantMessage,
     Conversation,
     LLM_Message,
     ToolMessage,
-    UserMessage,
 )
+from .message_conversion import django_message_to_pydantic, pydantic_message_to_django
 from .models import Message, WSConversation
+from .message_history import retained_tool_history
 
 
 class ConversationConflictError(RuntimeError):
@@ -63,103 +61,16 @@ def _feedback_matches(convo: Conversation, rows: list[Message]) -> bool:
 
 
 def _frontend_message_content(msg: LLM_Message) -> str:
+    if getattr(msg, "_rag_answer", False):
+        return msg.content
     if msg.content == "** Empty Message, tool call **":
         return ""
     if isinstance(msg, AssistantMessage):
+        history = retained_tool_history(msg)
+        if history is not None and history.tool_call_name:
+            return ""
         return assistant_content_for_frontend(msg)
     return msg.content
-
-
-def pydantic_message_to_django(
-    msg: LLM_Message, conversation: WSConversation, seq_num: int
-) -> Message:
-    """Convert a Pydantic message to a Django Message instance (unsaved).
-
-    Returns an unsaved Message object — the caller is responsible for saving it
-    (typically via bulk_create for performance).
-    """
-    # Fields shared by all message types
-    content = (
-        sanitize_assistant_text(
-            msg.content,
-            allow_short_final=msg.stop_reason in ("stop", "end_turn")
-            and not msg.tool_call_name,
-        )
-        if isinstance(msg, AssistantMessage)
-        else msg.content
-    )
-    common = {
-        "conversation": conversation,  # FK linking this message to its conversation
-        "message_uuid": msg.message_uuid,  # frontend message identity
-        "role": msg.role,  # 'user', 'assistant', or 'tool'
-        "content": content,  # the actual message text
-        "rating": msg.rating,  # user rating (1-5) or None
-        "feedback_text": msg.feedback_text,  # optional user feedback text
-        "sequence_number": seq_num,  # position in the conversation (0, 1, 2, ...)
-    }
-
-    # Add role-specific fields depending on message type
-    if isinstance(msg, AssistantMessage):
-        return Message(
-            **common,
-            model=msg.model,  # which LLM model generated this response
-            stop_reason=msg.stop_reason,  # e.g. 'end_turn' or 'tool_use'
-            tool_call_id=msg.tool_call_id,  # ID if the LLM called a tool
-            tool_call_name=msg.tool_call_name,  # e.g. 'vector_search'
-            tool_call_input=msg.tool_call_input,  # arguments passed to the tool
-            usage=msg.usage,  # token count for this response
-        )
-    elif isinstance(msg, ToolMessage):
-        return Message(
-            **common,
-            tool_name=msg.tool_name,  # which tool produced this result
-            arguments=msg.arguments,  # arguments the tool was called with
-            for_whom=msg.for_whom,  # who the result is for ('assistant' or 'user')
-            result_dict=msg.result_dict,  # the tool's output data
-        )
-    else:
-        # UserMessage — only needs the common fields
-        return Message(**common)
-
-
-def django_message_to_pydantic(msg: Message) -> LLM_Message:
-    """Convert a Django Message row to a Pydantic message object.
-
-    Used when loading a conversation from the database for runtime use.
-    The Pydantic object can be passed to the LLM API or rendered for the frontend.
-    """
-    # Fields shared by all message types
-    common = {
-        "content": msg.content,
-        "rating": msg.rating,
-        "feedback_text": msg.feedback_text,
-        "message_uuid": msg.message_uuid,
-    }
-
-    if msg.role == "assistant":
-        return AssistantMessage(
-            **common,
-            model=msg.model,
-            stop_reason=msg.stop_reason
-            or "end_turn",  # default to 'end_turn' if not stored
-            tool_call_id=msg.tool_call_id,
-            tool_call_name=msg.tool_call_name,
-            tool_call_input=msg.tool_call_input,
-            usage=msg.usage,
-        )
-    elif msg.role == "tool":
-        return ToolMessage(
-            **common,
-            tool_name=msg.tool_name
-            or "",  # default to empty string (required by Pydantic)
-            arguments=msg.arguments,
-            for_whom=msg.for_whom
-            or "assistant",  # default to 'assistant' (required by Pydantic)
-            result_dict=msg.result_dict
-            or {},  # default to empty dict (required by Pydantic)
-        )
-    else:
-        return UserMessage(**common)
 
 
 def load_conversation_from_db(db_convo: WSConversation) -> Conversation:
@@ -182,7 +93,9 @@ def load_conversation_from_db(db_convo: WSConversation) -> Conversation:
     return convo
 
 
-def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, selected_collections=None) -> None:
+def save_conversation_to_db(
+    convo: Conversation, db_convo: WSConversation, *, selected_collections=None
+) -> None:
     """Replace the transcript only if this writer's loaded revision is current.
 
     Existing populated conversations require load_conversation_from_db first.
@@ -190,7 +103,10 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, se
     handle's revision, allowing repeated appends and explicit shorter replacements.
     Conflicts never merge transcripts or write metadata; callers must reload.
     """
-    with transaction.atomic():
+    from apps.chat.services.rag_turn_publication import conversation_publication
+    from lib.llm.execution_context import execution_publication
+
+    with execution_publication(), conversation_publication(), transaction.atomic():
         locked = WSConversation.objects.select_for_update().get(pk=db_convo.pk)
         if execution_token := getattr(db_convo, "_execution_token", None):
             from apps.chat.services.execution import verify_execution
@@ -226,11 +142,34 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, se
         incoming_uuids = []
         rows_to_create = []
         rows_to_update = []
+        verified_messages = []
 
         for seq, msg in enumerate(convo.messages):
             incoming_uuids.append(msg.message_uuid)
             incoming = pydantic_message_to_django(msg, db_convo, seq)
             current = existing_by_uuid.get(msg.message_uuid)
+            from lib.llm.turn_context import current_turn
+
+            active_publication = getattr(current_turn(), "answer_publication", None)
+            if isinstance(msg, AssistantMessage) and (
+                current is None
+                or incoming.content != current.content
+                or (
+                    active_publication is not None
+                    and (
+                        msg._answer_publication_context is active_publication
+                        or msg.message_uuid not in active_publication.historical_ids
+                    )
+                )
+            ):
+                from asgiref.sync import async_to_sync
+
+                from lib.llm.answer_publication import verify_message
+
+                async_to_sync(verify_message)(
+                    msg, content=incoming.content, sink="persist"
+                )
+                verified_messages.append(msg)
             if current is None:
                 rows_to_create.append(incoming)
                 continue
@@ -278,9 +217,14 @@ def save_conversation_to_db(convo: Conversation, db_convo: WSConversation, *, se
 
         # Keep DB in sync when callers pass a shorter conversation than what's stored.
         db_convo.db_messages.exclude(message_uuid__in=incoming_uuids).delete()
-        saved_revision = _message_revisions(
-            list(locked.db_messages.order_by("sequence_number", "pk"))
-        )
+        saved_rows = list(locked.db_messages.order_by("sequence_number", "pk"))
+        saved_revision = _message_revisions(saved_rows)
+        saved_by_uuid = {row.message_uuid: row for row in saved_rows}
+        # Recheck exact written bytes and the original lease before committing.
+        for msg in verified_messages:
+            async_to_sync(verify_message)(
+                msg, content=saved_by_uuid[msg.message_uuid].content, sink="persist"
+            )
 
     # Advance immediately for sequential writes within an outer transaction. If
     # that transaction later rolls back (e.g. publication cancellation), this
@@ -340,9 +284,11 @@ def pydantic_message_to_frontend_dict(msg: LLM_Message) -> dict:
     }
 
     if isinstance(msg, AssistantMessage):
-        if msg.tool_call_name:
-            msg_dict["tool_call_name"] = msg.tool_call_name
-            msg_dict["tool_call_input"] = msg.tool_call_input
+        history = retained_tool_history(msg)
+        call = history if history is not None else msg
+        if call.tool_call_name:
+            msg_dict["tool_call_name"] = call.tool_call_name
+            msg_dict["tool_call_input"] = call.tool_call_input
         if msg.usage:
             msg_dict["usage"] = msg.usage
     elif isinstance(msg, ToolMessage):

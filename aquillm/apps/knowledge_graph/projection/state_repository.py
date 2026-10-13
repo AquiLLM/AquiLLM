@@ -1,6 +1,8 @@
 # ruff: noqa: E501,E701,E702,I001
 from __future__ import annotations
 
+from .database_deadline import (bounded_state_call, current_operation, projection_database)
+
 import json
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -84,10 +86,11 @@ def _checksum(value: object) -> str:
 class FunctionProjectionStateRepository:
     """Fixed calls into migration-owned projection state functions."""
 
-    def __init__(self, state_using: str = "projection_state", source_using: str = "projection_source", *, owner: str | None = None) -> None:
+    def __init__(self, state_using: str = "projection_state", source_using: str = "projection_source", *, owner: str | None = None, operation=None) -> None:
         self.state_using = _token(state_using, "state_using")
         self.source_using = _token(source_using, "source_using")
         self.owner = None if owner is None else _token(owner, "owner")
+        self.operation = current_operation() if operation is None else operation
 
     def model_read_alias(self, model) -> str:
         if model not in {CollectionGraphProjection, ProjectionChunkReference}: raise ValueError("model is not projection source authority")
@@ -96,7 +99,7 @@ class FunctionProjectionStateRepository:
     def _rows(self, operation: str, parameters: tuple[object, ...]) -> tuple[dict, ...]:
         function = _FUNCTIONS[operation]
         statement = f"SELECT * FROM public.{function}({', '.join(('%s',) * len(parameters))})"
-        with connections[self.state_using].cursor() as cursor:
+        with projection_database(self.state_using, operation=self.operation), connections[self.state_using].cursor() as cursor:
             cursor.execute(statement, parameters)
             if cursor.description is None: return ()
             names = tuple(getattr(item, "name", item[0]) for item in cursor.description)
@@ -105,7 +108,7 @@ class FunctionProjectionStateRepository:
     def _one(self, operation: str, parameters: tuple[object, ...]) -> dict | None:
         function = _FUNCTIONS[operation]
         statement = f"SELECT * FROM public.{function}({', '.join(('%s',) * len(parameters))})"
-        with connections[self.state_using].cursor() as cursor:
+        with projection_database(self.state_using, operation=self.operation), connections[self.state_using].cursor() as cursor:
             cursor.execute(statement, parameters)
             row = cursor.fetchone()
             if row is None: return None
@@ -144,13 +147,25 @@ class FunctionProjectionStateRepository:
         row = self._one("begin_prune", (_identifier(projection_id), _identifier(generation_key), _instant(now)))
         return bool(row and row["changed"])
 
+    @bounded_state_call
     def load(self, *, projection_id: UUID, keys: tuple[str, ...] | None = None):
-        query = ProjectionChunkReference.objects.using(self.source_using).filter(projection_id=_identifier(projection_id))
-        if keys is not None: query = query.filter(projection_chunk_key__in=keys)
-        rows = tuple(query.select_related("chunk").only(*CHUNK_REFERENCE_READ_FIELDS).order_by("projection_chunk_key")[:MAX_DETAIL_ROWS + 1].iterator(chunk_size=MAX_PAGE_ROWS))
-        if len(rows) > MAX_DETAIL_ROWS:
-            raise ValueError("projection chunk mapping exceeds its hard cap")
-        return rows
+        identifier = _identifier(projection_id)
+        with projection_database(self.source_using, operation=self.operation):
+            projection = CollectionGraphProjection.objects.using(self.source_using).only(
+                "id", "representation_snapshot", "representation_digest", "collection_pk_snapshot"
+            ).get(pk=identifier)
+            query = ProjectionChunkReference.objects.using(self.source_using).filter(projection_id=identifier)
+            if keys is not None:
+                query = query.filter(projection_chunk_key__in=keys)
+            rows = tuple(query.select_related("chunk").only(*CHUNK_REFERENCE_READ_FIELDS)
+                         .order_by("projection_chunk_key")[:MAX_DETAIL_ROWS + 1])
+            if len(rows) > MAX_DETAIL_ROWS:
+                raise ValueError("projection chunk mapping exceeds its hard cap")
+            for row in rows:
+                if row.projection_id != projection.pk:
+                    raise ValueError("projection chunk mapping identity differs")
+                row._state.fields_cache["projection"] = projection
+            return rows
 
     def create(self, *, projection_id: UUID, rows: tuple[PrivateProjectionChunkReferenceV1, ...], batch_size: int) -> None:
         if type(batch_size) is not int or not 1 <= batch_size <= MAX_PAGE_ROWS:
@@ -186,10 +201,12 @@ class FunctionProjectionStateRepository:
         row = self._one("fail_outbox", (_identifier(outbox_id), "broker_publish_failed", _instant(now) + timedelta(seconds=delay)))
         return bool(row and row["changed"])
 
+    @bounded_state_call
     def ready(self, *, projection_id: UUID, owner: str, validation, expected_generation_key: str, expected_graph_checksum: str, expected_private_mapping_checksum: str, now: datetime, versions: tuple[str, str, str]):
         identifier = _identifier(projection_id)
         if validation.generation_key != _checksum(expected_generation_key): raise ValueError("projection generation validation is stale")
-        row = CollectionGraphProjection.objects.using(self.source_using).values("generation_key", "collection_id", "artifact_id", "membership_epoch", "membership_checksum").get(pk=identifier)
+        with projection_database(self.source_using, operation=self.operation):
+            row = CollectionGraphProjection.objects.using(self.source_using).values("generation_key", "collection_id", "artifact_id", "membership_epoch", "membership_checksum").get(pk=identifier)
         counts = validation.counts
         result = self._one("ready", (
             identifier, row["collection_id"], row["artifact_id"], row["generation_key"], _token(owner, "owner"), *versions,

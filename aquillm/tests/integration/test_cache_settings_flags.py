@@ -1,12 +1,12 @@
 """Contracts for RAG cache settings and Django CACHES defaults."""
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 from django.conf import settings
 
 
@@ -29,41 +29,42 @@ def test_context_packer_defaults():
     assert settings.CONTEXT_BUDGET_TOOL_EVIDENCE_TOKENS == 1400
 
 
-def test_caches_default_locmem_without_redis_url():
-    assert settings.CACHES["default"]["BACKEND"].endswith("LocMemCache")
-
-
-@pytest.mark.parametrize(
-    "env_redis",
-    ["redis://127.0.0.1:6379/2"],
-)
-def test_caches_redis_when_url_set_subprocess(env_redis):
-    """Fresh interpreter picks Redis backend when DJANGO_CACHE_REDIS_URL is set."""
+def _cache_configuration(env_redis):
+    """Read base configuration in a fresh child without starting Django/apps/IO."""
     project = Path(__file__).resolve().parents[2]
+    env = dict(os.environ, OTEL_ENABLED="0")
+    if env_redis is None:
+        env.pop("DJANGO_CACHE_REDIS_URL", None)
+    else:
+        env["DJANGO_CACHE_REDIS_URL"] = env_redis
     code = (
-        "import os, django\n"
-        "os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'aquillm.settings')\n"
-        f"os.environ['DJANGO_CACHE_REDIS_URL'] = {env_redis!r}\n"
-        "os.environ.setdefault('SECRET_KEY', 'test-subprocess-secret-key-xxxxxxxx')\n"
-        "django.setup()\n"
-        "from django.conf import settings as s\n"
-        "assert 'RedisCache' in s.CACHES['default']['BACKEND']\n"
+        "import json\n"
+        "from django.apps import apps\n"
+        "assert not apps.ready\n"
+        "from aquillm import settings as base\n"
+        "assert not apps.ready\n"
+        "print(json.dumps(base.CACHES['default']))\n"
     )
-    env = {
-        **os.environ,
-        "DJANGO_CACHE_REDIS_URL": env_redis,
-        "SECRET_KEY": "test-subprocess-secret-key-xxxxxxxx",
-        "OPENAI_API_KEY": "test",
-        "GEMINI_API_KEY": "test",
-        "GOOGLE_OAUTH2_CLIENT_ID": "test-oauth-client-id",
-        "GOOGLE_OAUTH2_CLIENT_SECRET": "test-oauth-client-secret",
-    }
     proc = subprocess.run(
-        [sys.executable, "-c", code],
-        cwd=project,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
+        [sys.executable, "-c", code], cwd=project, env=env,
+        capture_output=True, text=True, check=False, timeout=30,
     )
     assert proc.returncode == 0, proc.stdout + proc.stderr
+    return json.loads(proc.stdout.strip().splitlines()[-1])
+
+
+def test_caches_default_locmem_without_redis_url():
+    config = _cache_configuration(None)
+    assert config == {
+        "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+        "LOCATION": "aquillm-default",
+    }
+
+
+def test_caches_redis_when_url_set_subprocess():
+    # Use only the owned test service; configuration inspection opens no client.
+    location = "redis://redis:6379/1"
+    config = _cache_configuration(location)
+    assert config["BACKEND"] == "django.core.cache.backends.redis.RedisCache"
+    assert config["LOCATION"] == location
+    assert config["TIMEOUT"] == 300

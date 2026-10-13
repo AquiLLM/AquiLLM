@@ -11,7 +11,8 @@ def test_known_pointwise_endpoint_sends_model_and_caps_timeout(monkeypatch):
 
     requests = []
 
-    def post(endpoint, *, headers, json, timeout):
+    def post(endpoint, *, headers, json, timeout, allow_redirects):
+        assert allow_redirects is False
         requests.append((endpoint, json, timeout))
         return SimpleNamespace(
             status_code=200, json=lambda: {"data": [{"score": -0.4}]}
@@ -73,13 +74,13 @@ def test_final_pair_preparation_refuses_silent_query_or_document_clipping():
     assert scorer.prepare_emitted_pair("a long question " * 20, "short") is None
 
 
-def test_retry_checks_deadline_and_records_successful_shorter_pair(monkeypatch):
+def test_context_overflow_closes_scoring_admission_without_retry(monkeypatch):
     from apps.documents.services import chunk_rerank_selection_provider as provider
 
-    times = iter((0.0, 0.0, 0.1, 0.2))
     payloads = []
 
-    def post(endpoint, *, headers, json, timeout):
+    def post(endpoint, *, headers, json, timeout, allow_redirects):
+        assert allow_redirects is False
         payloads.append(json)
         if len(payloads) == 1:
             return SimpleNamespace(status_code=400)
@@ -96,15 +97,18 @@ def test_retry_checks_deadline_and_records_successful_shorter_pair(monkeypatch):
         reserve=0,
         timeout=3.0,
         deadline=1.0,
-        clock=lambda: next(times),
+        clock=lambda: 0.0,
         headers={},
     )
     pair = ("query " * 30, "document " * 30)
     result = scorer.score_pair(pair, 1.0)
-    assert result is not None and result[0] == 0.6
-    assert result[1] != pair
-    assert payloads[1]["text_1"] == result[1][0]
-    assert payloads[1]["text_2"] == result[1][1]
+    assert result is None
+    assert len(payloads) == 1
+    assert payloads[0]["text_1"] == pair[0]
+    assert payloads[0]["text_2"] == pair[1]
+    assert not scorer.rerank_state.can_admit()
+    assert scorer.score_pair(pair, 1.0) is None
+    assert len(payloads) == 1
 
 
 def test_unknown_capability_does_not_probe(monkeypatch):
@@ -172,7 +176,8 @@ def test_known_batch_only_score_shape_uses_singleton_list_and_exact_index(monkey
 
     payloads = []
 
-    def post(_endpoint, *, headers, json, timeout):
+    def post(_endpoint, *, headers, json, timeout, allow_redirects):
+        assert allow_redirects is False
         payloads.append(json)
         if json["text_2"] != ["document"]:
             return SimpleNamespace(status_code=400)

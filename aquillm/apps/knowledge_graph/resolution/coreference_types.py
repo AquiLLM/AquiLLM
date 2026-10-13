@@ -69,6 +69,7 @@ class PairDecision:
     method: str
     confidence: float
     explanation: str
+    outcome: str | None = None
 
     def __post_init__(self) -> None:
         _require_string(self.left_mention_id, "left_mention_id")
@@ -80,6 +81,12 @@ class PairDecision:
         _require_string(self.method, "method")
         _confidence(self.confidence)
         _require_string(self.explanation, "explanation")
+        if self.outcome is not None and (
+            type(self.outcome) is not str
+            or self.outcome not in ("automatic", "candidate", "rejected")
+            or self.accepted != (self.outcome == "automatic")
+        ):
+            raise ValueError("decision outcome must agree with automatic acceptance")
 
 
 @dataclass(frozen=True, slots=True)

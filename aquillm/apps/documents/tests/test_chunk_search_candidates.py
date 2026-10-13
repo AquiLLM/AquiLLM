@@ -21,6 +21,10 @@ from apps.knowledge_graph.retrieval import (
     GraphExpansionSeed,
     get_graph_expansion_config,
 )
+from lib.embeddings.document_binding import validate_query_observation
+from lib.embeddings.document_provider import observe_query_embedding
+from lib.embeddings.tests.test_document_provider import transport as transport
+from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 _DOC_A = UUID("11111111-1111-4111-8111-111111111111")
 _DOC_B = UUID("22222222-2222-4222-8222-222222222222")
@@ -53,23 +57,6 @@ class _Rows:
         if self._error is not None:
             raise self._error
         return iter(self._rows)
-
-
-class _VectorChain:
-    def __init__(self, root: _QueryRoot):
-        self._root = root
-
-    def defer(self, *fields: str):
-        self._root.deferred = fields
-        return self
-
-    def order_by(self, *fields: object):
-        self._root.vector_order = fields
-        return self
-
-    def __getitem__(self, item: slice):
-        self._root.limits["vector"] = item.stop
-        return _Rows(self._root.vector_rows, self._root.vector_error)
 
 
 class _TextChain:
@@ -116,11 +103,6 @@ class _QueryRoot:
             "trigram": None,
             "exact": None,
         }
-        self.deferred: tuple[str, ...] = ()
-        self.vector_order: tuple[object, ...] = ()
-
-    def exclude(self, **kwargs: object):
-        return _VectorChain(self)
 
     def filter(self, *args: object, **kwargs: object):
         return _TextChain(self).filter(*args, **kwargs)
@@ -155,24 +137,43 @@ def _chunk(identifier: int, *, doc_id: UUID = _DOC_A):
     return SimpleNamespace(pk=identifier, doc_id=doc_id, content=f"chunk-{identifier}")
 
 
-def _collect(root: _QueryRoot, *, graph_config: GraphExpansionConfig | None):
+def _collect(root, transport, *, graph_config):
     model = _model(root)
-    snapshot = collect_hybrid_candidate_snapshot(
-        model,
+
+    observation = observe_query_embedding(
         "Explain HSC-PDR2",
-        3,
-        (SimpleNamespace(id=_DOC_A, collection_id=7),),
-        query_embedding=[0.1, 0.2],
-        graph_config=graph_config,
-        app_config_getter=lambda _label: SimpleNamespace(
-            vector_top_k=30,
-            trigram_top_k=30,
-        ),
+        space=transport[0],
+        budget=TurnBudget(TurnLimits()),
     )
+
+    def dense(_model, _observation, _scope, limit):
+        assert validate_query_observation(_observation, space=transport[0])
+        root.limits["vector"] = limit
+        if root.vector_error:
+            raise root.vector_error
+        return tuple(root.vector_rows)
+
+    from unittest.mock import patch
+
+    with patch("apps.documents.services.chunk_search_candidates.dense_rows", dense):
+        snapshot = collect_hybrid_candidate_snapshot(
+            model,
+            "Explain HSC-PDR2",
+            3,
+            (SimpleNamespace(id=_DOC_A, collection_id=7),),
+            query_embedding=observation,
+            graph_config=graph_config,
+            app_config_getter=lambda _label: SimpleNamespace(
+                vector_top_k=30,
+                trigram_top_k=30,
+            ),
+        )
     return model, snapshot
 
 
-def test_snapshot_preserves_source_order_baseline_first_occurrence_and_rrf() -> None:
+def test_snapshot_preserves_source_order_baseline_first_occurrence_and_rrf(
+    transport,
+) -> None:
     c1, c2, c3, c4 = (_chunk(identifier) for identifier in range(1, 5))
     root = _QueryRoot(
         vector_rows=[c2, c1, c2],
@@ -180,7 +181,7 @@ def test_snapshot_preserves_source_order_baseline_first_occurrence_and_rrf() -> 
         exact_rows=[c4, c2],
     )
 
-    model, snapshot = _collect(root, graph_config=_config(max_seeds=3))
+    model, snapshot = _collect(root, transport, graph_config=_config(max_seeds=3))
 
     assert snapshot.vector_chunk_ids == (2, 1, 2)
     assert snapshot.trigram_chunk_ids == (3, 2)
@@ -199,11 +200,10 @@ def test_snapshot_preserves_source_order_baseline_first_occurrence_and_rrf() -> 
     assert snapshot.graph_seeds[0].restart_weight == pytest.approx(
         expected_two / denominator
     )
-    assert model.objects.scopes == [snapshot.documents] * 3
-    assert root.deferred == ("embedding",)
+    assert model.objects.scopes == [snapshot.documents] * 2
 
 
-def test_vector_db_failure_keeps_trigram_and_exact_candidates() -> None:
+def test_vector_db_failure_keeps_trigram_and_exact_candidates(transport) -> None:
     trigram = _chunk(2)
     exact = _chunk(3)
     root = _QueryRoot(
@@ -213,7 +213,7 @@ def test_vector_db_failure_keeps_trigram_and_exact_candidates() -> None:
         vector_error=RuntimeError("vector operator unavailable"),
     )
 
-    _model_cls, snapshot = _collect(root, graph_config=_config())
+    _model_cls, snapshot = _collect(root, transport, graph_config=_config())
 
     assert snapshot.vector_chunk_ids == ()
     assert snapshot.trigram_chunk_ids == (2,)
@@ -223,13 +223,13 @@ def test_vector_db_failure_keeps_trigram_and_exact_candidates() -> None:
     assert tuple(seed.chunk_id for seed in snapshot.graph_seeds) == (2, 3)
 
 
-def test_snapshot_is_frozen_and_source_limits_match_legacy_tuning() -> None:
+def test_snapshot_is_frozen_and_source_limits_match_legacy_tuning(transport) -> None:
     root = _QueryRoot(
         vector_rows=[_chunk(1)],
         trigram_rows=[_chunk(2)],
         exact_rows=[_chunk(3)],
     )
-    _model_cls, snapshot = _collect(root, graph_config=None)
+    _model_cls, snapshot = _collect(root, transport, graph_config=None)
 
     with pytest.raises(FrozenInstanceError):
         snapshot.vector_chunk_ids = ()  # type: ignore[misc]

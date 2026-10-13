@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pytest
 from django.test import override_settings
 
 from apps.documents.services.chunk_search import (
@@ -24,74 +25,80 @@ from apps.knowledge_graph.retrieval.topology.contracts import HybridBranchKind
 
 
 @override_settings(KG_OVERLAY_ENABLED=True, RAG_CACHE_ENABLED=False)
+@pytest.mark.parametrize("use_rrf", [False, True])
 def test_successful_hybrid_pool_always_uses_complete_reranker_once(
     monkeypatch,
+    use_rrf,
 ) -> None:
     from apps.documents.services import chunk_search
 
-    baseline = (chunk(1), chunk(2))
-    graph_row = chunk(3)
-    snapshot = selected_snapshot(baseline=baseline)
+    with override_settings(
+        RAG_RRF_ENABLED=use_rrf, RAG_PROTECTED_EXACT_ENABLED=use_rrf
+    ):
+        baseline = (chunk(1), chunk(2))
+        graph_row = chunk(3)
+        snapshot = selected_snapshot(baseline=baseline)
 
-    class Runtime:
-        def prepare_shared(self, **_kwargs):
-            return object()
+        class Runtime:
+            def prepare_shared(self, **_kwargs):
+                return object()
 
-        def run_direct(self, **_kwargs):
-            return successful_branch(
-                HybridBranchKind.DIRECT,
-                (GraphBranchCandidateV1(KEYS[0], 1, 0.9),),
-            )
+            def run_direct(self, **_kwargs):
+                return successful_branch(
+                    HybridBranchKind.DIRECT,
+                    (GraphBranchCandidateV1(KEYS[0], 1, 0.9),),
+                )
 
-        def prepare_extended(self, **_kwargs):
-            return object()
+            def prepare_extended(self, **_kwargs):
+                return object()
 
-        def run_extended(self, **_kwargs):
-            return successful_branch(
-                HybridBranchKind.EXTENDED,
-                (GraphBranchCandidateV1(KEYS[0], 1, 0.9),),
-            )
+            def run_extended(self, **_kwargs):
+                return successful_branch(
+                    HybridBranchKind.EXTENDED,
+                    (GraphBranchCandidateV1(KEYS[0], 1, 0.9),),
+                )
 
-    complete_reranks: list[tuple[int, ...]] = []
-    monkeypatch.setattr(
-        chunk_search,
-        "collect_hybrid_candidate_snapshot",
-        lambda *_args, **_kwargs: snapshot,
-    )
-    monkeypatch.setattr("aquillm.utils.get_embedding", lambda _query: (0.1, 0.2))
-    monkeypatch.setattr(
-        chunk_search,
-        "rerank_chunks",
-        lambda _model, _query, rows, _top_k: (
-            complete_reranks.append(tuple(row.pk for row in rows)) or tuple(rows)
-        ),
-    )
-    monkeypatch.setattr(
-        chunk_search,
-        "_fallback_rerank",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(
-            AssertionError("successful hybrid pool used fallback reranker")
-        ),
-    )
-    model, _filters = _model([])
-
-    returned = text_chunk_search(
-        model,
-        "query",
-        5,
-        list(snapshot.documents),
-        authorization_context=authorization(Policy()),
-        hybrid_graph_dependencies=HybridGraphRetrievalDependencies(
-            runtime=Runtime(),
-            settings=hybrid_settings(),
-            materialize=lambda **_kwargs: (
-                MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, graph_row),
+        complete_reranks: list[tuple[int, ...]] = []
+        monkeypatch.setattr(
+            chunk_search,
+            "collect_hybrid_candidate_snapshot",
+            lambda *_args, **_kwargs: snapshot,
+        )
+        monkeypatch.setattr("aquillm.utils.get_embedding", lambda _query: (0.1, 0.2))
+        monkeypatch.setattr(
+            chunk_search,
+            "rerank_chunks",
+            lambda _model, _query, rows, _top_k: (
+                complete_reranks.append(tuple(row.pk for row in rows)) or tuple(rows)
             ),
-        ),
-    )
+        )
+        monkeypatch.setattr(
+            chunk_search,
+            "_fallback_rerank",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError("successful hybrid pool used fallback reranker")
+            ),
+        )
+        model, _filters = _model([])
 
-    assert complete_reranks == [(1, 2, 3)]
-    assert tuple(row.pk for row in returned[2]) == (1, 2, 3)
+        returned = text_chunk_search(
+            model,
+            "query",
+            5,
+            list(snapshot.documents),
+            authorization_context=authorization(Policy()),
+            hybrid_graph_dependencies=HybridGraphRetrievalDependencies(
+                runtime=Runtime(),
+                settings=hybrid_settings(),
+                materialize=lambda **_kwargs: (
+                    MaterializedGraphChunkV1(KEYS[0], 3, _DOC_A, 2, graph_row),
+                ),
+            ),
+        )
+
+        expected = (3, 1, 2) if use_rrf else (1, 2, 3)
+        assert complete_reranks == [expected]
+        assert tuple(row.pk for row in returned[2]) == expected
 
 
 def test_hybrid_dependencies_repr_never_exposes_adapter_objects() -> None:

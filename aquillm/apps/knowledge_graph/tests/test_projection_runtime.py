@@ -135,6 +135,7 @@ def test_postgres_factory_injects_frozen_hmac_versions_and_function_repository(
     from apps.knowledge_graph.projection.state_repository import (
         FunctionProjectionStateRepository,
     )
+    from apps.knowledge_graph.projection.database_deadline import ProjectionOperation
 
     settings = runtime.load_projection_runtime_settings(_projection_environment())
     aliases = runtime.ProjectionDatabaseAliases(
@@ -155,7 +156,8 @@ def test_postgres_factory_injects_frozen_hmac_versions_and_function_repository(
     monkeypatch.setattr(
         runtime, "PostgresProjectionRepository", repository, raising=False
     )
-    function_repository = FunctionProjectionStateRepository(owner="worker-1")
+    operation = ProjectionOperation(settings.projection_timeout_ms)
+    function_repository = FunctionProjectionStateRepository(owner="worker-1", operation=operation)
 
     result = runtime.postgres_projection_repository(
         settings,
@@ -169,6 +171,8 @@ def test_postgres_factory_injects_frozen_hmac_versions_and_function_repository(
             "projection_source",
             {
                 "state_using": "projection_source",
+                "lease_owner": "worker-1",
+                "operation": operation,
                 "identifier_key": b"identifier-secret",
                 "identifier_key_version": "key-v7",
                 "schema_version": "collection-graph-v1",
@@ -181,6 +185,7 @@ def test_postgres_factory_injects_frozen_hmac_versions_and_function_repository(
             "chunk_store": function_repository,
         },
     }
+    assert observed["source"][1]["operation"] is operation
 
 
 def test_activation_projection_hook_is_default_off_and_fail_open(monkeypatch) -> None:

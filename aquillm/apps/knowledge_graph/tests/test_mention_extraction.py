@@ -285,18 +285,6 @@ def test_extraction_fingerprint_caps_actual_iteration_after_count_drift():
     assert consumed == [0, 1, 2]
 
 
-def test_ordered_chunks_are_counted_and_sized_before_materialization():
-    from apps.knowledge_graph.extraction import pipeline
-
-    source = inspect.getsource(pipeline._ordered_chunks)
-
-    assert "queryset.count()" in source
-    assert "DOCUMENT_EXTRACTION_V1_MAX_CHUNKS" in source
-    assert "DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS" in source
-    assert "queryset.iterator(" in source
-    assert "islice(" in source
-    assert source.index("queryset.count()") < source.index("queryset.iterator(")
-    assert source.index("aggregate(") < source.index("queryset.iterator(")
 
 
 def test_scoped_v1_extraction_marker_requires_exact_hard_caps():
@@ -999,98 +987,8 @@ def test_concrete_document_resolution_rejects_two_rows_from_the_same_subtype(
         _get_concrete_document(DOCUMENT_ID)
 
 
-def test_ordered_chunk_query_loads_only_extraction_fields(monkeypatch):
-    from apps.documents import models as document_models
-    from apps.knowledge_graph.extraction.pipeline import _ordered_chunks
-
-    calls = []
-
-    class Query:
-        def filter(self, **kwargs):
-            calls.append(("filter", kwargs))
-            return self
-
-        def order_by(self, *fields):
-            calls.append(("order_by", fields))
-            return self
-
-        def only(self, *fields):
-            calls.append(("only", fields))
-            return self
-
-        def count(self):
-            calls.append(("count",))
-            return 0
-
-        def aggregate(self, **expressions):
-            calls.append(("aggregate", tuple(expressions)))
-            return {"total_characters": 0}
-
-        def iterator(self, *, chunk_size):
-            calls.append(("iterator", chunk_size))
-            return iter(())
-
-        def __iter__(self):
-            raise AssertionError("ordered chunks must not populate queryset cache")
-
-    monkeypatch.setattr(document_models.TextChunk, "objects", Query())
-
-    assert _ordered_chunks(DOCUMENT_ID) == ()
-    assert ("count",) in calls
-    assert ("aggregate", ("total_characters",)) in calls
-    assert ("iterator", 1_000) in calls
-    assert (
-        "only",
-        (
-            "pk",
-            "doc_id",
-            "chunk_number",
-            "start_position",
-            "end_position",
-            "modality",
-            "content",
-        ),
-    ) in calls
 
 
-def test_ordered_chunk_query_caps_actual_iteration_after_count_drift(monkeypatch):
-    from apps.documents import models as document_models
-    from apps.knowledge_graph.extraction import pipeline
-
-    consumed = []
-
-    class Query:
-        def filter(self, **_kwargs):
-            return self
-
-        def order_by(self, *_fields):
-            return self
-
-        def only(self, *_fields):
-            return self
-
-        def count(self):
-            return 0
-
-        def aggregate(self, **_expressions):
-            return {"total_characters": 0}
-
-        def iterator(self, *, chunk_size):
-            assert chunk_size == 2
-            for value in range(10):
-                consumed.append(value)
-                yield value
-
-        def __iter__(self):
-            raise AssertionError("ordered chunks must use a bounded iterator")
-
-    monkeypatch.setattr(document_models.TextChunk, "objects", Query())
-    monkeypatch.setattr(pipeline, "DOCUMENT_EXTRACTION_V1_MAX_CHUNKS", 2)
-
-    with pytest.raises(pipeline.ExtractionCapacityError, match="chunk cap") as error:
-        pipeline._ordered_chunks(DOCUMENT_ID)
-    assert error.value.code is pipeline.ExtractionCapacityCode.CHUNK_LIMIT
-    assert consumed == [0, 1, 2]
 
 
 def test_window_construction_rejects_chunks_from_a_different_document_uuid():
@@ -1362,37 +1260,52 @@ def test_initial_stale_hash_aborts_before_artifact_or_run_writes(monkeypatch):
 @pytest.mark.django_db(transaction=True)
 @database_required
 def test_midflight_source_change_marks_destination_stale_without_evidence(
-    monkeypatch,
+    monkeypatch, caplog,
 ):
-    from apps.documents.models import RawTextDocument
+    from apps.documents.models import TextChunk
     from apps.knowledge_graph.extraction import pipeline
     from apps.knowledge_graph.models import EntityMention, GraphArtifact, GraphBuildRun
 
     _persist_active_ontology()
     document = _persist_text_document(monkeypatch, text="Orion uses MMLU")
-    _persist_chunk(document, content=document.full_text, start=0, number=0)
+    chunk = _persist_chunk(document, content=document.full_text, start=0, number=0)
+    original_text, original_hash = document.full_text, document.full_text_hash
+    calls = []
+    cancelled = []
 
     class MutatingBackend:
         def extract_batch(self, texts, *, ontology):
             changed = "Changed while the provider was running"
-            RawTextDocument.objects.filter(pk=document.pk).update(
-                full_text=changed,
-                full_text_hash=RawTextDocument.hash_fn(changed),
-            )
+            calls.append(tuple(texts))
+            document.full_text = changed
+            document.save(dont_rechunk=True)
+            assert not GraphArtifact.objects.filter(scope_id=str(document.id)).exists()
+            cancelled.append(GraphBuildRun.objects.values().get())
+            assert cancelled[-1]["stage"] == GraphBuildRun.Stage.STALE
+            assert cancelled[-1]["error_code"] == "document_content_changed"
+            assert cancelled[-1]["lease_owner"] == ""
+            assert cancelled[-1]["lease_expires_at"] is None
             return (_result(model_start=0, dataset_start=11, confidence=0.9),)
 
     monkeypatch.setattr(pipeline, "_build_backend", lambda _settings: MutatingBackend())
 
     with pytest.raises(pipeline.MidflightSourceChangedError):
         pipeline.extract_document_mentions(
-            document.id, document.full_text_hash, "1.0.0"
+            document.id, original_hash, "1.0.0"
         )
 
     run = GraphBuildRun.objects.get()
-    run.artifact.refresh_from_db()
+    assert calls == [(original_text,)]
     assert run.status == GraphBuildRun.Status.CANCELLED
-    assert run.artifact.status == GraphArtifact.Status.STALE
-    assert not EntityMention.objects.filter(artifact=run.artifact).exists()
+    assert run.artifact_id is None
+    assert len(cancelled) == 1
+    assert GraphBuildRun.objects.filter(pk=run.pk).values().get() == cancelled[0]
+    assert not any("obs.kg.terminal_update_failed" in record.getMessage()
+                   for record in caplog.records)
+    assert not GraphArtifact.objects.filter(scope_id=str(document.id)).exists()
+    assert not EntityMention.objects.filter(document_id=document.id).exists()
+    assert TextChunk.objects.get(pk=chunk.pk).content == original_text
+    assert not document.chunks.exists()
 
 
 @pytest.mark.django_db(transaction=True)

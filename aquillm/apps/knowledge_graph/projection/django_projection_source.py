@@ -54,6 +54,8 @@ class DjangoProjectionRowSource:
         *,
         state_using: str | None = None,
         loader: ProjectionSnapshotLoader | None = None,
+        lease_owner: str | None = None,
+        operation=None,
         identifier_key: bytes | None = None,
         identifier_key_version: str | None = None,
         schema_version: str | None = None,
@@ -68,6 +70,7 @@ class DjangoProjectionRowSource:
             else DjangoProjectionOrmLoader(
                 using,
                 state_using=using if state_using is None else state_using,
+                lease_owner=lease_owner, operation=operation,
             )
         )
         self._identifier_key = identifier_key

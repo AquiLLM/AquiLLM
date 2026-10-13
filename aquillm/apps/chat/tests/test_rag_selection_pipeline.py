@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from apps.chat.refs import CollectionsRef
+from apps.chat.tests.selection_pipeline_support import selection_owner, selection_worker, two_selection_queries
 from apps.chat.services import rag_pipeline, rag_selection_coordinator
 from apps.chat.services.rag_config import EvidenceSelectionConfig
 from apps.chat.services.rag_retrieval import FusedRetrievalPool
@@ -100,7 +101,7 @@ def test_shadow_new_scoring_obeys_explicit_flag(monkeypatch, shadow_scoring):
 
 @pytest.mark.parametrize("drop_selected", [False, True])
 async def test_adaptive_selects_full_union_once_and_persists_only_selected(
-    monkeypatch, drop_selected
+    monkeypatch, drop_selected, selection_worker, two_selection_queries
 ):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     monkeypatch.setenv("RAG_EVIDENCE_SELECTION_MODE", "adaptive")
@@ -164,7 +165,7 @@ async def test_adaptive_selects_full_union_once_and_persists_only_selected(
         system="sys",
         messages=[UserMessage(content="compare papers; and summarize trials")],
     )
-    consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
+    consumer = SimpleNamespace(user=selection_worker, col_ref=CollectionsRef([1]), convo=convo)
     assert (
         await rag_pipeline.run_direct_rag_turn(consumer, AsyncMock(), convo)
         == "handled"
@@ -183,7 +184,7 @@ async def test_adaptive_selects_full_union_once_and_persists_only_selected(
     assert "_retrieval_scores" not in seen["persisted"]
 
 
-async def test_shadow_failure_preserves_legacy_packet(monkeypatch):
+async def test_shadow_failure_preserves_legacy_packet(monkeypatch, selection_worker):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     monkeypatch.setenv("RAG_EVIDENCE_SELECTION_MODE", "shadow")
     monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "1")
@@ -204,9 +205,9 @@ async def test_shadow_failure_preserves_legacy_packet(monkeypatch):
     monkeypatch.setattr(rag_pipeline, "_prepare_selection_sync", prepare)
     monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", synth)
     convo = Conversation(
-        system="sys", messages=[UserMessage(content="what is this paper")]
+        system="sys", messages=[UserMessage(content="Compare calibration methods across papers")]
     )
-    consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
+    consumer = SimpleNamespace(user=selection_worker, col_ref=CollectionsRef([1]), convo=convo)
     assert (
         await rag_pipeline.run_direct_rag_turn(consumer, AsyncMock(), convo)
         == "handled"
@@ -215,7 +216,7 @@ async def test_shadow_failure_preserves_legacy_packet(monkeypatch):
     assert observed["persisted"]["result"] == [row]
 
 
-async def test_adaptive_all_queries_failed_leaves_conversation_untouched(monkeypatch):
+async def test_adaptive_all_queries_failed_leaves_conversation_untouched(monkeypatch, selection_worker):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     monkeypatch.setenv("RAG_EVIDENCE_SELECTION_MODE", "adaptive")
     monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "2")
@@ -227,7 +228,7 @@ async def test_adaptive_all_queries_failed_leaves_conversation_untouched(monkeyp
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
     monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", synthesis)
     convo = Conversation(system="sys", messages=[UserMessage(content="compare papers")])
-    consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
+    consumer = SimpleNamespace(user=selection_worker, col_ref=CollectionsRef([1]), convo=convo)
     assert (
         await rag_pipeline.run_direct_rag_turn(consumer, AsyncMock(), convo)
         == "skipped"
@@ -236,7 +237,7 @@ async def test_adaptive_all_queries_failed_leaves_conversation_untouched(monkeyp
     synthesis.assert_not_called()
 
 
-async def test_adaptive_partial_query_failure_selects_surviving_union(monkeypatch):
+async def test_adaptive_partial_query_failure_selects_surviving_union(monkeypatch, selection_worker, two_selection_queries):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     monkeypatch.setenv("RAG_EVIDENCE_SELECTION_MODE", "adaptive")
     monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", "2")
@@ -283,7 +284,7 @@ async def test_adaptive_partial_query_failure_selects_surviving_union(monkeypatc
         system="sys",
         messages=[UserMessage(content="compare papers; and summarize trials")],
     )
-    consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
+    consumer = SimpleNamespace(user=selection_worker, col_ref=CollectionsRef([1]), convo=convo)
     assert (
         await rag_pipeline.run_direct_rag_turn(consumer, AsyncMock(), convo)
         == "handled"

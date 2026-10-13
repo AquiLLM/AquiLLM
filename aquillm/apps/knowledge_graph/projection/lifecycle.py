@@ -7,6 +7,7 @@ from datetime import UTC, datetime, timedelta
 from hashlib import sha256
 from uuid import UUID
 from django.db import connections, transaction
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 from apps.collections.models import Collection
 from apps.knowledge_graph.models import CollectionGraphMembershipState, CollectionGraphProjection, GraphArtifact, GraphProjectionOutbox
@@ -15,6 +16,7 @@ from .identifiers import ProjectionIdentifierCodec
 from .memgraph_repository import ProjectionValidationV1
 from .records import ProjectionFailureCode, ProjectionLeaseV1
 from .runtime import load_projection_runtime_settings
+from .representation_inputs import binding_values, projection_input_snapshot, validate_projection_current
 
 _EMPTY_MAPPING_CHECKSUM = sha256(b"[]").hexdigest()
 _MAX_ROWS = 5_000
@@ -77,7 +79,9 @@ def enqueue_collection_projection_locked(*, collection_id: int, artifact_id: int
             if row is not current:
                 instant = timezone.now(); _supersede(row, instant, using); _enqueue_outbox(row, GraphProjectionOutbox.Operation.PRUNE, instant, using)
         if current is None:
-            current = CollectionGraphProjection.objects.using(using).create(collection_id=collection_id, collection_pk_snapshot=collection_id, artifact_id=artifact_id, artifact_pk_snapshot=artifact_id, schema_version=schema_version, projection_version=projection_version, identifier_key_version=identifier_key_version, membership_epoch=membership.registry_epoch, membership_checksum=membership.membership_checksum, private_mapping_checksum=_EMPTY_MAPPING_CHECKSUM)
+            artifact = GraphArtifact.objects.using(using).get(pk=artifact_id)
+            values = {} if artifact.representation_snapshot is None else binding_values(projection_input_snapshot(artifact_id, using=using))
+            current = CollectionGraphProjection.objects.using(using).create(collection_id=collection_id, collection_pk_snapshot=collection_id, artifact_id=artifact_id, artifact_pk_snapshot=artifact_id, schema_version=schema_version, projection_version=projection_version, identifier_key_version=identifier_key_version, membership_epoch=membership.registry_epoch, membership_checksum=membership.membership_checksum, private_mapping_checksum=_EMPTY_MAPPING_CHECKSUM, **values)
         _enqueue_outbox(current, GraphProjectionOutbox.Operation.PROJECT, timezone.now(), using)
         return current
 
@@ -144,6 +148,12 @@ def publish_projection_ready_compare_and_set(*, projection_id: UUID, owner: str,
     if type(validation) is not ProjectionValidationV1: raise TypeError("validation must be exact")
     with _atomic(using):
         collection, artifact, membership, row = _locked_ready_context(identifier, using)
+        if getattr(row, "representation_snapshot", None) is not None:
+            try:
+                validate_projection_current(row, using=using)
+            except (ValueError, ValidationError):
+                _supersede(row, instant, using); _enqueue_outbox(row, GraphProjectionOutbox.Operation.PRUNE, instant, using)
+                return ProjectionReadyOutcomeV1(identifier, False, row.state, "source_changed")
         stable = collection is not None and artifact is not None and membership is not None and artifact.pk == row.artifact_id and artifact.status == "active" and getattr(artifact, "evaluation_only", False) is False and membership.active_artifact_id == row.artifact_id and membership.registry_epoch == row.membership_epoch and membership.membership_checksum == row.membership_checksum and membership.resolver_version == artifact.resolver_version and membership.resolution_config_checksum == artifact.resolution_config_checksum and row.collection_id == collection.pk and (row.schema_version, row.projection_version, row.identifier_key_version) == _projection_versions() and row.private_mapping_checksum == private_checksum and row.state == "building" and row.lease_owner == lease_owner and row.lease_expires_at > instant and validation.valid and validation.generation_key == generation_key and validation.validation_checksum == graph_checksum
         if not stable:
             if row.state == "building" and row.lease_owner == lease_owner:

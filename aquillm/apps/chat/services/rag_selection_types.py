@@ -20,6 +20,10 @@ class SelectionCandidate:
     row: Mapping[str, object]
     prepared_evidence: PreparedEvidence | None = None
     token_cost: int | None = None
+    raw_score: float | None = None
+    scorer_fingerprint: str | None = None
+    scoring_kind: str = "rank_only"
+    score_interpretation: str = "unavailable"
 
 
 @dataclass(frozen=True)

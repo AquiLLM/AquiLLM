@@ -2,37 +2,11 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from apps.knowledge_graph.tests.maintenance_redis_test_support import owned_maintenance_redis, RedisBoundary
 from django.utils import timezone
 
 from apps.knowledge_graph.projection import reconciler, tasks
 from apps.knowledge_graph.projection.memgraph_driver import MemgraphDriverError
-
-
-class RedisBoundary:
-    def __init__(self):
-        self.now = 0
-        self.values = {}
-        self.expires = {}
-
-    def get(self, key):
-        if self.expires.get(key, float("inf")) <= self.now:
-            self.values.pop(key, None)
-        return self.values.get(key)
-
-    def set(self, key, value, nx=False, ex=None):
-        if nx and self.get(key) is not None:
-            return False
-        self.values[key] = str(value)
-        if ex:
-            self.expires[key] = self.now + ex
-        return True
-
-    def eval(self, script, count, lock, cursor, token, value):
-        assert count == 2
-        if self.get(lock) != token:
-            return 0
-        self.set(cursor, value)
-        return 1
 
 
 def maintenance_module():
@@ -397,7 +371,7 @@ def test_publisher_exception_returns_fixed_summary_without_retry(monkeypatch):
     assert "private detail" not in repr(result)
 
 
-def test_real_isolated_redis_admission_contract():
+def test_real_isolated_redis_admission_contract(owned_maintenance_redis):
     """Opt-in integration boundary: only point this at a disposable Redis."""
     import os
     from uuid import uuid4

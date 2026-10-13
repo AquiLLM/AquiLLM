@@ -7,17 +7,28 @@ safe to import in web workers that do not install the optional KG runtime.
 
 from __future__ import annotations
 
+from .collection_components import (
+    _DisjointSet,
+    _conflict_reason,
+    _identity_signature,
+    _component_anchors,
+    _component_pair_stable_key,
+)
+
 import json
 import re
 import uuid
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from .vocabulary_policy import ScopedVetoV1, bind_digest, component_veto, endpoint_terms
+from .vocabulary_terms import endpoint_labels, terms_for, validate_terms
 from hashlib import sha256
 from heapq import merge
 from itertools import islice
 from math import isfinite, sqrt
 
+from . import resolver_version_for_policy
 from .candidate_pool import iter_candidate_pools
 from .embedding_session import (
     _HASH_PATTERN,
@@ -31,6 +42,7 @@ from .embedding_session import (
     _require_hash,
     embedding_text_hash,
 )
+from .identity_policy import IdentityEndpointV2, decide_identity_v2
 from .normalization import normalize_entity_label
 from .relation_evidence import relation_participation
 from .scoring import (
@@ -226,8 +238,10 @@ class DocumentEntityInput:
     description: str = ""
     extraction_confidence: float = 1.0
     document_resolution_confidence: float = 1.0
+    vocabulary_terms: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        validate_terms(self.vocabulary_terms)
         _positive_int(self.entity_id, "document entity id")
         _require_hash(self.document_cluster_key, "document cluster key")
         _positive_int(self.document_artifact_id, "document artifact id")
@@ -341,8 +355,15 @@ class CollectionResolutionConfig:
     max_relations: int = MAX_RELATIONS
     # Independent output envelope: a larger input cap never truncates links.
     max_links: int = MAX_COLLECTION_LINKS
+    identity_policy: str = "legacy"
+    vocabulary: ScopedVetoV1 | None = None
 
     def __post_init__(self) -> None:
+        resolver_version_for_policy("collection", self.identity_policy)
+        if self.vocabulary is not None:
+            if type(self.vocabulary) is not ScopedVetoV1:
+                raise ValueError("exact scoped vocabulary required")
+            self.vocabulary.__post_init__()
         if type(self.thresholds) is not ResolutionThresholds:
             raise ValueError("thresholds must be exact ResolutionThresholds")
         self.thresholds.__post_init__()
@@ -390,9 +411,11 @@ def resolution_config_checksum(config: CollectionResolutionConfig) -> str:
     if type(config) is not CollectionResolutionConfig:
         raise ValueError("config must be exact CollectionResolutionConfig")
     config.__post_init__()
-    return _hash(
+    return bind_digest(_hash(
         {
-            "resolver_version": COLLECTION_RESOLVER_VERSION,
+            "resolver_version": resolver_version_for_policy(
+                "collection", config.identity_policy
+            ),
             "thresholds": {
                 "automatic": config.thresholds.automatic,
                 "candidate": config.thresholds.candidate,
@@ -410,7 +433,7 @@ def resolution_config_checksum(config: CollectionResolutionConfig) -> str:
             "max_relations": config.max_relations,
             "max_links": config.max_links,
         }
-    )
+    ), config.vocabulary)
 
 
 @dataclass(frozen=True, slots=True)
@@ -871,74 +894,6 @@ class CollectionResolutionResult:
                 raise ValueError("result checksum is invalid")
 
 
-class _DisjointSet:
-    def __init__(
-        self,
-        values: Iterable[int],
-        *,
-        identifiers: Mapping[int, frozenset[str]] | None = None,
-        versions: Mapping[int, frozenset[str]] | None = None,
-        entity_types: Mapping[int, frozenset[str]] | None = None,
-    ) -> None:
-        self.parent = {value: value for value in values}
-        self.identifiers = {
-            value: frozenset() if identifiers is None else identifiers[value]
-            for value in self.parent
-        }
-        self.versions = {
-            value: frozenset() if versions is None else versions[value]
-            for value in self.parent
-        }
-        self.entity_types = {
-            value: frozenset() if entity_types is None else entity_types[value]
-            for value in self.parent
-        }
-
-    def find(self, value: int) -> int:
-        root = value
-        while self.parent[root] != root:
-            root = self.parent[root]
-        while self.parent[value] != value:
-            next_value = self.parent[value]
-            self.parent[value] = root
-            value = next_value
-        return root
-
-    def union(self, left: int, right: int) -> int:
-        left_root, right_root = self.find(left), self.find(right)
-        if left_root == right_root:
-            return left_root
-        root, child = sorted((left_root, right_root))
-        self.parent[child] = root
-        self.identifiers[root] = self.identifiers[root] | self.identifiers[child]
-        self.versions[root] = self.versions[root] | self.versions[child]
-        self.entity_types[root] = self.entity_types[root] | self.entity_types[child]
-        return root
-
-    def try_union(self, left: int, right: int) -> tuple[int | None, str | None]:
-        """Merge only when every component-level cannot-link remains true."""
-
-        left_root, right_root = self.find(left), self.find(right)
-        if left_root == right_root:
-            return left_root, None
-        identifiers = self.identifiers[left_root] | self.identifiers[right_root]
-        if len(identifiers) > 1:
-            return None, "component_stable_identifier_conflict"
-        versions = self.versions[left_root] | self.versions[right_root]
-        if len(versions) > 1:
-            return None, "component_version_signature_conflict"
-        entity_types = self.entity_types[left_root] | self.entity_types[right_root]
-        if len(entity_types) > 1:
-            return None, "component_ontology_type_conflict"
-        return self.union(left_root, right_root), None
-
-    def groups(self) -> dict[int, tuple[int, ...]]:
-        result: dict[int, list[int]] = defaultdict(list)
-        for value in sorted(self.parent):
-            result[self.find(value)].append(value)
-        return {root: tuple(values) for root, values in sorted(result.items())}
-
-
 def _ontology_maps(ontology: object) -> tuple[dict[str, str], frozenset[str]]:
     definitions = getattr(ontology, "entity_types", None)
     if not isinstance(definitions, Mapping) or not definitions:
@@ -1041,18 +996,6 @@ def _is_undefined_acronym(entity: DocumentEntityInput) -> bool:
     )
 
 
-def _conflict_reason(
-    left: DocumentEntityInput, right: DocumentEntityInput
-) -> str | None:
-    if left.version_signature != right.version_signature and (
-        left.version_signature or right.version_signature
-    ):
-        return "version_signature_conflict"
-    if left.identifier and right.identifier and left.identifier != right.identifier:
-        return "conflicting_stable_identifiers"
-    return None
-
-
 def _decision(
     left: int,
     right: int,
@@ -1086,17 +1029,6 @@ def _decision(
         left_embedding_input_hash=left_hash,
         right_embedding_input_hash=right_hash,
         candidate_rank=rank,
-    )
-
-
-def _identity_signature(
-    entity: DocumentEntityInput, canonical_type: str | None
-) -> tuple[str, str, str, str]:
-    return (
-        canonical_type or f"unknown:{entity.entity_type}",
-        entity.identifier,
-        normalize_entity_label(entity.normalized_label).key,
-        entity.version_signature,
     )
 
 
@@ -1230,6 +1162,7 @@ def _source_entity_content(entity: DocumentEntityInput) -> dict[str, object]:
         "description": entity.description,
         "extraction_confidence": entity.extraction_confidence,
         "document_resolution_confidence": entity.document_resolution_confidence,
+        **({"vocabulary_terms": entity.vocabulary_terms} if entity.vocabulary_terms else {}),
     }
 
 
@@ -1460,20 +1393,6 @@ def resolution_result_checksum(result: CollectionResolutionResult) -> str:
     return _hash(_result_content(result))
 
 
-def _component_anchors(
-    members: Sequence[int], entities: Mapping[int, DocumentEntityInput]
-) -> tuple[frozenset[str], frozenset[str]]:
-    identifiers = frozenset(
-        entities[item].identifier for item in members if entities[item].identifier
-    )
-    versions = frozenset(
-        entities[item].version_signature
-        for item in members
-        if entities[item].version_signature
-    )
-    return identifiers, versions
-
-
 def _semantic_pair_is_eligible(
     left: int,
     right: int,
@@ -1545,14 +1464,6 @@ def _component_stable_key(
     return _hash(sorted(entities[item].document_cluster_key for item in members))
 
 
-def _component_pair_stable_key(
-    left: int,
-    right: int,
-    component_keys: Mapping[int, str],
-) -> tuple[str, str]:
-    return tuple(sorted((component_keys[left], component_keys[right])))  # type: ignore[return-value]
-
-
 def _automatic_conflict_components(
     roots: Sequence[int],
     automatic_edges: Sequence[tuple[int, int]],
@@ -1609,6 +1520,7 @@ def resolve_collection_entities(
     config.__post_init__()
     if resolution_config_checksum(config) != snapshot.resolution_config_checksum:
         raise ValueError("resolution config checksum does not match snapshot")
+    resolver_version = resolver_version_for_policy("collection", config.identity_policy)
     from apps.knowledge_graph.services.ontology import validate_ontology_definition
 
     validate_ontology_definition(
@@ -1653,6 +1565,29 @@ def resolve_collection_entities(
     canonical_type = {
         item.entity_id: canonical_map.get(item.entity_type) for item in ordered
     }
+
+    def contextual_policy(left: int, right: int):
+        first, second = by_id[left], by_id[right]
+        return decide_identity_v2(
+            left=IdentityEndpointV2(
+                canonical_type[left] or first.entity_type,
+                first.normalized_label,
+                first.identifier,
+                first.version_signature,
+                str(first.document_id),
+            ),
+            right=IdentityEndpointV2(
+                canonical_type[right] or second.entity_type,
+                second.normalized_label,
+                second.identifier,
+                second.version_signature,
+                str(second.document_id),
+            ),
+            # Document entities are already resolved. Collection alias strings
+            # alone cannot attest a binding between two distinct source entities.
+            explicit_local_binding=False,
+        )
+
     relation_signatures = _precomputed_relation_signatures(
         ordered_relations,
         entities=by_id,
@@ -1673,6 +1608,9 @@ def resolve_collection_entities(
 
     dsu = _DisjointSet(
         entity_ids,
+        vocabulary=config.vocabulary,
+        vocabulary_endpoints={item.entity_id: tuple((snapshot.collection_id, label)
+            for label in endpoint_labels(item)) for item in ordered},
         identifiers={
             item.entity_id: (
                 frozenset({item.identifier}) if item.identifier else frozenset()
@@ -1705,6 +1643,12 @@ def resolve_collection_entities(
         for _version, version_members in sorted(by_version.items()):
             representatives.append(min(version_members))
             for left, right in _star_pairs(version_members):
+                if config.identity_policy == "contextual_v2":
+                    policy = contextual_policy(left, right)
+                    if policy.outcome != "automatic":
+                        raise ValueError(
+                            "stable identifier block lacks identity authority"
+                        )
                 decisions[(left, right)] = _decision(
                     left,
                     right,
@@ -1715,7 +1659,11 @@ def resolve_collection_entities(
                     reason_codes=("stable_identifier_equal",),
                 )
                 _root, conflict = dsu.try_union(left, right)
-                if conflict is not None:
+                if conflict == "component_vocabulary_veto":
+                    decisions[(left, right)] = _decision(left, right,
+                        outcome=ResolutionOutcome.REJECTED, tier=ResolutionTier.STABLE_IDENTIFIER,
+                        confidence=0.0, identifier_score=1.0, reason_codes=(conflict,))
+                elif conflict is not None:
                     raise ValueError(
                         "stable identifier block violated component cannot-link"
                     )
@@ -1773,6 +1721,19 @@ def resolve_collection_entities(
                 pair = _pair(left, right)
                 if pair in decisions:
                     continue
+                if config.identity_policy == "contextual_v2":
+                    policy = contextual_policy(left, right)
+                    if policy.outcome != "automatic":
+                        decisions[pair] = _decision(
+                            left,
+                            right,
+                            outcome=ResolutionOutcome(policy.outcome),
+                            tier=ResolutionTier.EXACT_LABEL_OR_ALIAS,
+                            confidence=0.99,
+                            alias_score=1.0,
+                            reason_codes=(policy.reason,),
+                        )
+                        continue
                 if undefined:
                     decisions[pair] = _decision(
                         left,
@@ -1948,6 +1909,17 @@ def resolve_collection_entities(
             deterministic_groups[right_root][0],
         )
         outcome = classify_resolution_score(score, config.thresholds)
+        policy = (
+            contextual_policy(*representative)
+            if config.identity_policy == "contextual_v2"
+            else None
+        )
+        if policy is not None:
+            if policy.outcome == "rejected":
+                outcome = ResolutionOutcome.REJECTED
+            elif outcome is ResolutionOutcome.AUTOMATIC:
+                # Context may propose an identity but cannot mint an anchor.
+                outcome = ResolutionOutcome.CANDIDATE
         reasons: tuple[str, ...]
         acronym_automatic_allowed = _semantic_acronym_automatic_allowed(
             left_root,
@@ -1975,6 +1947,13 @@ def resolve_collection_entities(
                 )
         left_embedding = embedded_by_root[left_root]
         right_embedding = embedded_by_root[right_root]
+        if policy is not None and outcome is not ResolutionOutcome.AUTOMATIC:
+            reasons = (
+                (policy.reason,)
+                if policy.outcome == "rejected"
+                or outcome is ResolutionOutcome.CANDIDATE
+                else reasons
+            )
         decisions[representative] = _decision(
             *representative,
             outcome=outcome,
@@ -1995,8 +1974,8 @@ def resolve_collection_entities(
         for root, member_ids in final_groups.items()
         for member_id in member_ids
     }
-    automatic_decisions_by_root: dict[int, list[CollectionPairDecision]] = (
-        defaultdict(list)
+    automatic_decisions_by_root: dict[int, list[CollectionPairDecision]] = defaultdict(
+        list
     )
     for decision in decisions.values():
         if decision.outcome is not ResolutionOutcome.AUTOMATIC:
@@ -2049,7 +2028,7 @@ def resolve_collection_entities(
         )
         cluster_key = _hash(
             {
-                "resolver_version": COLLECTION_RESOLVER_VERSION,
+                "resolver_version": resolver_version,
                 "ontology_checksum": snapshot.ontology_checksum,
                 "document_cluster_keys": list(document_cluster_keys),
                 "entity_type": entity_type,
@@ -2125,7 +2104,7 @@ def resolve_collection_entities(
     )
     result = CollectionResolutionResult(
         snapshot=snapshot,
-        resolver_version=COLLECTION_RESOLVER_VERSION,
+        resolver_version=resolver_version,
         input_fingerprint=_input_fingerprint(
             snapshot,
             ordered,
@@ -2300,6 +2279,7 @@ def build_collection_snapshot(
     orchestration_version: int = 0,
     rebuild_request=None,
     evaluation_only: bool = False,
+    representation_snapshot=None,
 ):
     """Create a building collection artifact and its immutable source manifest."""
 
@@ -2512,6 +2492,10 @@ def build_collection_snapshot(
                 "document artifact snapshot changed before locking"
             )
         source_rows: list[tuple[GraphArtifact, uuid.UUID, str, str]] = []
+        from .vocabulary_builds import bind_collection_config, collection_metadata
+        resolution_config, vocabulary_capsule = bind_collection_config(
+            resolution_config, collection.pk, sources)
+        resolver_checksum = resolution_config_checksum(resolution_config)
         for source in sources:
             source_eligible = (
                 source.status == GraphArtifact.Status.SUPERSEDED
@@ -2562,7 +2546,9 @@ def build_collection_snapshot(
                 (source, document_id, membership_signature, source_signature)
             )
         source_hash = collection_manifest_source_hash(row[3] for row in source_rows)
+        from apps.knowledge_graph.projection.representation_inputs import binding_values
         artifact = GraphArtifact.objects.create(
+            **binding_values(representation_snapshot),
             scope_type=GraphArtifact.ScopeType.COLLECTION,
             scope_id=collection.pk,
             status=GraphArtifact.Status.BUILDING,
@@ -2591,6 +2577,7 @@ def build_collection_snapshot(
             metadata={
                 "manifest_version": 2,
                 "assembly_config": _config_payload(assembly_config),
+                **collection_metadata(vocabulary_capsule, resolution_config),
             },
         )
         rows = [
@@ -2872,6 +2859,7 @@ def _load_resolution_source_rows(
         memberships_by_entity[membership.document_entity_id].append(membership)
         mention_owner[membership.mention_id] = membership.document_entity_id
     projected: list[DocumentEntityInput] = []
+    vocabulary_bytes = [0]
     for entity in source_entities:
         manifest = manifest_by_artifact.get(entity.artifact_id)
         if manifest is None or entity.document_id != manifest.document_id:
@@ -2914,6 +2902,8 @@ def _load_resolution_source_rows(
                 identifier=entity.identifier,
                 version_signature=entity.version_signature,
                 alias_evidence=aliases,
+                vocabulary_terms=terms_for(config.vocabulary,
+                    (m.mention.raw_text for m in entity_memberships), budget=vocabulary_bytes),
                 description=description,
                 extraction_confidence=extraction_confidence,
                 document_resolution_confidence=entity.resolution_confidence,
@@ -3226,6 +3216,8 @@ def _validate_result_against_source(
         raise CollectionResolutionPersistenceError(
             "result must be exact CollectionResolutionResult"
         )
+    from .vocabulary_builds import validate_collection_result
+    validate_collection_result(artifact, result.config)
     try:
         result.__post_init__()
     except (AttributeError, TypeError, ValueError) as exc:

@@ -26,6 +26,7 @@ import {
   type PdfPageExtractionSession,
 } from './pdfPageExtraction';
 import VirtualizedPdfPages from './VirtualizedPdfPages';
+import { citationPdfUrl } from './historicalCitationContext';
 
 configurePdfWorker();
 
@@ -99,10 +100,7 @@ export const PDFCitationModal: React.FC<PDFCitationModalProps> = ({
   onTogglePin,
 }) => {
   const pdfPattern = window.pageUrls?.pdf;
-  const pdfUrl = useMemo(() => {
-    if (!pdfPattern) return null;
-    return formatUrl(pdfPattern, { doc_id: docId });
-  }, [docId, pdfPattern]);
+  const pdfUrl = useMemo(() => citationPdfUrl(pdfPattern, docId, chunkId), [docId, chunkId, pdfPattern]);
   const identity = `${docId}\u0000${pdfUrl ?? ''}`;
 
   const identityRef = useRef(identity);

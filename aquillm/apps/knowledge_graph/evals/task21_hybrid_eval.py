@@ -65,7 +65,9 @@ def task21_hybrid_arm_specs() -> tuple[Mapping[str, object], ...]:
     )
 
 
-def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity):
+def build_task21_hybrid_report(
+    *, cases, observations, freshness, backend_parity, graph_report=None
+):
     indexed = validate_cases(cases)
     if not any(case["privacy_required"] for case in indexed.values()):
         raise Task21HybridEvalError("an inaccessible privacy fixture is required")
@@ -85,7 +87,11 @@ def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity
             raise Task21HybridEvalError(f"{arm} observations are incomplete")
         scored = {}
         for row in rows:
-            if not isinstance(row, Mapping) or set(row) != _OBSERVATION_FIELDS:
+            if not isinstance(row, Mapping) or set(row) not in (
+                _OBSERVATION_FIELDS,
+                _OBSERVATION_FIELDS
+                | {"coverage_status", "coverage_exhaustive", "abstained"},
+            ):
                 raise Task21HybridEvalError(f"{arm} observation fields are not exact")
             case_id = row["case_id"]
             if case_id not in indexed or case_id in scored:
@@ -151,9 +157,14 @@ def build_task21_hybrid_report(*, cases, observations, freshness, backend_parity
         raise Task21HybridEvalError(
             "permission isolation observed inaccessible results"
         )
+    from .graph_quality_gates_v2 import GraphGatePolicyV2, evaluate_graph_gates_v2
+
     return MappingProxyType(
         {
             "schema_version": "task21-hybrid-eval-v1",
+            "graph_quality_v2": evaluate_graph_gates_v2(
+                report=graph_report or {}, policy=GraphGatePolicyV2()
+            ),
             "arms": MappingProxyType(arms),
             "freshness": validate_freshness(freshness),
             "backend_parity": validate_parity(backend_parity),

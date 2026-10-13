@@ -53,6 +53,15 @@ def completed_search_diagnostics(
     }
     if overlay_enabled:
         diagnostics.update(graph_diagnostics)
+    coverage = snapshot.full_text_coverage
+    if coverage is not None and coverage.status != "disabled":
+        diagnostics["full_text_coverage"] = {
+            "status": coverage.status,
+            "indexed_modalities": coverage.indexed_modalities,
+            "text_count": coverage.text_count,
+            "indexed_count": coverage.indexed_count,
+            "unsupported_count": coverage.unsupported_count,
+        }
     if score_set is not None and reranked_results:
         diagnostics["_score_set"] = serialize_score_set(score_set)
     if not reranked_results:

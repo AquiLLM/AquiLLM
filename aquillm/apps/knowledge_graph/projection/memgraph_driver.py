@@ -22,6 +22,7 @@ _COUNTERS = (
     "relationships_deleted",
 )
 _PROJECTION_INDEX_STATEMENTS = (
+    "CREATE INDEX ON :FrontierIndexV2(index_key)",
     "CREATE INDEX ON :CollectionGeneration(generation_key)",
     "CREATE INDEX ON :ProjectedRecord(generation_key)",
     "CREATE INDEX ON :ProjectedEntity(entity_key)",
@@ -135,7 +136,12 @@ def _read_failure_code(error: Exception) -> str:
     return "memgraph_read_failed"
 
 
+from .driver_lifecycle import close_owned_client
+from .memgraph_transport_deadline import execute_managed, ensure_schema, transaction_function
+
+
 class Neo4jMemgraphDriver:
+    close = close_owned_client
     def __init__(
         self,
         uri: str,
@@ -170,10 +176,14 @@ class Neo4jMemgraphDriver:
         self._database = database
         self._max_transaction_retry_time = max_transaction_retry_time
         self._client = driver
+        self._owns_client = driver is None
+        self._closed = False
         self._client_lock = Lock()
 
     def _connection(self):
         with self._client_lock:
+            if self._closed:
+                raise RuntimeError("memgraph_driver_closed")
             if self._client is None:
                 from neo4j import GraphDatabase
 
@@ -192,15 +202,7 @@ class Neo4jMemgraphDriver:
                 self._client = GraphDatabase.driver(self._uri, auth=auth, **options)
             return self._client
 
-    def _transaction_function(self, callback, *, timeout: float):
-        try:
-            from neo4j import unit_of_work
-        except ModuleNotFoundError:
-            if self._client is None:
-                raise
-            callback.timeout = timeout
-            return callback
-        return unit_of_work(timeout=timeout)(callback)
+    _transaction_function = transaction_function
 
     def execute_read(
         self,
@@ -229,10 +231,7 @@ class Neo4jMemgraphDriver:
             return tuple(rows)
 
         try:
-            with self._connection().session(database=self._database) as session:
-                return session.execute_read(
-                    self._transaction_function(read, timeout=timeout)
-                )
+            return execute_managed(self, read, timeout=timeout, write=False)
         except MemgraphDriverError:
             raise
         except Exception as error:
@@ -269,10 +268,7 @@ class Neo4jMemgraphDriver:
             return MemgraphWriteSummaryV1(encoded)
 
         try:
-            with self._connection().session(database=self._database) as session:
-                return session.execute_write(
-                    self._transaction_function(write, timeout=timeout)
-                )
+            return execute_managed(self, write, timeout=timeout, write=True)
         except MemgraphDriverError:
             raise
         except Exception:
@@ -281,11 +277,7 @@ class Neo4jMemgraphDriver:
     def ensure_projection_schema(self, *, timeout_seconds: float) -> None:
         """Install only our fixed indexes in Memgraph's required implicit mode."""
         timeout = _timeout(timeout_seconds)
-        from neo4j import Query
-
         try:
-            with self._connection().session(database=self._database) as session:
-                for statement in _PROJECTION_INDEX_STATEMENTS:
-                    session.run(Query(statement, timeout=timeout)).consume()
+            ensure_schema(self, _PROJECTION_INDEX_STATEMENTS, timeout=timeout)
         except Exception:
             raise MemgraphDriverError("memgraph_write_failed") from None

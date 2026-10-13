@@ -6,8 +6,12 @@ import pytest
 from django.db import connection, transaction
 
 from ._chunk_graph_lifecycle_support import (
+    assert_media_generation,
+    assert_rebuild_binding,
     configure_chunking_runtime,
     database_required,
+    media_storage as media_storage,
+    persist_media_document,
     persist_chunk,
     persist_document,
     run_chunk_task,
@@ -16,7 +20,7 @@ from ._chunk_graph_lifecycle_support import (
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_normal_image_chunking_atomically_replaces_text_and_image_chunks(monkeypatch):
+def test_durable_image_chunking_publishes_caption_and_retains_history(monkeypatch, media_storage):
     from django.contrib.auth.models import User
 
     from apps.collections.models import Collection
@@ -26,33 +30,38 @@ def test_normal_image_chunking_atomically_replaces_text_and_image_chunks(monkeyp
     chunking = configure_chunking_runtime(monkeypatch)
     user = User.objects.create_user(username=f"chunk-image-{uuid.uuid4()}")
     collection = Collection.objects.create(name=f"chunk image {uuid.uuid4()}")
-    document = persist_document(
+    pixels = b"target immutable image pixels"
+    document, output, envelope = persist_media_document(
         ImageUploadDocument,
         user=user,
         collection=collection,
         text="Orion evaluates MMLU.",
-        ingestion_complete=False,
-        image_file="ingestion_images/orion.png",
+        pixels=pixels, monkeypatch=monkeypatch,
     )
     obsolete = persist_chunk(document)
     publications = []
     monkeypatch.setattr(
         builds,
         "enqueue_document_build",
-        lambda document_id, source_hash: publications.append((document_id, source_hash)),
+        lambda document_id, source_hash, **kwargs: publications.append((document_id, source_hash, kwargs)),
     )
 
-    run_chunk_task(chunking, document)
+    wrong = dict(envelope[1], publication_attempt=envelope[1]["publication_attempt"] + 1)
+    assert chunking.create_chunks.run(*envelope[0], **wrong) == "stale"
+    assert publications == []
+    assert list(TextChunk.objects.filter(doc_id=document.id).values_list("pk", flat=True)) == [obsolete.pk]
+    assert chunking.create_chunks.run(*envelope[0], **envelope[1]) == "activated"
 
     document.refresh_from_db()
-    chunks = list(TextChunk.objects.filter(doc_id=document.id).order_by("chunk_number"))
+    current = assert_media_generation(document, output, pixels)
     assert document.ingestion_complete is True
-    assert not TextChunk.objects.filter(pk=obsolete.pk).exists()
-    assert [chunk.chunk_number for chunk in chunks] == [0, 1]
-    assert [chunk.modality for chunk in chunks] == ["text", "image"]
-    assert chunks[0].content == document.full_text
-    assert chunks[1].metadata["image_name"] == "ingestion_images/orion.png"
-    assert publications == [(document.id, document.full_text_hash)]
+    assert TextChunk.objects.get(pk=obsolete.pk).content == obsolete.content
+    assert current.pk != obsolete.pk and current.chunk_number == 0
+    assert len(publications) == 1 and publications[0][:2] == (document.id, document.full_text_hash)
+    request = assert_rebuild_binding(document, publications[0][2])
+    assert request.document_publication_state == "published"
+    assert chunking.create_chunks.run(*envelope[0], **envelope[1]) == "stale"
+    assert len(publications) == 1 and document.chunks.get().pk == current.pk
 
 
 @pytest.mark.django_db(transaction=True)
@@ -77,14 +86,16 @@ def test_graph_publication_observes_only_the_committed_text_replacement(monkeypa
     obsolete = persist_chunk(document)
     observed = []
 
-    def observe(document_id, source_hash):
+    bindings = []
+    def observe(document_id, source_hash, **kwargs):
         persisted = RawTextDocument.objects.get(pkid=document.pkid, id=document_id)
+        bindings.append(assert_rebuild_binding(persisted, kwargs))
         observed.append(
             (
                 connection.in_atomic_block,
                 persisted.ingestion_complete,
                 tuple(
-                    TextChunk.objects.filter(doc_id=document_id)
+                    persisted.chunks
                     .order_by("chunk_number")
                     .values_list("pk", "content")
                 ),
@@ -97,7 +108,8 @@ def test_graph_publication_observes_only_the_committed_text_replacement(monkeypa
 
     run_chunk_task(chunking, document)
 
-    replacement = TextChunk.objects.get(doc_id=document.id)
+    document.refresh_from_db()
+    replacement = document.chunks.get()
     assert observed == [
         (
             False,
@@ -108,6 +120,9 @@ def test_graph_publication_observes_only_the_committed_text_replacement(monkeypa
         )
     ]
     assert replacement.pk != obsolete.pk
+    assert TextChunk.objects.get(pk=obsolete.pk).content == obsolete.content
+    assert replacement.representation_generation_id is not None
+    assert len(bindings) == 1
 
 
 @pytest.mark.django_db(transaction=True)
@@ -137,10 +152,10 @@ def test_stale_expected_hash_does_not_mutate_chunks_or_publish_graph_work(monkey
     )
     publications = []
     monkeypatch.setattr(
-        builds, "enqueue_document_build", lambda *args: publications.append(args)
+        builds, "enqueue_document_build", lambda *args, **kwargs: publications.append((args, kwargs))
     )
 
-    run_chunk_task(chunking, document, expected_source_hash="f" * 64)
+    assert run_chunk_task(chunking, document, expected_source_hash="f" * 64) == "stale"
 
     document.refresh_from_db()
     after = tuple(
@@ -162,6 +177,8 @@ def test_outer_rollback_discards_replacement_chunks_and_graph_publication(monkey
     from apps.collections.models import Collection
     from apps.documents.models import RawTextDocument, TextChunk
     from apps.knowledge_graph.services import builds
+    from apps.knowledge_graph.models import GraphRebuildRequest
+    from apps.documents.models import DocumentRepresentationGeneration
 
     chunking = configure_chunking_runtime(monkeypatch)
     user = User.objects.create_user(username=f"chunk-rollback-{uuid.uuid4()}")
@@ -176,12 +193,15 @@ def test_outer_rollback_discards_replacement_chunks_and_graph_publication(monkey
     original = persist_chunk(document, content="rollback preserves this chunk")
     publications = []
     monkeypatch.setattr(
-        builds, "enqueue_document_build", lambda *args: publications.append(args)
+        builds, "enqueue_document_build", lambda *args, **kwargs: publications.append((args, kwargs))
     )
 
     with pytest.raises(RuntimeError, match="force outer rollback"):
         with transaction.atomic():
-            run_chunk_task(chunking, document)
+            assert run_chunk_task(chunking, document) == "activated"
+            document.refresh_from_db()
+            assert document.chunks.get().pk != original.pk
+            assert GraphRebuildRequest.objects.filter(scope_id=str(document.id)).count() == 1
             assert publications == []
             raise RuntimeError("force outer rollback")
 
@@ -191,3 +211,5 @@ def test_outer_rollback_discards_replacement_chunks_and_graph_publication(monkey
         TextChunk.objects.filter(doc_id=document.id).values_list("pk", "content")
     ) == [(original.pk, original.content)]
     assert publications == []
+    assert not GraphRebuildRequest.objects.filter(scope_id=str(document.id)).exists()
+    assert not DocumentRepresentationGeneration.objects.filter(owner__document_id=document.id).exists()

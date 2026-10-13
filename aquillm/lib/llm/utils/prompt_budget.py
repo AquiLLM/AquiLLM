@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from os import getenv
+import json
 from typing import Any
 
 import structlog
@@ -83,6 +84,27 @@ def cap_completion_tokens(max_tokens: int) -> int:
     if cap <= 0:
         return requested
     return min(requested, cap)
+
+
+def remaining_memory_chars(*, system_text: str, message_dicts: list[dict[str, Any]], max_tokens: int, context_limit: int | None = None, max_chars: int = 8000) -> int:
+    """Allocate only unused prompt capacity; never trim evidence or output reserve.
+
+    UTF-8 bytes are a conservative token upper bound for the existing byte-level
+    estimator. Memory serialization is ASCII JSON, so one available token permits
+    at most one serialized character. Unknown capacity permits no extra context.
+    """
+    from lib.llm.providers.openai_tokens import context_reserve_tokens
+    from lib.llm.providers.openai_runtime_config import context_limit as provider_context_limit
+    limit = prompt_budget_context_limit() if context_limit is None else context_limit
+    provider_limit = provider_context_limit()
+    if provider_limit > 0:
+        limit = min(limit, provider_limit) if limit > 0 else provider_limit
+    if type(limit) is not int or limit <= 0 or type(max_chars) is not int or max_chars < 0:
+        return 0
+    guard, pad = context_reserve_tokens(limit)
+    existing = len(system_text.encode('utf-8')) + len(json.dumps(message_dicts, ensure_ascii=True, default=str).encode('utf-8')) + 16
+    reserve = max(int(max_tokens), 1) + guard + pad + max(prompt_budget_slack_tokens(), 0)
+    return min(max_chars, max(0, limit - reserve - existing))
 
 
 def maybe_pack_message_dicts_for_context(

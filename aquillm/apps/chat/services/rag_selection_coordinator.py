@@ -148,7 +148,7 @@ async def coordinate_selection(
             query=query,
             search_scope="selected documents",
         )
-        if preservation.active:
+        if preservation.active or current_source_runtime() is not None:
             packet.source_mode = preservation.evidence_text_mode == "source"
             packet.source_authorization = turn.authorization
             packet.selection = selection
@@ -156,7 +156,7 @@ async def coordinate_selection(
                 packet.retrieval_status = "context_limited"
         return turn, packet, selected_tool_result(packet)
     except Exception:
-        if config.mode == "adaptive" or rag_preservation_config().active:
+        if config.mode == "adaptive" or rag_preservation_config().active or current_source_runtime() is not None:
             raise
         logger.warning("obs.rag.shadow_selection_failed")
         return None, None, None
@@ -178,12 +178,8 @@ def prepare_selection_turn(
     source_mode = preservation.evidence_text_mode == "source"
     runtime = current_source_runtime()
     if runtime is not None or source_mode:
-        if (
-            runtime is None
-            or frozenset(int(v) for v in consumer.col_ref.collections)
-            != runtime.authorization.selected_collection_ids
-        ):
-            raise SourcePreparationLimited("source scope or shared budget unavailable")
+        from apps.documents.services.representation_requested_selection import requested_selection
+        requested_selection(runtime, consumer)
         authorization = runtime.authorization
         turn_budget = runtime.budget
     else:

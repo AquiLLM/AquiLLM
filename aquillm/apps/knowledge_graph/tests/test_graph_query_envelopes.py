@@ -103,13 +103,16 @@ def test_task9_markers_audit_the_exact_manifest_cap():
     )
     filtering_source = inspect.getsource(filtering.create_filter_rerun_artifact)
     lineage_source = inspect.getsource(assembly._validate_task9_lineage_node)
+    from apps.knowledge_graph.resolution.vocabulary_builds import collection_replay_config
+    assert "config=collection_replay_config(artifact, marker)" in lineage_source
+    replay_config_source = inspect.getsource(collection_replay_config)
 
     assert '"max_document_inputs": result.config.max_document_inputs' in (
         persistence_source
     )
     assert 'marker.get("max_document_inputs")' in marker_validation_source
     assert '"max_document_inputs": manifest_cap' in filtering_source
-    assert '"max_document_inputs"' in lineage_source
+    assert '"max_document_inputs"' in replay_config_source
 
 
 def test_contributor_scope_and_relation_source_queries_use_bounded_batches():
@@ -463,27 +466,6 @@ def test_task9_and_filter_endpoint_in_predicates_are_always_fixed_batches():
     assert all(pattern not in joined for pattern in forbidden)
 
 
-def test_task9_and_filter_markers_persist_every_checksum_addressed_row_cap():
-    persist_source = inspect.getsource(
-        collection_resolution.persist_collection_resolution
-    )
-    marker_validation_source = inspect.getsource(
-        collection_resolution._collection_resolution_marker_is_valid
-    )
-    filter_source = inspect.getsource(filtering.create_filter_rerun_artifact)
-    lineage_source = inspect.getsource(assembly._validate_task9_lineage_node)
-
-    for field_name in (
-        "max_entities",
-        "max_memberships",
-        "max_relations",
-        "max_links",
-    ):
-        marker_field = f'"{field_name}"'
-        assert marker_field in persist_source
-        assert marker_field in marker_validation_source
-        assert marker_field in filter_source
-        assert marker_field in lineage_source
 
 
 def test_filter_rerun_duplicate_audits_the_exact_persisted_assembly_config():

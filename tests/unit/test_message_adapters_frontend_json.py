@@ -24,8 +24,10 @@ def test_frontend_json_contains_common_fields_for_all_messages(
     # build json payload returned to frontend
     payload = build_frontend_conversation_json(db_conversation)
 
-    # verify system prompt preserved
-    assert payload["system"] == "Frontend system prompt"
+    # Runtime memory augmentation must not overwrite the durable base prompt.
+    db_conversation.refresh_from_db()
+    assert payload["system"] == db_conversation.system_prompt == "Test system prompt"
+    assert payload["system"] != convo.system
 
     # verify all messages returned
     assert len(payload["messages"]) == 3

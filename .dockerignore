@@ -9,6 +9,7 @@ venv/
 .env
 .env.*
 .env*
+!.env.example
 .codex-ssh/
 .superpowers/sdd/
 .pytest_cache/

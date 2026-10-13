@@ -1,0 +1,125 @@
+{
+  "job": "source_ingestion",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "command": [
+    "rtk",
+    "proxy",
+    "python",
+    "-X",
+    "utf8",
+    "scripts/run_rag_remediation_tests.py",
+    "--project",
+    "aquillm-rag-r5-test",
+    "--",
+    "aquillm/apps/ingestion/tests",
+    "aquillm/lib/parsers/tests",
+    "aquillm/lib/embeddings/tests",
+    "aquillm/apps/documents/tests",
+    "aquillm/tests/integration/test_legacy_requested_selection_boundary.py",
+    "-q",
+    "-ra",
+    "--tb=short"
+  ],
+  "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved.",
+  "exit_code": 0,
+  "log_sha256": "05602c8555ca160c5def19c9a7326ee3b0aa95c1e24485ea4faa5b28ff43e7a2",
+  "result_sha256": "a9541c829f7a986913cbb0d35489121ea0eae56700775df8632e86291ab90c1f",
+  "source_and_index_unchanged": true,
+  "source_snapshot_sha256": "2588c92a9537d3ec70f0827691026775dd2bdd00636844d7ac3fddb1432d798c",
+  "runtime": [
+    {
+      "service": "app",
+      "container_id": "8623365299ed2daa120b3225bcab4a9d5348cb0c74bacd221c40ce2f9ff598cc",
+      "image_id": "sha256:41220a30a0295b0fd6d827dc85efbb15b7c0f6b57efcadcf1ddccc24f1cccb48"
+    },
+    {
+      "service": "db",
+      "container_id": "25213d9aedc0458b58bf87ebb723fc2ec12f0e46a23660b4f3d8f9f187deb39a",
+      "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+    },
+    {
+      "service": "fake-models",
+      "container_id": "45b65596626ee41b7b50191b751e35df713cb42cd2806663689677922ed74076",
+      "image_id": "sha256:e68a353e73e85e504d22b6457f4ea19d232ab40e8a8c39eec2c5873e3ee0dec9"
+    },
+    {
+      "service": "memgraph",
+      "container_id": "b686fc8f315c3f07881f3c26d7e58b0bf3f3d632fc3548f3d92e277fd4ca1eee",
+      "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+    },
+    {
+      "service": "redis",
+      "container_id": "355e9e5fd54778a4411fbf5ef7051b1b07a4bfa7c59b4f649afef604a921a256",
+      "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+    }
+  ],
+  "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+  "counts": {
+    "passed": 1751,
+    "failed": 0,
+    "errors": 0,
+    "skipped": 0,
+    "warnings": 35
+  },
+  "skips": [],
+  "warnings": [
+    {
+      "category": "PydanticDeprecatedSince212",
+      "count": 1,
+      "source": "aquillm/lib/llm/types/tools.py:66",
+      "observation": "After-model validator uses a classmethod; deprecated since Pydantic 2.12 and scheduled for removal in V3.",
+      "disposition": "OPEN_COMPATIBILITY_DEBT",
+      "action": "Migrate to the supported instance-method validator before the incompatible upgrade; this passing run does not clear the warning."
+    },
+    {
+      "category": "FutureWarning",
+      "count": 1,
+      "source": "aquillm/lib/ocr/gemini.py:13",
+      "observation": "The imported google.generativeai package reports ended support and no further updates or bug fixes.",
+      "disposition": "OPEN_DEPENDENCY_MIGRATION_DEBT",
+      "action": "Review migration to google.genai; this owned test run does not establish live OCR provider behavior."
+    },
+    {
+      "category": "RuntimeWarning",
+      "count": 1,
+      "source": "django.db.backends.utils",
+      "observation": "Database access occurred during application initialization.",
+      "disposition": "OPEN_STARTUP_ATTRIBUTION_AND_LIFECYCLE_DEBT",
+      "action": "Identify the originating initialization/import call path. The retained warning has no caller stack establishing which application component caused it; attribution remains unresolved."
+    },
+    {
+      "category": "UserWarning",
+      "count": 32,
+      "source": "django.core.handlers.base",
+      "observation": "Missing prod_static directory during test middleware initialization.",
+      "module_counts": {
+        "aquillm/apps/ingestion/tests/test_handwritten_ingest.py": 1,
+        "aquillm/apps/ingestion/tests/test_ingestion_monitor_includes_non_pdf.py": 1,
+        "aquillm/apps/ingestion/tests/test_unified_ingestion_api.py": 3,
+        "aquillm/apps/documents/tests/test_citation_api.py": 10,
+        "aquillm/apps/documents/tests/test_document_chunk_highlight.py": 2,
+        "aquillm/apps/documents/tests/test_pdf_response.py": 11,
+        "aquillm/apps/documents/tests/test_representation_media.py": 1,
+        "aquillm/apps/documents/tests/test_representation_media_edges.py": 2,
+        "aquillm/apps/documents/tests/test_representation_pdf_history.py": 1
+      },
+      "disposition": "TEST_STATIC_ASSET_ENVIRONMENT_WARNING_RETAINED",
+      "action": "This is not evidence that deployed static assets are correct. Deployment asset collection and serving verification remain separate operational gates."
+    }
+  ],
+  "duration_seconds": 1824.39,
+  "summary": "1751 passed, 35 warnings in 1824.39s (0:30:24)",
+  "summary_derivation": "Read the entire retained log and verified its exact SHA-256, result, completed source post-proof, driver argv and runtime receipt. The final summary reports 1751 ordinary passes and 35 warnings; no skipped, failed or error cases are reported anywhere in the retained log, and the wrapper/result exit is zero. Four warning groups reconcile as 1+1+1+32=35. Observed elapsed time is 1824.39 seconds (30 minutes 24.39 seconds); no performance cause or regression is inferred from differences from historical runs. This is one completed source-ingestion job only, not aggregate acceptance. Dependency migration and startup attribution remain open; static-asset deployment verification, real quality, rebuild, activation, deployment and user PR review gates are unchanged.",
+  "public_log_or_summary_url": "./source-ingestion-job.json",
+  "status": "COMPLETED_JOB_RESULTS_AND_WARNING_SKIP_DISPOSITIONS_REVIEWED",
+  "retained_evidence_hashes": {
+    "source_proof": "0e152c4cac7cef7974cec378f27a48918ef03773824a57be16a6bbf83f0b9fed",
+    "driver_receipt": "17cf587b032e707fce18b364261660dfa80e284674dafed76e271577b9d0f149",
+    "runtime_receipt": "690fc8a5bec346f06c72732db1d324a4fe17ae6b6388142f1cd4f759d884ef95",
+    "manual_review": "93bcbbe9d7cc12ccb0a29666d3a8dea949606816e08d74caf2f0a16cf0ac8b9e",
+    "candidate_manifest": "ed79f211ef99fae4025e1f0fa466b1b7231d87bc120dc0e82c8478e579ecd1a8"
+  },
+  "limits": [
+    "This is one job record. Separate contract, quality, data and deployment dispositions remain in closure.json."
+  ]
+}

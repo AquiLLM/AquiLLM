@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from ipaddress import ip_address
 from urllib.parse import unquote_to_bytes, urlsplit
 
+from . import retrieval_config_modes as _modes
 from . import topology_gateway_config as _gateway
 
 __all__ = ("HybridRetrievalConfigError", "HybridRetrievalSettings", "SecretSetting", "QUERY_EXTRACTOR_MODEL", "QUERY_EXTRACTOR_MODEL_REVISION", "QUERY_SCHEMA_CHECKSUM", "QUERY_SCHEMA_VERSION", "load_django_hybrid_retrieval_settings", "load_hybrid_retrieval_settings", "select_evaluation_topology_backend")  # fmt: skip
@@ -72,7 +73,7 @@ class HybridRetrievalSettings:
     graph_direct_max_depth: int; graph_direct_max_nodes: int; graph_direct_max_edges: int; graph_direct_max_candidates: int
     graph_extended_max_seeds: int; graph_extended_max_depth: int; graph_extended_max_nodes: int; graph_extended_max_edges: int
     graph_extended_max_candidates: int; graph_fusion_rrf_k: int; direct_embedding_enabled: bool; direct_min_similarity: float
-    direct_winner_margin: float; graph_eval_parity_backend: str; ppr_restart_mode: str
+    direct_winner_margin: float; graph_eval_parity_backend: str; ppr_restart_mode: str; graph_remediation_mode: str
 _BOOL_DEFAULTS = dict.fromkeys((
     "KG_MEMGRAPH_PROJECTION_ENABLED", "KG_MEMGRAPH_TRAVERSAL_ENABLED",
     "KG_GRAPH_DIRECT_ENABLED", "KG_GRAPH_EXTENDED_ENABLED", "KG_DIRECT_EMBEDDING_ENABLED",
@@ -93,7 +94,7 @@ _TEXT_DEFAULTS = {
     "KG_PROJECTION_POSTGRES_SOURCE_DSN": "", "KG_PROJECTION_POSTGRES_STATE_DSN": "", "KG_PROJECTION_QUEUE": "knowledge_graph_projection", "KG_PROJECTION_SCHEMA_VERSION": "collection-graph-v1",
     "KG_PROJECTION_FORMAT_VERSION": "projection-v1", "KG_PROJECTION_IDENTIFIER_HMAC_KEY": "", "KG_PROJECTION_IDENTIFIER_KEY_VERSION": "", "KG_QUERY_EXTRACTOR_URL": "",
     "KG_QUERY_EXTRACTOR_BEARER_TOKEN": "", "KG_QUERY_EXTRACTOR_MODEL": QUERY_EXTRACTOR_MODEL, "KG_QUERY_EXTRACTOR_MODEL_REVISION": QUERY_EXTRACTOR_MODEL_REVISION, "KG_QUERY_EXTRACTOR_BUILD_HASH": "",
-    "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": QUERY_SCHEMA_VERSION, "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": "", "KG_GRAPH_EVAL_PARITY_BACKEND": "postgres", "KG_PPR_RESTART_MODE": "fixed",
+    "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_VERSION": QUERY_SCHEMA_VERSION, "KG_QUERY_EXTRACTOR_EXPECTED_SCHEMA_CHECKSUM": "", "KG_GRAPH_EVAL_PARITY_BACKEND": "postgres", "KG_PPR_RESTART_MODE": "fixed", "KG_GRAPH_REMEDIATION_MODE": "legacy",
 }
 # fmt: on
 _ALLOWED_KEYS = (
@@ -196,11 +197,9 @@ def _postgres_identity(key: str, value: str) -> tuple[str, str, int, str]:
         raise _error(key, "must contain a canonical host and database")
     return username, host_identity[0], host_identity[1], database
 def _require(settings: HybridRetrievalSettings, keys: str) -> None:
-    for required_key in keys.split():
-        if not getattr(settings, required_key[3:].lower()):
-            raise _error(required_key, "is required for the enabled path")
+    _modes.require_graph_settings(settings, keys, _error)
 def _validate_settings(settings: HybridRetrievalSettings) -> None:
-    if settings.ppr_restart_mode not in ("fixed", "shadow", "adaptive"): raise _error("KG_PPR_RESTART_MODE", "selects an unsupported mode")
+    _modes.validate_graph_modes(settings, _error)
     if settings.graph_topology_backend != "memgraph":
         raise _error("KG_GRAPH_TOPOLOGY_BACKEND", "must be memgraph in production")
     fixed = {"KG_GRAPH_ALGORITHM": "ppr_projected_v1", "KG_PROJECTION_SCHEMA_VERSION": "collection-graph-v1", "KG_PROJECTION_FORMAT_VERSION": "projection-v1", "KG_GRAPH_EVAL_PARITY_BACKEND": "postgres"}

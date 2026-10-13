@@ -177,64 +177,84 @@ def test_skipped_small_pool_has_explicit_rank_only_result():
 
 
 @override_settings(RAG_CACHE_ENABLED=True)
-def test_successful_retry_score_is_not_reused_for_canonical_pair(monkeypatch):
-    from types import SimpleNamespace
-    from unittest.mock import MagicMock
-
-    from apps.documents.services import rag_cache
-    from apps.documents.services.chunk_rerank import rerank_chunks_scored
+def test_effective_pair_cache_isolation_preserves_first_failure_latch(monkeypatch):
+    from apps.documents.services import chunk_rerank, chunk_rerank_local_scored as scored
+    from apps.documents.services import rag_cache, rerank_transport_policy as protocol
     from apps.documents.services.chunk_rerank_results import fingerprint_pair
+    from lib.retrieval import TurnBudget, TurnLimits
 
-    monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank.rerank_provider", lambda: "local"
+    monkeypatch.setattr(chunk_rerank, "rerank_provider", lambda: "local")
+    monkeypatch.setenv("RAG_RERANK_TEXT_MODE", "legacy")
+    monkeypatch.setattr(scored, "rerank_base_url", lambda: "http://pair-cache/v1")
+    monkeypatch.setattr(scored, "rerank_model", lambda: "synthetic")
+    monkeypatch.setattr(scored, "rerank_model_revision", lambda: "pinned-revision")
+    monkeypatch.setattr(scored, "rerank_doc_char_limit", lambda: 2000)
+    monkeypatch.setattr(scored, "rerank_pair_token_limit", lambda: 1024)
+    monkeypatch.setattr(scored, "rerank_template_reserve_tokens", lambda: 96)
+    monkeypatch.setattr(protocol, "time", lambda: 100.0)
+    binding = protocol.RerankProtocolV1(
+        "http://pair-cache/score", "score_single_text_pair", "synthetic", 99, 160
     )
     monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.rerank_model_revision",
-        lambda: "pinned-revision",
+        rag_cache, "get_cached_rerank_capability", lambda *a, **k: binding.as_cache_entry()
     )
+    # Keep the real scored-cache serializer and validator over an isolated store.
+    cache, payloads = {}, []
+    monkeypatch.setattr(rag_cache, "cache_get", lambda key: cache.get(key))
     monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.rerank_model_is_qwen3_vl",
-        lambda: True,
+        rag_cache, "cache_set", lambda key, value, ttl: cache.update({key: value})
     )
+    shorten = [False]
     monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.rerank_pair_token_limit",
-        lambda: 64,
+        scored, "trim_rerank_pair",
+        lambda query, text, *a: (query, text[:50] if shorten[0] else text),
     )
-    monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.rerank_template_reserve_tokens",
-        lambda: 0,
-    )
-    monkeypatch.setattr(
-        rag_cache,
-        "get_cached_rerank_capability",
-        lambda *_: {
-            "endpoint": "http://retry/score",
-            "shape": "score_single_text_pair",
-        },
-    )
-    payloads = []
 
-    def post(_endpoint, *, json, **_kwargs):
+    def post(endpoint, *, json, **kwargs):
+        assert endpoint == binding.endpoint
+        assert json["model"] == binding.model_key
+        assert kwargs["allow_redirects"] is False
         payloads.append(json)
-        response = MagicMock(status_code=400 if len(payloads) % 2 else 200)
-        response.json.return_value = {"score": 0.8}
-        return response
+        return SimpleNamespace(
+            status_code=400 if len(payloads) == 1 else 200, url=endpoint,
+            json=lambda: {"model": "synthetic", "score": 0.8},
+        )
 
-    monkeypatch.setattr(
-        "apps.documents.services.chunk_rerank_local_scored.requests.post", post
-    )
-    row = SimpleNamespace(
-        pk=876,
-        content="evidence " * 30,
-        doc_id=DOC_A,
-        chunk_number=1,
-        modality="text",
-        Modality=SimpleNamespace(IMAGE="image"),
-    )
-    first = rerank_chunks_scored(object, "retry-sensitive", [row], 1)
-    second = rerank_chunks_scored(object, "retry-sensitive", [row], 1)
-    assert len(payloads) == 4
-    assert first.score_set.scores[0].effective_pair_fingerprint == fingerprint_pair(
-        payloads[1]["text_1"], payloads[1]["text_2"]
-    )
-    assert second.score_set.status == "complete"
+    monkeypatch.setattr(scored.requests, "post", post)
+    row = _row(876, "evidence " * 30)
+    query = "pair-sensitive"
+
+    def score(budget=None):
+        return chunk_rerank.rerank_chunks_scored(
+            object, query, [row], 1, turn_budget=budget or TurnBudget(TurnLimits())
+        ).score_set
+
+    failed_budget = TurnBudget(TurnLimits())
+    for _ in range(2):
+        failed = score(failed_budget)
+        assert failed.status == "unavailable" and failed.scores == ()
+    assert len(payloads) == 1 and cache == {}
+    assert failed_budget.pairs_used == {"acquisition": 1, "final": 0}
+
+    # A new turn can score another effective pair; the failed turn cannot retry.
+    shorten[0] = True
+    short = score()
+    assert short.status == "complete" and len(payloads) == 2
+    short_pair = (payloads[1]["text_1"], payloads[1]["text_2"])
+    assert short_pair == (query, row.content[:50])
+    assert short.scores[0].effective_pair_fingerprint == fingerprint_pair(*short_pair)
+    assert short.scores[0].effective_pair_fingerprint != fingerprint_pair(query, row.content)
+    assert score() == short and len(payloads) == 2
+
+    shorten[0] = False
+    canonical = score()
+    assert canonical.status == "complete" and len(payloads) == 3
+    canonical_pair = (payloads[2]["text_1"], payloads[2]["text_2"])
+    assert canonical_pair == (query, row.content)
+    assert canonical.scores[0].effective_pair_fingerprint == fingerprint_pair(*canonical_pair)
+    assert canonical.scorer_fingerprint == short.scorer_fingerprint
+    assert canonical.scores[0].source_fingerprint == short.scores[0].source_fingerprint
+    assert canonical.pool_fingerprint != short.pool_fingerprint
+    assert score() == canonical and len(payloads) == 3
+    assert len(cache) == 2
+    assert all(entry["status"] == "complete" for entry in cache.values())

@@ -10,9 +10,11 @@ from apps.chat.tests.chat_message_test_support import stub_execution_ownership
 from apps.chat.tests.test_direct_rag_websocket_smoke import (
     _append_payload,
     _consumer,
-    _mock_user_and_convo,
+    _persisted_user_and_convo,
+    _results_payload,
 )
-from apps.documents.services.source_loading import SourceRuntime, current_source_runtime
+from apps.documents.services.source_loading import current_source_runtime
+from apps.chat.tests.persisted_direct_test_support import close_direct_worker
 from lib.llm.turn_context import current_turn
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, UserMessage
@@ -21,20 +23,17 @@ from lib.llm.types.messages import AssistantMessage, UserMessage
 @pytest.mark.asyncio
 @pytest.mark.parametrize("entry", ["connect", "append"])
 async def test_consumer_direct_fallback_share_budget_and_next_turn_is_new(
-    entry, monkeypatch
+    entry, monkeypatch, close_direct_worker
 ):
-    from apps.chat.services import rag_turn
-
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
-    monkeypatch.setattr(
-        rag_turn, "create_runtime", lambda _, budget: SourceRuntime(budget, None)
-    )
-    user, db = _mock_user_and_convo()
+    case, user, db = await _persisted_user_and_convo(_results_payload()["result"])
     consumer = _consumer(user, db, object())
     captured = []
 
     async def direct(*args, **kwargs):
-        budget = current_source_runtime().budget
+        runtime = current_source_runtime()
+        assert runtime.authorization is not None and runtime._frozen_retrieval_scope.representation is not None
+        budget = runtime.budget
         assert current_turn().budget is budget
         captured.append(budget)
         assert budget.reserve_action("initial")
@@ -62,14 +61,14 @@ async def test_consumer_direct_fallback_share_budget_and_next_turn_is_new(
         for _ in range(2):
             if entry == "append":
                 await handle_chat_receive(
-                    consumer, _append_payload("search selected documents", [1])
+                    consumer, _append_payload("search selected documents", case.collections((1,)))
                 )
             else:
                 pending = Conversation(
                     system="sys",
                     messages=[UserMessage(content="Search selected documents")],
                 )
-                db.selected_collection_ids, db.system_prompt = [1], "sys"
+                db.selected_collection_ids, db.system_prompt = case.collections((1,)), "sys"
                 consumer.accept = AsyncMock()
                 consumer._ChatConsumer__get_all_user_collections = AsyncMock()
                 consumer._ChatConsumer__get_convo = AsyncMock(return_value=db)

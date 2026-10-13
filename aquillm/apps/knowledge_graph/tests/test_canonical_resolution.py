@@ -652,8 +652,6 @@ def test_automatic_projection_uses_source_specific_evidence_without_member_ids()
         assert "right_entity_id" not in row.metadata_json
 
 
-
-
 def test_rejected_embedding_audit_is_valid_but_never_automatic():
     from apps.knowledge_graph.models import CollectionEntity
 
@@ -811,6 +809,7 @@ def _create_active_collection_entity(
     identifier: str = "",
     embedding=None,
     embedding_hash: str = "",
+    resolver_version: str = "collection-resolution-v1",
 ):
     from apps.knowledge_graph.models import CollectionEntity, GraphArtifact
 
@@ -821,7 +820,7 @@ def _create_active_collection_entity(
         source_hash=cluster_digit * 64,
         ontology_version="ontology-v1",
         extractor_version="extractor-v1",
-        resolver_version="collection-resolution-v1",
+        resolver_version=resolver_version,
         filter_policy_version="filter-v1",
         embedding_model_signature=_embedding_signature(),
     )

@@ -11,6 +11,7 @@ from apps.chat.tests.cross_document_acceptance_support import (
     run_acceptance_case,
 )
 from lib.llm.types.response import LLMResponse
+from .persisted_direct_test_support import close_direct_worker as close_direct_worker
 
 
 def _probe(case, text=None):
@@ -27,8 +28,9 @@ def _probe(case, text=None):
 
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.case_id)
+@pytest.mark.usefixtures("close_direct_worker")
 async def test_both_paper_facts_survive_fusion_before_final_two_row_limit(case):
-    report = await run_acceptance_case(case, _probe(case), retrieval_limit=2)
+    report = await run_acceptance_case(case, _probe(case), retrieval_limit=2, scripted_responses=True)
 
     assert report["outcome"] == "handled"
     assert report["evidence_coverage_passed"], report["evidence_citations"]
@@ -36,17 +38,19 @@ async def test_both_paper_facts_survive_fusion_before_final_two_row_limit(case):
     assert report["serialized_rows_match"]
 
 
+@pytest.mark.usefixtures("close_direct_worker")
 async def test_provider_receives_only_packet_rows_and_their_exact_citations():
     case = CASES[0]
-    report = await run_acceptance_case(case, _probe(case), retrieval_limit=4)
+    report = await run_acceptance_case(case, _probe(case), retrieval_limit=4, scripted_responses=True)
 
     assert report["outcome"] == "handled"
-    assert set(report["evidence_citations"]) == case.required_citations
+    assert set(report["evidence_citations"]) == {report["citation_map"][v] for v in case.required_citations}
     assert report["exact_allowlist_passed"]
     assert report["serialized_rows_match"]
     assert "apparatus description" not in report["requests"][0]["tool_content"]
 
 
+@pytest.mark.usefixtures("close_direct_worker")
 async def test_prior_turn_citations_do_not_expand_current_packet_allowlist():
     case = CASES[0]
     old = {
@@ -61,13 +65,14 @@ async def test_prior_turn_citations_do_not_expand_current_packet_allowlist():
         _probe(case),
         retrieval_limit=4,
         prior_tool_rows=[old],
-    )
+     scripted_responses=True)
 
     assert report["outcome"] == "handled"
     assert report["exact_allowlist_passed"]
-    assert old["citation"] not in report["requests"][0]["system_citations"]
+    assert report["citation_map"][old["citation"]] not in report["requests"][0]["system_citations"]
 
 
+@pytest.mark.usefixtures("close_direct_worker")
 async def test_final_completion_repairs_citation_to_prior_evidence_outside_packet():
     case = CASES[0]
     old = {
@@ -94,14 +99,15 @@ async def test_final_completion_repairs_citation_to_prior_evidence_outside_packe
     )
     report = await run_acceptance_case(
         case, llm, retrieval_limit=4, prior_tool_rows=[old]
-    )
+    , scripted_responses=True)
 
     assert report["outcome"] == "handled"
-    assert old["citation"] not in report["answer"]
+    assert report["citation_map"][old["citation"]] not in report["answer"]
     assert report["provider_call_count"] == 2
     assert report["exact_allowlist_passed"]
 
 
+@pytest.mark.usefixtures("close_direct_worker")
 async def test_deferred_final_stream_delivers_the_repaired_stored_answer(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "1")
     case = CASES[0]
@@ -123,7 +129,7 @@ async def test_deferred_final_stream_delivers_the_repaired_stored_answer(monkeyp
         ]
     )
 
-    report = await run_acceptance_case(case, llm, stream_output=True)
+    report = await run_acceptance_case(case, llm, stream_output=True, scripted_responses=True)
 
     assert report["outcome"] == "handled"
     assert report["provider_call_count"] == 2
@@ -136,6 +142,7 @@ async def test_deferred_final_stream_delivers_the_repaired_stored_answer(monkeyp
 
 @pytest.mark.parametrize("case", CASES, ids=lambda case: case.case_id)
 @pytest.mark.parametrize("omitted_index", [0, 1])
+@pytest.mark.usefixtures("close_direct_worker")
 async def test_single_paper_ablation_removes_its_evidence_and_citation(
     case, omitted_index
 ):
@@ -146,12 +153,12 @@ async def test_single_paper_ablation_removes_its_evidence_and_citation(
         case,
         _probe(case, probe_answer),
         omitted_doc_id=omitted["doc_id"],
-    )
+     scripted_responses=True)
 
     assert report["outcome"] == "handled"
-    assert set(report["evidence_citations"]) == {retained["citation"]}
+    assert set(report["evidence_citations"]) == {report["citation_map"][retained["citation"]]}
     assert report["exact_allowlist_passed"]
-    assert omitted["citation"] not in report["requests"][0]["tool_content"]
+    assert report["citation_map"][omitted["citation"]] not in report["requests"][0]["tool_content"]
     # The model-quality grader is intentionally not asserted against probe text.
 
 

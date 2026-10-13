@@ -22,13 +22,25 @@ from .source_documents import (
 
 
 def _central_chunk(chunk_id):
+    from apps.documents.services.source_loading import current_source_runtime
+    from apps.documents.services.representation_media_acquisition import media_runtime
+    from .current_document_rows import current_chunk_metadata
+    if current_source_runtime() is None and media_runtime() is not None:
+        return current_chunk_metadata(chunk_id)
     if not source_mode_enabled():
-        return TextChunk.objects.filter(id=chunk_id).first()
+        if media_runtime() is not None:
+            return current_chunk_metadata(chunk_id)
+        chunk = TextChunk.objects.filter(id=chunk_id).only("id", "doc_id", "chunk_number").first()
+        if chunk is None:
+            return None
+        doc = chunk.document
+        return chunk if doc is not None and doc.chunks.filter(pk=chunk.pk).exists() else None
     runtime = required_source_runtime()
     alias = runtime.authorization.database_alias
     with bounded_source_database(runtime, alias):
+        from apps.documents.services.representation_tool_scope import current_tool_rows
         return (
-            TextChunk.objects.using(alias)
+            current_tool_rows(TextChunk.objects.using(alias).all(), runtime=runtime)
             .filter(id=chunk_id)
             .only(
                 "id",
@@ -97,9 +109,10 @@ def more_context_tool(user: User) -> LLMTool:
                 bounded_document_result(doc, query, adjacent=True),
                 user=user,
             )
-        window = list(
-            TextChunk.objects.filter(
-                doc_id=central_chunk.doc_id, chunk_number__in=range(bottom, top + 1)
+        from .current_document_rows import current_document_rows
+        window = current_document_rows(
+            doc.chunks.filter(
+                chunk_number__in=range(bottom, top + 1)
             )
             .order_by("chunk_number")
             .only("chunk_number", "content")

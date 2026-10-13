@@ -13,7 +13,6 @@ from ..types.response import LLMResponse
 from ..types.tools import ToolChoice, dump_tool_choice
 from . import fallback_heuristics as fb
 from . import final_stream, visibility
-from . import image_context as imgctx
 from . import rag_citations as citations
 from .complete_turn_continuation import (
     _continuation_separator as _continuation_separator,
@@ -113,14 +112,6 @@ from .retrieval_status import (
     document_retrieval_notice,
 )
 from .summary import generate_compact_tool_summary
-
-try:
-    from aquillm.settings import DEBUG
-except ImportError:
-    DEBUG = False
-
-if DEBUG:
-    from pprint import pp
 
 
 _DOC_IMAGE_URL_RE = re.compile(r"/aquillm/document_image/([^/]+)/")
@@ -423,17 +414,6 @@ async def _last_resort_evidence_answer(
     stream_message_uuid: str | None = None,
 ) -> str | None:
     """Optional fallbacks; default is synthesis-only (no chunk dumps in the UI)."""
-    if _extractive_evidence_ui_enabled():
-        if fb.extractive_fallback_enabled():
-            synthesized = fb.synthesize_from_recent_tool_results(conversation)
-            if synthesized:
-                return synthesized
-        doc_extract = citations.synthesize_doc_level_extract_from_results(conversation)
-        if doc_extract:
-            return doc_extract
-        cited_extract = citations.synthesize_cited_extract_from_results(conversation)
-        if cited_extract:
-            return cited_extract
     if _compact_summary_fallback_enabled():
         return await generate_compact_tool_summary(
             llm,
@@ -478,13 +458,27 @@ async def complete_conversation_turn(
     is_post_tool_result_turn = (
         isinstance(last_message, ToolMessage) and last_message.for_whom == "assistant"
     )
+    from lib.llm.turn_context import current_turn, is_retrieval_tool
+
+    publication = getattr(current_turn(), "answer_publication", None)
+    current_source_refs = (
+        _collect_source_refs_from_tool_message(last_message)
+        if is_post_tool_result_turn
+        else set()
+    )
+    rag_answer = is_post_tool_result_turn and (
+        is_retrieval_tool(last_message.tool_name)
+        or publication is not None
+        or bool(current_source_refs)
+    )
     citation_allowlist: set[str] = set()
     source_allowlist: set[str] = set()
     enforce_citations = False
-    response_from_compact_summary = False
     request_system_prompt = system_prompt
-    if is_post_tool_result_turn and citations.citation_enforcement_enabled():
-        citation_allowlist = citations.collect_allowed_chunk_citations(conversation)
+    if rag_answer and citations.citation_enforcement_enabled():
+        citation_allowlist = citations.collect_allowed_chunk_citations(
+            Conversation(system="", messages=[last_message])
+        )
         if citation_allowlist:
             enforce_citations = True
             request_system_prompt = (
@@ -492,7 +486,12 @@ async def complete_conversation_turn(
                 f"{citations.build_citation_system_suffix(citation_allowlist)}"
             )
     if is_post_tool_result_turn:
-        if current_stage() == "direct_synthesis":
+        if not rag_answer:
+            synthesis_instruction = (
+                "Answer the user's request using the current tool result. "
+                "Do not reuse document evidence or citations from earlier turns."
+            )
+        elif current_stage() == "direct_synthesis":
             if DIRECT_SYNTHESIS_GROUNDING not in request_system_prompt:
                 request_system_prompt += f"\n\n{DIRECT_SYNTHESIS_GROUNDING}"
             synthesis_instruction = (
@@ -520,11 +519,11 @@ async def complete_conversation_turn(
     if CONDITIONAL_IMAGE_INSTRUCTION not in request_system_prompt:
         request_system_prompt += f"\n\n{CONDITIONAL_IMAGE_INSTRUCTION}"
     source_allowlist = set(citation_allowlist)
-    if is_post_tool_result_turn and not source_allowlist:
-        source_allowlist = _collect_source_refs_from_tool_message(last_message)
-    defer_stream_until_final = (
-        callable(stream_func) and final_stream.final_answer_streaming_enabled()
-    )
+    if rag_answer and not source_allowlist:
+        source_allowlist = current_source_refs
+    # Any answer can introduce document markup, even with no document history.
+    # Classify the complete answer before releasing any of its provider tokens.
+    defer_stream_until_final = callable(stream_func)
     use_live_citation_stream = bool(
         source_allowlist
         and callable(stream_func)
@@ -819,8 +818,6 @@ async def complete_conversation_turn(
             stream_callback=provider_stream_func,
             stream_message_uuid=stream_message_uuid,
         )
-        if recovered and _compact_summary_fallback_enabled():
-            response_from_compact_summary = True
         response_text = recovered or visibility.clean_response_failure_text(
             after_tool_result=is_post_tool_result_turn
         )
@@ -906,8 +903,6 @@ async def complete_conversation_turn(
                     stream_message_uuid=stream_message_uuid,
                 )
                 if recovered:
-                    if _compact_summary_fallback_enabled():
-                        response_from_compact_summary = True
                     response_text = recovered
     if is_post_tool_result_turn and (not response_tool_call):
         retrieval_notice = document_retrieval_notice(last_message)
@@ -917,45 +912,12 @@ async def complete_conversation_turn(
             )
     if enforce_citations and (not response_tool_call):
         is_streaming_turn = callable(provider_stream_func)
-        require_cited_numeric_claims = current_stage() == "direct_synthesis"
-        original_response_text = (response_text or "").strip()
+        require_cited_numeric_claims = True
         citations_valid = citations.response_has_required_citations(
             response_text,
             citation_allowlist,
             require_cited_numeric_claims=require_cited_numeric_claims,
         )
-        original_invalid = citations.find_invalid_citations(
-            original_response_text, citation_allowlist
-        )
-        original_has_any_citation = bool(
-            citations.extract_citations(original_response_text)
-        )
-        should_soft_accept_original = (
-            (not citations_valid)
-            and (not original_invalid)
-            and original_has_any_citation
-            and fb.is_high_quality_summary(original_response_text)
-        )
-        should_soft_accept_image_display = (
-            (not citations_valid)
-            and (not original_invalid)
-            and _latest_user_requested_image(conversation)
-            and bool(imgctx.recent_tool_image_markdown(conversation, max_images=1))
-        )
-        should_soft_accept_compact_summary = (
-            (not citations_valid)
-            and response_from_compact_summary
-            and (not original_invalid)
-            and bool(original_response_text)
-        )
-        # Direct synthesis must repair uncited claims before deferred delivery;
-        # fluent prose, figures, and compact summaries are not citation evidence.
-        if current_stage() != "direct_synthesis" and (
-            should_soft_accept_original
-            or should_soft_accept_image_display
-            or should_soft_accept_compact_summary
-        ):
-            citations_valid = True
         if (not citations_valid) and (not is_streaming_turn):
             invalid = citations.find_invalid_citations(
                 response_text, citation_allowlist
@@ -999,52 +961,22 @@ async def complete_conversation_turn(
                 "stream_callback": provider_stream_func,
                 "stream_message_uuid": stream_message_uuid,
             }
-            retry_response = await llm.get_message(**retry_args)
+            try:
+                retry_response = await llm.get_message(**retry_args)
+            except Exception:
+                retry_response = None
             if retry_response and (not retry_response.tool_call):
                 response = retry_response
                 response_text = (retry_response.text or "").strip()
                 response_tool_call = {}
-        retry_invalid = citations.find_invalid_citations(
-            response_text, citation_allowlist
-        )
-        if retry_invalid and (
-            not citations.response_has_required_citations(
-                response_text,
-                citation_allowlist,
-                require_cited_numeric_claims=require_cited_numeric_claims,
-            )
+        if not citations.response_has_required_citations(
+            response_text,
+            citation_allowlist,
+            require_cited_numeric_claims=require_cited_numeric_claims,
         ):
-            if is_streaming_turn:
-                response_text = (
-                    response_text.rstrip()
-                    + "\n\n[Note: Some citation tokens could not be verified "
-                    "against retrieved chunks.]"
-                )
-            else:
-                if _extractive_evidence_ui_enabled():
-                    cited_extract = citations.synthesize_cited_extract_from_results(
-                        conversation
-                    ) or citations.synthesize_doc_level_extract_from_results(
-                        conversation
-                    )
-                    if cited_extract:
-                        response_text = cited_extract
-                        response_tool_call = {}
-        if (
-            _extractive_evidence_ui_enabled()
-            and (not response_tool_call)
-            and (
-                not response_text.strip()
-                or response_text.strip()
-                == visibility.clean_response_failure_text(after_tool_result=True)
-            )
-        ):
-            cited_extract = citations.synthesize_cited_extract_from_results(
-                conversation
-            ) or citations.synthesize_doc_level_extract_from_results(conversation)
-            if cited_extract:
-                response_text = cited_extract
-                response_tool_call = {}
+            from lib.llm.answer_publication import LIMITED_ANSWER
+
+            response_text = LIMITED_ANSWER
     should_append_final_sources = bool(
         (use_live_citation_stream or defer_stream_until_final)
         and source_allowlist
@@ -1053,6 +985,9 @@ async def complete_conversation_turn(
     if (
         should_append_final_sources
         and (not response_tool_call)
+        and not response_text.startswith(
+            "I could not produce a reliably cited answer from the selected excerpts."
+        )
         and visibility.should_append_citation_sources(response_text)
     ):
         response_text = _append_citation_sources_if_missing(
@@ -1080,9 +1015,25 @@ async def complete_conversation_turn(
         message_uuid=response.message_uuid or uuid.uuid4(),
         **response_tool_call,
     )
-    if DEBUG:
-        print("Response from LLM:")
-        pp(new_msg.model_dump())
+    if (
+        not new_msg.tool_call_id
+        and (
+            citations.find_invalid_citations(new_msg.content, set())
+            or "/aquillm/document_image/" in new_msg.content
+        )
+    ):
+        # No newly generated answer can revive historical document authority.
+        rag_answer = True
+    if rag_answer and not new_msg.tool_call_id:
+        from lib.llm.answer_publication import LIMITED_ANSWER, bind_answer
+
+        if publication is None:
+            new_msg.content = LIMITED_ANSWER
+            new_msg._rag_answer = True
+        else:
+            bind_answer(
+                new_msg, await publication.finalize(new_msg.content), publication
+            )
     if (
         defer_stream_until_final
         and callable(stream_func)
@@ -1095,6 +1046,7 @@ async def complete_conversation_turn(
             content=new_msg.content,
             stop_reason=new_msg.stop_reason,
             usage=new_msg.usage,
+            message=new_msg,
         )
 
     return conversation + [new_msg], "changed"

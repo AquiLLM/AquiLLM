@@ -7,6 +7,7 @@ import pytest
 from apps.chat.services.rag_evidence_handoff import prepare_evidence_handoff
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.chat.tests.rag_evidence_handoff_support import _fixture
+from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.providers.openai import OpenAIInterface
 
 
@@ -61,8 +62,8 @@ async def test_preflight_trims_history_but_sdk_receives_exact_selected_evidence(
     convo, packet, expected, original_count, calls, provider = _selected_request(
         monkeypatch, 16000
     )
-    with pytest.raises(Dispatched):
-        await synthesize_from_evidence(provider, convo, packet, max_tokens=256)
+    result = await synthesize_from_evidence(provider, convo, packet, max_tokens=256)
+    assert result[-1].content == LIMITED_ANSWER
     assert len(calls) == 1
     messages = calls[0]["messages"]
     assert len(messages) < original_count
@@ -77,7 +78,7 @@ async def test_preflight_cannot_dispatch_when_selected_evidence_will_not_fit(
     convo, packet, _, _, calls, provider = _selected_request(monkeypatch, 500)
     result = await synthesize_from_evidence(provider, convo, packet, max_tokens=256)
     assert calls == []
-    assert "could not deliver the selected evidence" in result[-1].content.lower()
+    assert result[-1].content == LIMITED_ANSWER
 
 
 @pytest.mark.asyncio
@@ -95,4 +96,4 @@ async def test_provider_overflow_cannot_retry_with_a_clipped_selected_message(
     result = await synthesize_from_evidence(provider, convo, packet, max_tokens=256)
     assert len(calls) == 1
     assert calls[0]["messages"][-1]["content"].endswith("\n" + expected)
-    assert "could not deliver the selected evidence" in result[-1].content.lower()
+    assert result[-1].content == LIMITED_ANSWER

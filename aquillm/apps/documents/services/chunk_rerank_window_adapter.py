@@ -22,6 +22,28 @@ from .chunk_rerank_score_cache import (
 )
 from .chunk_rerank_window_scores import aggregate_window_scores, score_window_plan
 from .chunk_rerank_windows import PreparationStopped, prepare_source_windows
+from .rerank_request_lifetime import rerank_state_for
+
+
+class _ScoringCacheBudget:
+    """Cache I/O stays bounded by the ledger; score pointers use its scoring latch."""
+
+    def __init__(self, state):
+        self.state, self.budget = state, state.budget
+
+    def __getattr__(self, name):
+        return getattr(self.budget, name)
+
+    def can_publish(self):
+        return self.state.can_admit()
+
+    def can_start_optional(self, *args, **kwargs):
+        return self.state.can_admit() and self.budget.can_start_optional(
+            *args, **kwargs
+        )
+
+    def publish(self, callback):
+        return self.state.publish(callback)
 
 
 def unknown_pair_count(query, document):
@@ -58,6 +80,10 @@ class WindowSelectionScorer:
         cache_enabled=False,
     ):
         self.provider, self.budget, self.pair_counter = provider, budget, pair_counter
+        self.rerank_state = rerank_state_for(budget) if budget is not None else None
+        self._cache_budget = (
+            _ScoringCacheBudget(self.rerank_state) if self.rerank_state else None
+        )
         self.clock = clock
         self.cache_enabled = cache_enabled
         self.deadline = (
@@ -107,7 +133,7 @@ class WindowSelectionScorer:
     def _preparation_open(self):
         if self.clock() >= self.deadline:
             return False
-        ledger_open = self.budget is None or self.budget.can_publish()
+        ledger_open = self.rerank_state is None or self.rerank_state.can_admit()
         return ledger_open and self.clock() < self.deadline
 
     def score_windows(self, query, chunks, *, phase="final", on_submit=None):
@@ -137,7 +163,7 @@ class WindowSelectionScorer:
             or len(rows) > 45
             or len(set(order)) != len(order)
             or self.clock() >= self.deadline
-            or not self.budget.can_publish()
+            or not self.rerank_state.can_admit()
         ):
             return envelope()
         plans = []
@@ -158,13 +184,13 @@ class WindowSelectionScorer:
         )
         scores = []
         for row, plan in zip(rows, plans):
-            if self.clock() >= self.deadline or not self.budget.can_publish():
+            if self.clock() >= self.deadline or not self.rerank_state.can_admit():
                 return envelope()
             key = (plan.fingerprint, getattr(row, "source_revision", ""))
             cached = self._scores.get(key)
             cache_key = window_cache_key(self.scorer_fingerprint, plan.fingerprint)
             if cached is None and self.cache_enabled:
-                envelope_hit = get_window_result(cache_key, budget=self.budget)
+                envelope_hit = get_window_result(cache_key, budget=self._cache_budget)
                 if envelope_hit is not None:
                     try:
                         validate_score_set(
@@ -188,7 +214,8 @@ class WindowSelectionScorer:
                     except (ValueError, TypeError):
                         pass
             if cached is not None:
-                scores.append(cached)
+                if not self.rerank_state.publish(lambda: scores.append(cached)):
+                    return envelope()
                 continue
             if self.provider is None:
                 return envelope()
@@ -220,7 +247,9 @@ class WindowSelectionScorer:
                 aggregate.value,
                 coverage,
             )
-            if not self.budget.publish(lambda: self._scores.__setitem__(key, score)):
+            if not self.rerank_state.publish(
+                lambda: self._scores.__setitem__(key, score)
+            ):
                 return envelope()
             if self.cache_enabled:
                 single = RerankScoreSet(
@@ -235,8 +264,8 @@ class WindowSelectionScorer:
                     (row.pk,),
                     (score,),
                 )
-                set_window_result(cache_key, single, budget=self.budget)
+                set_window_result(cache_key, single, budget=self._cache_budget)
             scores.append(score)
         published = []
-        self.budget.publish(lambda: published.append(envelope(scores)))
+        self.rerank_state.publish(lambda: published.append(envelope(scores)))
         return published[0] if published else envelope()

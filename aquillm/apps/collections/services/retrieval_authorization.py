@@ -7,13 +7,13 @@ from collections.abc import Iterable
 from hashlib import sha256
 from uuid import UUID
 
+from .bounded_retrieval_authorization import current_selected_rows, resolve_read_budget
 from .retrieval_authorization_contracts import (
     CurrentAuthorizedScopeV1,
     OpaquePrincipalReference,
     RetrievalAuthorizationContext,
     RetrievalPermissionPolicy,
     RetrievalReauthorizationCapability,
-    _current_rows,
     _intersect,
     _policy_signature,
     _selected_collections,
@@ -48,9 +48,7 @@ def _make_test_reauthorization_capability(
 ) -> RetrievalReauthorizationCapability:
     """Create the exact private capability used by isolated service tests."""
 
-    return bind_retrieval_reauthorization_capability(
-        principal=principal, policy=policy
-    )
+    return bind_retrieval_reauthorization_capability(principal=principal, policy=policy)
 
 
 def bind_retrieval_reauthorization_capability(
@@ -96,11 +94,12 @@ def freeze_retrieval_authorization_context(
     if type(reference) is not OpaquePrincipalReference:
         raise TypeError("permission policy returned an invalid principal reference")
     current = _intersect(
-        _current_rows(
+        current_selected_rows(
             principal=principal,
             policy=policy,
             database_alias=database_alias,
-            selected_collections=collections,
+            selected_collection_ids=collections,
+            selected_document_ids=documents,
         ),
         collections,
         documents,
@@ -130,12 +129,15 @@ def freeze_retrieval_authorization_context(
 
 
 def revalidate_retrieval_authorization_context(
-    *, context: RetrievalAuthorizationContext
+    *,
+    context: RetrievalAuthorizationContext,
+    read_budget=None,
 ) -> CurrentAuthorizedScopeV1:
     """Return current permission intersected with the immutable selected scope."""
 
     if type(context) is not RetrievalAuthorizationContext:
         raise TypeError("context must be an exact RetrievalAuthorizationContext")
+    read_budget = resolve_read_budget(context, read_budget)
     expected_signature = _context_signature(
         context.principal_reference,
         context.database_alias,
@@ -150,11 +152,13 @@ def revalidate_retrieval_authorization_context(
     version, checksum = _policy_signature(capability._policy)
     if (version, checksum) != (context.policy_version, context.policy_checksum):
         raise ValueError("permission policy signature changed")
-    rows = _current_rows(
+    rows = current_selected_rows(
         principal=capability._principal,
         policy=capability._policy,
         database_alias=context.database_alias,
-        selected_collections=context.selected_collection_ids,
+        selected_collection_ids=context.selected_collection_ids,
+        selected_document_ids=context.selected_document_ids,
+        read_budget=read_budget,
     )
     return _intersect(
         rows, context.selected_collection_ids, context.selected_document_ids

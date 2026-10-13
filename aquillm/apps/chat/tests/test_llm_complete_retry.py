@@ -19,7 +19,6 @@ from aquillm.llm import (
     llm_tool,
 )
 
-
 @llm_tool(
     for_whom="assistant",
     required=["search_string", "top_k"],
@@ -467,6 +466,8 @@ class ToolUseRetryTests(SimpleTestCase):
         self.assertNotIn("I'll retrieve", updated[-1].content)
 
     def test_retries_post_tool_placeholder_that_only_promises_to_help(self):
+        from lib.llm.tests.publication_fixture_support import selected_publication, UNCERTAINTY
+        citation = "[doc:doc-1 chunk:1]"
         llm = _FakeLLMInterface(
             [
                 LLMResponse(
@@ -481,7 +482,7 @@ class ToolUseRetryTests(SimpleTestCase):
                         "The paper's math centers on calibration and discrimination: "
                         "it compares confidence scores against correctness, then studies "
                         "regions where utility and factuality trade off."
-                    ),
+                    ) + " " + citation,
                     tool_call={},
                     stop_reason="stop",
                     input_usage=5,
@@ -505,11 +506,12 @@ class ToolUseRetryTests(SimpleTestCase):
             ],
         )
 
-        updated, changed = async_to_sync(llm.complete)(convo, 512)
+        with selected_publication([{"doc_id": "doc-1", "chunk_id": 1, "text": 'The paper discusses calibration, confidence, utility, and factuality.'}]):
+            updated, changed = async_to_sync(llm.complete)(convo, 512)
 
         self.assertEqual(changed, "changed")
         self.assertEqual(len(llm.calls), 2)
-        self.assertIn("calibration and discrimination", updated[-1].content)
+        self.assertEqual(updated[-1].content, UNCERTAINTY + "\n\n> " + 'The paper discusses calibration, confidence, utility, and factuality.' + " " + citation)
         self.assertNotIn("I'll help", updated[-1].content)
 
 
@@ -644,7 +646,7 @@ class CutoffContinuationTests(SimpleTestCase):
             "LLM_STREAM_FINAL_ANSWER_ONLY": "0",
         },
     )
-    def test_streaming_cutoff_continuation_keeps_streaming_same_bubble(self):
+    def test_cutoff_continuation_publishes_only_final_same_bubble_even_when_flag_disabled(self):
         class _StreamingFakeLLM(_FakeLLMInterface):
             async def get_message(self, *args, **kwargs):
                 self.calls.append(kwargs)
@@ -698,11 +700,12 @@ class CutoffContinuationTests(SimpleTestCase):
 
         self.assertEqual(changed, "changed")
         self.assertEqual(len(llm.calls), 2)
-        self.assertTrue(callable(llm.calls[1].get("stream_callback")))
-        self.assertEqual(len(stream_payloads), 2)
-        self.assertEqual(
-            stream_payloads[0]["message_uuid"], stream_payloads[1]["message_uuid"]
-        )
+        self.assertTrue(all(call.get("stream_callback") is None for call in llm.calls))
+        self.assertEqual(len(stream_payloads), 1)
+        self.assertTrue(stream_payloads[0]["done"])
+        self.assertEqual(stream_payloads[0]["content"], updated[-1].content)
+        self.assertEqual(stream_payloads[0]["message_uuid"], str(updated[-1].message_uuid))
+        self.assertEqual(llm.calls[0]["stream_message_uuid"], llm.calls[1]["stream_message_uuid"])
         self.assertIn("Intro section that gets cut", stream_payloads[-1]["content"])
         self.assertIn("and then continues cleanly.", stream_payloads[-1]["content"])
         self.assertIn("and then continues cleanly.", updated[-1].content)
@@ -740,11 +743,8 @@ class CutoffContinuationTests(SimpleTestCase):
 
         self.assertEqual(changed, "changed")
         self.assertEqual(len(llm.calls), 2)
-        self.assertIn(
-            "![Figure 7](https://aquillm/document_image/b4a65cf7-c884-49cf-af76-e477e5a21b25/)",
-            updated[-1].content,
-        )
-        self.assertNotIn("/document_image/b4a\n65cf7", updated[-1].content)
+        from lib.llm.tests.publication_fixture_support import assert_unbound_image_continuation
+        assert_unbound_image_continuation(llm, updated)
 
 
     @patch.dict(

@@ -25,6 +25,21 @@ class UserMemoryFact(models.Model):
         default='general',
         db_index=True,
     )
+    origin = models.CharField(max_length=24, default='legacy_unknown')
+    source_conversation_id = models.BigIntegerField(null=True, blank=True, db_index=True)
+    source_message_uuid = models.UUIDField(null=True, blank=True, db_index=True)
+    source_content_digest = models.CharField(max_length=64, blank=True, default='')
+    source_span_start = models.PositiveIntegerField(null=True, blank=True)
+    source_span_end = models.PositiveIntegerField(null=True, blank=True)
+    intent_policy_version = models.CharField(max_length=48, blank=True, default='')
+    promotion_key = models.CharField(max_length=64, null=True, blank=True, unique=True)
+    fact_digest = models.CharField(max_length=64, blank=True, default='')
+    revision = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=16, default='active', db_index=True)
+    supersedes = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name='successors')
+    provider_memory_ids = models.JSONField(default=list, blank=True)
+    provider_receipt_complete = models.BooleanField(default=False)
+    reconciliation_status = models.CharField(max_length=16, default='not_needed')
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -34,4 +49,4 @@ class UserMemoryFact(models.Model):
         ordering = ['category', 'created_at']
 
     def __str__(self):
-        return f"{self.user.username}: {self.fact[:50]}..."
+        return f"Profile fact {self.pk} ({self.status})"

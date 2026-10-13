@@ -32,6 +32,7 @@ from . import zotero_views
 urlpatterns = [
     path("", views.index, name="index"),
     path("api/", include(api_urlpatterns)),
+    path('api/', include('apps.memory.urls')),
     path("aquillm/", include(page_urlpatterns)),
     path("chat/", include(chat_urlpatterns)),
     path('accounts/', include('allauth.urls')),

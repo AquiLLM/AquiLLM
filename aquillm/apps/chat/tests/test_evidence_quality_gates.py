@@ -15,6 +15,10 @@ def independent_operational_gate(monkeypatch):
     )
     # Metric unit tests isolate the separately tested attachment validator.
     monkeypatch.setattr(
+        "apps.knowledge_graph.evals.graph_activation_attachment_v2.validate_graph_activation_attachment_v2",
+        lambda *a, **kw: {"passed": True, "blocking_reasons": []},
+    )
+    monkeypatch.setattr(
         "apps.chat.evals.evidence_operational.validate_attachment",
         lambda *a: {"passed": True, "blocking_reasons": []},
     )
@@ -23,6 +27,9 @@ def independent_operational_gate(monkeypatch):
     )
     monkeypatch.setattr(
         "apps.chat.evals.evidence_quality_gates.verified_flags", lambda r: r
+    )
+    monkeypatch.setattr(
+        "apps.chat.evals.evidence_quality_gates.support_gate_errors", lambda *a: []
     )
 
 
@@ -87,6 +94,19 @@ def reports():
 TARGETS = {
     depth: {"first_grounded": 25, "completion": 35} for depth in ("routine", "deeper")
 }
+
+
+def test_comparator_reports_crossed_domain_depth_failure():
+    from apps.chat.tests.test_evidence_support_gates import crossing_cohort_reports
+
+    assert compare(crossing_cohort_reports(decline=False), TARGETS)[
+        "activation_eligible"
+    ]
+    result = compare(crossing_cohort_reports(), TARGETS)
+    assert result["blocking_reasons"] == [
+        "combined: domain policy_record/deeper/support_recall decline or unknown"
+    ]
+    assert result["activation_eligible"] is False
 
 
 def test_incomplete_frozen_corpus_and_unmatched_conditions_rejected():

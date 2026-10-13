@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
 from typing import Any, Literal
 
 import structlog
-from channels.db import database_sync_to_async
 
 from apps.chat.services.manual_search_turn import run_manual_search_turn
 from apps.chat.services.rag_config import (
@@ -28,7 +26,7 @@ from apps.chat.services.rag_pipeline_messages import (
     _latest_user_message,
     _retry_needs_visual_tools,
 )
-from apps.chat.services.rag_pipeline_retrieval import successful_search_results
+from apps.chat.services.rag_pipeline_retrieval import run_parallel_searches, successful_search_results
 from apps.chat.services.rag_query import build_retrieval_queries
 from apps.chat.services.rag_retrieval import merge_ranked_tool_results
 from apps.chat.services.rag_selection_coordinator import (
@@ -89,6 +87,19 @@ async def run_direct_rag_turn(
     *,
     stream_func: Any = None,
 ) -> DirectRagOutcome:
+    from lib.llm.turn_context import current_turn
+
+    if current_turn() is None:
+        from .rag_turn import preservation_turn
+
+        async with preservation_turn(consumer, max_func_calls=3):
+            return await _run_direct_rag_turn(
+                consumer, llm_if, convo, stream_func=stream_func
+            )
+    return await _run_direct_rag_turn(consumer, llm_if, convo, stream_func=stream_func)
+
+
+async def _run_direct_rag_turn(consumer, llm_if, convo, *, stream_func=None):
     """Handle an obvious document question through the deterministic RAG pipeline.
 
     Returns ``"handled"`` when the turn was fully answered here (caller must skip
@@ -147,6 +158,13 @@ async def run_direct_rag_turn(
         return "skipped"
 
     preservation = rag_preservation_config()
+    if not preservation.followup_evidence_enabled:
+        from .rag_source_continuity_turn import unresolved_source_notice
+
+        notice = unresolved_source_notice(convo, user_message.content or "")
+        if notice:
+            consumer.convo = convo + [AssistantMessage(content=notice, stop_reason="end_turn")]
+            return "handled"
     if preservation.error or (
         preservation.evidence_text_mode == "source" and current_source_runtime() is None
     ):
@@ -154,7 +172,9 @@ async def run_direct_rag_turn(
             AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
         ]
         return "handled"
-    if preservation.active:
+    from .retrieval_query_runtime import query_proposals_enabled
+
+    if preservation.active or query_proposals_enabled():
         from apps.chat.services.rag_preservation_turn import run_preservation_rag
 
         return await run_preservation_rag(
@@ -183,39 +203,20 @@ async def run_direct_rag_turn(
         prepared_queries(queries, top_k, candidate_top_k)
 
         t_retrieval_start = time.perf_counter()
-        search_async = database_sync_to_async(
-            _run_vector_search,
-            thread_sensitive=False,
-        )
-        search_outcomes = await asyncio.gather(
-            *(
-                search_async(consumer, search_query, candidate_top_k)
-                for search_query in queries
-            ),
-            return_exceptions=True,
-        )
+        search_outcomes = await run_parallel_searches(
+            consumer, queries, candidate_top_k, vector_runner=_run_vector_search)
         observe_search_outcomes(queries, search_outcomes)
         search_results = successful_search_results(search_outcomes, logger)
-        raw_result = (
-            {}
-            if preservation.active
-            else merge_ranked_tool_results(search_results, limit=top_k)
-        )
+        raw_result = merge_ranked_tool_results(search_results, limit=top_k)
         t_retrieval_end = time.perf_counter()
         retrieval_diagnostics = raw_result.get("_retrieval_diagnostics")
         if not isinstance(retrieval_diagnostics, dict):
             retrieval_diagnostics = {}
 
         t_evidence_start = time.perf_counter()
-        packet = (
-            None
-            if preservation.active
-            else build_evidence_packet(
-                raw_result, query=query, search_scope=_SEARCH_SCOPE
-            )
-        )
+        packet = build_evidence_packet(raw_result, query=query, search_scope=_SEARCH_SCOPE)
         selection_turn = None
-        if preservation.active or selection_config.mode in ("shadow", "adaptive"):
+        if selection_config.mode in ("shadow", "adaptive"):
             (
                 selection_turn,
                 selected_packet,
@@ -240,6 +241,9 @@ async def run_direct_rag_turn(
         working_convo = _append_retrieval_messages(convo, query, raw_result, top_k)
 
         t_synthesis_start = time.perf_counter()
+        from apps.chat.services.rag_answer_publication import bind_legacy_answer_packet
+
+        await bind_legacy_answer_packet(consumer, packet)
         with observability_scope(correlation_id, "direct_synthesis"):
             result_convo = await synthesize_from_evidence(
                 llm_if, working_convo, packet, stream_func=stream_func
@@ -289,11 +293,6 @@ async def run_direct_rag_turn(
             correlation_id=correlation_id,
             error_type=type(exc).__name__,
         )
-        if preservation.active:
-            consumer.convo = convo + [
-                AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
-            ]
-            return "handled"
         return "skipped"
 
 

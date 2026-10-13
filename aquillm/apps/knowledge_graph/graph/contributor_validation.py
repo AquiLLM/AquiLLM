@@ -41,6 +41,8 @@ def validate_evaluation_contributors(
 ) -> tuple[object, ...]:
     """Revalidate an eval manifest's exact locked sources, documents, and chunks."""
 
+    from apps.documents.services.representation_contracts import SourceScopeUnavailable
+
     from apps.knowledge_graph.extraction.pipeline import (
         StaleSourceError,
         _ordered_chunks,
@@ -106,7 +108,7 @@ def validate_evaluation_contributors(
                 concrete_model_label=document._meta.label_lower,
             )
             _validate_source(document, source.source_hash)
-        except StaleSourceError as exc:
+        except (StaleSourceError, SourceScopeUnavailable) as exc:
             raise CollectionGraphSourceStaleError(
                 "contributing document source or chunks changed"
             ) from exc

@@ -6,6 +6,7 @@ import uuid
 import pytest
 
 from ._chunk_graph_lifecycle_support import (
+    assert_rebuild_binding,
     configure_chunking_runtime,
     database_required,
     persist_chunk,
@@ -43,7 +44,7 @@ def test_graph_enqueue_failure_leaves_successful_chunk_commit_intact(monkeypatch
 
     from apps.collections.models import Collection
     from apps.documents.models import RawTextDocument, TextChunk
-    from apps.knowledge_graph.graph import invalidation
+    from apps.knowledge_graph.models import GraphRebuildRequest
     from apps.knowledge_graph.services import builds
 
     chunking = configure_chunking_runtime(monkeypatch)
@@ -56,16 +57,14 @@ def test_graph_enqueue_failure_leaves_successful_chunk_commit_intact(monkeypatch
         text="Chunking succeeds even when the graph broker is unavailable.",
         ingestion_complete=False,
     )
-    events = []
+    attempted = []
+    def fail(document_id, source_hash, **kwargs):
+        attempted.append((document_id, source_hash, kwargs))
+        raise ConnectionError("broker")
     monkeypatch.setattr(
         builds,
         "enqueue_document_build",
-        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("broker")),
-    )
-    monkeypatch.setattr(
-        invalidation.logger,
-        "error",
-        lambda event, **fields: events.append((event, fields)),
+        fail,
     )
 
     run_chunk_task(chunking, document)
@@ -75,28 +74,24 @@ def test_graph_enqueue_failure_leaves_successful_chunk_commit_intact(monkeypatch
     assert list(
         TextChunk.objects.filter(doc_id=document.id).values_list("content", flat=True)
     ) == [document.full_text]
-    assert events == [
-        (
-            "obs.kg.document_enqueue_failed",
-            {
-                "document_id": str(document.id),
-                "expected_source_hash": document.full_text_hash,
-                "error_type": "ConnectionError",
-            },
-        )
-    ]
+    assert len(attempted) == 1 and attempted[0][:2] == (document.id, document.full_text_hash)
+    request = assert_rebuild_binding(document, attempted[0][2])
+    assert request.document_publication_state == "failed"
+    assert request.error_code == "document_task_publish_failed" and request.document_publish_cursor == 0
+    assert GraphRebuildRequest.objects.filter(scope_id=str(document.id)).count() == 1
+    assert document.chunks.get().representation_generation.status == "active"
 
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_same_hash_redelivery_preserves_active_graph_evidence_and_reenqueues(
+def test_registered_same_hash_redelivery_preserves_graph_without_duplicate_rebuild(
     monkeypatch,
 ):
     from django.contrib.auth.models import User
 
     from apps.collections.models import Collection
     from apps.documents.models import RawTextDocument, TextChunk
-    from apps.knowledge_graph.models import EntityMention, GraphArtifact
+    from apps.knowledge_graph.models import EntityMention, GraphArtifact, GraphRebuildRequest
     from apps.knowledge_graph.services import builds
 
     chunking = configure_chunking_runtime(monkeypatch)
@@ -109,7 +104,13 @@ def test_same_hash_redelivery_preserves_active_graph_evidence_and_reenqueues(
         text="Orion evaluates MMLU.",
         ingestion_complete=True,
     )
-    chunk = persist_chunk(document, content=document.full_text)
+    legacy = persist_chunk(document, content=document.full_text)
+    assert run_chunk_task(chunking, document) == "activated"
+    document.refresh_from_db()
+    chunk = document.chunks.get()
+    assert chunk.pk != legacy.pk and TextChunk.objects.filter(pk=legacy.pk).exists()
+    rebuilds = tuple(GraphRebuildRequest.objects.filter(scope_id=str(document.id)).values_list("pk", flat=True))
+    assert len(rebuilds) == 1
 
     def unexpected_provider_work(*_args, **_kwargs):
         raise AssertionError("committed same-hash redelivery must skip provider work")
@@ -146,10 +147,10 @@ def test_same_hash_redelivery_preserves_active_graph_evidence_and_reenqueues(
     monkeypatch.setattr(
         builds,
         "enqueue_document_build",
-        lambda document_id, source_hash: publications.append((document_id, source_hash)),
+        lambda document_id, source_hash, **kwargs: publications.append((document_id, source_hash, kwargs)),
     )
 
-    run_chunk_task(chunking, document)
+    assert run_chunk_task(chunking, document) == "already_committed"
 
     document.refresh_from_db()
     artifact.refresh_from_db()
@@ -157,4 +158,7 @@ def test_same_hash_redelivery_preserves_active_graph_evidence_and_reenqueues(
     assert TextChunk.objects.filter(pk=chunk.pk).exists()
     assert EntityMention.objects.filter(pk=mention.pk, chunk_id=chunk.pk).exists()
     assert artifact.status == GraphArtifact.Status.ACTIVE
-    assert publications == [(document.id, document.full_text_hash)]
+    assert document.chunks.get().pk == chunk.pk
+    assert TextChunk.objects.filter(pk=legacy.pk).exists()
+    assert publications == []
+    assert tuple(GraphRebuildRequest.objects.filter(scope_id=str(document.id)).values_list("pk", flat=True)) == rebuilds

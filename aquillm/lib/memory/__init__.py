@@ -45,6 +45,7 @@ from .mem0 import (
     search_mem0_via_oss_async,
 )
 from .extraction import (
+    parse_memory_intent, validate_fact_candidates,
     clean_stable_facts,
     extract_stable_facts,
     heuristic_facts_from_turn,
@@ -54,6 +55,7 @@ from .extraction import (
 from .formatting import format_memories_for_system
 
 __all__ = [
+    'parse_memory_intent', 'validate_fact_candidates',
     # Types
     'RetrievedEpisodicMemory',
     # Config

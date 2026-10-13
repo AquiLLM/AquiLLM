@@ -223,6 +223,7 @@ def test_optional_dependency_is_exact_and_not_in_default_dependencies() -> None:
 
     assert project["optional-dependencies"]["knowledge-graph-local"] == [
         "gliner2[local]==1.3.2",
+        "neo4j-rust-ext==5.28.4.0",
         "torch==2.11.0",
     ]
     assert all(

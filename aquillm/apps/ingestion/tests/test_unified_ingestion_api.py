@@ -18,7 +18,7 @@ def test_ingestion_batch_item_source_file_allows_long_storage_paths():
     assert IngestionBatchItem._meta.get_field("source_file").max_length == 500
 
 
-@pytest.mark.django_db
+@pytest.mark.django_db(transaction=True)
 @patch("apps.ingestion.services.upload_batches.ingest_uploaded_file_task.delay")
 def test_upload_endpoint_queues_each_file(delay_mock, settings, tmp_path):
     settings.STORAGES = {

@@ -14,12 +14,19 @@ RAG_EVIDENCE_SELECTION_SHADOW_SCORING=0
 
 Start with the deterministic replay in `aquillm/apps/chat/evals/evidence_selection_cases.yaml`. It has nine **synthetic regression cases**. They check mechanics and expected citation identities, not real retrieval quality. Run the four policies (`legacy`, `relevance_only`, `fixed_mmr`, `adaptive`) on identical candidate snapshots and budgets. Keep the zero-extra-final-scoring arm to measure the value of neural work separately. Keep the existing routing evaluator `run_rag_eval` as a separate check.
 
-From `aquillm/`, replay a policy and run the existing routing evaluator:
+From `aquillm/`, replay an offline policy:
 
 ```sh
 python -m apps.chat.evals.run_evidence_selection_eval --cases apps/chat/evals/evidence_selection_cases.yaml --policy adaptive --split regression --output evidence-selection-regression.json
-python -m apps.chat.evals.run_rag_eval --quiet
 ```
+
+Run the routing evaluator checks from the repository root through an owned isolated test project:
+
+```sh
+rtk proxy python scripts/run_rag_remediation_tests.py --project aquillm-rag-review -- aquillm/apps/chat/tests/test_rag_eval_runner.py -q
+```
+
+Use an available task-owned project and only one wrapper at a time for that project, as described in the [isolated testing runbook](../../runbooks/rag-remediation-testing.md). These checks use real persisted principals, source coordinates, and publication guards with synthetic external transports; they do not measure model quality. The callable `run_rag_eval` runner requires an explicit persisted-case factory. Its fixture-free CLI reports usage guidance instead of starting an unbound application evaluation.
 
 There is currently no representative 80-question labeled corpus in this repository. Before tuning or enabling adaptive serving, collect 40 development and 40 frozen held-out questions, balanced across focused facts, comparisons/synthesis, multipart questions, and contradiction/condition-sensitive questions. Label relevant chunks, grades, aspects, and required independent evidence. A gold chunk missing from the upstream candidate pool counts as a retrieval miss. Keep private question text, document IDs, and source passages outside tracked artifacts and ordinary logs. Tune coefficients and cross-document attenuation on development cases only; choose the winning policy before opening held-out results.
 

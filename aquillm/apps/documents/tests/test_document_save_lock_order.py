@@ -16,6 +16,7 @@ def test_existing_full_save_locks_old_and_new_collections_before_document_write(
     from apps.documents.models import RawTextDocument
     from apps.documents.models import document as document_module
     from apps.knowledge_graph.graph import invalidation
+    from apps.documents.services import representation_history
 
     document_id = uuid.uuid4()
     source_hash = RawTextDocument.hash_fn("unchanged")
@@ -46,6 +47,32 @@ def test_existing_full_save_locks_old_and_new_collections_before_document_write(
     )
     actions = []
     lock_calls = []
+    old = SimpleNamespace(
+        pkid=7, id=document_id, full_text="unchanged",
+        full_text_hash=source_hash, collection_id=3,
+    )
+    query.get.return_value = old
+    history = SimpleNamespace(collection_id=3)
+
+    def lock_history(owner, *, using):
+        assert owner is old and using == "default"
+        actions.append("history_locked")
+        return history
+
+    def capture_history(owner, state, *, using):
+        assert owner is old and state is history and using == "default"
+        assert owner.collection_id == state.collection_id == 3
+        actions.append("history_captured")
+
+    def move_history(*, using, update_fields):
+        assert using == "default"
+        assert update_fields == ["collection_id", "updated_at"]
+        assert history.collection_id == 9
+        actions.append("history_moved")
+
+    history.save = move_history
+    monkeypatch.setattr(representation_history, "locked_state", lock_history)
+    monkeypatch.setattr(representation_history, "capture_legacy", capture_history)
 
     @contextmanager
     def atomic(*, using):
@@ -97,7 +124,11 @@ def test_existing_full_save_locks_old_and_new_collections_before_document_write(
 
     document.save(dont_rechunk=True)
 
-    assert actions == ["collections_locked", "document_written"]
+    assert actions == [
+        "collections_locked", "history_locked", "history_captured",
+        "document_written", "history_moved",
+    ]
+    query.get.assert_called_once_with(pkid=7, id=document_id)
     assert len(lock_calls) == 1
     document_ref, collection_ids, using, active_only = lock_calls[0]
     assert document_ref.document_pkid == 7

@@ -16,6 +16,8 @@ def start_graph(query, authorization, dependencies, enabled):
     ):
         return None
     settings = dependencies.settings
+    if getattr(settings, "graph_remediation_mode", "legacy") != "legacy":
+        return None
     if getattr(settings, "memgraph_traversal_enabled", None) is not True:
         return None
     timeout = getattr(settings, "graph_overall_timeout_ms", None)
@@ -35,13 +37,6 @@ def start_graph(query, authorization, dependencies, enabled):
 
 
 def query_embedding(query):
-    from apps.documents.services import rag_cache
-    from aquillm.utils import get_embedding
-    from lib.embeddings.config import get_local_embed_config
+    from .chunk_search_query_observation import query_embedding as observe
 
-    _base, _key, model = get_local_embed_config()
-    vector = rag_cache.get_cached_query_embedding(query, "search_query", model)
-    if vector is None:
-        vector = get_embedding(query)
-        rag_cache.set_cached_query_embedding(query, "search_query", model, vector)
-    return vector
+    return observe(query)

@@ -6,6 +6,8 @@ from contextvars import ContextVar, copy_context
 from dataclasses import dataclass
 from os import getenv
 
+from lib.llm.answer_publication import AnswerPublicationContextV1
+
 _TURN = ContextVar("llm_turn_context", default=None)
 _IN_HANDOFF = ContextVar("llm_in_evidence_handoff", default=False)
 
@@ -17,6 +19,7 @@ class TurnContext:
     policy: object = None
     max_func_calls: int = 0
     worker_cleanup: object = None
+    answer_publication: AnswerPublicationContextV1 | None = None
 
 
 def current_turn():
@@ -38,6 +41,10 @@ def bind_turn(state):
     try:
         yield state
     finally:
+        if state.answer_publication is not None:
+            close = getattr(state.answer_publication, "close", None)
+            if close:
+                close()
         _TURN.reset(token)
 
 

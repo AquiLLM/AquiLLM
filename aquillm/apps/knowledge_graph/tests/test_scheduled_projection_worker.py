@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from apps.knowledge_graph.tests.maintenance_redis_test_support import owned_maintenance_redis
 import test_scheduled_projection_publication as publication_tests
 from billiard.exceptions import SoftTimeLimitExceeded
 from redis import Redis

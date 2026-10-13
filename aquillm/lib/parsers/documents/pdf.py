@@ -1,19 +1,11 @@
-"""
-PDF document parsing.
-"""
-
-import io
-
-from pypdf import PdfReader
+# Compatibility wrapper for faithful ordered extraction.
+from lib.parsers.source_contracts import source_artifact_ref
+from lib.parsers.structural import extract_structure
 
 
 def extract_pdf_text(data: bytes) -> str:
-    """Extract text content from PDF bytes."""
-    reader = PdfReader(io.BytesIO(data))
-    text_parts = []
-    for page in reader.pages:
-        text_parts.append((page.extract_text() or "").strip())
-    return "\n\n".join(part for part in text_parts if part)
+    artifact = source_artifact_ref(data, member_path=None, container_sha256=None)
+    return extract_structure('source.pdf', data, artifact=artifact).canonical_text
 
 
 __all__ = ['extract_pdf_text']

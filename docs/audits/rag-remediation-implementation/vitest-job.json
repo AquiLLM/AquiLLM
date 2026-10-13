@@ -1,0 +1,177 @@
+{
+  "job": "vitest",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "command": [
+    "rtk",
+    "proxy",
+    "python",
+    "-X",
+    "utf8",
+    "scripts/run_rag_remediation_tests.py",
+    "--project",
+    "aquillm-rag-integration",
+    "--vitest",
+    "react/src/features/chat/components/Chat.context.test.tsx",
+    "react/src/features/chat/components/Chat.test.tsx",
+    "react/src/features/chat/components/ChatCollectionsModal.test.tsx",
+    "react/src/features/chat/components/ChatRenameDialog.test.tsx",
+    "react/src/features/chat/components/CitationModalProvider.test.tsx",
+    "react/src/features/chat/components/HistoricalCitationContext.test.tsx",
+    "react/src/features/chat/components/HistoricalCitationRouting.test.tsx",
+    "react/src/features/chat/components/MessageBubble.test.tsx",
+    "react/src/features/chat/components/MessageSources.test.tsx",
+    "react/src/features/chat/components/PDFCitationModal.test.tsx",
+    "react/src/features/chat/components/VirtualizedPdfPages.test.tsx",
+    "react/src/features/chat/components/pdfPageExtraction.test.ts",
+    "react/src/features/chat/components/pdfPageWindow.test.ts",
+    "react/src/features/chat/hooks/useChatWebSocket.bootstrap.test.tsx",
+    "react/src/features/chat/hooks/useChatWebSocket.context.test.tsx",
+    "react/src/features/chat/hooks/useChatWebSocket.lifecycle.test.tsx",
+    "react/src/features/chat/hooks/useChatWebSocket.test.tsx",
+    "react/src/utils/pdfTextMatch.test.ts",
+    "react/src/utils/stripCitationSources.test.ts",
+    "react/src/utils/textOffsetMatch.test.ts"
+  ],
+  "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved.",
+  "exit_code": 0,
+  "log_sha256": "d4f1b94273e6cf92079588d25f2da61321429b06f60155f8df723008ddbd5918",
+  "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+  "source_and_index_unchanged": true,
+  "source_snapshot_sha256": "2588c92a9537d3ec70f0827691026775dd2bdd00636844d7ac3fddb1432d798c",
+  "runtime": [
+    {
+      "service": "app",
+      "container_id": "5233685f9101d4a3faed7a2de87c6b19a38910e71e5202781ce53058caca20c4",
+      "image_id": "sha256:a2468c32b76dbc38c7c9bf964a7c135622eeac59c374f142445c41ef21b512db"
+    },
+    {
+      "service": "db",
+      "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+      "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+    },
+    {
+      "service": "fake-models",
+      "container_id": "d62967db65ea4c6c8cde6ab7445fcc8b20aa0ab7cf3bc53e62a3df67fd2a95d5",
+      "image_id": "sha256:ef0d30ecbcb5d13f3a4ba2dc9ffab5294c04972e74d65e411dbb65153d9225e8"
+    },
+    {
+      "service": "frontend",
+      "container_id": "d2032ee2b94fa680cc2be6504586027bdb4c1ad855c628b7d5ce2cfa6101d1ec",
+      "image_id": "sha256:43c25153523fce5140559b30403273e73f1ea5cb1163ca2a458882c89d17876b"
+    },
+    {
+      "service": "memgraph",
+      "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+      "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+    },
+    {
+      "service": "redis",
+      "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+      "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+    }
+  ],
+  "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+  "counts": {
+    "passed": 202,
+    "total": 202,
+    "failed": 0,
+    "skipped": 0,
+    "test_files_passed": 20,
+    "test_files_total": 20
+  },
+  "skips": [],
+  "warnings": [
+    {
+      "kind": "dependency_metadata_warning",
+      "count": 1,
+      "category": "Browserslist caniuse-lite age",
+      "observed": "The retained log reports browser compatibility data 21 months old.",
+      "disposition": "Maintenance debt remains. This successful job does not establish current browser-target data or production browser coverage; a dependency refresh needs its own change and verification."
+    },
+    {
+      "kind": "expected_negative_case_stderr",
+      "count": 1,
+      "message": "Conversation changed elsewhere. Refresh and resend.",
+      "test_path": "react/src/features/chat/hooks/useChatWebSocket.lifecycle.test.tsx",
+      "test_name": "preserves a fatal stale-writer error after permanent close",
+      "test_line": 260,
+      "evidence_lines": [
+        265,
+        268,
+        269,
+        271
+      ],
+      "disposition": "The fixture injects a fatal stale-writer exception and permanent close; assertions retain that exact error, disabled input and one socket after the retry window. Logged by the actual hook error branch; no application-server failure is inferred from this synthetic socket event."
+    },
+    {
+      "kind": "expected_negative_case_stderr",
+      "count": 1,
+      "message": "Unavailable",
+      "test_path": "react/src/features/chat/hooks/useChatWebSocket.lifecycle.test.tsx",
+      "test_name": "disables input immediately on fatal initialization errors",
+      "test_line": 274,
+      "evidence_lines": [
+        279,
+        280,
+        281,
+        283,
+        284
+      ],
+      "disposition": "The fixture injects a fatal initialization exception after readiness; assertions require disabled input and the exact error, then refuse to restore readiness from a later snapshot. Logged by the actual hook error branch; no application-server failure is inferred from this synthetic socket event."
+    },
+    {
+      "kind": "expected_negative_case_stderr",
+      "count": 1,
+      "message": "Tool result validation failed.",
+      "test_path": "react/src/features/chat/hooks/useChatWebSocket.test.tsx",
+      "test_name": "settles an aborted tool turn and allows a later retry to run normally",
+      "test_line": 140,
+      "evidence_lines": [
+        165,
+        168,
+        170,
+        171,
+        184,
+        203,
+        204,
+        205
+      ],
+      "disposition": "The fixture injects a tool error; assertions stop the spinner, allow retry, clear the error for that retry and retain the completed retry answer. Logged by the actual hook error branch; no application-server failure is inferred from this synthetic socket event."
+    },
+    {
+      "kind": "expected_negative_case_stderr",
+      "count": 1,
+      "message": "Tool result validation failed.",
+      "test_path": "react/src/features/chat/hooks/useChatWebSocket.test.tsx",
+      "test_name": "resumes a terminal tool turn after authoritative reconnect hydration",
+      "test_line": 208,
+      "evidence_lines": [
+        224,
+        228,
+        229,
+        235,
+        236,
+        237,
+        272,
+        273,
+        274
+      ],
+      "disposition": "The fixture injects a tool error; assertions retain it until authoritative hydration, resume the pending state and settle after the recovered answer. Logged by the actual hook error branch; no application-server failure is inferred from this synthetic socket event."
+    }
+  ],
+  "duration_seconds": 4.87,
+  "summary": "Vitest passed 202 tests across 20 test files. One outdated Browserslist-data warning and four deliberately injected WebSocket error messages were reviewed; no tests were skipped.",
+  "summary_derivation": "Read the entire retained Vitest log: twenty per-file results sum to 202 and match both final totals. Duration is the reported 4.87 seconds; concurrent transform/collect/test/environment phase times are not summed into wall time. The four stderr headers match exact negative-case tests and asserted UI/recovery outcomes through useChatWebSocket.ts line207. The Browserslist warning remains maintenance debt. The wrapper exited zero and the separate post proof matches all 3118 source files and the index. Synthetic fixture text only; no credentials or private corpus content identified. This is one job, not aggregate acceptance.",
+  "public_log_or_summary_url": "./vitest-job.json",
+  "status": "COMPLETED_JOB_RESULTS_AND_WARNING_SKIP_DISPOSITIONS_REVIEWED",
+  "retained_evidence_hashes": {
+    "source_proof": "5f0391670dbf2beb54c9d70ed1a38e422a8949855129732c8efe3df07fdef2ea",
+    "driver_receipt": "ed72fe8f50f93adea1a66521ac901ac198ba4a72c7d3d5f63e6a79ba9fb28ea6",
+    "runtime_receipt": "9d96b95a10a8946fb290c64a136fd335cadd02ed7f00a05f9aac2c54da856c9f",
+    "manual_review": "b43e818a00d3b6783f5711c42c662ae1537ca7abbcbf3efc5952300a5659ed1d",
+    "candidate_manifest": "ed79f211ef99fae4025e1f0fa466b1b7231d87bc120dc0e82c8478e579ecd1a8"
+  },
+  "limits": [
+    "This is one job record. Separate contract, quality, data and deployment dispositions remain in closure.json."
+  ]
+}

@@ -31,16 +31,20 @@ class FakeOpenAIClient:
         self.chat = FakeOpenAIChatAPI(response)
 
 
-def test_openai_transform_tools_produces_openai_function_schema():
+def test_openai_transform_tools_produces_openai_function_schema(monkeypatch):
+    monkeypatch.setenv("OPENAI_TOOL_STRICT", "1")
     # this checks internal tool definitions get converted to openai function tools
 
-    response = SimpleNamespace()
+    response = SimpleNamespace(choices=[SimpleNamespace(
+        message=SimpleNamespace(content="ready", tool_calls=None), finish_reason="stop",
+    )], usage=SimpleNamespace(prompt_tokens=1, completion_tokens=1))
     client = FakeOpenAIClient(response)
     iface = OpenAIInterface(client, model="gpt-oss:20b")
 
-    transformed = asyncio.run(
-        iface._transform_tools(
-            [
+    asyncio.run(
+        iface.get_message(
+            system="Tool schema mapping", messages=[{"role": "user", "content": "search"}],
+            messages_pydantic=[], max_tokens=32, tools=[
                 {
                     "name": "search_docs",
                     "description": "searches documents",
@@ -55,6 +59,7 @@ def test_openai_transform_tools_produces_openai_function_schema():
         )
     )
 
+    transformed = client.chat.completions.last_create_kwargs["tools"]
     assert transformed[0]["type"] == "function"
     assert transformed[0]["function"]["name"] == "search_docs"
     assert transformed[0]["function"]["description"] == "searches documents"

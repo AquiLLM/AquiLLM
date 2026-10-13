@@ -1,18 +1,11 @@
-"""
-DOCX document parsing.
-"""
-
-import io
+# Compatibility wrapper for faithful ordered extraction.
+from lib.parsers.source_contracts import source_artifact_ref
+from lib.parsers.structural import extract_structure
 
 
 def extract_docx_text(data: bytes) -> str:
-    """Extract text content from DOCX bytes."""
-    try:
-        from docx import Document  # type: ignore
-    except Exception as exc:
-        raise ValueError("python-docx is required for .docx extraction.") from exc
-    doc = Document(io.BytesIO(data))
-    return "\n".join(paragraph.text.strip() for paragraph in doc.paragraphs if paragraph.text.strip())
+    artifact = source_artifact_ref(data, member_path=None, container_sha256=None)
+    return extract_structure('source.docx', data, artifact=artifact).canonical_text
 
 
 __all__ = ['extract_docx_text']

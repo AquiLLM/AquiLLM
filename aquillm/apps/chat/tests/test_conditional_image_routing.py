@@ -3,6 +3,9 @@
 from types import SimpleNamespace
 
 import pytest
+from apps.chat.tests.persisted_direct_test_support import (
+    persisted_direct_case, close_direct_worker as close_direct_worker,
+)
 
 from apps.chat.services import rag_pipeline
 from apps.chat.services.rag_intent import classify_chat_message
@@ -53,7 +56,7 @@ def test_text_questions_do_not_enable_visual_retrieval(question):
 )
 @pytest.mark.asyncio
 async def test_visual_questions_allow_model_to_select_image_tools(
-    question, monkeypatch
+    question, monkeypatch, close_direct_worker
 ):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
     calls = []
@@ -68,8 +71,9 @@ async def test_visual_questions_allow_model_to_select_image_tools(
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
     monkeypatch.setattr(rag_pipeline, "synthesize_from_evidence", synthesize)
     convo = Conversation(system="sys", messages=[UserMessage(content=question)])
+    case = await persisted_direct_case([], collection_labels=(1,))
     consumer = SimpleNamespace(
-        convo=convo, user=None, col_ref=SimpleNamespace(collections=[1])
+        convo=convo, user=case.user, col_ref=SimpleNamespace(collections=case.collections((1,)))
     )
     assert classify_chat_message(question, selected_collection_ids=[1]).wants_figures
     assert await run_direct_rag_turn(consumer, object(), convo) == "skipped"
@@ -138,7 +142,7 @@ def test_explicit_visual_followup_can_use_immediately_previous_turn_only():
 )
 @pytest.mark.asyncio
 async def test_retry_of_selected_visual_keeps_deliberate_tool_selection(
-    monkeypatch,
+    monkeypatch, close_direct_worker,
     earlier_question,
 ):
     monkeypatch.setenv("RAG_DIRECT_ENABLED", "1")
@@ -164,8 +168,9 @@ async def test_retry_of_selected_visual_keeps_deliberate_tool_selection(
             UserMessage(content="try again"),
         ],
     )
+    case = await persisted_direct_case([], collection_labels=(1,))
     consumer = SimpleNamespace(
-        convo=convo, user=None, col_ref=SimpleNamespace(collections=[1])
+        convo=convo, user=case.user, col_ref=SimpleNamespace(collections=case.collections((1,)))
     )
     monkeypatch.setattr(
         rag_pipeline,

@@ -39,7 +39,34 @@ def _current_chunks(
     )
 
     query = TextChunk.objects.using(authorization.database_alias).filter(pk__in=ids)
-    return source_query_rows(query) if current_source_runtime() else query
+    if current_source_runtime():
+        return source_query_rows(query)
+    from .rag_publication_database import _bounded_database
+    from .rag_representation_publication import authorized_snapshot
+    from apps.documents.services.representation_store import active_chunk_scope, validate_representation_snapshot
+    from lib.llm.turn_context import current_turn
+    turn = current_turn()
+    from apps.documents.services.representation_manual_scope import private_acquisition_runtime
+    runtime = private_acquisition_runtime()
+    if runtime is not None:
+        from apps.documents.services.chunk_search_scope import validate_requested_authorization
+        from apps.documents.services.representation_tool_scope import tool_scope
+        from apps.documents.services.representation_contracts import SourceScopeUnavailable
+        from apps.documents.services.source_loading import bounded_source_database
+        if (runtime.budget is not turn.budget or runtime.authorization is not
+                getattr(runtime, "_media_authorization", None)):
+            raise SourceScopeUnavailable("source_scope_unavailable")
+        with runtime.lock, bounded_source_database(runtime, query.db):
+            scope = tool_scope(runtime, using=query.db, require_existing=True)
+            documents = tuple(item.document for item in scope.representation.selections
+                              if item.document.id in authorization.selected_document_ids)
+            validate_requested_authorization(runtime, authorization, documents)
+            return source_query_rows(query, runtime=runtime, require_existing=True)
+    with _bounded_database(query.db, min(3, turn.budget.remaining_ms() / 1000) if turn else 3):
+        snapshot = authorized_snapshot(authorization, using=query.db)
+        rows = tuple(active_chunk_scope(query, snapshot=snapshot))
+        validate_representation_snapshot(snapshot, using=query.db)
+        return rows
 
 
 def hydrate_pool_rows(

@@ -1,4 +1,4 @@
-"""Celery task: build embeddings and TextChunk rows for a document."""
+"""Exact-envelope structural publication; legacy preparation helpers remain callable."""
 from __future__ import annotations
 
 import structlog
@@ -10,7 +10,7 @@ from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 from django.apps import apps as django_apps
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import DEFAULT_DB_ALIAS, transaction
+from django.db import DEFAULT_DB_ALIAS
 from django.db.models import Q
 
 from aquillm.celery import app
@@ -245,70 +245,6 @@ def _embed_chunks(
     return chunks
 
 
-class _StaleChunkReplacement(RuntimeError):
-    pass
-
-
-def _commit_chunks(
-    document,
-    chunks: list[TextChunk],
-    *,
-    expected_source_hash: str,
-    using: str,
-) -> str:
-    from apps.knowledge_graph.graph.invalidation import (
-        DocumentLifecycleRef,
-        prepare_document_chunk_replacement,
-        schedule_post_chunk_graph_build,
-    )
-
-    reference = DocumentLifecycleRef(
-        concrete_model_label=type(document)._meta.label_lower,
-        document_pkid=int(document.pkid),
-        document_id=document.id,
-    )
-    try:
-        with transaction.atomic(using=using):
-            affected = prepare_document_chunk_replacement(
-                reference,
-                (document.collection_id,),
-                expected_source_hash=expected_source_hash,
-                using=using,
-            )
-            if affected is None:
-                schedule_post_chunk_graph_build(
-                    document.id,
-                    expected_source_hash,
-                    using=using,
-                )
-                return "already_committed"
-            if not affected:
-                raise _StaleChunkReplacement
-            locked = (
-                type(document)._base_manager.using(using)
-                .select_for_update()
-                .filter(pkid=document.pkid, id=document.id)
-                .first()
-            )
-            if locked is None or locked.full_text_hash != expected_source_hash:
-                raise _StaleChunkReplacement
-            TextChunk.objects.using(using).bulk_create(chunks)
-            locked.ingestion_complete = True
-            locked.save(
-                dont_rechunk=True,
-                update_fields=["ingestion_complete"],
-                using=using,
-            )
-            schedule_post_chunk_graph_build(
-                document.id,
-                expected_source_hash,
-                using=using,
-            )
-        return "committed"
-    except _StaleChunkReplacement:
-        return "stale"
-
-
 @app.task(serializer="json", bind=True, track_started=True, max_retries=2)
 def create_chunks(
     self,
@@ -321,7 +257,7 @@ def create_chunks(
     publication_generation: str | None = None,
     publication_attempt: int | None = None,
 ):
-    from apps.documents.services.chunk_publication import acknowledge_chunk_publication, task_publication
+    from apps.documents.services.chunk_publication import task_publication
     database_alias = DEFAULT_DB_ALIAS
     document = _exact_document(
         doc_id,
@@ -338,6 +274,7 @@ def create_chunks(
         return "stale"
     envelope = (publication_id, publication_generation, publication_attempt)
     intent = None
+    current = None
     if any(value is not None for value in envelope):
         if any(value is None for value in envelope):
             raise ValueError("Incomplete publication envelope")
@@ -345,36 +282,10 @@ def create_chunks(
         current = intent.first()
         if current is None or current.failure_kind:
             return "stale"
+    from apps.documents.services.representation_publication import capture_legacy_success_ack
+    from apps.documents.services.representation_history import reference
+    success_ack = capture_legacy_success_ack(reference(document), using=database_alias) if intent is None else None
     try:
-        from apps.knowledge_graph.graph.invalidation import (
-            DocumentChunkState,
-            DocumentLifecycleRef,
-            inspect_document_chunk_state,
-            schedule_post_chunk_graph_build,
-        )
-
-        reference = DocumentLifecycleRef(
-            concrete_model_label=type(document)._meta.label_lower,
-            document_pkid=int(document.pkid),
-            document_id=document.id,
-        )
-        chunk_state = inspect_document_chunk_state(
-            reference,
-            (document.collection_id,),
-            expected_source_hash=source_hash,
-            using=database_alias,
-        )
-        if chunk_state == DocumentChunkState.STALE:
-            return "stale"
-        if chunk_state == DocumentChunkState.COMMITTED:
-            schedule_post_chunk_graph_build(
-                document.id,
-                source_hash,
-                using=database_alias,
-            )
-            notify_ingest_monitor_complete(document.id)
-            acknowledge_chunk_publication(document, source_hash, using=database_alias)
-            return "already_committed"
         async_to_sync(get_channel_layer().group_send)(
             f"ingestion-dashboard-{document.ingested_by.id}",
             {
@@ -388,35 +299,27 @@ def create_chunks(
                 "providerModel": document_provider_model(document),
             },
         )
-        chunks = _duplicate_chunks(document, using=database_alias)
-        if chunks is None:
-            text_chunks, image_chunk = _prepared_chunks(document)
-            chunks = _embed_chunks(document, text_chunks, image_chunk)
-        else:
-            _unused_text_chunks, image_chunk = _prepared_chunks(document)
-            chunks = _embed_chunks(
-                document,
-                chunks,
-                image_chunk,
-                embed_text=False,
-            )
-        outcome = _commit_chunks(
-            document,
-            chunks,
-            expected_source_hash=source_hash,
-            using=database_alias,
-        )
-        if outcome != "stale":
-            acknowledge_chunk_publication(document, source_hash, using=database_alias)
+        from .representation import publish_document_representation
+        outcome = publish_document_representation(document, publication=current,
+            legacy_success_ack=success_ack, using=database_alias)
+        if outcome in ("activated", "already_committed", "already_active"):
             notify_ingest_monitor_complete(document.id)
         return outcome
     except Exception as exc:
+        from apps.documents.services.representation_contracts import SourceScopeUnavailable
+        from lib.parsers.source_contracts import SourceContractError
+        if isinstance(exc, SourceScopeUnavailable) and str(exc) in {
+            "stale_chunk_publication", "stale_representation", "source_scope_unavailable",
+            "representation_owner_changed", "invalid_representation_lease",
+        }:
+            return "stale"
         transient = isinstance(exc, EmbeddingUpstreamUnavailableError)
         current_attempt = True
         if intent is not None:
             current_attempt = intent.filter(Q(failure_kind='') | Q(failure_kind__isnull=True)).update(
                 last_error=type(exc).__name__[:128],
-                failure_kind='' if transient else ('contract' if isinstance(exc, EmbeddingContractError) else 'unexpected'),
+                failure_kind='' if transient else ('contract' if isinstance(
+                    exc, (EmbeddingContractError, SourceContractError, SourceScopeUnavailable)) else 'unexpected'),
             )
         logger.error(
             "obs.rag.chunking_failed",

@@ -13,6 +13,11 @@ from apps.chat.services.manual_search_commands import (
 from apps.chat.services.tool_wiring import documents
 from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
 from apps.chat.tests.test_rag_source_document_tools import docs as docs
+from apps.documents.tests.representation_support import upload as upload
+from apps.documents.tests.test_representation_media import figure as figure
+from .manual_routing_support import current_figure as current_figure
+from .manual_routing_support import close_routing_worker as close_routing_worker
+from lib.llm.turn_context import TurnContext, bind_turn
 from apps.documents.services.source_loading import (
     SourceRuntime,
     current_source_runtime,
@@ -57,28 +62,31 @@ def _conversation(command, query, inherit):
 @pytest.mark.parametrize("inherit", [False, True])
 @pytest.mark.parametrize("single_document", [False, True])
 async def test_legacy_manual_search_admits_only_requested_images(
-    monkeypatch, query, visual, inherit, single_document
+    current_figure, monkeypatch, query, visual, inherit, single_document
 ):
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "legacy")
     monkeypatch.setenv("RAG_RERANK_TEXT_MODE", "legacy")
     monkeypatch.setenv("RAG_DOCUMENT_CAPACITY_MODE", "legacy")
     monkeypatch.setenv("RAG_FOLLOWUP_EVIDENCE_ENABLED", "0")
     monkeypatch.setenv("RAG_ITERATIVE_RETRIEVAL_ENABLED", "0")
-    command = f"/search [{DOC}]" if single_document else "/collection"
+    monkeypatch.setenv("RAG_EVIDENCE_TOKEN_BUDGET", "6000")
+    user, document, chunk = current_figure
+    document_id = str(document.id)
+    command = f"/search [{document_id}]" if single_document else "/collection"
     convo = _conversation(command, query, inherit)
-    consumer = SimpleNamespace(user=object(), col_ref=CollectionsRef([1]), convo=convo)
+    consumer = SimpleNamespace(user=user, col_ref=CollectionsRef([document.collection_id]), convo=convo)
 
     def search(*, search_string, top_k, include_images=False, **kwargs):
         assert search_string == query
         assert 1 <= top_k <= 15
-        assert kwargs == ({"doc_id": DOC} if single_document else {})
-        return _result(DOC, include_images)
+        assert kwargs == ({"doc_id": document_id} if single_document else {})
+        return _current_result(document, chunk, include_images)
 
     tool_name = "search_single_document" if single_document else "vector_search"
     monkeypatch.setattr(
         manual_search_turn, tool_name + "_tool", lambda user, cols: search
     )
-    reply = f"The calibration plot shows drift [doc:{DOC} chunk:1]."
+    reply = f"{chunk.content} [doc:{document_id} chunk:{chunk.pk}]."
     llm = _FakeLLMInterface(
         [
             LLMResponse(
@@ -99,7 +107,12 @@ async def test_legacy_manual_search_admits_only_requested_images(
     assert retrieved.tool_name == tool_name
     assert bool(retrieved.arguments.get("include_images")) is visual
     assert ("image_url" in retrieved.result_dict["result"][0]) is visual
-    assert consumer.convo[-1].content == reply
+    assert consumer.convo[-1].content == (
+        "Support for an answer is uncertain in the selected evidence. "
+        "These are attributed excerpts, not a conclusion about the question:\n\n"
+        f"> {chunk.content} [doc:{document_id} chunk:{chunk.pk}]"
+    )
+    assert len(llm.calls) == 1
     assert "![" not in consumer.convo[-1].content
 
 
@@ -107,9 +120,10 @@ async def test_legacy_manual_search_admits_only_requested_images(
 @pytest.mark.parametrize("inherit", [False, True])
 @pytest.mark.parametrize("single_document", [False, True])
 def test_preserved_manual_search_keeps_scope_and_visual_intent(
-    docs, monkeypatch, query, visual, inherit, single_document
+    current_figure, monkeypatch, query, visual, inherit, single_document
 ):
-    user, doc, _, auth = docs
+    from apps.documents.services.representation_media_acquisition import initialize_media_runtime
+    user, doc, chunk = current_figure
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
     document_id = str(doc.id)
     prefix = f"/search [{document_id}]" if single_document else "/collection"
@@ -119,7 +133,7 @@ def test_preserved_manual_search_keeps_scope_and_visual_intent(
     consumer = SimpleNamespace(
         user=user, col_ref=CollectionsRef([doc.collection_id]), convo=convo
     )
-    parent = SourceRuntime(TurnBudget(TurnLimits()), auth)
+    turn = TurnContext(TurnBudget(TurnLimits()))
 
     def search(*, search_string, top_k, include_images=False, **kwargs):
         assert search_string == query
@@ -128,21 +142,40 @@ def test_preserved_manual_search_keeps_scope_and_visual_intent(
         runtime = current_source_runtime()
         assert runtime.budget is parent.budget
         assert runtime.authorization.selected_document_ids == frozenset((doc.id,))
-        return _result(document_id, include_images)
+        return _current_result(doc, chunk, include_images)
 
     tool_name = "search_single_document" if single_document else "vector_search"
     monkeypatch.setattr(documents, tool_name + "_tool", lambda user, cols: search)
 
-    with source_runtime_scope(parent):
-        raw, acquired_scope = rag_manual_preservation._manual_acquire(
-            consumer, command, resolved, convo.messages[:-1]
-        )
-        assert current_source_runtime() is parent
+    with bind_turn(turn):
+        parent = initialize_media_runtime(consumer, turn)
+        original = parent._frozen_retrieval_scope
+        assert parent is turn._media_source_runtime
+        with source_runtime_scope(parent):
+            raw, acquired_scope = rag_manual_preservation._manual_acquire(
+                consumer, command, resolved, convo.messages[:-1]
+            )
+            assert current_source_runtime() is parent
+            assert parent._frozen_retrieval_scope is original
+            assert acquired_scope._media_principal_binding is turn._media_principal_binding
+            assert (acquired_scope is not parent) is single_document
 
     assert ("image_url" in raw["result"][0]) is visual
     assert acquired_scope.budget is parent.budget
     assert acquired_scope.cache is parent.cache
     assert acquired_scope.authorization.selected_document_ids == frozenset((doc.id,))
+
+
+def _current_result(document, chunk, include_images):
+    from apps.documents.services.representation_media_acquisition import chunk_media_url
+    result = _result(str(document.id), False)
+    row = result["result"][0]
+    row.update(chunk_id=chunk.pk, text=chunk.content,
+               citation=f"[doc:{document.id} chunk:{chunk.pk}]")
+    if include_images:
+        row.update(type="text_with_image", image_url=chunk_media_url(chunk))
+        assert row["image_url"].endswith(f"?chunk_id={chunk.pk}")
+    return result
 
 
 @pytest.mark.parametrize("prefix", ["/collection", f"/search [{DOC}]"])

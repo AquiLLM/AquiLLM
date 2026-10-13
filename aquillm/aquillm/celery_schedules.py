@@ -53,6 +53,12 @@ def application_maintenance_schedule(*, enabled: bool) -> dict[str, dict[str, ob
     if enabled is not True:
         return {}
     return {
+        "ingestion-output-recovery": {
+            "task": "apps.ingestion.tasks.output_recovery.recover_ingestion_outputs",
+            "schedule": 60,
+            "kwargs": {"limit": 25},
+            "options": {"queue": "celery"},
+        },
         "document-chunk-publication-recovery": {
             "task": "apps.documents.tasks.chunk_recovery.recover_chunk_publications",
             "schedule": 60,
@@ -61,6 +67,12 @@ def application_maintenance_schedule(*, enabled: bool) -> dict[str, dict[str, ob
         },
         "conversation-memory-recovery": {
             "task": "aquillm.tasks.recover_conversation_memory_jobs",
+            "schedule": 60,
+            "kwargs": {"limit": 25},
+            "options": {"queue": "celery"},
+        },
+        "profile-memory-reconciliation-recovery": {
+            "task": "aquillm.tasks.recover_profile_memory_reconciliation_jobs",
             "schedule": 60,
             "kwargs": {"limit": 25},
             "options": {"queue": "celery"},

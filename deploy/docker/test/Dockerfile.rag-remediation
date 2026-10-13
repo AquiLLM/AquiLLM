@@ -1,0 +1,17 @@
+# Same pinned Python/dependency runtime as deploy/docker/test/Dockerfile.
+FROM astral/uv:0.8.17-python3.12-bookworm
+WORKDIR /app
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen
+ENV PATH="/app/.venv/bin:$PATH" PYTHONPATH="/app:/app/aquillm"
+RUN python -c "from tiktoken import encoding_for_model; encoding_for_model('gpt-4o'); encoding_for_model('gpt-4')"
+COPY aquillm ./aquillm
+COPY scripts ./scripts
+COPY tests ./tests
+COPY deploy ./deploy
+COPY docs ./docs
+COPY pytest.ini compose.rag-remediation-test.yml .env.example requirements.txt ./
+RUN uv pip install -r deploy/vllm_plugins/nemotron_asr/requirements-test.txt
+# Standalone client renders contracts offline; no daemon/socket is installed.
+COPY --from=docker/compose-bin:v2.39.4@sha256:2f2ab50fbed6b13eab5c832d9be82eed4959aae4c4da9018fc7b45e8b3f96d99 /docker-compose /usr/local/bin/docker-compose
+CMD ["sleep", "infinity"]

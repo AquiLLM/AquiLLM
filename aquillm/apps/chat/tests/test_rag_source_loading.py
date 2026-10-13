@@ -12,6 +12,16 @@ from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
 def make_chunk(text):
+    from django.contrib.auth.models import User
+    from apps.collections.models import Collection
+    from apps.documents.models import RawTextDocument
+    # The policy adapter below deliberately authorizes exact collection 1/DOC.
+    # Persist that actual owner before exercising metadata/body admission.
+    owner = User.objects.create(username="source-loading-owner")
+    collection = Collection.objects.create(pk=1, name="Source loading")
+    document = RawTextDocument(id=DOC, title="Source", full_text=text,
+                               collection=collection, ingested_by=owner)
+    document.save(dont_rechunk=True)
     return TextChunk.objects.bulk_create(
         [
             TextChunk(
@@ -101,7 +111,10 @@ def test_cached_source_is_reauthorized_and_revision_checked():
         )
         assert runtime.budget.text_used["materialized"] == 14
         policy.allowed = ()
-        assert source_query_rows(TextChunk.objects.filter(pk=chunk.pk)) == ()
+        from apps.documents.services.representation_contracts import SourceScopeUnavailable
+        with pytest.raises(SourceScopeUnavailable, match="source_scope_unavailable"):
+            source_query_rows(TextChunk.objects.filter(pk=chunk.pk))
+        assert runtime.budget.text_used["materialized"] == 14
 
 
 def test_source_mode_without_turn_budget_fails_closed(monkeypatch):
@@ -152,7 +165,7 @@ def test_independent_authorization_builder_preserves_old_graph_gate(
     settings.KG_OVERLAY_ENABLED = False
     monkeypatch.setattr(
         auth.DjangoCollectionRetrievalPermissionPolicy,
-        "current_authorized_document_scope",
+        "current_authorized_selected_document_scope",
         lambda *a, **kw: ((1, DOC),),
     )
     kwargs = dict(

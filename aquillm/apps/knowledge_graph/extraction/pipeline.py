@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING
 
 import structlog
 
-from ..resolution import DOCUMENT_RESOLVER_VERSION
 from .evidence import (
     ExtractedDocumentEvidence,
     ExtractionCapacityCode,
@@ -137,7 +136,7 @@ def collect_document_evidence(
             if raw_entity_count > DOCUMENT_EXTRACTION_V1_MAX_RAW_ENTITY_OBSERVATIONS:
                 raise ExtractionCapacityError(
                     ExtractionCapacityCode.OBSERVATION_LIMIT,
-                    "provider raw entity cap exceeded before candidate materialization"
+                    "provider raw entity cap exceeded before candidate materialization",
                 )
             raw_relation_count += len(result.relations)
             if (
@@ -147,7 +146,7 @@ def collect_document_evidence(
                 raise ExtractionCapacityError(
                     ExtractionCapacityCode.OBSERVATION_LIMIT,
                     "provider raw relation cap exceeded before candidate "
-                    "materialization"
+                    "materialization",
                 )
             fatal_codes = sorted(
                 diagnostic.code
@@ -262,6 +261,12 @@ def validate_build_identity(
 
     from apps.knowledge_graph.models import GraphArtifact
 
+    if getattr(artifact, "representation_snapshot", None) is not None:
+        from apps.knowledge_graph.projection.representation_binding import (
+            validate_binding_current,
+        )
+
+        validate_binding_current(artifact, using=artifact._state.db or "default")
     if run.artifact_id != artifact.pk:
         raise ValueError("build run must be owned by the destination artifact")
     if getattr(run, "build_key", None) != getattr(artifact, "build_key", None):
@@ -277,6 +282,8 @@ def validate_build_identity(
         raise ValueError("destination artifact source hash does not match")
     if artifact.ontology_version != ontology_version:
         raise ValueError("destination artifact ontology does not match")
+    from apps.knowledge_graph.resolution.vocabulary_builds import document_artifact_policy
+    document_artifact_policy(artifact, using=getattr(getattr(artifact, "_state", None), "db", None) or "default")
     if (
         run.assembly_version != artifact.assembly_version
         or run.assembly_config_checksum != artifact.assembly_config_checksum
@@ -623,58 +630,14 @@ def _validate_source(document, expected_source_hash: str) -> None:
         )
 
 
-def _ordered_chunks(document_id, *, for_update: bool = False):
-    from django.db.models import Sum
-    from django.db.models.functions import Coalesce, Length
+def _ordered_chunks(document_id, *, for_update=False, representation_snapshot=None):
+    from .representation_chunks import ordered_chunks
 
-    from apps.documents.models import TextChunk
-
-    queryset = (
-        TextChunk.objects.filter(doc_id=document_id)
-        .only(
-            "pk",
-            "doc_id",
-            "chunk_number",
-            "start_position",
-            "end_position",
-            "modality",
-            "content",
-        )
-        .order_by("chunk_number", "pk")
+    return ordered_chunks(
+        document_id,
+        for_update=for_update,
+        representation_snapshot=representation_snapshot,
     )
-    if for_update:
-        queryset = queryset.select_for_update()
-    if queryset.count() > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
-        raise ExtractionCapacityError(
-            ExtractionCapacityCode.CHUNK_LIMIT,
-            "ordered document chunk cap exceeded",
-        )
-    totals = queryset.aggregate(total_characters=Coalesce(Sum(Length("content")), 0))
-    total_characters = totals.get("total_characters")
-    if type(total_characters) is not int or total_characters < 0:
-        raise StaleSourceError("ordered document chunk character count is invalid")
-    if total_characters > DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS:
-        raise ExtractionCapacityError(
-            ExtractionCapacityCode.CHARACTER_LIMIT,
-            "ordered document chunk character cap exceeded",
-        )
-    chunks = tuple(
-        islice(
-            queryset.iterator(
-                chunk_size=min(
-                    DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
-                    _QUERY_ITERATOR_BATCH_SIZE,
-                )
-            ),
-            DOCUMENT_EXTRACTION_V1_MAX_CHUNKS + 1,
-        )
-    )
-    if len(chunks) > DOCUMENT_EXTRACTION_V1_MAX_CHUNKS:
-        raise ExtractionCapacityError(
-            ExtractionCapacityCode.CHUNK_LIMIT,
-            "ordered document chunk cap exceeded",
-        )
-    return chunks
 
 
 def _chunk_snapshot(chunks) -> tuple[tuple[object, ...], ...]:
@@ -687,6 +650,7 @@ def _chunk_snapshot(chunks) -> tuple[tuple[object, ...], ...]:
             chunk.end_position,
             chunk.modality,
             chunk.content,
+            getattr(chunk, "representation_generation_id", None),
         )
         for chunk in chunks
     )
@@ -804,6 +768,8 @@ def document_artifact_identity_values(
     ontology_checksum: str,
     *,
     settings,
+    identity_policy: str = "legacy",
+    vocabulary=None,
 ) -> dict[str, object]:
     from apps.knowledge_graph.models import (
         ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
@@ -811,6 +777,10 @@ def document_artifact_identity_values(
         GraphArtifact,
     )
     from apps.knowledge_graph.models.artifacts import graph_identity_checksum
+    from apps.knowledge_graph.resolution import resolver_version_for_policy
+
+    resolver_version = resolver_version_for_policy("document", identity_policy)
+    from apps.knowledge_graph.resolution.vocabulary_policy import bind_digest
 
     return {
         "scope_type": GraphArtifact.ScopeType.DOCUMENT,
@@ -818,15 +788,15 @@ def document_artifact_identity_values(
         "source_hash": expected_source_hash,
         "ontology_version": ontology_version,
         "extractor_version": _extractor_identity(settings),
-        "resolver_version": DOCUMENT_RESOLVER_VERSION,
+        "resolver_version": resolver_version,
         "filter_policy_version": "pending-v1",
         "ontology_checksum": ontology_checksum,
         "filter_policy_checksum": graph_identity_checksum(
             "document-filter-policy", "pending-v1"
         ),
-        "resolution_config_checksum": graph_identity_checksum(
-            "document-resolver", DOCUMENT_RESOLVER_VERSION
-        ),
+        "resolution_config_checksum": bind_digest(graph_identity_checksum(
+            "document-resolver", resolver_version
+        ), vocabulary),
         "assembly_version": ASSEMBLY_NOT_APPLICABLE_VERSION,
         "assembly_config_checksum": ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
     }
@@ -850,12 +820,17 @@ def _create_build_destination(
     from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
     from apps.knowledge_graph.services.builds import _lock_document_scope
 
+    from apps.knowledge_graph.resolution.vocabulary_builds import document_capsule
+    from apps.knowledge_graph.resolution.vocabulary_capture import metadata
+    from apps.knowledge_graph.models import graph_identity_checksum
+    vocabulary = document_capsule(document_id)
     identity = _artifact_identity_values(
         document_id,
         expected_source_hash,
         ontology_version,
         ontology_checksum,
         settings=settings,
+        vocabulary=vocabulary.policy if vocabulary else None,
     )
     with transaction.atomic():
         _lock_document_scope(document_id)
@@ -888,7 +863,8 @@ def _create_build_destination(
         artifact = GraphArtifact.objects.create(
             status=GraphArtifact.Status.BUILDING,
             build_generation=build_generation,
-            metadata={"stage": "raw_extraction"},
+            metadata={"stage": "raw_extraction", **metadata(vocabulary,
+                graph_identity_checksum("document-resolver", identity["resolver_version"]))},
             **identity,
         )
         run = GraphBuildRun.objects.create(
@@ -1033,28 +1009,20 @@ def _safe_mark_terminal(
     error_code: str,
     lease_owner=None,
     lease_generation=None,
+    original_run=None,
 ) -> bool:
-    """Best-effort bookkeeping that cannot replace the triggering exception."""
+    """Delegate with the current pipeline patch seams and original error policy."""
+    from .terminal_cleanup import safe_mark_terminal
 
-    try:
-        _mark_terminal(
-            artifact_id,
-            build_run_id,
-            artifact_status=artifact_status,
-            run_status=run_status,
-            error_code=error_code,
-            lease_owner=lease_owner,
-            lease_generation=lease_generation,
-        )
-    except Exception:
-        logger.exception(
-            "obs.kg.terminal_update_failed",
-            artifact_id=artifact_id,
-            build_run_id=build_run_id,
-            error_code=error_code,
-        )
-        return False
-    return True
+    return safe_mark_terminal(
+        _mark_terminal, logger, artifact_id, build_run_id,
+        artifact_status=artifact_status,
+        run_status=run_status,
+        error_code=error_code,
+        lease_owner=lease_owner,
+        lease_generation=lease_generation,
+        original_run=original_run,
+    )
 
 
 def extract_into_build(
@@ -1094,6 +1062,9 @@ def extract_into_build(
         lease_owner=lease_owner,
         lease_generation=lease_generation,
     )
+    from .terminal_cleanup import capture_original_run
+
+    original_run = capture_original_run(artifact, run, document_id)
     total_started = perf_counter()
     try:
         settings = load_extraction_settings()
@@ -1126,11 +1097,14 @@ def extract_into_build(
 
         persistence_started = perf_counter()
         with transaction.atomic():
-            locked_artifact, locked_run = _lock_extraction_orchestration_rows(
-                artifact_id,
-                build_run_id,
-                document_id,
-            )
+            try:
+                locked_artifact, locked_run = _lock_extraction_orchestration_rows(
+                    artifact_id, build_run_id, document_id,
+                )
+            except (GraphArtifact.DoesNotExist, GraphBuildRun.DoesNotExist) as exc:
+                raise MidflightSourceChangedError(
+                    "extraction destination was removed during inference"
+                ) from exc
             validate_build_identity(
                 locked_artifact,
                 locked_run,
@@ -1225,6 +1199,7 @@ def extract_into_build(
             error_code="source_or_config_stale",
             lease_owner=lease_owner,
             lease_generation=lease_generation,
+            original_run=original_run,
         )
         raise
     except Exception as exc:
@@ -1261,12 +1236,15 @@ def extract_document_mentions(
     _validate_source(document, expected_source_hash)
     settings = load_extraction_settings()
     ontology = _resolve_ontology_definition(ontology_version)
+    from apps.knowledge_graph.resolution.vocabulary_builds import document_capsule, document_artifact_policy
+    vocabulary = document_capsule(document_id)
     identity = _artifact_identity_values(
         document_id,
         expected_source_hash,
         ontology_version,
         ontology.checksum,
         settings=settings,
+        vocabulary=vocabulary.policy if vocabulary else None,
     )
     artifact = (
         GraphArtifact.objects.filter(**identity)
@@ -1274,6 +1252,7 @@ def extract_document_mentions(
         .first()
     )
     if artifact is not None:
+        document_artifact_policy(artifact)
         committed_run = _find_committed_extraction_run(artifact)
         if committed_run is not None:
             return committed_run

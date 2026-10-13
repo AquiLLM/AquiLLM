@@ -1,0 +1,1 @@
+"""Application memory lifecycle services."""

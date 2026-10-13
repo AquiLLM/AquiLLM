@@ -44,23 +44,16 @@ def test_document_bootstrap_advances_past_a_detached_generation(monkeypatch):
             document_id=document.id,
         ),
         (collection.pk,),
-        reason="test_generation_cleanup",
+        reason="document_chunks_replaced",
         expected_source_hash=document.full_text_hash,
     )
     assert isinstance(cleanup, DocumentGraphCleanupResult)
     audit.refresh_from_db()
     assert audit.artifact_id is None
 
-    replacement_chunk = TextChunk.objects.create(
-        content=document.full_text,
-        start_position=0,
-        end_position=len(document.full_text),
-        chunk_number=0,
-        modality=TextChunk.Modality.TEXT,
-        doc_id=document.id,
-        embedding=[0.0] * 1024,
-    )
-    next_context = _document_context(document, replacement_chunk)
+    assert TextChunk.objects.get(pk=chunk.pk).content == document.full_text
+    assert document.chunks.filter(pk=chunk.pk).exists()
+    next_context = _document_context(document, chunk)
     _patch_document_activation(monkeypatch, lambda: next_context)
     build_key = builds.derive_document_build_key(next_context.identity)
 
@@ -113,3 +106,25 @@ def test_collection_bootstrap_advances_past_a_detached_generation():
     assert completed is False
     assert owner is not None and lease_generation is not None
     assert artifact.build_generation == run.build_generation == 10
+
+
+def test_committed_eval_source_drift_detaches_graph_and_retains_citation():
+    """Ordinary committed edits clean up immediately, without a test transaction."""
+    from apps.knowledge_graph.tests.test_eval_collection_failures_postgres import _eval_manifest
+    from apps.documents.models import TextChunk
+    from apps.knowledge_graph.models import GraphArtifact, GraphBuildRun
+
+    collection, documents, sources, destination, _request, _config = _eval_manifest()
+    document = documents[0]
+    chunk = TextChunk.objects.get(doc_id=document.id)
+    old_text = chunk.content
+    source_id = sources[0].pk
+    run_id = GraphBuildRun.objects.get(artifact_id=source_id).pk
+    document.full_text += " changed"
+    document.save(dont_rechunk=True)
+    assert not GraphArtifact.objects.filter(pk__in=(destination.pk, source_id)).exists()
+    run = GraphBuildRun.objects.get(pk=run_id)
+    assert run.artifact_id is None
+    assert not GraphArtifact.objects.current().filter(scope_id=str(document.id)).exists()
+    assert TextChunk.objects.get(pk=chunk.pk).content == old_text
+    assert not document.chunks.exists()

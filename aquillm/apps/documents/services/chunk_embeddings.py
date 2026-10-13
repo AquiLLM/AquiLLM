@@ -27,7 +27,13 @@ def multimodal_caption(chunk: TextChunk) -> str:
 
 
 def image_data_url(chunk: TextChunk) -> str | None:
+    from lib.llm.turn_context import current_turn
+    if current_turn() is not None:
+        from .representation_media_acquisition import captured_chunk_data_url
+        return captured_chunk_data_url(chunk)
     if chunk.modality != chunk.Modality.IMAGE:
+        return None
+    if getattr(chunk, "representation_generation_id", None) or getattr(chunk, "legacy_source_snapshot_id", None):
         return None
     try:
         doc = chunk.document

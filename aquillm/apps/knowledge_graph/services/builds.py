@@ -7,10 +7,9 @@ It deliberately imports provider runtimes only through lazy stage functions.
 
 from __future__ import annotations
 
-import json
 import re
 import uuid
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import timedelta
 from enum import StrEnum
 from hashlib import sha256
@@ -29,7 +28,11 @@ from apps.knowledge_graph.resolution.commit_state import (
     _document_resolution_commit_state,
 )
 from apps.knowledge_graph.resolution.source_exclusions import resolvable_mentions
+from apps.knowledge_graph.resolution.vocabulary_builds import bind_collection_config, document_capsule
+from apps.knowledge_graph.resolution.vocabulary_capture import metadata as vocabulary_metadata
+from apps.knowledge_graph.resolution.vocabulary_policy import bind_digest
 
+from .ordered_chunk_identity import _text, ordered_chunk_signature
 from .collection_context_policy import (
     context_failure_code,
     select_capacity_configs,
@@ -44,6 +47,22 @@ from .failure_codes import (
     CorruptBuildError,
     RebuildPublicationError,
     StaleBuildError,
+)
+from .representation_build_identity import (
+    CollectionBuildIdentity,
+    DocumentBuildIdentity,
+    _identity_key,
+    derive_collection_build_key,
+    derive_document_build_key,
+)
+from .representation_request_guard import (
+    validate_guarded_request_context,
+    validate_request_completion_snapshot,
+    validate_requested_representation_context,
+)
+from .requested_representation import (
+    request_has_representation_guard,
+    requested_representation_generation,
 )
 
 _HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -314,199 +333,6 @@ def _occurrence_action(artifacts, runs, build_key: str) -> OccurrenceAction:
     return OccurrenceAction.CREATE
 
 
-def _text(value: object, label: str, *, maximum: int = 512) -> str:
-    if (
-        type(value) is not str
-        or not value
-        or value != value.strip()
-        or len(value) > maximum
-        or any(character in value for character in "\x00\r\n")
-    ):
-        raise ValueError(f"{label} must be a safe nonempty bounded string")
-    return value
-
-
-@dataclass(frozen=True, slots=True)
-class DocumentBuildIdentity:
-    document_id: uuid.UUID
-    source_hash: str
-    ordered_chunk_signature: str
-    extractor_package: str
-    extractor_checkpoint: str
-    extractor_model_revision: str
-    extractor_config_checksum: str
-    ontology_version: str
-    ontology_checksum: str
-    resolver_version: str
-    resolver_checksum: str
-    filter_version: str
-    filter_checksum: str
-    assembly_version: str
-    assembly_checksum: str
-    ontology_activation_signature: str = "0" * 64
-
-    def __post_init__(self) -> None:
-        if type(self.document_id) is not uuid.UUID or self.document_id.version is None:
-            raise ValueError("document UUID must be an exact RFC 4122 UUID")
-        for name in (
-            "source_hash",
-            "ordered_chunk_signature",
-            "extractor_config_checksum",
-            "ontology_checksum",
-            "resolver_checksum",
-            "filter_checksum",
-            "assembly_checksum",
-            "ontology_activation_signature",
-        ):
-            object.__setattr__(
-                self,
-                name,
-                _hash(getattr(self, name), name.replace("_", " ")),
-            )
-        for name in (
-            "extractor_package",
-            "extractor_checkpoint",
-            "extractor_model_revision",
-            "ontology_version",
-            "resolver_version",
-            "filter_version",
-            "assembly_version",
-        ):
-            object.__setattr__(
-                self,
-                name,
-                _text(getattr(self, name), name.replace("_", " ")),
-            )
-
-
-@dataclass(frozen=True, slots=True)
-class CollectionBuildIdentity:
-    collection_id: int
-    aggregate_source_signature: str
-    extractor_version: str
-    ontology_version: str
-    ontology_checksum: str
-    resolver_version: str
-    resolver_checksum: str
-    filter_version: str
-    filter_checksum: str
-    assembly_version: str
-    assembly_checksum: str
-    embedding_model_signature: str
-    ontology_activation_signature: str = "0" * 64
-
-    def __post_init__(self) -> None:
-        if type(self.collection_id) is not int or not 0 < self.collection_id < 2**63:
-            raise ValueError("collection id must be a positive database integer")
-        for name in (
-            "aggregate_source_signature",
-            "ontology_checksum",
-            "resolver_checksum",
-            "filter_checksum",
-            "assembly_checksum",
-            "ontology_activation_signature",
-        ):
-            object.__setattr__(
-                self,
-                name,
-                _hash(getattr(self, name), name.replace("_", " ")),
-            )
-        for name in (
-            "extractor_version",
-            "ontology_version",
-            "resolver_version",
-            "filter_version",
-            "assembly_version",
-            "embedding_model_signature",
-        ):
-            maximum = 512 if name == "embedding_model_signature" else 128
-            object.__setattr__(
-                self,
-                name,
-                _text(getattr(self, name), name.replace("_", " "), maximum=maximum),
-            )
-
-
-def _identity_key(namespace: str, identity: object) -> str:
-    payload = {
-        "namespace": namespace,
-        "identity": (
-            asdict(identity)
-            if hasattr(type(identity), "__dataclass_fields__")
-            else identity
-        ),
-    }
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    ).encode("utf-8")
-    return sha256(encoded).hexdigest()
-
-
-def derive_document_build_key(identity: DocumentBuildIdentity) -> str:
-    if type(identity) is not DocumentBuildIdentity:
-        raise ValueError("document build identity must be exact")
-    identity.__post_init__()
-    return _identity_key("kg-document-build-v1", identity)
-
-
-def derive_collection_build_key(identity: CollectionBuildIdentity) -> str:
-    if type(identity) is not CollectionBuildIdentity:
-        raise ValueError("collection build identity must be exact")
-    identity.__post_init__()
-    return _identity_key("kg-collection-build-v1", identity)
-
-
-def ordered_chunk_signature(chunks, *, concrete_model_label: str = "") -> str:
-    """Hash the exact ordered extraction inputs without retaining chunk text."""
-
-    rows = tuple(chunks)
-    payload = []
-    previous_number = None
-    seen_ids: set[int] = set()
-    for chunk in rows:
-        chunk_id = getattr(chunk, "pk", None)
-        chunk_number = getattr(chunk, "chunk_number", None)
-        content = getattr(chunk, "content", None)
-        if (
-            type(chunk_id) is not int
-            or chunk_id <= 0
-            or chunk_id in seen_ids
-            or type(chunk_number) is not int
-            or chunk_number < 0
-            or (previous_number is not None and chunk_number <= previous_number)
-            or type(content) is not str
-        ):
-            raise ValueError("ordered chunk snapshot is invalid")
-        seen_ids.add(chunk_id)
-        previous_number = chunk_number
-        payload.append(
-            {
-                "chunk_id": chunk_id,
-                "document_id": str(getattr(chunk, "doc_id", "")),
-                "chunk_number": chunk_number,
-                "start": getattr(chunk, "start_position", None),
-                "end": getattr(chunk, "end_position", None),
-                "modality": getattr(chunk, "modality", None),
-                "content_hash": sha256(content.encode("utf-8")).hexdigest(),
-            }
-        )
-    return _identity_key(
-        "kg-ordered-chunks-v1",
-        {
-            "concrete_model_label": _text(
-                concrete_model_label or "unknown-document-model",
-                "concrete document model",
-                maximum=128,
-            ),
-            "chunks": tuple(payload),
-        },
-    )
-
-
 def _extractor_version(settings: object) -> str:
     value = (
         f"{getattr(settings, 'provider', '')}:"
@@ -522,6 +348,8 @@ class _DocumentContext:
     collection_id: int
     ontology: object
     settings: object
+    representation_snapshot: object = None
+    vocabulary: object = None
 
 
 def _active_ontology(collection_id: int | None = None):
@@ -596,8 +424,11 @@ def _document_context(
         ASSEMBLY_NOT_APPLICABLE_VERSION,
         graph_identity_checksum,
     )
-    from apps.knowledge_graph.resolution import DOCUMENT_RESOLVER_VERSION
-    from lib.knowledge_graph.config import load_extraction_settings
+    from apps.knowledge_graph.resolution import resolver_version_for_policy
+    from lib.knowledge_graph.config import (
+        load_extraction_settings,
+        load_identity_policy,
+    )
 
     if type(document_id) is not uuid.UUID:
         raise ValueError("document id must be an exact UUID")
@@ -610,13 +441,27 @@ def _document_context(
         _validate_source(document, source_hash)
     except Exception as exc:
         raise StaleBuildError("document source hash changed") from exc
-    chunks = _ordered_chunks(document_id, for_update=for_update)
+    from apps.knowledge_graph.projection.representation_inputs import (
+        binding_digest,
+        capture_build_snapshot,
+    )
+
+    representation = capture_build_snapshot((document_id,))
+    chunks = (
+        _ordered_chunks(document_id, for_update=for_update)
+        if representation is None
+        else _ordered_chunks(
+            document_id, for_update=for_update, representation_snapshot=representation
+        )
+    )
     chunk_signature = ordered_chunk_signature(
         chunks,
         concrete_model_label=document._meta.label_lower,
     )
     ontology = _active_ontology(collection_id) if ontology is None else ontology
     settings = load_extraction_settings() if settings is None else settings
+    resolver_version = resolver_version_for_policy("document", load_identity_policy())
+    vocabulary = document_capsule(document_id)
     identity = DocumentBuildIdentity(
         document_id=document_id,
         source_hash=source_hash,
@@ -650,21 +495,24 @@ def _document_context(
         ),
         ontology_version=_text(ontology.version, "ontology version", maximum=128),
         ontology_checksum=_hash(ontology.checksum, "ontology checksum"),
-        resolver_version=DOCUMENT_RESOLVER_VERSION,
-        resolver_checksum=graph_identity_checksum(
-            "document-resolver", DOCUMENT_RESOLVER_VERSION
-        ),
+        resolver_version=resolver_version,
+        resolver_checksum=bind_digest(graph_identity_checksum(
+            "document-resolver", resolver_version
+        ), vocabulary.policy if vocabulary else None),
         filter_version="pending-v1",
         filter_checksum=graph_identity_checksum("document-filter-policy", "pending-v1"),
         assembly_version=ASSEMBLY_NOT_APPLICABLE_VERSION,
         assembly_checksum=ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM,
         ontology_activation_signature=_ontology_activation_signature(ontology),
+        representation_digest=binding_digest(representation),
     )
     return _DocumentContext(
         identity=identity,
         collection_id=collection_id,
         ontology=ontology,
         settings=settings,
+        representation_snapshot=representation,
+        vocabulary=vocabulary,
     )
 
 
@@ -1411,8 +1259,11 @@ def _lock_rebuild_request_prefix(request_id: uuid.UUID):
         ).get(pk=parent_id)
     current = GraphRebuildRequest.objects.select_for_update(no_key=True).get(pk=root_id)
     for _ in range(_MAX_REBUILD_LINEAGE_DEPTH):
+        guarded = request_has_representation_guard(current)
         if current.pk == request_id:
             return hierarchy_parent, current
+        if guarded:
+            raise CorruptBuildError("guarded representation request has a successor")
         successor = (
             GraphRebuildRequest.objects.select_for_update(no_key=True)
             .filter(predecessor_request_id=current.pk)
@@ -1431,12 +1282,15 @@ def _effective_rebuild_request(request: object, *, for_update: bool = False):
 
     current = request
     for _ in range(_MAX_REBUILD_LINEAGE_DEPTH):
+        guarded = request_has_representation_guard(current)
         query = GraphRebuildRequest.objects
         if for_update:
             query = query.select_for_update()
         successor = query.filter(predecessor_request_id=current.pk).first()
         if successor is None:
             return current
+        if guarded:
+            raise CorruptBuildError("guarded representation request has a successor")
         current = successor
     raise CorruptBuildError("rebuild successor lineage exceeds its cap")
 
@@ -1523,6 +1377,7 @@ def validate_rebuild_task_request_metadata(
     )
     if len(matching) != 1:
         raise StaleBuildError("document is outside the rebuild request snapshot")
+    request_has_representation_guard(request)
     if request.scope_type == GraphRebuildRequest.ScopeType.DOCUMENT:
         valid_scope = request.scope_id == str(scope_id)
     elif request.scope_type == GraphRebuildRequest.ScopeType.COLLECTION:
@@ -1883,11 +1738,13 @@ def _publish_rebuild_document_tasks(
             return True
         snapshot = request.requested_documents[cursor]
         try:
+            guard = requested_representation_generation(snapshot)
             enqueue_document_build(
                 uuid.UUID(snapshot["document_id"]),
                 snapshot["source_hash"],
                 request_id=request.pk,
                 eval_only=request.evaluation_only,
+                **({"representation_request": snapshot} if guard is not None else {}),
             )
         except Exception:
             with transaction.atomic():
@@ -2222,6 +2079,8 @@ def enqueue_document_build(
     expected_source_hash: str,
     request_id: uuid.UUID | str | None = None,
     eval_only: bool = False,
+    *,
+    representation_request: dict | None = None,
 ) -> None:
     """Publish one provider-neutral, JSON-safe document build request."""
 
@@ -2238,7 +2097,12 @@ def enqueue_document_build(
     if type(document_id) is not uuid.UUID:
         raise ValueError("document id must be an exact UUID")
     source_hash = _hash(expected_source_hash, "expected source hash")
-    build_key = derive_current_document_build_key(document_id, source_hash)
+    if representation_request is None:
+        build_key = derive_current_document_build_key(document_id, source_hash)
+    else:
+        context = _document_context(document_id, source_hash)
+        validate_requested_representation_context(representation_request, context)
+        build_key = derive_document_build_key(context.identity)
     from apps.knowledge_graph.tasks import build_document_graph_task
 
     payload: dict[str, object] = {
@@ -2366,7 +2230,16 @@ def _document_artifact_values(context: _DocumentContext, build_key: str):
         context.identity.ontology_version,
         context.identity.ontology_checksum,
         settings=context.settings,
+        vocabulary=context.vocabulary.policy if context.vocabulary else None,
+        identity_policy=(
+            "contextual_v2"
+            if context.identity.resolver_version == "document-coreference-v4-contextual"
+            else "legacy"
+        ),
     )
+    from apps.knowledge_graph.projection.representation_inputs import binding_values
+
+    values.update(binding_values(context.representation_snapshot))
     values["build_key"] = build_key
     return values
 
@@ -2516,6 +2389,8 @@ def _create_rebuild_successor_once(
             predecessor_request_id=request.pk
         ).first()
         if successor is not None:
+            if request_has_representation_guard(request):
+                raise CorruptBuildError("guarded request has a successor")
             return successor, None, request.scope_type, request.scope_id
         if (
             request.status != GraphRebuildRequest.Status.PARTIAL
@@ -2526,6 +2401,10 @@ def _create_rebuild_successor_once(
                 GraphRebuildRequest.ScopeType.COLLECTION,
             }
         ):
+            return None, None, request.scope_type, request.scope_id
+        if request_has_representation_guard(request):
+            request.error_code = "representation_changed"
+            request.save(update_fields=["error_code", "updated_at"])
             return None, None, request.scope_type, request.scope_id
         scope_id: object = (
             uuid.UUID(request.scope_id)
@@ -2578,6 +2457,9 @@ def _reconcile_rebuild_successor(request_id: uuid.UUID) -> object | None:
 def _schedule_rebuild_resnapshot(request: object) -> None:
     """Persist a terminal marker, then reconcile only after its locks commit."""
 
+    if request_has_representation_guard(request):
+        request.error_code = "representation_changed"
+        return
     if request.scope_type not in {
         request.ScopeType.DOCUMENT,
         request.ScopeType.COLLECTION,
@@ -2867,8 +2749,11 @@ def _finish_rebuild_preflight(request, parent_id, *, error_code, resnapshot):
         _schedule_rebuild_resnapshot(request)
     request.save(
         update_fields=[
-            "status", "failed_collection_count", "error_code",
-            "completed_at", "updated_at",
+            "status",
+            "failed_collection_count",
+            "error_code",
+            "completed_at",
+            "updated_at",
         ]
     )
     _advance_parent_rebuild_request(parent_id)
@@ -2906,10 +2791,11 @@ def advance_rebuild_request(request_id: uuid.UUID | str) -> None:
         expected = tuple(request.requested_documents)
         try:
             current = _lock_request_completion_snapshot(request, expected)
-            if current != expected:
-                raise StaleBuildError("request snapshot changed")
+            validate_request_completion_snapshot(expected=expected, current=current)
             active = _completed_request_document_artifacts(
-                request, expected, for_update=True,
+                request,
+                expected,
+                for_update=True,
             )
         except (LookupError, RuntimeError, ValueError) as exc:
             # KeyError/IndexError from malformed snapshots are permanent errors.
@@ -2918,12 +2804,17 @@ def advance_rebuild_request(request_id: uuid.UUID | str) -> None:
                 exc, (CorruptBuildError, ValueError, KeyError, IndexError)
             )
             error_code = (
-                "request_snapshot_changed" if stale
-                else "request_snapshot_invalid" if invalid
+                "request_snapshot_changed"
+                if stale
+                else "request_snapshot_invalid"
+                if invalid
                 else "request_snapshot_failed"
             )
             _finish_rebuild_preflight(
-                request, hierarchy_parent_id, error_code=error_code, resnapshot=stale,
+                request,
+                hierarchy_parent_id,
+                error_code=error_code,
+                resnapshot=stale,
             )
             return
         request.completed_document_count = min(len(active), request.document_count)
@@ -3018,7 +2909,8 @@ def advance_rebuild_request(request_id: uuid.UUID | str) -> None:
             )
         except Exception as exc:
             _finish_rebuild_preflight(
-                request, hierarchy_parent_id,
+                request,
+                hierarchy_parent_id,
                 error_code=context_failure_code(exc),
                 resnapshot=isinstance(exc, StaleBuildError),
             )
@@ -3026,8 +2918,10 @@ def advance_rebuild_request(request_id: uuid.UUID | str) -> None:
         contributing_ids = {artifact.pk for artifact in context.document_artifacts}
         if contributing_ids != {artifact.pk for artifact in active}:
             _finish_rebuild_preflight(
-                request, hierarchy_parent_id,
-                error_code="collection_manifest_changed", resnapshot=True,
+                request,
+                hierarchy_parent_id,
+                error_code="collection_manifest_changed",
+                resnapshot=True,
             )
             return
         build_key = derive_collection_build_key(context.identity)
@@ -3288,6 +3182,7 @@ def _bootstrap_document_build(
         resolve_ontology_definition,
     )
     from apps.knowledge_graph.models import (
+        graph_identity_checksum,
         GraphArtifact,
         GraphBuildRun,
         GraphRebuildRequest,
@@ -3342,6 +3237,7 @@ def _bootstrap_document_build(
             )
             if len(matching) != 1:
                 raise StaleBuildError("document is outside the rebuild snapshot")
+            validate_guarded_request_context(request, locked_context)
             correlated = tuple(
                 GraphArtifact.objects.select_for_update()
                 .filter(
@@ -3489,6 +3385,8 @@ def _bootstrap_document_build(
                     "ontology_activation_signature": (
                         context.identity.ontology_activation_signature
                     ),
+                    **vocabulary_metadata(context.vocabulary, graph_identity_checksum(
+                        "document-resolver", context.identity.resolver_version)),
                 },
                 **_document_artifact_values(context, build_key),
             )
@@ -3837,6 +3735,7 @@ def build_document_graph(
 
     started = perf_counter()
     context = _document_context(document_id, expected_source_hash)
+    validate_guarded_request_context(request, context)
     requested_key = _hash(document_build_key, "document build key")
     if derive_document_build_key(context.identity) != requested_key:
         raise StaleBuildError("document build key does not match live source")
@@ -3914,12 +3813,22 @@ def build_document_graph(
                     except ValueError as exc:
                         raise CorruptBuildError(str(exc)) from exc
                     result = resolve_document_mentions(
-                        resolvable_mentions(mentions), context.ontology
+                        resolvable_mentions(mentions),
+                        context.ontology,
+                        vocabulary=context.vocabulary.policy if context.vocabulary else None,
+                        collection_id=context.collection_id,
+                        identity_policy=(
+                            "contextual_v2"
+                            if context.identity.resolver_version
+                            == "document-coreference-v4-contextual"
+                            else "legacy"
+                        ),
                     )
                     persist_document_resolution(
                         artifact.pk,
                         run.pk,
                         result,
+                        ontology=context.ontology,
                         lease_owner=lease_owner,
                         lease_generation=lease_generation,
                     )
@@ -4016,6 +3925,8 @@ class _CollectionContext:
     filter_policy: object
     resolution_config: object
     assembly_config: object
+    representation_snapshot: object = None
+    vocabulary: object = None
 
 
 def _collection_extractor_version(artifacts: tuple[object, ...]) -> str:
@@ -4084,12 +3995,13 @@ def _collection_context(
         collection_manifest_source_hash,
         document_membership_signature,
     )
-    from apps.knowledge_graph.resolution import COLLECTION_RESOLVER_VERSION
+    from apps.knowledge_graph.resolution import resolver_version_for_policy
     from apps.knowledge_graph.resolution.collection import (
         CollectionResolutionConfig,
         resolution_config_checksum,
     )
     from aquillm.utils import strict_index_embedding_signature
+    from lib.knowledge_graph.config import load_identity_policy
 
     if type(collection_id) is not int or not 0 < collection_id < 2**63:
         raise ValueError("collection id must be a positive database integer")
@@ -4217,8 +4129,30 @@ def _collection_context(
         status=DocumentEntity.Status.ACTIVE,
     ).count()
     resolution_config, assembly_config = select_capacity_configs(
-        entity_count, *capacity_overrides,
+        entity_count,
+        *capacity_overrides,
     )
+    if capacity_overrides[0] is None:
+        from dataclasses import replace
+
+        resolution_config = replace(
+            resolution_config, identity_policy=load_identity_policy()
+        )
+    if resolution_config.identity_policy == "contextual_v2" and any(
+        artifact.resolver_version
+        != resolver_version_for_policy("document", "contextual_v2")
+        for artifact in artifacts
+    ):
+        raise StaleBuildError("collection awaits contextual document graph artifacts")
+    resolution_config, vocabulary = bind_collection_config(resolution_config, collection_id, artifacts)
+    if resolution_config.identity_policy == "legacy" and any(
+        artifact.resolver_version
+        == resolver_version_for_policy("document", "contextual_v2")
+        for artifact in artifacts
+    ):
+        raise StaleBuildError(
+            "legacy collection cannot consume contextual document graph artifacts"
+        )
     _validate_collection_context_caps(
         document_count=document_count,
         entity_count=entity_count,
@@ -4284,13 +4218,33 @@ def _collection_context(
         )
     aggregate = collection_manifest_source_hash(source_signatures)
     extractor_version = _collection_extractor_version(contributing)
+    from apps.knowledge_graph.projection.representation_inputs import (
+        binding_digest,
+        capture_build_snapshot,
+        validate_artifact_selection,
+    )
+
+    representation = capture_build_snapshot(
+        tuple(document.id for document in documents)
+    )
+    if representation is not None:
+        by_id = {
+            selection.document.id: selection for selection in representation.selections
+        }
+        for artifact in contributing:
+            validate_artifact_selection(
+                artifact, by_id[uuid.UUID(artifact.scope_id)], using="default"
+            )
     identity = CollectionBuildIdentity(
+        representation_digest=binding_digest(representation),
         collection_id=collection_id,
         aggregate_source_signature=aggregate,
         extractor_version=extractor_version,
         ontology_version=ontology.version,
         ontology_checksum=ontology.checksum,
-        resolver_version=COLLECTION_RESOLVER_VERSION,
+        resolver_version=resolver_version_for_policy(
+            "collection", resolution_config.identity_policy
+        ),
         resolver_checksum=resolution_config_checksum(resolution_config),
         filter_version=filter_policy.version,
         filter_checksum=filter_policy_checksum(filter_policy),
@@ -4307,6 +4261,8 @@ def _collection_context(
         filter_policy=filter_policy,
         resolution_config=resolution_config,
         assembly_config=assembly_config,
+        representation_snapshot=representation,
+        vocabulary=vocabulary,
     )
 
 
@@ -4634,6 +4590,7 @@ def _bootstrap_collection_build(
                 orchestration_version=(GraphArtifact.OrchestrationVersion.SCOPED_V1),
                 rebuild_request=request,
                 evaluation_only=eval_only,
+                representation_snapshot=context.representation_snapshot,
             )
             artifact.metadata = {
                 **(artifact.metadata if type(artifact.metadata) is dict else {}),

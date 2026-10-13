@@ -19,7 +19,7 @@ def revalidate_source_tool_result(result, *, user):
     rows = source_query_rows(
         TextChunk.objects.using(
             runtime.authorization.database_alias,
-        ).filter(pk__in=[r["chunk_id"] for r in records])
+        ).filter(pk__in=[r["chunk_id"] for r in records]), require_existing=True,
     )
     current = {row.pk: row for row in rows}
     if any(

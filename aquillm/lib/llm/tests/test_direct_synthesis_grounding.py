@@ -6,6 +6,7 @@ import pytest
 
 from lib.llm.providers.complete_turn import complete_conversation_turn
 from lib.llm.providers.request_observability import observability_scope
+from lib.llm.tests.test_answer_publication import synthetic_publication
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
@@ -35,6 +36,21 @@ def _conversation():
                 },
             ),
         ],
+    )
+
+
+def _selected_packet(convo, image_urls=()):
+    from apps.chat.services.rag_evidence import EvidencePacket
+
+    return EvidencePacket(
+        list(convo[-1].result_dict["result"]),
+        list(image_urls),
+        ["[doc:a chunk:1]", "[doc:b chunk:2]"],
+        convo[0].content,
+        "synthetic selected papers",
+        "results_found",
+        "",
+        20,
     )
 
 
@@ -123,7 +139,12 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
         "- The arithmetic difference is 11 percentage points. "
         "This calculation subtracts 7 from 18."
     )
-    repaired = initial + " [doc:a chunk:1] [doc:b chunk:2]."
+    repaired = (
+        "- Paper A reports an 18% improvement [doc:a chunk:1].\n"
+        "- Paper B reports a 7% improvement [doc:b chunk:2].\n"
+        "- The arithmetic difference is 11 percentage points "
+        "[doc:a chunk:1] [doc:b chunk:2]."
+    )
     convo = _conversation()
     if with_figure:
         convo.messages[0].content += " Show the relevant figure."
@@ -149,7 +170,14 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
     async def capture(payload):
         stream_payloads.append(payload)
 
-    with observability_scope("comparison-repair", stage):
+    with (
+        synthetic_publication(
+            packet=_selected_packet(
+                convo, ("/aquillm/document_image/a/",) if with_figure else ()
+            )
+        ),
+        observability_scope("comparison-repair", stage),
+    ):
         result, _ = await complete_conversation_turn(
             ComparisonModel(),
             convo,
@@ -157,24 +185,18 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
             stream_func=capture,
         )
 
-    if stage == "direct_synthesis":
-        assert len(requests) == 2
-        comparison = next(
-            line
-            for line in result[-1].content.splitlines()
-            if line.startswith("- The arithmetic difference")
-        )
-        assert "[doc:a chunk:1]" in comparison
-        assert "[doc:b chunk:2]" in comparison
-    else:
-        assert len(requests) == 1
+    assert len(requests) == 2
+    assert "11 percentage points" not in result[-1].content
+    assert "uncertain" in result[-1].content
+    assert "> Improvement was 18%. [doc:a chunk:1]" in result[-1].content
+    assert "> Improvement was 7%. [doc:b chunk:2]" in result[-1].content
     assert len(stream_payloads) == 1
     assert stream_payloads[0]["done"] is True
     assert stream_payloads[0]["content"] == result[-1].content
 
 
 @pytest.mark.parametrize("stage", ["direct_synthesis", "post_tool_synthesis"])
-async def test_uncited_numeric_prose_is_repaired_only_for_direct_synthesis(
+async def test_uncited_numeric_prose_is_repaired_for_every_rag_synthesis(
     stage,
     monkeypatch,
 ):
@@ -213,17 +235,22 @@ async def test_uncited_numeric_prose_is_repaired_only_for_direct_synthesis(
     async def capture(payload):
         streamed.append(payload)
 
-    with observability_scope("numeric-comparison", stage):
+    convo = _conversation()
+    with (
+        synthetic_publication(packet=_selected_packet(convo)),
+        observability_scope("numeric-comparison", stage),
+    ):
         result, _ = await complete_conversation_turn(
             CapacityModel(),
-            _conversation(),
+            convo,
             1024,
             stream_func=capture,
         )
 
-    assert len(requests) == (2 if stage == "direct_synthesis" else 1)
-    assert result[-1].content.startswith(
-        repaired if stage == "direct_synthesis" else first
-    )
+    assert len(requests) == 2
+    assert "litres per cycle" not in result[-1].content
+    assert "uncertain" in result[-1].content
+    assert "> Improvement was 18%. [doc:a chunk:1]" in result[-1].content
+    assert "> Improvement was 7%. [doc:b chunk:2]" in result[-1].content
     assert len(streamed) == 1
     assert streamed[0]["content"] == result[-1].content

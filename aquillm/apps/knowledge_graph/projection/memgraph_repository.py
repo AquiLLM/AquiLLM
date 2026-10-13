@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from hashlib import sha256
-from math import isfinite
 
 from apps.knowledge_graph.retrieval.topology.contracts import TopologyCapsV1
 
@@ -16,6 +15,7 @@ from .memgraph_edges import (
     write_topology_edges,
 )
 from .memgraph_records import manifest_from_row, read_bundle
+from .memgraph_repository_validation import _key, _size, _timeout
 from .memgraph_validation import (
     ProjectionValidationV1,
     mark_ready,
@@ -27,26 +27,7 @@ from .records import (
 )
 from .serialization import projection_checksum
 
-_MAX_PAGE = 5_000
 _EMPTY_PRIVATE_MAPPING = sha256(b"[]").hexdigest()
-
-
-def _size(value: object, name: str) -> int:
-    if type(value) is not int or not 1 <= value <= _MAX_PAGE:
-        raise ValueError(f"{name} must be an integer in 1..5000")
-    return value
-
-
-def _timeout(value: object) -> float:
-    if type(value) is not float or not isfinite(value) or value <= 0.0:
-        raise ValueError("timeout_seconds must be a finite positive float")
-    return value
-
-
-def _key(value: object) -> str:
-    if type(value) is not OpaqueProjectionKey:
-        raise TypeError("generation key must be an exact opaque key")
-    return value.value
 
 
 class MemgraphProjectionRepository:
@@ -69,9 +50,12 @@ class MemgraphProjectionRepository:
         private_mapping_checksum: str,
         batch_size: int,
         timeout_seconds: float,
+        frontier_index: bool = False,
     ) -> None:
         if type(bundle) is not CollectionGraphProjectionBundleV1:
             raise TypeError("bundle must be an exact projection bundle")
+        if type(frontier_index) is not bool:
+            raise TypeError("frontier_index must be an exact opt-in boolean")
         size = _size(batch_size, "batch_size")
         timeout = _timeout(timeout_seconds)
         if (
@@ -174,6 +158,10 @@ class MemgraphProjectionRepository:
         write_topology_edges(
             self._driver, bundle, batch_size=size, timeout_seconds=timeout
         )
+        if frontier_index:
+            from .frontier_index_store_v2 import write_frontier_index
+
+            write_frontier_index(self._driver, bundle, batch_size=size, timeout=timeout)
 
     @staticmethod
     def _set_clause(alias: str, values: dict[str, object]) -> str:

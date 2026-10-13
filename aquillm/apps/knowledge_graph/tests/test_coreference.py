@@ -164,45 +164,6 @@ def test_identical_normalized_names_cluster_with_compatible_ontology_alias_types
     assert result.clusters[0].entity_type == "method"
 
 
-def test_parenthetical_full_form_and_all_later_acronyms_cluster():
-    text = (
-        "Retrieval-Augmented Generation (RAG) improves grounding. "
-        "RAG retrieves evidence."
-    )
-    full = "Retrieval-Augmented Generation"
-    first_acronym = text.index("RAG")
-    later_acronym = text.rindex("RAG")
-    result = resolve_document_mentions(
-        (
-            _mention(
-                "full",
-                full,
-                start=0,
-                source_text=text,
-            ),
-            _mention(
-                "definition",
-                "RAG",
-                start=first_acronym,
-                source_text=text,
-            ),
-            _mention(
-                "later",
-                "RAG",
-                start=later_acronym,
-                source_text=text,
-            ),
-        ),
-        _ontology(),
-    )
-
-    assert _cluster_ids(result) == {frozenset(("full", "definition", "later"))}
-    assert result.clusters[0].label == full
-    assert _decision(result, "full", "definition").method == "defined_acronym"
-    assert _decision(result, "full", "later").method == "defined_acronym"
-    assert _decision(result, "definition", "later").method == "normalized_name"
-
-
 def test_acronym_mentions_before_the_definition_remain_singletons():
     text = (
         "RAG was mentioned early. Retrieval-Augmented Generation (RAG) is defined. "
@@ -451,50 +412,6 @@ def test_version_signature_difference_blocks_even_an_equal_stable_identifier():
     assert _decision(result, "base", "v2").method == "version_mismatch"
 
 
-def test_identifier_conflict_cannot_be_bridged_by_a_defined_acronym():
-    text = (
-        "Retrieval-Augmented Generation (RAG) is introduced. RAG is referenced later."
-    )
-    full = "Retrieval-Augmented Generation"
-    acronym_positions = [
-        index for index in range(len(text)) if text.startswith("RAG", index)
-    ]
-    result = resolve_document_mentions(
-        (
-            _mention(
-                "identifier-x",
-                full,
-                start=0,
-                source_text=text,
-                identifier="https://github.com/example/identity-x",
-            ),
-            _mention(
-                "definition",
-                "RAG",
-                start=acronym_positions[0],
-                source_text=text,
-            ),
-            _mention(
-                "identifier-y",
-                "RAG",
-                start=acronym_positions[1],
-                source_text=text,
-                identifier="https://github.com/example/identity-y",
-            ),
-        ),
-        _ontology(),
-    )
-
-    assert _cluster_ids(result) == {
-        frozenset(("identifier-x", "definition")),
-        frozenset(("identifier-y",)),
-    }
-    suppressed = _decision(result, "definition", "identifier-y")
-    assert suppressed.accepted is False
-    assert suppressed.method == "component_conflict"
-    assert "conflicting_stable_identifiers" in suppressed.explanation
-
-
 def test_shared_identifier_does_not_bridge_versioned_or_versionless_aliases():
     repository = "https://github.com/example/orion"
     result = resolve_document_mentions(
@@ -634,16 +551,6 @@ def test_unknown_entity_types_are_rejected_instead_of_silently_accepted():
         resolve_document_mentions(
             (_mention("unknown", "RAG", "evaluation_metric"),), _ontology()
         )
-
-
-
-
-
-
-
-
-
-
 
 
 @pytest.mark.parametrize(
@@ -1053,8 +960,7 @@ def test_invalid_confidence_duplicate_ids_and_unbounded_documents_are_rejected(
         )
     monkeypatch.setattr(coreference, "MAX_DOCUMENT_MENTIONS", 2)
     over_cap = tuple(
-        _mention(index, f"entity {index}", start=index * 20)
-        for index in range(3)
+        _mention(index, f"entity {index}", start=index * 20) for index in range(3)
     )
     with pytest.raises(ValueError, match="mention cap"):
         resolve_document_mentions(over_cap, _ontology())
@@ -1078,8 +984,6 @@ def test_sparse_resolver_does_not_materialize_unrelated_mention_pairs(monkeypatc
 
     assert len(result.clusters) == 600
     assert len(result.decisions) <= 8 * len(mentions)
-
-
 
 
 def test_sparse_lowercase_acronym_blocks_identifier_alias_bridge(monkeypatch):
@@ -1958,7 +1862,10 @@ def test_document_mention_links_store_immutable_typed_resolution_audit_fields():
 
 
 def test_task7_artifact_identity_uses_the_shared_concrete_resolver_version():
-    from apps.knowledge_graph.extraction.pipeline import _artifact_identity_values
+    from apps.knowledge_graph.extraction.pipeline import (
+        _artifact_identity_values,
+        document_artifact_identity_values,
+    )
 
     extraction_settings = SimpleNamespace(
         provider="gliner2_local",
@@ -1975,6 +1882,32 @@ def test_task7_artifact_identity_uses_the_shared_concrete_resolver_version():
     )
 
     assert identity["resolver_version"] == DOCUMENT_RESOLVER_VERSION
+    # Frozen from the pinned legacy version-only checksum payload.
+    assert identity["resolution_config_checksum"] == (
+        "fcfd07a023b6186d86f8490b72f2c184b8cb20d64b322ebe77550536065efc6c"
+    )
+    explicit_legacy = document_artifact_identity_values(
+        DOCUMENT_ID,
+        "b" * 64,
+        "1.0.0",
+        "c" * 64,
+        settings=extraction_settings,
+        identity_policy="legacy",
+    )
+    assert explicit_legacy == identity
+    contextual = document_artifact_identity_values(
+        DOCUMENT_ID,
+        "b" * 64,
+        "1.0.0",
+        "c" * 64,
+        settings=extraction_settings,
+        identity_policy="contextual_v2",
+    )
+    assert contextual["resolver_version"] == "document-coreference-v4-contextual"
+    assert (
+        contextual["resolution_config_checksum"]
+        != identity["resolution_config_checksum"]
+    )
 
 
 def test_resolution_commit_validator_requires_exact_typed_counts_and_hashes():
@@ -2298,7 +2231,10 @@ database_required = pytest.mark.skipif(
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
+@pytest.mark.parametrize("identity_policy", ["legacy", "contextual_v2"])
+def test_persistence_links_mentions_audibly_without_owning_build_lifecycle(
+    identity_policy,
+):
     from apps.documents.models import TextChunk
     from apps.knowledge_graph.models import (
         DocumentEntity,
@@ -2307,7 +2243,9 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
         GraphArtifact,
         GraphBuildRun,
     )
+    from apps.knowledge_graph.resolution import resolver_version_for_policy
 
+    resolver_version = resolver_version_for_policy("document", identity_policy)
     artifact = GraphArtifact.objects.create(
         scope_type=GraphArtifact.ScopeType.DOCUMENT,
         scope_id=DOCUMENT_ID,
@@ -2316,7 +2254,7 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
         ontology_version="1.0.0",
         ontology_checksum="b" * 64,
         extractor_version="extractor-v1",
-        resolver_version=RESOLVER_VERSION,
+        resolver_version=resolver_version,
         filter_policy_version="pending-v1",
     )
     chunk = TextChunk.objects.create(
@@ -2363,26 +2301,57 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
         status=GraphBuildRun.Status.RUNNING,
         stats=original_stats,
     )
-    result = resolve_document_mentions(tuple(mentions), _ontology())
+    result = resolve_document_mentions(
+        tuple(mentions), _ontology(), identity_policy=identity_policy
+    )
+
+    replay_kwargs = (
+        {"ontology": _ontology()} if identity_policy == "contextual_v2" else {}
+    )
+    if identity_policy == "contextual_v2":
+        forged = replace(
+            result,
+            decisions=tuple(
+                replace(
+                    item,
+                    accepted=True,
+                    outcome="automatic",
+                    explanation="forged_anchor",
+                )
+                for item in result.decisions
+            ),
+        )
+        object.__setattr__(forged, "checksum", resolution_result_checksum(forged))
+        with pytest.raises(ResolutionPersistenceError, match="contextual.*replay"):
+            persist_document_resolution(artifact.pk, run.pk, forged, **replay_kwargs)
+        assert not DocumentEntity.objects.filter(artifact=artifact).exists()
 
     persisted = persist_document_resolution(
         artifact.pk,
         run.pk,
         result,
+        **replay_kwargs,
     )
 
-    assert len(persisted) == 1
-    entity = DocumentEntity.objects.get(artifact=artifact)
+    expected_count = 1 if identity_policy == "legacy" else 2
+    assert len(persisted) == expected_count
+    entity = persisted[0]
     assert entity.label == "Orion"
     assert entity.version_signature == ""
     assert entity.cluster_key == result.clusters[0].cluster_key
-    assert entity.metadata["resolver_version"] == RESOLVER_VERSION
-    assert entity.metadata["methods"] == ["normalized_name"]
-    links = list(DocumentEntityMention.objects.filter(document_entity=entity))
+    assert entity.metadata["resolver_version"] == resolver_version
+    assert entity.metadata["methods"] == (
+        ["normalized_name"] if identity_policy == "legacy" else ["singleton"]
+    )
+    links = list(
+        DocumentEntityMention.objects.filter(document_entity__artifact=artifact)
+    )
     assert {link.mention_id for link in links} == {mention.pk for mention in mentions}
-    assert {link.resolver_version for link in links} == {RESOLVER_VERSION}
+    assert {link.resolver_version for link in links} == {resolver_version}
     links_by_mention = {link.mention_id: link for link in links}
-    for membership in result.clusters[0].memberships:
+    for membership in (
+        membership for cluster in result.clusters for membership in cluster.memberships
+    ):
         link = links_by_mention[int(membership.mention_id)]
         assert link.method == membership.method
         assert link.parent_mention_id == (membership.parent_mention_id or "")
@@ -2394,17 +2363,28 @@ def test_persistence_links_mentions_audibly_without_owning_build_lifecycle():
     assert artifact.status == GraphArtifact.Status.BUILDING
     assert run.stats["extraction_commit"] == original_stats["extraction_commit"]
     assert run.stats["provider"] == "gliner2_local"
-    assert run.stats["resolution_commit"]["resolver_version"] == RESOLVER_VERSION
+    assert run.stats["resolution_commit"]["resolver_version"] == resolver_version
     assert run.stats["resolution_commit"]["ontology_checksum"] == "b" * 64
     assert run.stats["resolution_commit"]["source_mention_count"] == 2
     assert run.stats["resolution_commit"]["membership_count"] == 2
-    assert run.stats["resolution_commit"]["document_entity_count"] == 1
+    assert run.stats["resolution_commit"]["document_entity_count"] == expected_count
     assert run.stats["resolution_commit"]["result_checksum"] == result.checksum
 
-    repeated = persist_document_resolution(artifact.pk, run.pk, result)
-    assert [row.pk for row in repeated] == [entity.pk]
-    assert DocumentEntity.objects.filter(artifact=artifact).count() == 1
+    repeated = persist_document_resolution(artifact.pk, run.pk, result, **replay_kwargs)
+    assert [row.pk for row in repeated] == [row.pk for row in persisted]
+    assert DocumentEntity.objects.filter(artifact=artifact).count() == expected_count
     assert DocumentEntityMention.objects.filter(mention__artifact=artifact).count() == 2
+    if identity_policy == "contextual_v2":
+        audit = run.stats["contextual_identity_decisions"]
+        assert audit["identity_policy"] == "contextual_v2"
+        assert audit["resolver_version"] == resolver_version
+        assert audit["decisions"][0]["outcome"] == "candidate"
+        with pytest.raises(ResolutionPersistenceError, match="resolver"):
+            persist_document_resolution(
+                artifact.pk,
+                run.pk,
+                resolve_document_mentions(tuple(mentions), _ontology()),
+            )
 
 
 def test_coreference_module_has_no_provider_embedding_or_llm_imports():

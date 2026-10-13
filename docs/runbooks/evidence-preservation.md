@@ -422,3 +422,31 @@ SDK delivery, human entailment or activation eligibility. Unknown coverage and
 incomplete turns remain unknown/failed. Preserve original failures and pending
 human/runtime prerequisites in the bundle; never create placeholder attestations
 or model-authored human labels to fill them.
+
+## R5 treatment evidence status
+
+All twelve [treatment decisions](rag-remediation-treatments.md) remain
+**inconclusive/off**. Whole-source delivery, window reuse, native structural
+controls, graph-event capture and the fixture CLI schedule have executed.
+Query and projection integration repairs are under verification; final composed
+verification and independent final review remain pending.
+
+The 22 retained fixture subprocess reports preserve the frozen 80-case/four-arm
+and 30-operation schedule, including two blocked activation comparisons. They
+are fixture plumbing: **zero live-quality studies and zero independent human
+reviews**. They do not satisfy the live quality or operational gates above.
+Structural ordering remains an offline provenance experiment, not a serving
+policy; parser-transition quality remains unmeasured.
+
+The completed exclusive [physical-vector diagnostic](../audits/rag-remediation-implementation/physical-vector-observations.json)
+retains 800 paired comparisons and 640 SQL plans under original authorization,
+payload and ledger bounds. Recall@1/5/10 was 1.0 for all pairs, with zero underfill
+or observed ineligible output. No plan used HNSW, so no ANN speedup is established.
+The observed Docker host capacity was shared and unreserved, without explicit
+per-container CPU or memory reservation/limits; timings are not production
+latency or semantic-quality evidence.
+
+See the [acceptance ledger](../audits/rag-remediation-implementation/retrieval-evidence-acceptance.md)
+for remaining matched runtime, human and identity evidence. Strict D17/G6 trust
+and calibration/current-run separation are unchanged. No production rebuild,
+deployment or optional treatment activation follows from these results.

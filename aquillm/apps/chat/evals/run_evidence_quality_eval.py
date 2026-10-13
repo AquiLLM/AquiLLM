@@ -60,6 +60,7 @@ def main(argv=None):
     parser.add_argument("--compare", type=Path, nargs=4)
     parser.add_argument("--targets", type=Path)
     parser.add_argument("--operational-reports", type=Path, nargs="+", default=[])
+    parser.add_argument("--graph-report", type=Path)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument(
         "--cache-state", choices=("cold", "warm", "unknown"), default="unknown"
@@ -106,6 +107,7 @@ def main(argv=None):
     if not original:
         for row in observations:
             row["code_revision"] = revision
+            row["corpus_sha256"] = hashlib.sha256(args.cases.read_bytes()).hexdigest()
     results = [
         evaluate(c, o, reviews.get(c["case_id"], o.get("human_review")))
         for c, o in zip(cases, observations, strict=True)
@@ -125,6 +127,14 @@ def main(argv=None):
         "summary": aggregate(results),
         **metadata,
     }
+    from apps.chat.evals.evidence_support_cases import SPLIT_DIGESTS, load_support_cases
+
+    report["support_supplement"] = {
+        "case_count": len(load_support_cases()),
+        "split_sha256": SPLIT_DIGESTS,
+        "independent_human_labels": False,
+        "activation_eligible": False,
+    }
     from apps.chat.evals.evidence_quality_review import dirty_checkout
 
     report["dirty"] = original.get("dirty", True) if original else dirty_checkout()
@@ -137,6 +147,10 @@ def main(argv=None):
             )
         )
     if args.compare:
+        from apps.knowledge_graph.evals.run_graph_quality_gates_v2 import (
+            load_graph_report,
+        )
+
         reports = [json.loads(p.read_text(encoding="utf-8")) for p in args.compare]
         if len({r["mode"] for r in reports}) != 4:
             parser.error("four distinct report modes required")
@@ -149,7 +163,15 @@ def main(argv=None):
                 json.loads(p.read_text(encoding="utf-8"))
                 for p in args.operational_reports
             ],
+            graph_report=load_graph_report(args.graph_report)
+            if args.graph_report
+            else None,
         )
+    # Never inherit activation from an input observation report or fixture comparison.
+    report["activation_eligible"] = (
+        args.backend == "live"
+        and report.get("gate", {}).get("activation_eligible") is True
+    )
     args.report.parent.mkdir(parents=True, exist_ok=True)
     args.report.write_text(
         json.dumps(
@@ -160,12 +182,7 @@ def main(argv=None):
         + "\n",
         encoding="utf-8",
     )
-    return (
-        0
-        if not args.require_activation
-        or report.get("gate", {}).get("activation_eligible")
-        else 2
-    )
+    return 0 if not args.require_activation or report["activation_eligible"] else 2
 
 
 if __name__ == "__main__":

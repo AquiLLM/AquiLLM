@@ -45,48 +45,9 @@ def canonical_provider(*, deadline):
 
 
 def load_attested_attempt():
-    """Consume an operator-verified, short-lived, locally mounted attestation.
+    from .pair_worker_attestation import load_attested_attempt as load
 
-    The worker has no Docker privilege. This file is deployment evidence, not
-    inferred from /models, environment names or the successful warm probes.
-    """
-    path = os.getenv("RAG_PAIR_CAPABILITY_ATTESTATION")
-    if not path:
-        return None
-    try:
-        with Path(path).open("rb") as stream:
-            raw = stream.read(65537)
-        if len(raw) > 65536:
-            return None
-        data = json.loads(raw)
-        provider = canonical_provider(deadline=monotonic() + 15)
-        template = data["template"]
-        identity = data["identity"]
-        if not (
-            provider
-            and data["verified_by"]
-            and data["verification_record"]
-            and data["verified_at"] <= time() < data["expires_at"]
-            and 0 < data["expires_at"] - data["verified_at"] <= 300
-            and data["endpoint"] == provider.endpoint
-            and data["served_model"] == provider.model_name
-            and data["pair_context"] == provider.pair_limit == 1024
-            and data["tokenizer_name"] == config.rerank_tokenizer()
-            and identity["model_revision"] == config.rerank_model_revision()
-            and identity["tokenizer_revision"] == config.rerank_tokenizer_revision()
-            and identity["code_revision"] == config.rerank_code_revision()
-            and _valid_identity(identity, template)
-        ):
-            return None
-        return dict(
-            provider=provider,
-            tokenizer_name=data["tokenizer_name"],
-            template=template,
-            identity=identity,
-            attestation_expires=data["expires_at"],
-        )
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
+    return load()
 
 
 class PairCapabilityController:
@@ -109,12 +70,19 @@ class PairCapabilityController:
         self.thread = self.budget = self.task = None
         self.generation = 0
         self.stopping = False
+        self.protocol_binding = None
 
     def invalidate(self):
         self.generation += 1
         if self.budget:
             self.budget.close("worker_invalidated")
         invalidate_pair_capability()
+        if self.protocol_binding is not None:
+            from .rerank_transport_policy import revoke_rerank_protocol
+
+            base, binding = self.protocol_binding
+            revoke_rerank_protocol(base, binding)
+            self.protocol_binding = None
 
     async def attempt(self):
         self.invalidate()
@@ -155,6 +123,28 @@ class PairCapabilityController:
                             min(counter.expires, monotonic() + max(0, expiry - time())),
                         )
                         result.append(counter)
+                        provider = args.get("provider")
+                        if provider is not None and counter.expires > monotonic():
+                            from .rerank_transport_policy import (
+                                RerankProtocolV1,
+                                register_rerank_protocol,
+                            )
+
+                            now = time()
+                            binding = RerankProtocolV1(
+                                provider.endpoint,
+                                provider.shape,
+                                provider.model_name,
+                                now,
+                                min(expiry, now + counter.expires - monotonic()),
+                            )
+                            base = config.rerank_base_url()
+
+                            def bind_protocol():
+                                register_rerank_protocol(base, binding)
+                                self.protocol_binding = (base, binding)
+
+                            budget.publish(bind_protocol)
             except Exception:
                 # Unknown capability is the specified outcome of warm failure.
                 pass
@@ -230,6 +220,7 @@ class PairCapabilityController:
 class PairCapabilityLifespan:
     def __init__(self, app):
         self.app, self.controller = app, None
+        self.protocol_controller = None
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "lifespan":
@@ -237,11 +228,18 @@ class PairCapabilityLifespan:
         while True:
             message = await receive()
             if message["type"] == "lifespan.startup":
+                if protocol_warm_enabled() and self.protocol_controller is None:
+                    self.protocol_controller = RerankProtocolController()
+                    self.protocol_controller.task = asyncio.create_task(
+                        self.protocol_controller.run()
+                    )
                 if enabled() and self.controller is None:
                     self.controller = PairCapabilityController()
                     self.controller.task = asyncio.create_task(self.controller.run())
                 await send({"type": "lifespan.startup.complete"})
             elif message["type"] == "lifespan.shutdown":
+                if self.protocol_controller:
+                    await self.protocol_controller.stop()
                 if self.controller:
                     await self.controller.stop()
                 await send({"type": "lifespan.shutdown.complete"})
@@ -251,3 +249,14 @@ class PairCapabilityLifespan:
 def verified_canonical_provider(deadline):
     provider = canonical_provider(deadline=deadline)
     return provider if registered_pair_counter(provider) is not None else None
+
+
+def protocol_warm_enabled():
+    return os.getenv(
+        "RAG_RERANK_PROTOCOL_WARM_ENABLED", "0"
+    ) == "1" and config.rerank_provider() in ("auto", "local", "vllm")
+
+
+# Keep one controller class and the existing public import/patch path.
+from .pair_worker_protocol import RerankProtocolController
+RerankProtocolController.__module__ = __name__

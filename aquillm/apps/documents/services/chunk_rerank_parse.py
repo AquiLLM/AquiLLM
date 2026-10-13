@@ -20,17 +20,38 @@ def _finite_score(value) -> float | None:
 
 def fallback_rerank(model_cls: type[TextChunk], chunks, top_k: int):
     chunk_ids = [chunk.pk for chunk in list(chunks)[:top_k]]
-    if not chunk_ids:
-        return model_cls.objects.none()
-    preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(chunk_ids)])
-    return model_cls.objects.filter(pk__in=chunk_ids).order_by(preserved)
+    return ordered_queryset_from_ids(model_cls, chunk_ids, status="unavailable")
 
 
-def ordered_queryset_from_ids(model_cls: type[TextChunk], ranked_ids: list[int]):
-    if not ranked_ids:
-        return model_cls.objects.none()
+def ordered_queryset_from_ids(
+    model_cls: type[TextChunk], ranked_ids: list[int], *, status="unknown"
+):
     preserved = Case(*[When(pk=pk, then=pos) for pos, pk in enumerate(ranked_ids)])
-    return model_cls.objects.filter(pk__in=ranked_ids).order_by(preserved)
+    rows = (
+        model_cls.objects.filter(pk__in=ranked_ids).order_by(preserved)
+        if ranked_ids
+        else model_cls.objects.none()
+    )
+    return mark_rerank_status(rows, status)
+
+
+def mark_rerank_status(rows, status):
+    normalized = (
+        status
+        if type(status) is str and status in ("complete", "unavailable")
+        else "unknown"
+    )
+    if hasattr(rows, "__dict__"):
+        rows._rag_rerank_status = normalized
+    return rows
+
+
+def queryset_from_scored_result(
+    model_cls, result, *, orderer=ordered_queryset_from_ids
+):
+    return mark_rerank_status(
+        orderer(model_cls, result.ranked_ids), result.score_set.status
+    )
 
 
 def parse_rerank_results(body, chunks_list) -> list[int]:

@@ -1,0 +1,91 @@
+{
+  "job": "migration_applied",
+  "candidate_revision": "7df6277184c97fcfcc36e3bc550aa4cbda9055fd",
+  "command": [
+    "rtk",
+    "proxy",
+    "python",
+    "-X",
+    "utf8",
+    "scripts/run_rag_remediation_tests.py",
+    "--project",
+    "aquillm-rag-integration",
+    "--manage",
+    "migrate",
+    "--check"
+  ],
+  "command_normalization": "Only the absolute interpreter is replaced by python; rtk proxy, -X utf8 and every retained wrapper argument are preserved.",
+  "exit_code": 0,
+  "log_sha256": "6aeadeeb1b87f88543ddd324e215e9b5008b17db2a21b3198ed058d80b0a3eb4",
+  "result_sha256": "feeaefdef2a3aac6f727e4b19c48e76f993ada90c0fc93eb31946d235dd3799d",
+  "source_and_index_unchanged": true,
+  "source_snapshot_sha256": "2588c92a9537d3ec70f0827691026775dd2bdd00636844d7ac3fddb1432d798c",
+  "runtime": [
+    {
+      "service": "app",
+      "container_id": "2e3c230ae54bc73bbae5fb0ecf102d5891317092dec9db02973510e01f5db657",
+      "image_id": "sha256:50ac296b6cd23a025a663cde8ee9a83da94fe6c414dcd6036c79d1ed24d3d231"
+    },
+    {
+      "service": "db",
+      "container_id": "20326dc75d4198b13a691ae6203bcf03165174533a7ab34edabf77d11075e09b",
+      "image_id": "sha256:ccc6e83d6e35e931dc7c5def2022729d5a6c370318d099181995567ff1fb4d6b"
+    },
+    {
+      "service": "fake-models",
+      "container_id": "cd2558d6420c7ea7a842cc6b906d04e857a9239d589d7f30af83e4af9fc80f1d",
+      "image_id": "sha256:05d4770175519f0b5ab2714ef6f49821eee33176c4238be089a52fb0e231c02e"
+    },
+    {
+      "service": "frontend",
+      "container_id": "81dff6082ee41e508b03667aec8c4b9e6d4761172f5aa332bcc25cb631820071",
+      "image_id": "sha256:1b014c12d84a0a12bf9e9d8533d55a4908f757196a81c4e8bc02629f4f684ee0"
+    },
+    {
+      "service": "memgraph",
+      "container_id": "1e437af75d9049ee42ec1cce4fce698d03c2867452921b309aa02f04fa20bab7",
+      "image_id": "sha256:40a96f96a45e62e55017aace6bfa4094afcf6cc33f9a5183186c0b1cd11f4f5f"
+    },
+    {
+      "service": "redis",
+      "container_id": "3828461b4ad537e011b0c1ee68227e05a357b0ef028b9fb372813f2aff4cec86",
+      "image_id": "sha256:976ab0f0939b78c06d802bcd3bea44c5142ea9a756a57b861e08819817f768c8"
+    }
+  ],
+  "runtime_scope": "validated project inventory after wrapper exit; not every service necessarily used by this mode",
+  "counts": null,
+  "skips": [],
+  "warnings": [
+    {
+      "kind": "FutureWarning",
+      "count": 1,
+      "category": "Deprecated Google OCR SDK",
+      "source_path": "aquillm/lib/ocr/gemini.py",
+      "source_line": 13,
+      "observed": "The imported google.generativeai package reports that support has ended.",
+      "disposition": "Dependency maintenance debt remains. This command succeeding does not establish current SDK support or a successful live OCR request; no dependency change or blanket warning waiver is made here."
+    },
+    {
+      "kind": "RuntimeWarning",
+      "count": 1,
+      "category": "Database access during app initialization",
+      "observed": "Django reports database access before app initialization is complete.",
+      "disposition": "Startup database access remains a maintenance concern. Current AppConfig.ready calls inline vector prewarming for management commands, consistent with the subsequent prewarmed info event; the log does not identify every initiating query. No warning suppression, database-plan or production-readiness claim follows."
+    }
+  ],
+  "duration_seconds": null,
+  "summary": "Django migrate --check completed with exit zero, indicating no unapplied migrations for the isolated runtime. Two startup warnings were reviewed and retained as maintenance debt.",
+  "summary_derivation": "Read the entire retained output and completed result. The log contains one unsupported Google OCR SDK FutureWarning, one database-during-app-initialization RuntimeWarning and one prewarming info event; it prints no separate migration success sentence. The actual migrate --check exit is zero. This check reports pending-migration state for the isolated runtime and does not itself apply migrations, verify physical object definitions/index validity or establish deployed-schema parity. No tests, skips, migration-row count or elapsed duration were reported; counts and duration remain null. The wrapper and separate post match all 3118 source files and index entries. No credentials/private corpus text identified; runtime inventory scope is retained. This individual review makes no aggregate acceptance claim.",
+  "public_log_or_summary_url": "./migration-applied-job.json",
+  "status": "COMPLETED_JOB_RESULTS_AND_WARNING_SKIP_DISPOSITIONS_REVIEWED",
+  "retained_evidence_hashes": {
+    "source_proof": "cd5688c6bae7cd8fa1c6a9c805f84facdd51df3231ff90f6db506086cd985734",
+    "driver_receipt": "e33bbe4083caebd538a59f02a94857f458a062f87863d1cb559f041a3064e5ac",
+    "runtime_receipt": "258a9d5244ddd8dcf117feabd4b161b9e4ba0ff540031c3d2ea03a4ef756fee5",
+    "manual_review": "4121c90dcfd74aec2deaa5e46b8e9b0de83c87dfe84e2325f4d756621adefeb1",
+    "candidate_manifest": "ed79f211ef99fae4025e1f0fa466b1b7231d87bc120dc0e82c8478e579ecd1a8"
+  },
+  "limits": [
+    "This is one job record. Separate contract, quality, data and deployment dispositions remain in closure.json."
+  ]
+}

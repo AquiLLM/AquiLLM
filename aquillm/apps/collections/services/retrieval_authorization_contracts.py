@@ -166,6 +166,10 @@ def _current_rows(
         database_alias=database_alias,
         selected_collection_ids=selected_collections,
     )
+    return validate_current_rows(raw)
+
+
+def validate_current_rows(raw):
     rows: list[tuple[int, UUID]] = []
     try:
         for row in raw:

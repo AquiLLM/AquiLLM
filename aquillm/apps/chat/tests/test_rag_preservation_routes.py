@@ -97,6 +97,7 @@ async def test_manual_exact_document_outside_selection_uses_same_budget(
 ):
     from apps.chat.services.manual_search_turn import run_manual_search_turn
     from apps.chat.services.rag_turn import preservation_turn
+    from lib.llm.turn_context import current_turn
 
     user, doc, chunks, _ = docs
     configure(monkeypatch)
@@ -114,13 +115,15 @@ async def test_manual_exact_document_outside_selection_uses_same_budget(
     )
     consumer = SimpleNamespace(user=user, col_ref=CollectionsRef([]), convo=convo)
     async with preservation_turn(consumer, max_func_calls=3) as runtime:
+        assert runtime is None  # Empty picker has no authorized public source scope.
+        original_budget = current_turn().budget
         assert (
             await run_manual_search_turn(
                 consumer, SimpleNamespace(complete=complete), convo
             )
             == "handled"
         )
-        assert runtime.budget.actions_used == 1
+        assert current_turn().budget is original_budget and original_budget.actions_used == 1
     assert len(captured) == 1
     assert chunks[-1].content in captured[0][-1].content
     assert consumer.col_ref.collections == []
@@ -200,4 +203,10 @@ async def test_normal_model_tool_is_counted_once_and_synthesized_once(
     assert len(calls) == (3 if iterative else 2)
     assert not calls[-1].get("tools")
     assert chunks[-1].content in str(calls[-1]["messages"])
-    assert send.call_args.args[0][-1].content.startswith("Only below")
+    published = send.call_args.args[0][-1]
+    assert "uncertain" in published.content
+    for chunk in chunks:
+        citation = f"[doc:{doc.id} chunk:{chunk.pk}]"
+        assert f"> Aspect {chunk.chunk_number}. {citation}" in published.content
+        assert f"> Qualified tail: only below 1 Pa. {citation}" in published.content
+    assert published._validated_answer.outcome == "partial"

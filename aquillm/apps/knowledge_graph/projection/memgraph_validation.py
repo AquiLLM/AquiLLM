@@ -34,10 +34,13 @@ def _invalid(expected, observed, checksum=None, counts=None):
 def validate(repository, *, expected, timeout, empty_private_checksum):
     if type(expected) is not ProjectionGenerationManifestV1:
         raise TypeError("expected must be an exact manifest")
-    observed = repository.read_generation_manifest(
-        generation_key=repository.opaque_generation_key(expected.generation_key),
-        timeout_seconds=timeout,
+    from .frontier_index_store_v2 import read_marker, validate_frontier_if_present
+    from .memgraph_records import manifest_from_row
+
+    marker_properties = read_marker(
+        repository._driver, expected.generation_key, timeout, alias="manifest"
     )
+    observed = manifest_from_row(marker_properties)
     try:
         streamed = stream_projection_validation(
             repository._driver,
@@ -112,6 +115,12 @@ def validate(repository, *, expected, timeout, empty_private_checksum):
             valid = False
     if not valid:
         return _invalid(expected, observed, checksum, streamed.counts)
+    try:
+        validate_frontier_if_present(
+            repository._driver, expected, timeout=timeout, marker=marker_properties
+        )
+    except (KeyError, TypeError, ValueError):
+        return _invalid(expected, observed, checksum, streamed.counts)
     if expected.state is ProjectionLifecycleState.READY:
         return ProjectionValidationV1(
             expected.generation_key,
@@ -183,9 +192,7 @@ def mark_ready(
         or not private_checksum_valid
     ):
         raise ValueError("generation validation checksum/state mismatch")
-    if not validate_topology_marker(
-        driver, generation_key, timeout_seconds=timeout
-    ):
+    if not validate_topology_marker(driver, generation_key, timeout_seconds=timeout):
         raise ValueError("generation topology attestation mismatch")
     parameters = {
         "generation_key": generation_key,
@@ -195,6 +202,10 @@ def mark_ready(
         "topology_checksum": row["topology_checksum"],
         "state": "ready",
     }
+    from .frontier_index_store_v2 import frontier_ready_parameters
+
+    frontier_parameters, frontier_guard = frontier_ready_parameters(row)
+    parameters.update(frontier_parameters)
     driver.execute_write(
         "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
         "WHERE g.validation_checksum=$validation_checksum "
@@ -204,7 +215,8 @@ def mark_ready(
         "AND g.topology_checksum=$topology_checksum "
         "AND g.validated_topology_checksum=$topology_checksum "
         "AND g.chunk_count=$chunk_count "
-        "AND g.state IN ['staging','building','ready'] SET g.state=$state",
+        + frontier_guard
+        + "AND g.state IN ['staging','building','ready'] SET g.state=$state",
         parameters,
         timeout_seconds=timeout,
     )
@@ -214,6 +226,8 @@ def mark_ready(
 
 
 def _ready_state(driver, generation_key, timeout):
+    from .frontier_index_contracts_v2 import MARKER_FIELDS
+
     rows = driver.execute_read(
         "MATCH (g:CollectionGeneration {generation_key:$generation_key}) "
         "RETURN g.validation_checksum AS validation_checksum, "
@@ -222,9 +236,10 @@ def _ready_state(driver, generation_key, timeout):
         "g.validated_private_mapping_checksum AS validated_private_mapping_checksum, "
         "g.topology_checksum AS topology_checksum, "
         "g.validated_topology_checksum AS validated_topology_checksum, "
-        "g.chunk_count AS chunk_count, g.state AS state",
+        "g.chunk_count AS chunk_count, g.state AS state, "
+        + ", ".join("g." + name + " AS " + name for name in MARKER_FIELDS),
         {"generation_key": generation_key},
         timeout_seconds=timeout,
         max_records=1,
     )
-    return dict(rows[0]) if len(rows) == 1 else {}
+    return {k: v for k, v in rows[0].items() if v is not None} if len(rows) == 1 else {}

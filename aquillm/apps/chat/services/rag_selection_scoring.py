@@ -11,6 +11,9 @@ from time import monotonic
 from apps.chat.services.rag_retrieval import FusedRetrievalPool
 from apps.chat.services.rag_selection_hydration import hydrate_pool_rows
 from apps.chat.services.rag_selection_inputs import prepare_final_input
+from apps.chat.services.rag_selection_policy import (
+    normalize_relevance_scores as _normalize,
+)
 from apps.chat.services.rag_selection_reuse import _reused_scores, retained_scores_match
 from apps.chat.services.rag_selection_types import SelectionCandidate
 from apps.collections.services.retrieval_authorization import (
@@ -46,15 +49,6 @@ class PreparedSelection:
     new_pairs: int
     scoring_duration_ms: float
     fallback_reason: str | None
-
-
-def _normalize(values: tuple[float, ...]) -> tuple[float, ...]:
-    if not values:
-        return ()
-    low, high = min(values), max(values)
-    if high - low <= 1e-9 * max(1.0, abs(low), abs(high)):
-        return (0.5,) * len(values)
-    return tuple((value - low) / (high - low) for value in values)
 
 
 @bound_source_finalization
@@ -102,7 +96,7 @@ def prepare_selection_candidates(
         item.chunk.pk: (item.source_fingerprint, item.excerpt) for item in first
     }
     used_scorer = scorer
-    if used_scorer is None and allow_new_scores:
+    if used_scorer is None and (allow_new_scores or pool.source_score_sets):
         from apps.documents.services.chunk_rerank_selection_provider import (
             current_selection_scorer,
         )
@@ -245,6 +239,7 @@ def prepare_selection_candidates(
     model_complete = (
         bool(retained)
         and used_scorer is not None
+        and used_scorer.scoring_kind in {"pointwise", "listwise"}
         and retained_scores_match(retained, scores, final_inputs)
         and clock() < deadline
         and (turn_budget is None or turn_budget.can_publish())
@@ -282,6 +277,10 @@ def prepare_selection_candidates(
             item.row,
             getattr(item, "prepared_evidence", None),
             source_candidate_cost(item, turn_budget) if source_mode else None,
+            scores[item.chunk.pk].value if model_complete else None,
+            used_scorer.scorer_fingerprint if used_scorer else None,
+            used_scorer.scoring_kind if model_complete else "rank_only",
+            "uncalibrated" if model_complete else "unavailable",
         )
         for item, value in zip(retained, relevance)
     )

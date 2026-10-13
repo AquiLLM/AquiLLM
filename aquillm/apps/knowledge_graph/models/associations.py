@@ -1,6 +1,6 @@
-import json
+from .association_checksums import canonical_link_decision_checksum
+
 import re
-from hashlib import sha256
 from math import isfinite
 
 from django.core.exceptions import ValidationError
@@ -319,34 +319,6 @@ class CollectionEntityDocumentLink(
             raise ValidationError(errors)
 
 
-def canonical_link_decision_checksum(link: object) -> str:
-    """Hash one immutable canonical decision without its lifecycle status."""
-
-    payload = {
-        "canonical_entity_id": getattr(link, "canonical_entity_id", None),
-        "collection_entity_id": getattr(link, "collection_entity_id", None),
-        "metadata": getattr(link, "metadata", None),
-        "method": getattr(link, "method", None),
-        "outcome": getattr(link, "outcome", None),
-        "reason": getattr(link, "reason", None),
-        "resolver_version": getattr(link, "resolver_version", None),
-        "score": getattr(link, "score", None),
-    }
-    try:
-        encoded = json.dumps(
-            payload,
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-            allow_nan=False,
-        ).encode("utf-8")
-    except (TypeError, ValueError) as exc:
-        raise ValidationError(
-            {"decision_checksum": "Canonical decision is not serializable."}
-        ) from exc
-    return sha256(encoded).hexdigest()
-
-
 class CanonicalEntityLinkQuerySet(ImmutableGraphQuerySet):
     """Expose one fail-closed current canonical assignment boundary."""
 
@@ -527,6 +499,11 @@ class CanonicalEntityLink(ValidatedGraphModel):
                     )
                     | Q(outcome="candidate", method="embedding_similarity")
                     | Q(
+                        outcome="candidate",
+                        resolver_version="canonical-resolution-v2-contextual",
+                        method__in=("exact_name_or_alias", "defined_acronym"),
+                    )
+                    | Q(
                         outcome="rejected",
                         method__in=(
                             "stable_identifier",
@@ -619,6 +596,10 @@ class CanonicalEntityLink(ValidatedGraphModel):
         if (
             self.outcome == self.Outcome.CANDIDATE
             and self.method != "embedding_similarity"
+            and not (
+                self.resolver_version == "canonical-resolution-v2-contextual"
+                and self.method in {"exact_name_or_alias", "defined_acronym"}
+            )
         ):
             errors["method"] = (
                 "Only audited embedding similarity creates v1 candidates."
@@ -637,6 +618,10 @@ class CanonicalEntityLink(ValidatedGraphModel):
                 "embedding_similarity",
             },
         }
+        if self.resolver_version == "canonical-resolution-v2-contextual":
+            allowed_methods[self.Outcome.CANDIDATE].update(
+                {"exact_name_or_alias", "defined_acronym"}
+            )
         if self.method not in allowed_methods.get(self.outcome, set()):
             errors["method"] = "Method is not valid for the canonical outcome."
         if self.collection_entity_id and self.canonical_entity_id:

@@ -1,4 +1,5 @@
 """Regression tests for final-answer-only streaming."""
+
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -6,7 +7,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.providers.complete_turn import complete_conversation_turn
+from lib.llm.tests.publication_fixture_support import selected_publication, UNCERTAINTY
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
@@ -48,7 +51,9 @@ async def test_post_tool_stream_replays_only_final_retry_answer():
             model="fake",
         )
 
-    llm = SimpleNamespace(base_args={}, get_message=AsyncMock(side_effect=_fake_get_message))
+    llm = SimpleNamespace(
+        base_args={}, get_message=AsyncMock(side_effect=_fake_get_message)
+    )
     convo = Conversation(
         system="sys",
         messages=[
@@ -70,15 +75,13 @@ async def test_post_tool_stream_replays_only_final_retry_answer():
     )
 
     assert changed == "changed"
-    assert updated[-1].content == "Final synthesized answer with supporting detail."
-    assert [payload["content"] for payload in stream_payloads] == [
-        "Final synthesized answer with supporting detail."
-    ]
+    assert updated[-1].content == LIMITED_ANSWER
+    assert [payload["content"] for payload in stream_payloads] == [LIMITED_ANSWER]
     assert stream_payloads[0]["done"] is True
 
 
 @pytest.mark.asyncio
-async def test_final_only_stream_appends_sources_after_validation():
+async def test_final_only_stream_publishes_exact_selected_excerpt_after_validation():
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict) -> None:
@@ -105,20 +108,25 @@ async def test_final_only_stream_appends_sources_after_validation():
                 content="{}",
                 tool_name="vector_search",
                 for_whom="assistant",
-                result_dict={"result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]},
+                result_dict={
+                    "result": [{"chunk_id": 7, "doc_id": "doc-a", "text": "alpha"}]
+                },
             ),
         ],
     )
 
-    updated, changed = await complete_conversation_turn(
-        llm,
-        convo,
-        max_tokens=1024,
-        stream_func=_capture_stream,
-    )
+    with selected_publication(convo[-1].result_dict["result"]):
+        updated, changed = await complete_conversation_turn(
+            llm,
+            convo,
+            max_tokens=1024,
+            stream_func=_capture_stream,
+        )
 
     assert changed == "changed"
-    assert "Sources:\n- [doc:doc-a chunk:7]" in updated[-1].content
+    assert updated[-1].content == UNCERTAINTY + "\n\n> alpha [doc:doc-a chunk:7]"
+    assert llm.get_message.await_count == 1
+    assert llm.get_message.await_args.kwargs["stream_callback"] is None
     assert stream_payloads == [
         {
             "message_uuid": str(updated[-1].message_uuid),

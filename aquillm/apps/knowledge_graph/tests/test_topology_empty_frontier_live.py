@@ -31,19 +31,29 @@ from apps.knowledge_graph.tests.test_projection_records import _bundle
 from apps.knowledge_graph.tests.test_topology_empty_frontier import empty_bundle
 
 pytestmark = pytest.mark.skipif(
-    os.environ.get("KG_DISPOSABLE_FRONTIER_TESTS") != "1",
+    os.environ.get("KG_DISPOSABLE_FRONTIER_TESTS") != "1"
+    and os.environ.get("RAG_REMEDIATION_TEST") != "1",
     reason="requires isolated kg-reliability-memgraph container",
 )
 
 
 @pytest.fixture
-def graph():
-    # Fixed internal endpoint cannot accidentally target configured live graphs.
+def frontier_target():
+    from apps.knowledge_graph.tests.owned_memgraph_test_support import owned_memgraph
+
+    with owned_memgraph() as target:
+        yield target or {"uri": "bolt://kg-reliability-memgraph:7687",
+                         "database": "memgraph"}
+
+
+@pytest.fixture
+def graph(frontier_target):
+    # Both owned admission and the legacy fixed endpoint are explicit fixture paths.
     driver = Neo4jMemgraphDriver(
-        "bolt://kg-reliability-memgraph:7687",
+        frontier_target["uri"],
         "",
         "",
-        database="memgraph",
+        database=frontier_target["database"],
         max_transaction_retry_time=0.0,
     )
     repository = MemgraphProjectionRepository(driver)

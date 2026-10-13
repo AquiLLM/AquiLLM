@@ -20,11 +20,9 @@ from apps.documents.services.chunk_rerank import (
     rerank_chunks_scored,
 )
 from apps.documents.services.chunk_rerank_results import RerankScoreSet
-from apps.documents.services.chunk_search_authorization import authorized_search_rows
-from apps.documents.services.chunk_search_candidates import (
-    CandidateScopeLimit,
-    collect_hybrid_candidate_snapshot,
-    freeze_authorized_document_scope,
+from apps.documents.services.chunk_search_authorization import (
+    authorized_search_rows,
+    finalize_ranking,
 )
 from apps.documents.services.chunk_search_candidates import (
     _exact_term_query as _candidate_exact_term_query,
@@ -32,12 +30,13 @@ from apps.documents.services.chunk_search_candidates import (
 from apps.documents.services.chunk_search_candidates import (
     _salient_exact_terms as _candidate_salient_exact_terms,
 )
+from apps.documents.services.chunk_search_candidates import (
+    collect_hybrid_candidate_snapshot,
+    freeze_authorized_document_scope,
+)
 from apps.documents.services.chunk_search_logging import (
     completed_search_diagnostics,
     log_search_failure,
-)
-from apps.documents.services.chunk_search_score_handoff import (
-    score_set_for_authorized_rows,
 )
 from apps.documents.services.chunk_search_validation import (
     candidate_identifier as _candidate_identifier,
@@ -51,7 +50,6 @@ from apps.documents.services.chunk_search_validation import (
 from apps.documents.services.chunk_source_materialization import materialize_graph_rows
 from apps.documents.services.hybrid_graph_authorization import (
     HybridGraphRetrievalDependencies,
-    documents_match_retrieval_authorization,
     is_exact_authorization_context,
 )
 from apps.documents.services.hybrid_graph_dependencies import resolve
@@ -70,6 +68,10 @@ from apps.documents.services.source_loading import (
 )
 from lib.replay_observation import retrieval_stages
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
+
+from .chunk_search_lifetime import enter_search, graph_preflight
+from .chunk_search_revalidation import ranking_status, reconcile_candidate_order
+from .chunk_search_scoped_rows import ranked_rows
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
@@ -93,6 +95,7 @@ class CandidateRankingResult:
     materialization_ms: float
     rerank_ms: float
     score_set: RerankScoreSet | None = None
+    rerank_status: str = "unknown"
 
 
 def materialize_and_rerank_candidates(
@@ -156,7 +159,7 @@ def materialize_and_rerank_candidates(
         )
         inaccessible += rejected
 
-    combined = (*baseline_candidates, *graph_rows)
+    combined = reconcile_candidate_order((*baseline_candidates, *graph_rows))
     materialization_ms = (perf_counter() - materialization_started) * 1_000
     rerank_started = perf_counter()
     score_set = None
@@ -193,7 +196,8 @@ def materialize_and_rerank_candidates(
             score_set = scored.score_set
     else:
         reranked = rerank_chunks(model_cls, query, combined, top_k)
-    ranked_results = tuple(reranked)
+    status = ranking_status(reranked, score_set)
+    ranked_results = ranked_rows(reranked)
     rerank_ms = (perf_counter() - rerank_started) * 1_000
     combined_identities = set(_candidate_identity(row) for row in combined)
     ranked_identities = tuple(_candidate_identity(row) for row in ranked_results)
@@ -214,6 +218,7 @@ def materialize_and_rerank_candidates(
         materialization_ms=materialization_ms,
         rerank_ms=rerank_ms,
         score_set=score_set,
+        rerank_status=status,
     )
 
 
@@ -237,6 +242,7 @@ def text_chunk_search(
         raise SourcePreparationLimited("source search requires shared ledger")
     total_start = perf_counter()
     graph_handle = None
+    lifetime = None
     try:
         capture_scores = (
             evidence_selection_config().mode == "adaptive"
@@ -244,6 +250,13 @@ def text_chunk_search(
             or rag_preservation_config().rerank_text_mode == "windowed"
         )
         overlay_enabled = bool(getattr(django_settings, "KG_OVERLAY_ENABLED", False))
+        lifetime, retrieval_scope = enter_search(
+            model_cls,
+            docs,
+            authorization_context,
+            query,
+            overlay_enabled,
+        )
         hybrid_graph_dependencies, hybrid_requested = resolve(
             overlay_enabled, authorization_context, hybrid_graph_dependencies
         )
@@ -255,32 +268,17 @@ def text_chunk_search(
                 hybrid_requested=hybrid_requested,
             )
 
-        graph_config: object | None = None
-        graph_scope: object | None = None
-        graph_preflight_status: str | None = None
-        search_documents: object = docs
-        if overlay_enabled:
-            try:
-                from apps.knowledge_graph.retrieval import (
-                    get_graph_expansion_config,
-                )
-
-                graph_config = get_graph_expansion_config()
-                if hybrid_requested:
-                    if not documents_match_retrieval_authorization(
-                        docs, authorization_context
-                    ):
-                        graph_preflight_status = "error"
-                else:
-                    graph_scope = freeze_authorized_document_scope(docs, graph_config)
-                    search_documents = graph_scope.documents
-            except CandidateScopeLimit:
-                graph_preflight_status = "miss"
-                graph_scope = None
-            except Exception:
-                graph_preflight_status = "error"
-                graph_config = None
-                graph_scope = None
+        graph_config, graph_scope, graph_preflight_status, search_documents = (
+            graph_preflight(
+                overlay_enabled,
+                hybrid_requested,
+                docs,
+                authorization_context,
+                retrieval_scope,
+                freeze_authorized_document_scope,
+                dependencies=hybrid_graph_dependencies,
+            )
+        )
 
         graph_handle = start_graph(
             query,
@@ -292,6 +290,8 @@ def text_chunk_search(
         query_embedding: object | None = None
         try:
             query_embedding = load_query_embedding(query)
+            if getattr(query_embedding, "compatibility_key", None) is None:
+                initial_vector_error = RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
         except Exception:
             initial_vector_error = RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
             logger.warning(
@@ -417,12 +417,14 @@ def text_chunk_search(
                 graph_diagnostics["graph_candidate_count"] = len(
                     ranking.graph_candidates
                 )
-        reranked_results = list(authorized_rows(ranking.ranked_results))
-        score_set = (
-            score_set_for_authorized_rows(ranking.score_set, tuple(reranked_results))
-            if ranking.score_set is not None
-            else None
+        snapshot, final_rows, score_set = finalize_ranking(
+            snapshot,
+            ranking,
+            authorize=authorized_rows,
+            query=query,
+            top_k=top_k,
         )
+        reranked_results = final_rows[2]
 
         total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
         diagnostics = completed_search_diagnostics(
@@ -449,18 +451,15 @@ def text_chunk_search(
                 graph_config is not None and graph_preflight_status is None
             ),
         )
-        return (
-            authorized_rows(snapshot.vector_results),
-            authorized_rows(snapshot.trigram_results),
-            reranked_results,
-            diagnostics,
-        )
+        return (*final_rows, diagnostics)
     except Exception as error:
         log_search_failure(logger, error)
         raise
     finally:
         if graph_handle is not None:
             graph_handle.close()
+        if lifetime is not None:
+            lifetime.close()
 
 
 __all__ = ["materialize_and_rerank_candidates", "text_chunk_search"]

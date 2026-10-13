@@ -20,6 +20,8 @@ export interface CitationChunkSummary {
   start_time: number | null;
   /** Chunk modality: "text" or "image". */
   modality: string;
+  /** Only verified context may use exact historical codepoint offsets. */
+  source_context_status?: 'verified' | 'unavailable';
   /** Served image URL for image chunks (figures); null for text chunks. */
   image_url: string | null;
   document: CitationDocumentSummary;

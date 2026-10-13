@@ -1,7 +1,7 @@
 """Smoke tests for the offline RAG eval runner (Task 8).
 
 These tests exercise the eval runner logic (case loading, mock dispatch,
-pass/fail detection) without any live LLM calls or database access.
+pass/fail detection) with real isolated database authority and synthetic external provider transport.
 """
 from __future__ import annotations
 
@@ -10,9 +10,13 @@ from pathlib import Path
 import pytest
 
 from apps.chat.evals.run_rag_eval import (
-    _run_case,
     load_cases,
 )
+
+from apps.chat.tests.persisted_eval_test_support import run_persisted_case as _run_case
+from apps.chat.tests.persisted_direct_test_support import close_direct_worker
+
+pytestmark = pytest.mark.usefixtures("close_direct_worker")
 
 _CASES_PATH = Path(__file__).resolve().parent.parent / "evals" / "rag_cases.yaml"
 
@@ -68,7 +72,7 @@ async def test_collection_backed_question_case_passes(monkeypatch):
     case = {
         "id": "collection_backed_smoke",
         "description": "Collection-backed question smoke test",
-        "message": "What does this paper say about spectral analysis?",
+        "message": "What do the selected papers say about spectral analysis?",
         "collection_ids": [42],
         "mock_retrieval_status": "results_found",
         "mock_retrieved_count": 1,
@@ -122,7 +126,7 @@ async def test_no_results_case_handled_without_llm(monkeypatch):
         "mock_retrieved_count": 0,
         "expect_outcome": "handled",
         "expect_retrieval_called": True,
-        "expect_content_contains": ["no relevant passages"],
+        "expect_content_contains": ["could not produce"],
     }
 
     result = await _run_case(case, verbose=False)
@@ -171,3 +175,26 @@ async def test_all_yaml_cases_pass(monkeypatch):
             failures.append(f"[{result['id']}] {result['failures']}")
 
     assert not failures, "One or more YAML eval cases failed:\n" + "\n".join(failures)
+
+
+@pytest.mark.asyncio
+async def test_fixture_free_eval_rejects_missing_authority():
+    from apps.chat.evals.run_rag_eval import _run_case as unbound
+    with pytest.raises(ValueError, match="persisted, authorized case_factory"):
+        await unbound({"id": "unbound", "message": "Search documents"})
+
+
+@pytest.mark.asyncio
+async def test_unresolved_paper_reference_clarifies_without_provider():
+    result = await _run_case(dict(id="anaphora", message="What does this paper say?",
+        collection_ids=[1], mock_retrieval_status="results_found", mock_retrieved_count=1,
+        expect_outcome="handled", expect_retrieval_called=False, expect_content_contains=["source"]))
+    assert result["passed"], result["failures"]
+
+
+def test_fixture_free_cli_explains_owned_harness_requirement(capsys):
+    from apps.chat.evals.run_rag_eval import main
+    with pytest.raises(SystemExit) as error:
+        main([])
+    assert error.value.code == 2
+    assert "owned project" in capsys.readouterr().err

@@ -86,6 +86,7 @@ def test_chunk_detail_compact_text_keeps_metadata_without_full_text(client):
         "start_time": None,
         "modality": "text",
         "image_url": None,
+        "source_context_status": "unavailable",
         "document": {
             "id": str(doc.id),
             "title": "Compact paper",
@@ -99,12 +100,17 @@ def test_chunk_detail_compact_text_keeps_metadata_without_full_text(client):
         for query in queries.captured_queries
         if 'FROM "aquillm_rawtextdocument"' in query["sql"]
     ]
-    assert len(document_selects) == 1
-    assert '"aquillm_rawtextdocument"."full_text"' not in document_selects[0]
+    assert document_selects
+    # Integrity may inspect the body in SQL, but model metadata never selects it.
+    # The integrity query also orders by title; inspect its projection, not ORDER BY.
+    metadata_queries = [sql for sql in document_selects
+                        if '"aquillm_rawtextdocument"."title"' in sql.split(" FROM ", 1)[0]]
+    assert metadata_queries
+    assert all('"aquillm_rawtextdocument"."full_text"' not in sql for sql in metadata_queries), metadata_queries
 
 
 @pytest.mark.django_db
-def test_chunk_detail_compact_image_chunk_exposes_image_url(client):
+def test_chunk_detail_unbound_image_chunk_has_no_invented_media(client):
     user = User.objects.create_user(username="cd-img", password="pw12345")
     collection = Collection.objects.create(name="CD Img")
     CollectionPermission.objects.create(user=user, collection=collection, permission="VIEW")
@@ -122,7 +128,8 @@ def test_chunk_detail_compact_image_chunk_exposes_image_url(client):
     assert resp.status_code == 200
     data = resp.json()
     assert data["modality"] == "image"
-    assert data["image_url"] == f"/aquillm/document_image/{doc.id}/"
+    assert data["image_url"] is None
+    assert data["source_context_status"] == "unavailable"
     assert data["start_position"] == 0
     assert data["end_position"] == len("a figure caption")
     assert data["document"] == {
@@ -181,7 +188,7 @@ def test_chunk_detail_compact_pdf_keeps_metadata_without_full_text(
         "id": str(doc.id),
         "title": "PDF paper",
         "type": "PDFDocument",
-        "has_pdf": True,
+        "has_pdf": False,
         "source_url": "https://example.com/pdf-source",
     }
 

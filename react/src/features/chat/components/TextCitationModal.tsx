@@ -3,7 +3,7 @@ import { X, ExternalLink } from 'lucide-react';
 import formatUrl from '../../../utils/formatUrl';
 import { getCsrfCookie } from '../../../main';
 import type { CitationChunkDetail } from './citationTypes';
-import { findNormalizedOffset, normalizeForSearch } from '../../../utils/textOffsetMatch';
+import { citationHighlight } from './historicalCitationContext';
 import CitationPinButton from './CitationPinButton';
 
 interface TextCitationModalProps {
@@ -130,38 +130,7 @@ export const TextCitationModal: React.FC<TextCitationModalProps> = ({
   // up with the local string.
   const highlight = useMemo(() => {
     if (!chunk) return null;
-    const text = chunk.document.full_text;
-    const localStart = chunk.start_position - chunk.document.text_offset;
-    const localEnd = chunk.end_position - chunk.document.text_offset;
-    let chunkStart = Math.max(0, Math.min(localStart, text.length));
-    let chunkEnd = Math.max(chunkStart, Math.min(localEnd, text.length));
-
-    // The offsets are trusted as long as the slice actually matches the chunk
-    // content. If they've drifted from the displayed text (windowing edge,
-    // re-extraction, etc.) the offset highlight would be silently wrong, so
-    // fall back to locating chunk.content directly — same approach the PDF
-    // modal uses.
-    const sliceNorm = normalizeForSearch(text.slice(chunkStart, chunkEnd)).trim();
-    const contentNorm = normalizeForSearch(chunk.content).trim();
-    if (contentNorm && sliceNorm !== contentNorm) {
-      const located = findNormalizedOffset(text, chunk.content);
-      if (located) {
-        chunkStart = located.start;
-        chunkEnd = located.end;
-      }
-    }
-
-    let tightStart: number | null = null;
-    let tightEnd: number | null = null;
-    if (narrowQuote) {
-      const window_ = text.slice(chunkStart, chunkEnd);
-      const hit = findNormalizedOffset(window_, narrowQuote);
-      if (hit) {
-        tightStart = chunkStart + hit.start;
-        tightEnd = chunkStart + hit.end;
-      }
-    }
-    return { chunkStart, chunkEnd, tightStart, tightEnd };
+    return citationHighlight(chunk, narrowQuote);
   }, [chunk, narrowQuote]);
 
   // Scroll the highlight into view once it's in the DOM.
@@ -220,7 +189,12 @@ export const TextCitationModal: React.FC<TextCitationModalProps> = ({
     if (!chunk) {
       return <div className="p-6 text-text-low_contrast text-sm">Loading citation…</div>;
     }
-    if (!highlight) return null;
+    if (!highlight) return (
+      <div className="p-4 overflow-auto text-text-normal">
+        <p className="text-sm text-text-low_contrast mb-3">Original source context is unavailable. Showing the saved citation.</p>
+        <pre className="whitespace-pre-wrap font-mono text-sm">{chunk.content}</pre>
+      </div>
+    );
 
     const text = chunk.document.full_text;
     const { chunkStart, chunkEnd, tightStart, tightEnd } = highlight;

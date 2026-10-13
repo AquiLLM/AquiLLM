@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from uuid import uuid4
+from contextlib import nullcontext
 
 import structlog
-from channels.db import database_sync_to_async
 
 from apps.chat.services.manual_search_commands import (
     ManualSearchError,
@@ -69,14 +69,23 @@ def _retrieve(consumer, command, query, prior_messages):
         )
         name, scope = "search_single_document", "requested document"
         tool = search_single_document_tool(consumer.user, consumer.col_ref)
-    raw_result = dict(tool(**arguments))
+    from apps.documents.services.representation_manual_scope import (
+        create_manual_document_runtime, private_manual_acquisition,
+    )
+    from apps.documents.services.representation_media_acquisition import media_runtime
+    child = None
+    if command.command != "collection":
+        child = create_manual_document_runtime(
+            consumer.user, arguments["doc_id"], parent=media_runtime())
+    with private_manual_acquisition(child) if child is not None else nullcontext():
+        raw_result = dict(tool(**arguments))
     if raw_result.get("exception"):
         raise ManualSearchError(
             "I couldn't search the requested documents. Check your "
             "document or "
             "collection selection and access, then try again."
         )
-    return name, scope, arguments, raw_result
+    return name, scope, arguments, raw_result, child
 
 
 def _reply(consumer, convo, text):
@@ -85,6 +94,21 @@ def _reply(consumer, convo, text):
 
 
 async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
+    from lib.llm.turn_context import current_turn
+
+    if current_turn() is None:
+        from .rag_turn import preservation_turn
+
+        async with preservation_turn(consumer, max_func_calls=3):
+            return await _run_manual_search_turn(
+                consumer, llm_if, convo, stream_func=stream_func
+            )
+    return await _run_manual_search_turn(
+        consumer, llm_if, convo, stream_func=stream_func
+    )
+
+
+async def _run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
     """Handle explicit commands even on errors or when automatic RAG is disabled."""
     if not convo.messages or not isinstance(convo[-1], UserMessage):
         return "skipped"
@@ -107,10 +131,25 @@ async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
     correlation_id = new_correlation_id()
     try:
         query = resolve_search_query(command, convo.messages[:-1])
-        name, scope, arguments, raw = await database_sync_to_async(
-            _retrieve,
-            thread_sensitive=False,
-        )(consumer, command, query, convo.messages[:-1])
+        # Use to_thread: cancellation returns immediately; DB cleanup runs in the
+        # actual worker finally block, after a non-cooperative call completes.
+        import asyncio
+
+        from django.db import connections
+
+        from lib.llm.turn_context import bounded_retrieval, current_turn
+
+        def retrieve_worker():
+            try:
+                return _retrieve(consumer, command, query, convo.messages[:-1])
+            finally:
+                connections.close_all()
+
+        retrieved = await bounded_retrieval(
+            asyncio.to_thread(retrieve_worker), current_turn().budget
+        )
+        name, scope, arguments, raw = retrieved[:4]
+        child = retrieved[4] if len(retrieved) == 5 else None
         working_convo = convo + [
             AssistantMessage(
                 content="",
@@ -128,13 +167,17 @@ async def run_manual_search_turn(consumer, llm_if, convo, *, stream_func=None):
             ),
         ]
         packet = build_evidence_packet(raw, query=query, search_scope=scope)
-        with observability_scope(correlation_id, "direct_synthesis"):
-            consumer.convo = await synthesize_from_evidence(
-                llm_if,
-                working_convo,
-                packet,
-                stream_func=stream_func,
+        from apps.chat.services.rag_answer_publication import bind_legacy_answer_packet
+
+        from apps.documents.services.representation_manual_scope import private_manual_acquisition
+        with private_manual_acquisition(child) if child is not None else nullcontext():
+            await bind_legacy_answer_packet(
+                consumer, packet, document_id=arguments.get("doc_id")
             )
+            with observability_scope(correlation_id, "direct_synthesis"):
+                consumer.convo = await synthesize_from_evidence(
+                    llm_if, working_convo, packet, stream_func=stream_func,
+                )
         return "handled"
     except ManualSearchError as exc:
         return _reply(consumer, working_convo, str(exc))

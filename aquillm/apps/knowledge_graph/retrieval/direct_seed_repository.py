@@ -49,12 +49,14 @@ class DirectSeedRepository:
         using: str = "default",
         deadline: float | None = None,
         clock=monotonic,
+        read_budget=None,
     ) -> None:
         self._scope = scope
         self._codec = codec
         self._using = using
         self._deadline = deadline
         self._clock = clock
+        self._read_budget = read_budget
         self._row_loader = _load_candidate_rows if row_loader is None else row_loader
         self._membership_state_loader = _load_membership_states if membership_state_loader is None else membership_state_loader
         self._spans = {
@@ -84,7 +86,7 @@ class DirectSeedRepository:
             raise ValueError("ready membership scope is incomplete")
         expected = {artifact_id: (ready_by_generation[generation].membership_epoch, ready_by_generation[generation].membership_checksum, ready_by_generation[generation].resolver_version, ready_by_generation[generation].resolution_config_checksum) for artifact_id, generation in self._scope.generation_keys_by_artifact}
         check_seed_deadline(self._deadline, clock=self._clock)
-        states = self._membership_state_loader(collection_ids=self._scope.selected_collection_ids, using=self._using, deadline=self._deadline, clock=self._clock)
+        states = self._membership_state_loader(collection_ids=self._scope.selected_collection_ids, using=self._using, deadline=self._deadline, clock=self._clock, **({"read_budget": self._read_budget} if self._read_budget is not None else {}))
         keys = {"collection_id", "active_artifact_id", "registry_epoch", "membership_checksum", "resolver_version", "resolution_config_checksum"}
         if type(states) is not tuple or len(states) != len(self._scope.selected_collection_ids) or any(type(row) is not dict or set(row) != keys for row in states):
             raise ValueError("current membership state is invalid")
@@ -134,6 +136,7 @@ class DirectSeedRepository:
             scope=self._scope,
             using=self._using,
             limit=limit,
+            **({"read_budget": self._read_budget} if self._read_budget is not None else {}),
         )
         generations = dict(self._scope.generation_ids_by_artifact)
         matches = []

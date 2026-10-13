@@ -166,10 +166,10 @@ def test_v1_lookup_is_db_derived_and_has_no_shared_cache_authority():
 
 def test_direct_collection_activation_schedules_reconciliation_after_commit():
     from apps.knowledge_graph.graph import assembly
-    from apps.knowledge_graph.resolution import canonical
+    from apps.knowledge_graph.resolution import canonical_legacy_reconciliation as scheduler
 
     swap_source = inspect.getsource(assembly._swap_active_collection_artifact)
-    schedule_source = inspect.getsource(canonical.schedule_canonical_rebuild)
+    schedule_source = inspect.getsource(scheduler.schedule_canonical_rebuild)
 
     assert "schedule_canonical_rebuild" in swap_source
     assert "transaction.on_commit" in schedule_source

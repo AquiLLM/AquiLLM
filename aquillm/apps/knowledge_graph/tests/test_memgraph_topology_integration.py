@@ -28,9 +28,7 @@ from apps.knowledge_graph.retrieval.topology.contracts import (
 from apps.knowledge_graph.retrieval.topology.memgraph import (
     MemgraphProjectedTopologyLoader,
 )
-from apps.knowledge_graph.tests.test_memgraph_projection_repository import (
-    _expected_manifest,
-)
+from apps.knowledge_graph.tests.memgraph_topology_fixture_support import _stage_ready
 from apps.knowledge_graph.tests.test_projected_topology_adapter import (
     _caps,
     _ready,
@@ -132,34 +130,6 @@ def _with_unrelated_document(bundle):
     )
 
 
-def _stage_ready(repository, bundle):
-    expected = _expected_manifest(bundle)
-    repository.write_staging_generation(
-        bundle=bundle,
-        private_mapping_checksum=expected.private_mapping_checksum,
-        batch_size=2,
-        timeout_seconds=5.0,
-    )
-    stale = repository.validate_generation(
-        expected=replace(expected, graph_checksum="f" * 64),
-        timeout_seconds=5.0,
-    )
-    assert stale.valid is False
-    validation = repository.validate_generation(
-        expected=expected,
-        timeout_seconds=5.0,
-    )
-    assert validation.valid is True
-    repository.mark_generation_ready(
-        generation_key=repository.opaque_generation_key(
-            bundle.generation.generation_key
-        ),
-        validation_checksum=validation.validation_checksum,
-        timeout_seconds=5.0,
-    )
-    return validation
-
-
 def test_two_generation_fixture_covers_candidate_automatic_and_evidence() -> None:
     first = _bundle()
     second = _second_generation(first)
@@ -202,79 +172,94 @@ def test_selected_document_admits_evidence_and_unselected_document_does_not() ->
     assert unselected.relation_groups == unselected.mentions == ()
 
 
+@pytest.fixture
+def live_projection_settings():
+    from apps.knowledge_graph.tests.owned_memgraph_test_support import owned_memgraph, owned_projection_settings
+
+    with owned_memgraph() as target:
+        yield (owned_projection_settings(target) if target is not None
+               else runtime.load_projection_runtime_settings())
+
+
 @pytest.mark.container
 @pytest.mark.skipif(
-    os.environ.get("KG_REQUIRE_CONTAINER_TESTS") != "1",
+    os.environ.get("KG_REQUIRE_CONTAINER_TESTS") != "1"
+    and os.environ.get("RAG_REMEDIATION_TEST") != "1",
     reason="Task22 live Memgraph proof runs only in the host harness",
 )
-def test_live_memgraph_projects_rebuilds_filters_and_prunes_generations() -> None:
-    settings = runtime.load_projection_runtime_settings()
+def test_live_memgraph_projects_rebuilds_filters_and_prunes_generations(
+    live_projection_settings,
+) -> None:
+    settings = live_projection_settings
     repository = runtime.memgraph_projection_repository(settings)
-    assert isinstance(repository, MemgraphProjectionRepository)
-    repository.ensure_schema(timeout_seconds=5.0)
-    first = _with_unrelated_document(_bundle())
-    second = _second_generation(first)
-    keys = tuple(
-        repository.opaque_generation_key(bundle.generation.generation_key)
-        for bundle in (first, second)
-    )
-    for key in keys:
-        repository.delete_generation(generation_key=key, timeout_seconds=5.0)
     try:
-        _stage_ready(repository, first)
-        _stage_ready(repository, second)
-        manifests = repository.list_generations(
-            collection_key=None,
-            after_generation_key=None,
-            limit=10,
-            timeout_seconds=5.0,
+        assert isinstance(repository, MemgraphProjectionRepository)
+        repository.ensure_schema(timeout_seconds=5.0)
+        first = _with_unrelated_document(_bundle())
+        second = _second_generation(first)
+        keys = tuple(
+            repository.opaque_generation_key(bundle.generation.generation_key)
+            for bundle in (first, second)
         )
-        assert {row.generation_key for row in manifests} == {
-            first.generation.generation_key,
-            second.generation.generation_key,
-        }
-
-        selected_document = first.evidence[0].document_key
-        unselected_document = next(
-            row.document_key
-            for row in first.documents
-            if row.document_key != selected_document
-        )
-        caps = _caps()
-        seeds = (ProjectedSeedV1(first.entities[0].entity_key, 1.0),)
-        loader = MemgraphProjectedTopologyLoader(
-            Neo4jProjectedTopologyQueryAdapter(repository._driver)
-        )
-        selected = loader.load(
-            ready=_ready_for_document(first, selected_document),
-            seeds=seeds,
-            caps=caps,
-            deadline=monotonic() + 15.0,
-        )
-        unselected = loader.load(
-            ready=_ready_for_document(first, unselected_document),
-            seeds=seeds,
-            caps=caps,
-            deadline=monotonic() + 15.0,
-        )
-        assert selected.relation_groups and selected.mentions
-        assert unselected.allowed_scope.document_keys == (unselected_document,)
-        assert unselected.relation_groups == unselected.mentions == ()
-
         for key in keys:
             repository.delete_generation(generation_key=key, timeout_seconds=5.0)
-        assert repository.list_generations(
-            collection_key=None,
-            after_generation_key=None,
-            limit=10,
-            timeout_seconds=5.0,
-        ) == ()
-        _stage_ready(repository, first)
-        rebuilt = repository.read_generation_manifest(
-            generation_key=keys[0],
-            timeout_seconds=5.0,
-        )
-        assert rebuilt.graph_checksum == projection_checksum(first)
+        try:
+            _stage_ready(repository, first)
+            _stage_ready(repository, second)
+            manifests = repository.list_generations(
+                collection_key=None,
+                after_generation_key=None,
+                limit=10,
+                timeout_seconds=5.0,
+            )
+            assert {row.generation_key for row in manifests} == {
+                first.generation.generation_key,
+                second.generation.generation_key,
+            }
+
+            selected_document = first.evidence[0].document_key
+            unselected_document = next(
+                row.document_key
+                for row in first.documents
+                if row.document_key != selected_document
+            )
+            caps = _caps()
+            seeds = (ProjectedSeedV1(first.entities[0].entity_key, 1.0),)
+            loader = MemgraphProjectedTopologyLoader(
+                Neo4jProjectedTopologyQueryAdapter(repository._driver)
+            )
+            selected = loader.load(
+                ready=_ready_for_document(first, selected_document),
+                seeds=seeds,
+                caps=caps,
+                deadline=monotonic() + 15.0,
+            )
+            unselected = loader.load(
+                ready=_ready_for_document(first, unselected_document),
+                seeds=seeds,
+                caps=caps,
+                deadline=monotonic() + 15.0,
+            )
+            assert selected.relation_groups and selected.mentions
+            assert unselected.allowed_scope.document_keys == (unselected_document,)
+            assert unselected.relation_groups == unselected.mentions == ()
+
+            for key in keys:
+                repository.delete_generation(generation_key=key, timeout_seconds=5.0)
+            assert repository.list_generations(
+                collection_key=None,
+                after_generation_key=None,
+                limit=10,
+                timeout_seconds=5.0,
+            ) == ()
+            _stage_ready(repository, first)
+            rebuilt = repository.read_generation_manifest(
+                generation_key=keys[0],
+                timeout_seconds=5.0,
+            )
+            assert rebuilt.graph_checksum == projection_checksum(first)
+        finally:
+            for key in keys:
+                repository.delete_generation(generation_key=key, timeout_seconds=5.0)
     finally:
-        for key in keys:
-            repository.delete_generation(generation_key=key, timeout_seconds=5.0)
+        repository._driver.close()

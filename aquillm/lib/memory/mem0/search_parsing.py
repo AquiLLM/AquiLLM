@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from ..types import RetrievedEpisodicMemory
+from ._provenance import validated_source_provenance
 
 
 def response_to_raw_items(response: Any) -> Any:
@@ -81,7 +82,14 @@ def parse_mem0_search_items(
         conv_id = _extract_mem0_conversation_id(item)
         if exclude_conversation_id is not None and conv_id == exclude_conversation_id:
             continue
-        parsed.append(RetrievedEpisodicMemory(content=content, conversation_id=conv_id))
+        metadata = item.get('metadata') if isinstance(item, dict) and isinstance(item.get('metadata'), dict) else {}
+        def bounded_string(value, limit):
+            return value if isinstance(value, str) and 0 < len(value) <= limit else None
+        source_uuid, source_digest = validated_source_provenance(
+            metadata.get('source_message_uuid'), metadata.get('source_content_digest'))
+        parsed.append(RetrievedEpisodicMemory(content=content, conversation_id=conv_id,
+            provider_memory_id=bounded_string(item.get('id'), 256),
+            source_message_uuid=source_uuid, source_content_digest=source_digest))
     return parsed[:top_k]
 
 

@@ -218,7 +218,10 @@ def test_pointer_capacity_and_warm_legacy_priming_are_bounded(backend, monkeypat
     assert len(bounded_rag_cache._pointers) == 2
     assert invoke(budget, "get", "one") is None
     key = rag_cache.rerank_capability_cache_key("http://fixture/v1", "model")
-    capability = {"endpoint": "http://fixture/score", "shape": "score_single_text_pair"}
+    from time import time
+    from apps.documents.services.rerank_transport_policy import RerankProtocolV1
+    capability = RerankProtocolV1("http://fixture/score", "score_single_text_pair",
+                                  "model", time() - 1, time() + 60).as_cache_entry()
     backend.values[key] = capability  # Explicit warm bootstrap uses the legacy key.
     monkeypatch.setattr(rag_cache, "_rag_enabled", lambda: True)
     from time import monotonic
@@ -249,3 +252,24 @@ def test_pointer_capacity_and_warm_legacy_priming_are_bounded(backend, monkeypat
     backend.values["rrcap:another"] = capability
     assert invoke(budget, "get", "rrcap:another") is None
     assert len(bounded_rag_cache._warm) == 1
+
+
+def test_shape_only_warm_entry_cannot_authorize_provider(backend, monkeypatch):
+    from time import monotonic
+    from uuid import uuid4
+    from unittest.mock import Mock
+    from apps.documents.services import rag_cache, chunk_rerank_selection_provider as provider
+    base, model = "http://unverified-fixture/v1", "unverified-" + uuid4().hex
+    key = rag_cache.rerank_capability_cache_key(base, model)
+    backend.values[key] = {"endpoint": "http://unverified-fixture/score",
+                           "shape": "score_single_text_pair"}
+    monkeypatch.setattr(rag_cache, "_rag_enabled", lambda: True)
+    monkeypatch.setenv("APP_RERANK_PROVIDER", "local")
+    monkeypatch.setenv("APP_RERANK_BASE_URL", base)
+    monkeypatch.setenv("APP_RERANK_MODEL", model)
+    post = Mock(side_effect=AssertionError("unverified protocol dispatched"))
+    monkeypatch.setattr(provider.requests, "post", post)
+    assert provider.current_selection_scorer(
+        deadline=monotonic() + 1, turn_budget=TurnBudget(TurnLimits()),
+        windowed=False) is None
+    post.assert_not_called()

@@ -2,11 +2,14 @@
 
 import json
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
-from apps.chat.services.rag_synthesis import synthesize_from_evidence
+from apps.chat.services.rag_synthesis import synthesize_from_evidence as _synthesize
+from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.providers.rag_citations import extract_citations
+from lib.llm.tests.test_answer_publication import synthetic_publication
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, UserMessage
 
@@ -22,6 +25,12 @@ from .rag_evidence_handoff_support import (
 from .rag_evidence_handoff_support import (
     _tool_pair as _tool_pair,
 )
+
+
+async def synthesize_from_evidence(llm, convo, packet, **kwargs):
+    # These fixtures exercise packet rendering with synthetic IDs, not DB access.
+    with synthetic_publication(packet=packet, seal=False):
+        return await _synthesize(llm, convo, packet, **kwargs)
 
 
 @pytest.mark.parametrize("compact", [False, True])
@@ -107,9 +116,9 @@ async def test_no_results_persists_empty_packet_without_raw_evidence():
 
     assert not llm.requests
     assert result[-2].result_dict["result"] == []
-    assert result[-2].result_dict["retrieval_status"] == "no_results"
+    assert result[-2].result_dict["retrieval_status"] == "context_limited"
     assert "EXCLUDED" not in result[-2].content
-    assert result[-1].content == "No relevant passages were found."
+    assert result[-1].content == LIMITED_ANSWER
 
 
 async def test_provider_request_mutation_cannot_change_history_or_packet():
@@ -130,8 +139,20 @@ async def test_provider_request_mutation_cannot_change_history_or_packet():
 
     result = await synthesize_from_evidence(MutatingProvider(), convo, packet)
 
+    from apps.chat.services.rag_coverage import decide_answer_support
+
+    expected_support = decide_answer_support(
+        packet_snapshot.query,
+        packet_snapshot,
+        assessment=packet_snapshot.coverage_assessment,
+    )
+    assert packet.answer_support == expected_support
+    assert expected_support.state == "unknown"
+    assert expected_support.assessment_basis == "unvalidated"
+    assert expected_support.supported_aspects == ()
+    assert expected_support.exhaustive is False
     assert convo.model_dump() == snapshot
-    assert packet == packet_snapshot
+    assert replace(packet, answer_support=None) == packet_snapshot
     assert result[0].content == "Earlier document question"
     assert result[-2].result_dict["result"][0]["text"] == "Selected alpha evidence."
 

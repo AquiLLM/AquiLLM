@@ -1,7 +1,7 @@
 """One preservation lifetime per consumer user turn, never per tool/fallback."""
 
 import asyncio
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from types import SimpleNamespace
 
 from channels.db import database_sync_to_async
@@ -20,7 +20,7 @@ from apps.documents.services.source_loading import (
     current_source_runtime,
     source_runtime_scope,
 )
-from lib.llm.turn_context import TurnContext, bind_turn
+from lib.llm.turn_context import TurnContext, bind_turn, current_turn
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
@@ -49,15 +49,15 @@ def create_runtime(consumer, budget):
 async def preservation_turn(consumer, *, max_func_calls):
     from lib.evidence_observation import publish
 
-    if not rag_preservation_config().active:
-        try:
-            yield None
-        finally:
-            publish("turn_complete", {})
-        return
-    from apps.chat.services.rag_preservation_turn import normal_source_handoff
-
     parent = current_source_runtime()
+    parent_turn = current_turn()
+    if parent_turn is not None:
+        # Nested direct/manual/tool calls inherit the owner's lifetime and latch.
+        yield parent
+        return
+    from .retrieval_query_runtime import query_proposals_enabled
+
+    active = rag_preservation_config().active or query_proposals_enabled()
     budget = (
         parent.budget
         if parent
@@ -66,15 +66,43 @@ async def preservation_turn(consumer, *, max_func_calls):
         )
     )
     task = asyncio.current_task()
+    owns_budget = parent is None
     # A cancellation handle only: scope/runtime are request-local, not reusable state.
     consumer._active_evidence_turn = (task, budget)
     try:
-        runtime = parent or await asyncio.wait_for(
-            database_sync_to_async(create_runtime, thread_sensitive=False)(
-                consumer, budget
-            ),
-            budget.remaining_ms() / 1000,
-        )
+        if not active:
+            from apps.chat.services.rag_answer_publication import legacy_tool_handoff
+
+            historical_ids = frozenset(
+                m.message_uuid
+                for m in getattr(getattr(consumer, "convo", None), "messages", ())
+            )
+
+            async def publication_handoff(llm, convo, max_tokens, stream_func):
+                if current_turn().answer_publication is not None:
+                    from lib.llm.answer_publication import AnswerPublicationRejected
+
+                    raise AnswerPublicationRejected("evidence_changed")
+                if convo[-1].message_uuid in historical_ids:
+                    return None
+                return await legacy_tool_handoff(
+                    consumer, llm, convo, max_tokens, stream_func
+                )
+
+            # Acquisition fencing is independent of preservation/planner/synthesis.
+            turn = TurnContext(
+                    budget,
+                    handoff=publication_handoff,
+                    max_func_calls=max_func_calls,
+                    worker_cleanup=connections.close_all,
+                )
+            from apps.documents.services.representation_media_acquisition import initialize_media_runtime
+            await asyncio.wait_for(database_sync_to_async(initialize_media_runtime, thread_sensitive=False)(
+                consumer, turn), budget.remaining_ms() / 1000)
+            with bind_turn(turn):
+                yield None
+            return
+        from apps.chat.services.rag_preservation_turn import normal_source_handoff
 
         async def handoff(llm, convo, max_tokens, stream_func):
             try:
@@ -82,31 +110,37 @@ async def preservation_turn(consumer, *, max_func_calls):
                     consumer, llm, convo, max_tokens, stream_func
                 )
             except Exception:
-                from apps.chat.services.rag_source_synthesis import LIMITED_MESSAGE
-                from lib.llm.types.messages import AssistantMessage
+                from apps.chat.services.rag_answer_publication import limited_rag_result
 
                 budget.check_active()
-                return convo + [
-                    AssistantMessage(content=LIMITED_MESSAGE, stop_reason="end_turn")
-                ], "changed"
+                return (
+                    await limited_rag_result(convo, stream_func=stream_func),
+                    "changed",
+                )
 
-        with (
-            source_runtime_scope(runtime),
-            bind_turn(
-                TurnContext(
+        turn = TurnContext(
                     budget,
                     handoff,
                     max_func_calls=max_func_calls,
                     worker_cleanup=connections.close_all,
                 )
-            ),
+        from apps.documents.services.representation_media_acquisition import initialize_media_runtime
+        runtime = parent or await asyncio.wait_for(
+            database_sync_to_async(initialize_media_runtime, thread_sensitive=False)(consumer, turn),
+            budget.remaining_ms() / 1000,
+        )
+        authorized = isinstance(runtime, SourceRuntime) and runtime.authorization is not None
+        with (
+            source_runtime_scope(runtime) if authorized else nullcontext(),
+            bind_turn(turn),
         ):
-            yield runtime
+            yield runtime if authorized else None
     except asyncio.CancelledError:
         budget.close("cancelled")
         raise
     finally:
-        budget.close("finished")
+        if owns_budget:
+            budget.close("finished")
         publish(
             "turn_complete",
             {

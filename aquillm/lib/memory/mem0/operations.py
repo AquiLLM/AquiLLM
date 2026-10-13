@@ -15,6 +15,11 @@ from ..types import RetrievedEpisodicMemory
 from .client import get_mem0_oss, get_mem0_oss_async, get_mem0_oss_async_vector, get_mem0_oss_vector
 from .search_parsing import parse_mem0_search_items, response_to_raw_items
 
+from ._write_payload import (
+    _payload_shape_error, _messages_to_transcript, _message_payload_candidates,
+    _mem0_add_result_has_writes, _add_mem0_messages_payload as _write_messages_payload,
+)
+
 logger = structlog.stdlib.get_logger(__name__)
 
 _NO_RESPONSE = object()
@@ -392,33 +397,6 @@ def _run_mem0_add_call_with_timeout(add_callable: Any, *args: Any, **kwargs: Any
     raise value
 
 
-def _payload_shape_error(exc: Exception) -> bool:
-    if isinstance(exc, TypeError):
-        return True
-    return "string indices must be integers" in str(exc)
-
-
-def _messages_to_transcript(messages: list[dict[str, Any]]) -> str:
-    lines: list[str] = []
-    for item in messages:
-        if not isinstance(item, dict):
-            continue
-        role = str(item.get("role", "")).strip().lower()
-        content = str(item.get("content", "") or "").strip()
-        if not role or not content:
-            continue
-        lines.append(f"{role.capitalize()}: {content}")
-    return "\n".join(lines)
-
-
-def _message_payload_candidates(messages: list[dict[str, Any]]) -> list[Any]:
-    candidates: list[Any] = [messages]
-    transcript = _messages_to_transcript(messages)
-    if transcript:
-        candidates.append(transcript)
-    return candidates
-
-
 def _add_mem0_fact(mem0: Any, fact: str, user_id: str, metadata: dict[str, Any], enable_graph: Optional[bool]) -> Any:
     add_kwargs = {"user_id": user_id, "metadata": metadata, "infer": False}
     if enable_graph is not None:
@@ -446,55 +424,9 @@ async def _add_mem0_fact_async(
         return await _add_mem0_fact_async(mem0, fact, user_id, metadata, enable_graph=None)
 
 
-def _add_mem0_messages_payload(
-    mem0: Any, messages: list[dict[str, Any]], user_id: str, metadata: dict[str, Any], enable_graph: Optional[bool],
-    *, strict: bool = False,
-) -> Any:
-    add_kwargs = {"user_id": user_id, "metadata": metadata, "infer": True}
-    if enable_graph is not None:
-        add_kwargs["enable_graph"] = enable_graph
-    last_exc: Exception | None = None
-
-    def invoke(*args, **kwargs):
-        # Durable callers hold an execution owner until this call finishes.
-        # Do not leave an unowned add thread alive after a wrapper timeout.
-        if strict:
-            return mem0.add(*args, **kwargs)
-        return _run_mem0_add_call_with_timeout(mem0.add, *args, **kwargs)
-
-    for payload in _message_payload_candidates(messages):
-        try:
-            return invoke(payload, **add_kwargs)
-        except TypeError as exc:
-            last_exc = exc
-            try:
-                return invoke(messages=payload, **add_kwargs)
-            except Exception as keyword_exc:
-                last_exc = keyword_exc
-                if not _payload_shape_error(keyword_exc):
-                    raise
-        except Exception as exc:
-            last_exc = exc
-            if not _payload_shape_error(exc):
-                raise
-    if last_exc is not None:
-        raise last_exc
-    raise RuntimeError("Mem0 intelligent write had no payload candidates")
-
-
-def _mem0_add_result_has_writes(result: Any) -> bool:
-    if isinstance(result, dict):
-        events = result.get("results")
-        if isinstance(events, list):
-            for item in events:
-                if not isinstance(item, dict):
-                    continue
-                if item.get("event") in {"ADD", "UPDATE", "UPSERT"}:
-                    return True
-            return bool(events)
-    if isinstance(result, list):
-        return bool(result)
-    return bool(result)
+def _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph, *, strict=False):
+    return _write_messages_payload(mem0, messages, user_id, metadata, enable_graph,
+                                   strict=strict, timeout_call=_run_mem0_add_call_with_timeout)
 
 
 def add_mem0_raw_facts(
@@ -573,6 +505,7 @@ def add_mem0_messages(
     conversation_id: int,
     assistant_message_uuid: str,
     *, strict: bool = False,
+    source_message_uuid=None, source_content_digest=None, result_observer=None, coverage_observer=None,
 ) -> bool:
     """Return whether inference added memories; strict callers receive failures.
 
@@ -580,6 +513,14 @@ def add_mem0_messages(
     the SDK call itself, whose network timeouts remain authoritative, so the
     durable worker can retain execution ownership until the call ends.
     """
+    from ..extraction import parse_memory_intent
+    user_intents = [(item, parse_memory_intent(item.get('content', '')))
+                    for item in messages if isinstance(item, dict) and item.get('role') == 'user']
+    if any(intent.kind not in {'none', 'affirmative'} for _, intent in user_intents):
+        return False
+    if any(intent.kind == 'affirmative' for _, intent in user_intents):
+        messages = [{'role': 'user', 'content': intent.payload}
+                    for _, intent in user_intents if intent.kind == 'affirmative']
     mem0 = get_mem0_oss()
     if mem0 is None:
         if strict:
@@ -597,6 +538,9 @@ def add_mem0_messages(
         "memory_type": "episodic",
     }
 
+    if source_message_uuid is not None:
+        metadata['source_message_uuid'] = str(source_message_uuid)
+        metadata['source_content_digest'] = source_content_digest
     enable_graph = _add_enable_graph()
     try:
         result = _add_mem0_messages_payload(mem0, messages, user_id, metadata, enable_graph=enable_graph, strict=strict)
@@ -604,7 +548,6 @@ def add_mem0_messages(
         if enable_graph and _graph_fail_open():
             logger.warning(
                 "obs.memory.intelligent_write_graph_error",
-                error=str(exc),
                 error_type=type(exc).__name__,
             )
             try:
@@ -612,7 +555,6 @@ def add_mem0_messages(
             except Exception as retry_exc:
                 logger.warning(
                     "obs.memory.intelligent_write_vector_retry_error",
-                    error=str(retry_exc),
                     error_type=type(retry_exc).__name__,
                 )
                 if strict:
@@ -621,13 +563,16 @@ def add_mem0_messages(
         else:
             logger.warning(
                 "obs.memory.intelligent_write_error",
-                error=str(exc),
                 error_type=type(exc).__name__,
             )
             if strict:
                 raise
             return False
 
+    if result_observer is not None:
+        result_observer(result)
+    if coverage_observer is not None:
+        coverage_observer(enable_graph)  # Includes a failed graph attempt before vector retry.
     return _mem0_add_result_has_writes(result)
 
 
@@ -701,18 +646,24 @@ def add_mem0_memory_with_client(
     conversation_id: int,
     assistant_message_uuid: str,
     *, strict: bool = False,
+    source_message_uuid=None, source_content_digest=None, result_observer=None, coverage_observer=None,
 ) -> bool:
     """Write a raw conversation turn to OSS Mem0 with inference enabled."""
-    messages = [
-        {"role": "user", "content": user_content},
-        {"role": "assistant", "content": assistant_content},
-    ]
+    from ..extraction import parse_memory_intent
+    intent = parse_memory_intent(user_content)
+    if intent.kind not in {'none', 'affirmative'}:
+        return False
+    messages = [{'role': 'user', 'content': intent.payload or user_content[:500]}]
+    if intent.kind == 'none':
+        messages.append({'role': 'assistant', 'content': assistant_content[:500]})
     return add_mem0_messages(
         user_id=user_id,
         messages=messages,
         conversation_id=conversation_id,
         assistant_message_uuid=assistant_message_uuid,
         strict=strict,
+        source_message_uuid=source_message_uuid, source_content_digest=source_content_digest,
+        result_observer=result_observer, coverage_observer=coverage_observer,
     )
 
 
@@ -726,3 +677,16 @@ __all__ = [
     "add_mem0_raw_facts_async",
     "add_mem0_memory_with_client",
 ]
+
+
+def reconcile_known_profile_copies(*, user_id: str, provider_memory_ids: list[str], source_conversation_id=None, source_message_uuid=None, source_content_digest=None) -> None:
+    """Delete only identified copies whose provider receipt still verifies owner/source."""
+    from .profile_reconciliation import reconcile_known_profile_copies as reconcile
+
+    return reconcile(
+        user_id=user_id, provider_memory_ids=provider_memory_ids,
+        source_conversation_id=source_conversation_id,
+        source_message_uuid=source_message_uuid,
+        source_content_digest=source_content_digest,
+        get_client=get_mem0_oss, timeout_call=_run_mem0_add_call_with_timeout,
+    )

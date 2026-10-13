@@ -95,6 +95,11 @@ def test_disabled_graph_imports_do_not_load_optional_runtimes() -> None:
         }
     )
 
+    if os.environ.get("RAG_REMEDIATION_TEST") == "1":
+        from scripts.run_rag_remediation_tests import test_environment
+
+        environment.update(test_environment())
+
     completed = subprocess.run(
         [sys.executable, "-c", script],
         cwd=repository_root,

@@ -1,6 +1,7 @@
 """Source document figures preserve captions within the same body/context budget."""
 
 from dataclasses import replace
+from hashlib import sha256
 from types import SimpleNamespace
 
 import pytest
@@ -22,7 +23,7 @@ def figure_for(user, doc, caption):
         collection_id=doc.collection_id,
         ingested_by=user,
         full_text="OCR fallback",
-        full_text_hash="f" * 64,
+        full_text_hash=sha256(b"OCR fallback").hexdigest(),
         extracted_caption=caption,
         image_file="test-figure.png",
         figure_index=0,
@@ -67,20 +68,18 @@ def test_whole_document_figures_preflight_caption_and_preserve_shape(
             doc_id=str(doc.id),
             include_images=True,
         )
-    if allowance == 500:
-        assert all(chunk.content in result["result"] for chunk in chunks)
-        assert "figure" in result["retrieval_message"].lower()
-        assert not any(
-            'SELECT "aquillm_documentfigure"."extracted_caption"' in q["sql"]
-            for q in queries
-        )
-    else:
-        assert result["result"]["type"] == "document_with_figures"
-        assert result["result"]["figures"][0]["text"] == caption
-        assert result["_figure_provenance"]
+    # This mutable auxiliary has no selected citation chunk or immutable media.
+    # A larger allowance cannot grant it authority; main text remains complete.
+    assert all(chunk.content in result["result"] for chunk in chunks)
+    assert "figure" in result["retrieval_message"].lower()
+    assert "image_url" not in str(result)
+    assert not any(
+        'SELECT "aquillm_documentfigure"."extracted_caption"' in q["sql"]
+        for q in queries
+    )
 
 
-def test_figure_handoff_revalidates_caption_and_permissions(docs, monkeypatch):
+def test_unbound_auxiliary_cannot_gain_authority_at_handoff(docs, monkeypatch):
     from apps.chat.services.tool_wiring.source_figure_payloads import (
         bounded_figure_payloads,
         revalidate_figure_payloads,
@@ -92,12 +91,13 @@ def test_figure_handoff_revalidates_caption_and_permissions(docs, monkeypatch):
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
     with source_runtime_scope(SourceRuntime(TurnBudget(TurnLimits()), auth)):
         payloads, provenance, omitted = bounded_figure_payloads(doc, user=user)
-        assert len(payloads) == 1 and not omitted
-        assert (
-            revalidate_figure_payloads(payloads, provenance, user=user)[0] == payloads
-        )
+        assert payloads == [] and provenance == [] and omitted
+        forged = [{"text": "caption", "image_url": f"/aquillm/document_image/{figure.id}/"}]
+        assert revalidate_figure_payloads(forged, [{}], user=user)[0] == []
         DocumentFigure.objects.filter(id=figure.id).update(extracted_caption="changed")
         assert revalidate_figure_payloads(payloads, provenance, user=user)[0] == []
         DocumentFigure.objects.filter(id=figure.id).update(extracted_caption="caption")
         CollectionPermission.objects.filter(user=user).delete()
-        assert revalidate_figure_payloads(payloads, provenance, user=user)[0] == []
+        from apps.documents.services.representation_contracts import SourceScopeUnavailable
+        with pytest.raises(SourceScopeUnavailable):
+            revalidate_figure_payloads(payloads, provenance, user=user)
