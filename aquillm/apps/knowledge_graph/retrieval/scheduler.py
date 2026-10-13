@@ -11,7 +11,7 @@ from .branch_contracts import (
     ExtendedBranchFailureReason,
     SharedBranchFailureReason,
 )
-from .scheduler_overlap import OverlappingBranches
+from .scheduler_overlap import OverlappingBranches, caller_expired, check_caller
 from .scheduler_support import (
     CompletedBranch,
     HybridBranchRuntime,
@@ -39,15 +39,19 @@ class HybridGraphBranchScheduler:
         self._runtime = runtime
         self._clock = clock
 
-    def _shared(self, authorization, settings, deadline):
+    def _shared(self, authorization, settings, deadline, caller_bound=None):
+        check_caller(caller_bound)
         return self._runtime.prepare_shared(
             authorization=authorization, settings=settings, deadline=deadline
         )
 
-    def start(self, *, query, authorization, settings, deadline):
-        return OverlappingBranches(self, query, authorization, settings, deadline)
+    def start(self, *, query, authorization, settings, deadline, caller_bound=None,
+              downstream_reserve_ms=0):
+        return OverlappingBranches(self, query, authorization, settings, deadline,
+            caller_bound=caller_bound, downstream_reserve_ms=downstream_reserve_ms)
 
-    def _direct(self, query, shared, authorization, settings, deadline):
+    def _direct(self, query, shared, authorization, settings, deadline, caller_bound=None):
+        check_caller(caller_bound)
         envelope = self._runtime.run_direct(
             query=query,
             shared=shared,
@@ -59,7 +63,8 @@ class HybridGraphBranchScheduler:
             validate_envelope(envelope, HybridBranchKind.DIRECT), self._clock()
         )
 
-    def _extended(self, query, baseline, shared, authorization, settings, deadline):
+    def _extended(self, query, baseline, shared, authorization, settings, deadline, caller_bound=None):
+        check_caller(caller_bound)
         prepared = self._runtime.prepare_extended(
             query=query,
             baseline=baseline,
@@ -68,6 +73,7 @@ class HybridGraphBranchScheduler:
             settings=settings,
             deadline=deadline,
         )
+        check_caller(caller_bound)
         envelope = self._runtime.run_extended(
             prepared=prepared,
             shared=shared,
@@ -87,16 +93,26 @@ class HybridGraphBranchScheduler:
         authorization: object,
         settings: object,
         deadline: float,
+        caller_bound=None,
+        downstream_reserve_ms=0,
     ):
         started = self._clock()
         if type(query) is not str:
             raise TypeError("query must be an exact string")
         if type(deadline) is not float or not isfinite(deadline) or deadline <= started:
             raise ValueError("deadline must be a future finite monotonic float")
+        if caller_bound is not None:
+            from lib.retrieval.operation import Operation
+            if type(caller_bound) is not Operation:
+                raise TypeError("caller bound must be the exact captured operation")
+            deadline = min(deadline, caller_bound.deadline_for(
+                self._clock, reserve_ms=downstream_reserve_ms))
+            if deadline <= started:
+                return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE)
         budgets = self._budgets(settings)
         enabled = self._enabled(settings)
         shared_future = BRANCH_WORKERS.submit(
-            self._shared, authorization, settings, deadline
+            self._shared, authorization, settings, deadline, caller_bound
         )
         if shared_future is None:
             return shared_outcome(SharedBranchFailureReason.BACKEND_UNAVAILABLE)
@@ -114,7 +130,7 @@ class HybridGraphBranchScheduler:
             return shared_outcome(mapped)
         except Exception:
             return shared_outcome(SharedBranchFailureReason.BACKEND_UNAVAILABLE)
-        if self._clock() >= deadline:
+        if self._clock() >= deadline or caller_expired(caller_bound):
             return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE)
         deadlines = {
             kind: min(deadline, started + budget / 1000.0)
@@ -123,27 +139,16 @@ class HybridGraphBranchScheduler:
         requests = {
             HybridBranchKind.DIRECT: (
                 self._direct,
-                (
-                    query,
-                    shared,
-                    authorization,
-                    settings,
-                    deadlines[HybridBranchKind.DIRECT],
-                ),
+                (query, shared, authorization, settings, deadlines[HybridBranchKind.DIRECT], caller_bound),
             ),
             HybridBranchKind.EXTENDED: (
                 self._extended,
-                (
-                    query,
-                    baseline,
-                    shared,
-                    authorization,
-                    settings,
-                    deadlines[HybridBranchKind.EXTENDED],
-                ),
+                (query, baseline, shared, authorization, settings, deadlines[HybridBranchKind.EXTENDED], caller_bound),
             ),
         }
         enabled_kinds = tuple(kind for kind in HybridBranchKind if enabled[kind])
+        if caller_expired(caller_bound):
+            return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE)
         submitted = BRANCH_WORKERS.submit_batch(
             tuple(requests[kind] for kind in enabled_kinds)
         )
@@ -168,6 +173,7 @@ class HybridGraphBranchScheduler:
                 baseline=baseline,
                 overall_deadline=deadline,
                 results=results,
+                caller_bound=caller_bound,
             )
         finally:
             for future in futures.values():
@@ -180,13 +186,9 @@ class HybridGraphBranchScheduler:
             return dict.fromkeys(HybridBranchKind, True)
         values = {
             HybridBranchKind.DIRECT: getattr(settings, "graph_direct_enabled", None),
-            HybridBranchKind.EXTENDED: getattr(
-                settings, "graph_extended_enabled", None
-            ),
+            HybridBranchKind.EXTENDED: getattr(settings, "graph_extended_enabled", None),
         }
-        if any(type(value) is not bool for value in values.values()) or not any(
-            values.values()
-        ):
+        if any(type(value) is not bool for value in values.values()) or not any(values.values()):
             raise ValueError("at least one branch must be explicitly enabled")
         return values  # type: ignore[return-value]
 
@@ -194,9 +196,7 @@ class HybridGraphBranchScheduler:
     def _budgets(settings: object) -> dict[HybridBranchKind, int]:
         values = {
             HybridBranchKind.DIRECT: getattr(settings, "graph_direct_timeout_ms", None),
-            HybridBranchKind.EXTENDED: getattr(
-                settings, "graph_extended_timeout_ms", None
-            ),
+            HybridBranchKind.EXTENDED: getattr(settings, "graph_extended_timeout_ms", None),
         }
         if any(
             type(value) is not int or not 1 <= value <= 5000
@@ -214,8 +214,11 @@ class HybridGraphBranchScheduler:
         baseline,
         overall_deadline,
         results,
+        caller_bound=None,
     ):
         while len(results) < 2:
+            if caller_bound is not None and caller_bound.remaining_ms() <= 0:
+                return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE)
             shared = self._read_completed(futures, deadlines, results)
             if shared is not None:
                 return shared_outcome(shared)
@@ -231,9 +234,7 @@ class HybridGraphBranchScheduler:
                     futures[kind].cancel()
             if len(results) == 2:
                 break
-            pending = [
-                futures[kind] for kind in HybridBranchKind if kind not in results
-            ]
+            pending = [futures[kind] for kind in HybridBranchKind if kind not in results]
             wake_at = min(
                 overall_deadline,
                 *(deadlines[kind] for kind in HybridBranchKind if kind not in results),
@@ -243,6 +244,8 @@ class HybridGraphBranchScheduler:
                 timeout=max(0.0, wake_at - self._clock()),
                 return_when=FIRST_COMPLETED,
             )
+        if caller_bound is not None and caller_bound.remaining_ms() <= 0:
+            return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE)
         return self._outcome(results)
 
     @staticmethod
@@ -281,10 +284,7 @@ class HybridGraphBranchScheduler:
     @staticmethod
     def _outcome(results):
         from .branch_contracts import HybridBranchOutcomeV1
-
-        return HybridBranchOutcomeV1(
-            results[HybridBranchKind.DIRECT], results[HybridBranchKind.EXTENDED], None
-        )
+        return HybridBranchOutcomeV1(results[HybridBranchKind.DIRECT], results[HybridBranchKind.EXTENDED], None)
 
 
 def run_hybrid_graph_branches(*, runtime: HybridBranchRuntime, **request):
