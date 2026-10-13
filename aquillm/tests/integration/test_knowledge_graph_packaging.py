@@ -46,7 +46,10 @@ def test_graph_worker_docker_context_excludes_environment_secret_files() -> None
     assert ".env" in patterns
     assert ".env.*" in patterns
     assert "/artifacts/" in patterns
-    assert all(not pattern.startswith("!.env") for pattern in patterns)
+    assert ".env*" in patterns
+    assert {pattern for pattern in patterns if pattern.startswith("!")} == {
+        "!.env.example"
+    }
 
     git = shutil.which("git")
     assert git is not None
