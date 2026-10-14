@@ -229,6 +229,7 @@ jobs:
           aquillm/apps/documents/tests/test_graph_admission_query_binding.py
           aquillm/apps/documents/tests/test_graph_metadata_worker.py
           aquillm/apps/documents/tests/test_graph_metadata_overlap.py
+          aquillm/apps/documents/tests/test_graph_native_trigram_rank_first.py
           aquillm/apps/documents/tests/test_representation_tool_scope.py
           aquillm/apps/documents/tests/test_graph_captured_owner_work.py
           aquillm/apps/documents/tests/test_graph_captured_owner_fences.py

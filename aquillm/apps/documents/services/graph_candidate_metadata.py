@@ -6,8 +6,8 @@ from time import perf_counter
 from uuid import UUID
 
 from django.contrib.postgres.search import TrigramSimilarity
-from django.db.models import Case, IntegerField, When
-from django.db.models.functions import Length, MD5
+from django.db.models import Case, F, IntegerField, Subquery, When
+from django.db.models.functions import MD5, Length
 
 from .chunk_search_rank_policy import controls
 from .lexical_candidates import extract_exact_terms, ranked_exact_queryset
@@ -113,8 +113,24 @@ def _lexical_text(spec):
 
 
 def _trigram_refs(text, query, limit, similarity):
-    return rank_refs(text.annotate(similarity=TrigramSimilarity("content", query)
-        ).filter(similarity__gt=similarity).order_by("-similarity", "pk")[:limit])
+    shape = text.query
+    if (shape.is_sliced or shape.combinator or shape.distinct or shape.group_by
+            or shape.extra or shape.values_select or shape.annotations
+            or shape.select_related or shape.select_for_update
+            or any(join.join_type and not (
+                getattr(join.join_field, "many_to_one", False)
+                or getattr(join.join_field, "one_to_one", False)
+            ) for join in shape.alias_map.values())):
+        return rank_refs(text.annotate(similarity=TrigramSimilarity("content", query)
+            ).filter(similarity__gt=similarity).order_by("-similarity", "pk")[:limit])
+    order = (F("similarity").desc(nulls_last=True), "pk")
+    top_ids = text.annotate(similarity=TrigramSimilarity("content", query)
+        ).order_by(*order)[:limit][:45].values("pk")
+    ranked = text.model._default_manager.using(text.db).filter(
+        pk__in=Subquery(top_ids)
+    ).annotate(similarity=TrigramSimilarity("content", query)
+    ).filter(similarity__gt=similarity).order_by(*order)[:limit]
+    return rank_refs(ranked)
 
 
 def _exact_refs(text, query, limit):
