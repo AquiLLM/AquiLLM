@@ -47,7 +47,9 @@ def test_pressure_rows_never_requests_embeddings(monkeypatch):
         raise AssertionError("lexical pressure must not request an embedding")
 
     monkeypatch.setattr(TextChunk, "get_chunk_embedding", unexpected_embedding)
-    with graph_frame(monkeypatch, prepare_sources=pressure_rows, dataset=True) as active:
+    with graph_frame(
+        monkeypatch, prepare_sources=pressure_rows, dataset=True,
+    ) as active:
         doc_id = active[0].chunks["A"].doc_id
         rows = list(
             TextChunk.objects.filter(doc_id=doc_id, chunk_number__gte=100)

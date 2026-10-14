@@ -438,6 +438,11 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_seed_lookup_postgres.py
           aquillm/apps/knowledge_graph/tests/test_extended_seed_batch.py
           aquillm/apps/knowledge_graph/tests/test_extended_seed_lookup.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_exists_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_exists_witness_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_exists_authority_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_sql_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_timeout_attribution.py
           --ds=aquillm.settings_projection_test -q --tb=short
 
       - name: Vocabulary permission and publication contracts

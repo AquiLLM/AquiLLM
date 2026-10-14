@@ -24,11 +24,24 @@ def _load_membership_states(**options: object) -> tuple[dict[str, object], ...]:
 
 
 def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...]:
-    from django.db.models import Count, F, FloatField, OuterRef, Q, Subquery, Value
+    from django.db.models import (
+        Count,
+        Exists,
+        F,
+        FloatField,
+        OuterRef,
+        Q,
+        Subquery,
+        Value,
+    )
     from django.db.models.expressions import ExpressionWrapper
     from pgvector.django import CosineDistance
 
-    from apps.knowledge_graph.models import CanonicalEntityLink, CollectionEntity
+    from apps.knowledge_graph.models import (
+        CanonicalEntityLink,
+        CollectionEntity,
+        CollectionEntityDocumentLink,
+    )
 
     scope = options["scope"]
     assert type(scope) is DirectSeedScopeV1
@@ -48,39 +61,43 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
     ).values("canonical_entity_id")[:1]
     tier = options["tier"]
     alias_filters = {
-        "document_links__document_entity__mention_links__status": "active",
+        "document_entity__mention_links__status": "active",
         # Mention assignments belong to the document resolver, which can evolve
         # independently of the selected collection's assembly resolver.
-        "document_links__document_entity__mention_links__resolver_version": F(
-            "document_links__document_entity__artifact__resolver_version"
+        "document_entity__mention_links__resolver_version": F(
+            "document_entity__artifact__resolver_version"
         ),
-        "document_links__document_entity__mention_links__mention__artifact_id__in": scope.selected_document_artifact_ids,
-        "document_links__document_entity__mention_links__mention__document_id__in": scope.selected_document_ids,
-        "document_links__document_entity__mention_links__mention__artifact__status__in": ("active", "superseded"),
-        "document_links__document_entity__mention_links__mention__artifact__evaluation_only": False,
-        "document_links__document_entity__mention_links__mention__artifact__ontology_checksum": scope.ontology_checksum,
-        "document_links__document_entity__mention_links__mention__entity_type": options["ontology_type"],
-        str(options["lookup_field"]): options["lookup"],
+        "document_entity__mention_links__mention__artifact_id__in": scope.selected_document_artifact_ids,
+        "document_entity__mention_links__mention__document_id__in": scope.selected_document_ids,
+        "document_entity__mention_links__mention__artifact__status__in": ("active", "superseded"),
+        "document_entity__mention_links__mention__artifact__evaluation_only": False,
+        "document_entity__mention_links__mention__artifact__ontology_checksum": scope.ontology_checksum,
+        "document_entity__mention_links__mention__entity_type": options["ontology_type"],
+        str(options["lookup_field"]).removeprefix("document_links__"): options["lookup"],
     } if tier is DirectResolutionTier.ALIAS else {}
+    witness = CollectionEntityDocumentLink.objects.using(options["using"]).filter(
+        collection_entity_id=OuterRef("pk"),
+        artifact_id__in=scope.selected_artifact_ids, status="active",
+        outcome="automatic", resolver_version=scope.resolver_version,
+        artifact__status="active", artifact__evaluation_only=False, artifact__ontology_checksum=scope.ontology_checksum,
+        manifest_input__artifact_id=OuterRef("artifact_id"), manifest_input__collection_id=OuterRef("collection_id"),
+        manifest_input__document_id__in=scope.selected_document_ids,
+        manifest_input__document_artifact_id__in=scope.selected_document_artifact_ids,
+        document_entity__artifact_id__in=scope.selected_document_artifact_ids,
+        document_entity__document_id__in=scope.selected_document_ids,
+        manifest_input__document_artifact_id=F("document_entity__artifact_id"), manifest_input__document_id=F("document_entity__document_id"),
+        document_entity__status="active", document_entity__artifact__status__in=("active", "superseded"), document_entity__artifact__evaluation_only=False,
+        document_entity__artifact__ontology_checksum=scope.ontology_checksum,
+        **alias_filters,
+    )
     query = (
         CollectionEntity.objects.using(options["using"])
         .filter(
             membership_scope,
+            Exists(witness),
             artifact_id__in=scope.selected_artifact_ids, collection_id__in=scope.selected_collection_ids,
             artifact__status="active", artifact__evaluation_only=False,
             artifact__ontology_checksum=scope.ontology_checksum, status="active", entity_type=options["ontology_type"],
-            document_links__artifact_id__in=scope.selected_artifact_ids, document_links__status="active",
-            document_links__outcome="automatic", document_links__resolver_version=scope.resolver_version,
-            document_links__artifact__status="active", document_links__artifact__evaluation_only=False, document_links__artifact__ontology_checksum=scope.ontology_checksum,
-            document_links__manifest_input__artifact_id=F("artifact_id"), document_links__manifest_input__collection_id=F("collection_id"),
-            document_links__manifest_input__document_id__in=scope.selected_document_ids,
-            document_links__manifest_input__document_artifact_id__in=scope.selected_document_artifact_ids,
-            document_links__document_entity__artifact_id__in=scope.selected_document_artifact_ids,
-            document_links__document_entity__document_id__in=scope.selected_document_ids,
-            document_links__manifest_input__document_artifact_id=F("document_links__document_entity__artifact_id"), document_links__manifest_input__document_id=F("document_links__document_entity__document_id"),
-            document_links__document_entity__status="active", document_links__document_entity__artifact__status__in=("active", "superseded"), document_links__document_entity__artifact__evaluation_only=False,
-            document_links__document_entity__artifact__ontology_checksum=scope.ontology_checksum,
-            **alias_filters,
         )
         .annotate(automatic_canonical_entity_id=Subquery(automatic), automatic_link_count=Subquery(active_count))
     )
