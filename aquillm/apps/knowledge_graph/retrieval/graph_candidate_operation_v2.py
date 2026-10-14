@@ -1,34 +1,56 @@
 """Native-only V2 pool: full fresh authority at both ends, no intermediate positives."""
 
-from copy import copy, deepcopy
+from copy import copy
 from dataclasses import fields, is_dataclass
 
-from apps.documents.models import TextChunk
+from apps.documents.models import TextChunk as TextChunk
 from apps.documents.services.chunk_search_scope import (
-    current_scope,
+    current_scope as current_scope,
+)
+from apps.documents.services.chunk_search_scope import (
     validate_requested_authorization,
 )
 from apps.documents.services.chunk_search_source_operation import (
-    _closed_header,
+    _closed_header as _closed_header,
 )
-from apps.documents.services.representation_contracts import SourceScopeUnavailable
-from apps.documents.services.source_deadline import (
-    _DEADLINE,
-    source_preparation_scope,
-    source_remaining_ms,
-)
-from apps.documents.services.source_loading import bounded_source_database
 from apps.documents.services.graph_admission_adapter import (
-    captured_admission, deferred_baseline, order_graph_pool, selector_body_reader,
-    observe_published_graph,
+    captured_admission as captured_admission,
+)
+from apps.documents.services.graph_admission_adapter import (
+    deferred_baseline,
+    order_graph_pool,
+    selector_body_reader,
+)
+from apps.documents.services.graph_admission_adapter import (
+    observe_published_graph as observe_published_graph,
 )
 from apps.documents.services.graph_admission_seeds import validate_final_native_seeds
+from apps.documents.services.source_deadline import (
+    source_preparation_scope as source_preparation_scope,
+)
+from apps.documents.services.source_deadline import (
+    source_remaining_ms as source_remaining_ms,
+)
+from apps.documents.services.source_loading import (
+    bounded_source_database as bounded_source_database,
+)
 
-from .graph_candidate_stage_v2 import _GraphSourceStage
-from .production_runtime import _NATIVE_GRAPH_RUN_V2, ProductionHybridBranchRuntime
+from .closed_graph_attempt_v2 import _capture_closed_graph_attempt
+from .graph_candidate_stage_v2 import _GraphSourceStage as _GraphSourceStage
+from .production_runtime import (
+    _NATIVE_GRAPH_RUN_V2 as _NATIVE_GRAPH_RUN_V2,
+)
+from .production_runtime import (
+    ProductionHybridBranchRuntime as ProductionHybridBranchRuntime,
+)
+
 
 def _settings_values(settings):
-    return {f.name: getattr(settings, f.name) for f in fields(settings)} if is_dataclass(settings) else vars(settings)
+    return (
+        {f.name: getattr(settings, f.name) for f in fields(settings)}
+        if is_dataclass(settings)
+        else vars(settings)
+    )
 
 
 def _same_references(captured, current):
@@ -37,136 +59,19 @@ def _same_references(captured, current):
 def _try_closed_graph_pool(
     snapshot, query, authorization, dependencies, *, diagnostics, fallback
 ):
-    scope, graph, settings = (
-        current_scope(),
-        dependencies.runtime,
-        dependencies.settings,
+    from apps.documents.services.hybrid_graph_deadline import graph_rerank_reserve_ms
+
+    attempt = _capture_closed_graph_attempt(
+        snapshot, query, authorization, dependencies, diagnostics=diagnostics
     )
-    if (
-        scope is None
-        or type(graph) is not ProductionHybridBranchRuntime
-        or graph.settings is not settings
-        or getattr(graph.run_v2, "__func__", None) is not _NATIVE_GRAPH_RUN_V2
-        or getattr(settings, "graph_remediation_mode", None) != "v2"
-    ):
+    if attempt is None:
         return None
-    base = TextChunk.objects.using(scope.using).all()
-    header = _closed_header(base, scope)
-    if header is None:
-        return None
-    stage = _GraphSourceStage(scope, base, header)
-    admission = getattr(snapshot, "source_admission", None)
-    dependencies_header = (
-        dependencies.runtime,
-        dependencies.settings,
-        dependencies.materialize,
-    )
-    graph_header = (graph.authorization, graph.settings, graph.codec, graph.clock)
-    settings_before = deepcopy(_settings_values(settings))
-    from apps.documents.services.chunk_search_rank_policy import controls
-
-    ranking_before = controls()
-    from lib.retrieval.operation import _OPERATION, capture_operation_bound
-
-    operation = _OPERATION.get()
-    parent_deadline = _DEADLINE.get()
-
-    def check():
-        if parent_deadline is not None and (
-            parent_deadline[1]() >= parent_deadline[0]
-            or (parent_deadline[2] is not None and not parent_deadline[2].can_publish())
-        ):
-            raise SourceScopeUnavailable("graph_original_scope_unavailable")
-        if operation is not None and not operation.active():
-            raise SourceScopeUnavailable("graph_original_scope_unavailable")
-        stage.check()
-        if getattr(snapshot, "source_admission", None) is not admission:
-            raise SourceScopeUnavailable("graph_original_scope_unavailable")
-        captured_admission(snapshot, scope, query=query)
-        if (
-            not _same_references(
-                dependencies_header,
-                (dependencies.runtime, dependencies.settings, dependencies.materialize),
-            )
-            or getattr(graph.run_v2, "__func__", None) is not _NATIVE_GRAPH_RUN_V2
-            or not _same_references(
-                graph_header,
-                (graph.authorization, graph.settings, graph.codec, graph.clock),
-            )
-            or _settings_values(settings) != settings_before
-            or controls() != ranking_before
-            or _OPERATION.get() is not operation
-        ):
-            raise SourceScopeUnavailable("graph_original_scope_unavailable")
-
-    deadline = None
-    try:
-        bound = capture_operation_bound(stage.budget)
-        timeout = settings.graph_overall_timeout_ms
-        if type(timeout) is not int or not 1 <= timeout <= 5000:
-            raise ValueError("graph timeout is invalid")
-        clock = graph.clock
-        now = (
-            clock()
-        )  # Translate the original source allowance before installing a child.
-        deadline = min(
-            now + timeout / 1000,
-            now + source_remaining_ms(stage.budget.remaining_ms()) / 1000,
-        )
-        if bound is not None:
-            from apps.documents.services.hybrid_graph_deadline import (
-                graph_rerank_reserve_ms,
-            )
-
-            deadline = min(
-                deadline,
-                bound.deadline_for(clock, reserve_ms=graph_rerank_reserve_ms()),
-            )
-
-        def phase_check():
-            if clock() >= deadline:
-                raise TimeoutError("graph phase deadline")
-            check()
-
-        preparation_clock = parent_deadline[1] if parent_deadline is not None else clock
-        preparation_now = preparation_clock()
-        preparation_deadline = preparation_now + max(0, deadline - clock())
-        phase_check()
-        with header[0][5]:
-            phase_check()
-            with source_preparation_scope(
-                preparation_deadline, preparation_clock, stage.budget
-            ):
-                phase_check()
-                with bounded_source_database(stage.runtime, scope.using):
-                    phase_check()
-                    result, final_rows, selected_pks = _run_closed_graph(
-                        stage,
-                        snapshot,
-                        query,
-                        authorization,
-                        graph,
-                        settings,
-                        deadline,
-                        phase_check,
-                        diagnostics,
-                        admission,
-                    )
-            # Both preparation and DB cleanup precede publication under the same lock.
-            phase_check()
-            stage.publish(final_rows, phase_check)
-            observe_published_graph(selected_pks)
-            return result
-    except Exception:
-        # Mid-operation identity/lifetime loss cannot switch to a fresh authority.
-        try:
-            check()
-        except Exception:
-            return (), diagnostics("error")
-        stage.withdraw()
-        return fallback(admit_deferred=deadline is None or clock() < deadline)
-    finally:
-        stage.withdraw()
+    outcome = attempt.run(downstream_reserve_ms=graph_rerank_reserve_ms())
+    if outcome.kind == "success":
+        return outcome.pool, outcome.diagnostics
+    if outcome.kind == "invalid":
+        return (), outcome.diagnostics
+    return fallback(admit_deferred=outcome.admit_deferred)
 
 
 def _run_closed_graph(
