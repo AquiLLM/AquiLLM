@@ -85,6 +85,12 @@ def retrieval_stages(
     overlay_enabled,
     hybrid_pool,
     graph_seed_attempted,
+    acquisition_schedule_requested=None,
+    acquisition_schedule_observed=None,
+    acquisition_initial_ineligibility_reason=None,
+    acquisition_score_status=None,
+    materialized_union_status=None,
+    preclosure_pool_count=None,
 ):
     def row_data(row, rank):
         doc_id = str(row.doc_id)
@@ -101,6 +107,16 @@ def retrieval_stages(
         return [row_data(row, rank) for rank, row in enumerate(rows, 1)]
 
     def make_data():
+        native = acquisition_schedule_observed == "native_closure"
+        baseline_ids = {row.pk for row in snapshot.baseline_candidates}
+        admission = getattr(snapshot, "source_admission", None)
+        if admission is not None:
+            baseline_ids.update(admission.baseline_order)
+        union_available = (
+            acquisition_schedule_observed != "native_closure"
+            and materialized_union_status in (None, "observed")
+            and ranking.combined_candidates is not None
+        )
         reasons = [
             diagnostics[key]
             for key in ("graph_direct_reason", "graph_extended_reason")
@@ -112,10 +128,6 @@ def retrieval_stages(
         graph_rows = None if overlay_enabled else ()
         if overlay_enabled:
             if hybrid_pool is not None:
-                baseline_ids = {row.pk for row in snapshot.baseline_candidates}
-                admission = getattr(snapshot, "source_admission", None)
-                if admission is not None:
-                    baseline_ids.update(admission.baseline_order)
                 graph_rows = [row for row in hybrid_pool if row.pk not in baseline_ids]
             else:
                 graph_rows = ranking.graph_candidates
@@ -135,6 +147,16 @@ def retrieval_stages(
         graph_status = diagnostics.get("graph_status")
         limits = getattr(snapshot, "effective_limits", None)
         return {
+            "acquisition_schedule_requested": acquisition_schedule_requested,
+            "acquisition_schedule_observed": acquisition_schedule_observed,
+            "acquisition_initial_ineligibility_reason": (
+                acquisition_initial_ineligibility_reason
+            ),
+            "acquisition_score_status": acquisition_score_status,
+            "preclosure_pool_count": preclosure_pool_count,
+            "baseline_metadata_ids": tuple(sorted(baseline_ids)),
+            "baseline_metadata_status": "captured",
+            "graph_overlay_enabled": overlay_enabled,
             "query": query,
             "requested_limits": {"top_k": top_k},
             "effective_limits": (
@@ -160,7 +182,9 @@ def retrieval_stages(
                 "reasons": reasons if reasons else None,
                 "branch_statuses": branch_statuses or None,
                 "candidate_provenance": (
-                    "novel_fused"
+                    "finalized_novel"
+                    if native
+                    else "novel_fused"
                     if hybrid_pool is not None
                     else "materialized_novel"
                     if graph_rows is not None
@@ -174,9 +198,21 @@ def retrieval_stages(
                     if graph_seed_attempted and not snapshot.graph_seed_error
                     else None
                 ),
-                "candidates": rows_data(graph_rows) if graph_rows is not None else None,
+                "candidates": (
+                    rows_data(graph_rows)
+                    if graph_rows is not None and not native
+                    else None
+                ),
+                "finalized_candidates": (
+                    rows_data(graph_rows) if graph_rows is not None and native else None
+                ),
             },
-            "materialized_union": rows_data(ranking.combined_candidates),
+            "materialized_union_status": (
+                "observed" if union_available else "unavailable"
+            ),
+            "materialized_union": (
+                rows_data(ranking.combined_candidates) if union_available else None
+            ),
             "post_rerank": rows_data(reranked),
             "readiness_failure_count": readiness_failures,
         }

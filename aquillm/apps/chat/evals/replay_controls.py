@@ -16,6 +16,7 @@ EXPERIMENTS = (
     "current",
 )
 MODE_CHOICES = {
+    "acquisition_schedule": ("scored", "native_closure"),
     "rerank_text_mode": ("legacy", "windowed"),
     "evidence_text_mode": ("legacy", "source"),
     "document_capacity_mode": ("legacy", "budgeted"),
@@ -23,6 +24,24 @@ MODE_CHOICES = {
     "graph_mode": ("configured", "off", "direct", "extended", "both"),
 }
 MODE_DEFAULTS = {key: values[0] for key, values in MODE_CHOICES.items()}
+
+
+def effective_schedule_config():
+    from apps.documents.services.native_search_schedule import (
+        NATIVE_CLOSURE_RESERVE_MS,
+        NATIVE_CLOSURE_SCHEDULE_VERSION,
+        acquisition_schedule,
+    )
+
+    schedule = acquisition_schedule()
+    native = schedule == "native_closure"
+    return {
+        "acquisition_schedule": schedule,
+        "acquisition_schedule_version": (
+            NATIVE_CLOSURE_SCHEDULE_VERSION if native else None
+        ),
+        "native_closure_reserve_ms": NATIVE_CLOSURE_RESERVE_MS if native else None,
+    }
 
 
 def validate_modes(experiment, modes):
@@ -39,6 +58,7 @@ def replay_runtime(experiment, settings, config, pipeline, recorder, **overrides
     modes = MODE_DEFAULTS | overrides
     validate_modes(experiment, modes)
     env = {
+        "RAG_ACQUISITION_SCHEDULE": modes["acquisition_schedule"],
         "RAG_DIRECT_ENABLED": "1",
         "RAG_RERANK_TEXT_MODE": modes["rerank_text_mode"],
         "RAG_EVIDENCE_TEXT_MODE": modes["evidence_text_mode"],

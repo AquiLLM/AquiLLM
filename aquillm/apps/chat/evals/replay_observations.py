@@ -2,6 +2,13 @@
 
 import hashlib
 
+from .replay_stage_contracts import (
+    materialized_pool,
+    novel_final_provenance,
+    schedule_fields,
+    schedule_summary,
+)
+
 
 def fingerprint(text):
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -79,6 +86,10 @@ def summarize(events, packet, targets):
     graph_sources, graph_provenance = _published_graph_sources(events)
     result = {
         "stages": [],
+        "acquisition_schedule": schedule_summary(stages),
+        "graph_novel_final_provenance": novel_final_provenance(
+            stages, packet, graph_sources, _identity
+        ),
         "targets": [],
         "packet": [
             {
@@ -109,10 +120,15 @@ def summarize(events, packet, targets):
     }
     for stage in stages:
         graph = stage.get("graph", {})
+        pool = materialized_pool(stage)
         result["stages"].append(
             {
                 "effective_limits": stage.get("effective_limits"),
-                "pool_count": len(stage.get("materialized_union", [])),
+                **schedule_fields(stage),
+                "materialized_union_status": (
+                    "observed" if pool is not None else "unavailable"
+                ),
+                "pool_count": len(pool) if pool is not None else None,
                 "rerank_count": len(stage.get("post_rerank", [])),
                 "baseline_branch_counts": {
                     key: len(rows)
@@ -127,6 +143,9 @@ def summarize(events, packet, targets):
                     "unique_count": len(graph["candidates"])
                     if graph.get("candidates") is not None
                     else None,
+                    "finalized_count": len(graph["finalized_candidates"])
+                    if graph.get("finalized_candidates") is not None
+                    else None,
                     "readiness_failure_count": stage.get("readiness_failure_count"),
                 },
             }
@@ -135,6 +154,10 @@ def summarize(events, packet, targets):
         identities = set(target["chunk_ids"])
 
         def ranks(key):
+            if key == "materialized_union" and (
+                not stages or any(materialized_pool(stage) is None for stage in stages)
+            ):
+                return None
             return [
                 row.get("rank", rank)
                 for stage in stages
@@ -158,6 +181,11 @@ def summarize(events, packet, targets):
             {
                 "source_sha256": target["source_sha256"],
                 "pool_ranks": ranks("materialized_union"),
+                "pool_status": (
+                    "observed"
+                    if ranks("materialized_union") is not None
+                    else "unavailable"
+                ),
                 "rerank_ranks": ranks("post_rerank"),
                 "packet_ranks": packet_ranks,
                 "answer_span_covered": coverage,

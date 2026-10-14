@@ -103,6 +103,7 @@ def test_membership_and_span_survival_are_independent_and_private():
     assert result["targets"][0] == {
         "source_sha256": target["source_sha256"],
         "pool_ranks": [2],
+        "pool_status": "observed",
         "rerank_ranks": [],
         "packet_ranks": [1],
         "answer_span_covered": False,
@@ -772,3 +773,22 @@ def test_effective_report_distinguishes_graph_implementation(monkeypatch):
     assert json.dumps(reports[0], sort_keys=True) != json.dumps(
         reports[1], sort_keys=True
     )
+
+
+def test_effective_report_records_explicit_acquisition_schedule(monkeypatch):
+    import importlib.util
+    from pathlib import Path
+
+    spec = importlib.util.spec_from_file_location(
+        "schedule_cli", Path(__file__).parents[1] / "scripts/replay_retrieval.py"
+    )
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", "native_closure")
+    report = cli.effective_config(
+        SimpleNamespace(RAG_CACHE_ENABLED=False),
+        SimpleNamespace(vector_top_k=15, trigram_top_k=15),
+    )
+    assert report["acquisition_schedule"] == "native_closure"
+    assert report["acquisition_schedule_version"] == "native-closure-v1"
+    assert report["native_closure_reserve_ms"] == 1250
