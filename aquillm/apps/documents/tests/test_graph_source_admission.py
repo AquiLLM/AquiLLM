@@ -28,11 +28,35 @@ def pressure_rows(f):
     text = f.documents["A"].full_text
     ends = tuple(end for end in range(5, 50) if end != first.end_position)
     assert len(ends) == 44
-    for number, end in enumerate(ends):
-        TextChunk.objects.create(
-            doc_id=first.doc_id, content=text[:end], chunk_number=100 + number,
-            start_position=0, end_position=end,
+    TextChunk.objects.bulk_create(
+        [
+            TextChunk(
+                doc_id=first.doc_id, content=text[:end], chunk_number=100 + number,
+                start_position=0, end_position=end,
+            )
+            for number, end in enumerate(ends)
+        ]
+    )
+
+
+def test_pressure_rows_never_requests_embeddings(monkeypatch):
+    attempts = []
+
+    def unexpected_embedding(chunk, callback=None):
+        attempts.append(chunk.content)
+        raise AssertionError("lexical pressure must not request an embedding")
+
+    monkeypatch.setattr(TextChunk, "get_chunk_embedding", unexpected_embedding)
+    with graph_frame(monkeypatch, prepare_sources=pressure_rows, dataset=True) as active:
+        doc_id = active[0].chunks["A"].doc_id
+        rows = list(
+            TextChunk.objects.filter(doc_id=doc_id, chunk_number__gte=100)
+            .order_by("chunk_number")
+            .values_list("content", "embedding")
         )
+        assert len(rows) == 44
+        assert all(content and embedding is None for content, embedding in rows)
+        assert attempts == []
 
 
 def capture(active, *, native=True):
