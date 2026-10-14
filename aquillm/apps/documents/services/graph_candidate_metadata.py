@@ -115,7 +115,7 @@ def _lexical_text(spec):
 def _trigram_refs(text, query, limit, similarity):
     shape = text.query
     if (shape.is_sliced or shape.combinator or shape.distinct or shape.group_by
-            or shape.extra or shape.values_select or shape.annotations
+            or shape.extra or shape.extra_tables or shape.values_select or shape.annotations
             or shape.select_related or shape.select_for_update
             or any(join.join_type and not (
                 getattr(join.join_field, "many_to_one", False)

@@ -221,6 +221,19 @@ def test_duplicate_producing_join_preserves_repeated_pk_rows():
     assert tuple(ref.pk for ref in result) == (row.pk, row.pk)
 
 
+def test_duplicate_producing_extra_table_preserves_repeated_pk_rows():
+    case = legacy_case()
+    row = case.chunks[0]
+    for _ in range(2):
+        EmbeddingSpace.objects.create(space_key="trigram-extra-" + uuid4().hex,
+            declaration={}, verification_evidence={})
+    text, _, _ = lazy_query(case.snapshot)
+    text = text.filter(pk=row.pk).extra(tables=[EmbeddingSpace._meta.db_table])
+    expected = frozen_262(text, "Retained canonical", 2, -1)
+    assert tuple(ref.pk for ref in expected) == (row.pk, row.pk)
+    assert metadata._trigram_refs(text, "Retained canonical", 2, -1) == expected
+
+
 @pytest.mark.parametrize("exclusion", [
     "selected_scope", "wrong_owner", "stale_body", "duplicate_owner",
 ])
