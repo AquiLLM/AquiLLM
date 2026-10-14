@@ -296,6 +296,7 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_coreference_sparse_partition.py
           aquillm/apps/knowledge_graph/tests/test_direct_seed_repository.py
           aquillm/apps/knowledge_graph/tests/test_direct_seed_scoped_lookup.py
+          aquillm/apps/knowledge_graph/tests/test_direct_seed_membership_exists.py
           aquillm/apps/knowledge_graph/tests/test_extraction_commit_marker.py
           aquillm/apps/knowledge_graph/tests/test_graph_activation_evaluation.py
           aquillm/apps/knowledge_graph/tests/test_graph_assembly.py

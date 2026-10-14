@@ -41,13 +41,27 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         CanonicalEntityLink,
         CollectionEntity,
         CollectionEntityDocumentLink,
+        CollectionGraphMembershipState,
     )
 
     scope = options["scope"]
     assert type(scope) is DirectSeedScopeV1
+    tier = options["tier"]
     membership_scope = Q()
-    for state in options["membership_states"]:
-        membership_scope |= Q(collection_id=state["collection_id"], artifact_id=state["active_artifact_id"], collection__graph_membership_state__active_artifact_id=state["active_artifact_id"], collection__graph_membership_state__registry_epoch=state["registry_epoch"], collection__graph_membership_state__membership_checksum=state["membership_checksum"], collection__graph_membership_state__resolver_version=state["resolver_version"], collection__graph_membership_state__resolution_config_checksum=state["resolution_config_checksum"])
+    if tier is DirectResolutionTier.NAME:
+        # Paired reads favored this state shape for names; alias retained A's join shape.
+        for state in options["membership_states"]:
+            membership_scope |= Q(collection_id=state["collection_id"], active_artifact_id=state["active_artifact_id"], registry_epoch=state["registry_epoch"], membership_checksum=state["membership_checksum"], resolver_version=state["resolver_version"], resolution_config_checksum=state["resolution_config_checksum"])
+        membership = CollectionGraphMembershipState.objects.using(options["using"]).filter(
+            membership_scope,
+            collection_id=OuterRef("collection_id"),
+            active_artifact_id=OuterRef("artifact_id"),
+        )
+        membership_predicate = Exists(membership)
+    else:
+        for state in options["membership_states"]:
+            membership_scope |= Q(collection_id=state["collection_id"], artifact_id=state["active_artifact_id"], collection__graph_membership_state__active_artifact_id=state["active_artifact_id"], collection__graph_membership_state__registry_epoch=state["registry_epoch"], collection__graph_membership_state__membership_checksum=state["membership_checksum"], collection__graph_membership_state__resolver_version=state["resolver_version"], collection__graph_membership_state__resolution_config_checksum=state["resolution_config_checksum"])
+        membership_predicate = membership_scope
     assert options["automatic_only"] is True
     active_count = CanonicalEntityLink.objects.using(options["using"]).filter(
         collection_entity_id=OuterRef("pk"), status="active", outcome="automatic",
@@ -59,7 +73,6 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
         canonical_entity__resolver_version=F("resolver_version"), canonical_entity__entity_type=OuterRef("entity_type"),
         canonical_entity__version_signature=OuterRef("version_signature"),
     ).values("canonical_entity_id")[:1]
-    tier = options["tier"]
     alias_filters = {
         "document_entity__mention_links__status": "active",
         # Mention assignments belong to the document resolver, which can evolve
@@ -93,7 +106,7 @@ def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...
     query = (
         CollectionEntity.objects.using(options["using"])
         .filter(
-            membership_scope,
+            membership_predicate,
             Exists(witness),
             artifact_id__in=scope.selected_artifact_ids, collection_id__in=scope.selected_collection_ids,
             artifact__status="active", artifact__evaluation_only=False,

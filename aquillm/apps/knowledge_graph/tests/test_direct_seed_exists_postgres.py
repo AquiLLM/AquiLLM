@@ -23,6 +23,8 @@ pytestmark = [
     ),
 ]
 
+_MEMBERSHIP_TIERS = (DirectResolutionTier.NAME, DirectResolutionTier.ALIAS)
+
 
 def _options(scoped_aliases, tier=DirectResolutionTier.ALIAS, **changes):
     scope, states, _, _ = scoped_aliases
@@ -58,6 +60,129 @@ def _same(options, expected):
     new = direct_seed_queries._load_candidate_rows(**options)
     assert old == new
     assert [row.entity_id for row in new] == expected
+
+
+def _two_selected_states(scoped_aliases):
+    from apps.collections.models import Collection
+    from apps.knowledge_graph.models import (
+        CollectionGraphMembershipState,
+        GraphArtifact,
+    )
+
+    scope, states, entities, assignments = scoped_aliases
+    other_collection = Collection.objects.create(name="other selected collection")
+    selected_artifact = GraphArtifact.objects.get(pk=scope.selected_artifact_ids[0])
+    other_artifact = GraphArtifact.objects.create(
+        scope_type="collection",
+        scope_id=other_collection.pk,
+        status="building",
+        source_hash="a" * 64,
+        ontology_version="ontology-v1",
+        ontology_checksum=scope.ontology_checksum,
+        extractor_version="extractor-v1",
+        filter_policy_version="filter-v1",
+        resolver_version=scope.resolver_version,
+        embedding_model_signature=selected_artifact.embedding_model_signature,
+    )
+    GraphArtifact.objects.filter(pk=other_artifact.pk).update(status="active")
+    other_state = {
+        "collection_id": other_collection.pk,
+        "active_artifact_id": other_artifact.pk,
+        "registry_epoch": 2,
+        "membership_checksum": "1" * 64,
+        "resolver_version": "other-resolver",
+        "resolution_config_checksum": "2" * 64,
+    }
+    CollectionGraphMembershipState.objects.create(
+        collection=other_collection,
+        active_artifact=other_artifact,
+        registry_epoch=other_state["registry_epoch"],
+        membership_checksum=other_state["membership_checksum"],
+        resolver_version=other_state["resolver_version"],
+        resolution_config_checksum=other_state["resolution_config_checksum"],
+    )
+    scope = replace(
+        scope,
+        selected_collection_ids=tuple(
+            sorted((*scope.selected_collection_ids, other_collection.pk))
+        ),
+        selected_artifact_ids=tuple(
+            sorted((*scope.selected_artifact_ids, other_artifact.pk))
+        ),
+        generation_keys_by_artifact=tuple(
+            sorted((*scope.generation_keys_by_artifact, (other_artifact.pk, "3" * 64)))
+        ),
+        generation_ids_by_artifact=tuple(
+            sorted((*scope.generation_ids_by_artifact, (other_artifact.pk, uuid4())))
+        ),
+    )
+    return (
+        scope,
+        tuple(sorted((*states, other_state), key=lambda row: row["collection_id"])),
+        entities,
+        assignments,
+    )
+
+
+@pytest.mark.parametrize("tier", _MEMBERSHIP_TIERS)
+def test_two_selected_membership_tuples_keep_nonempty_oracle_parity(
+    scoped_aliases, tier
+):
+    selected = _two_selected_states(scoped_aliases)
+    _same(_options(selected, tier), [entity.pk for entity in selected[2][:2]])
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "registry_epoch",
+        "membership_checksum",
+        "resolver_version",
+        "resolution_config_checksum",
+    ],
+)
+@pytest.mark.parametrize("tier", _MEMBERSHIP_TIERS)
+def test_selected_states_cannot_mix_tuple_fields(scoped_aliases, field, tier):
+    from apps.knowledge_graph.models import CollectionGraphMembershipState
+
+    selected = _two_selected_states(scoped_aliases)
+    first, second = selected[1]
+    _same(_options(selected, tier), [entity.pk for entity in selected[2][:2]])
+    CollectionGraphMembershipState.objects.filter(
+        collection_id=first["collection_id"]
+    ).update(**{field: second[field]})
+    _same(_options(selected, tier), [])
+
+
+@pytest.mark.parametrize("active_artifact_id", [None, "other"])
+@pytest.mark.parametrize("tier", _MEMBERSHIP_TIERS)
+def test_changed_or_null_active_artifact_rejects_candidate(
+    scoped_aliases, active_artifact_id, tier
+):
+    from apps.knowledge_graph.models import CollectionGraphMembershipState
+
+    selected = _two_selected_states(scoped_aliases)
+    first, second = selected[1]
+    _same(_options(selected, tier), [entity.pk for entity in selected[2][:2]])
+    replacement = (
+        second["active_artifact_id"] if active_artifact_id == "other" else None
+    )
+    CollectionGraphMembershipState.objects.filter(
+        collection_id=first["collection_id"]
+    ).update(active_artifact_id=replacement)
+    _same(_options(selected, tier), [])
+
+
+@pytest.mark.parametrize("tier", _MEMBERSHIP_TIERS)
+def test_absent_selected_state_rejects_candidate(scoped_aliases, tier):
+    from apps.knowledge_graph.models import CollectionGraphMembershipState
+
+    selected = _two_selected_states(scoped_aliases)
+    _same(_options(selected, tier), [entity.pk for entity in selected[2][:2]])
+    CollectionGraphMembershipState.objects.filter(
+        collection_id=selected[1][0]["collection_id"]
+    ).delete()
+    _same(_options(selected, tier), [])
 
 
 @pytest.mark.parametrize(
