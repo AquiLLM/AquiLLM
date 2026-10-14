@@ -194,6 +194,7 @@ jobs:
         run: >-
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py
+          aquillm/apps/knowledge_graph/tests/test_closed_graph_attempt_v2.py
           aquillm/apps/knowledge_graph/tests/test_closed_seed_projection_batch.py
           aquillm/apps/documents/tests/test_closed_graph_seed_work.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_races.py
@@ -484,6 +485,7 @@ jobs:
           tests/test_check_retrieval_logging.py
           tests/test_replay_retrieval.py
           tests/test_replay_target_preflight.py
+          tests/test_native_closure_replay.py
           --ds=aquillm.settings_projection_test -x -vv --tb=short --durations=20
       - name: Logging and file-size guardrails
         run: |

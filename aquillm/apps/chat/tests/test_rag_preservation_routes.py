@@ -212,3 +212,61 @@ async def test_normal_model_tool_is_counted_once_and_synthesized_once(
             f"Qualified tail: only below 1 Pa. {citation}"
         ) in published.content
     assert published._validated_answer.outcome == "partial"
+
+
+async def test_direct_native_off_search_reaches_preserved_completion(docs, monkeypatch):
+    from django.conf import settings
+
+    from apps.chat.services import rag_pipeline
+    from apps.chat.services.rag_turn import preservation_turn
+    from apps.documents.services import chunk_rerank_selection_provider, chunk_search
+    from apps.documents.services.chunk_rerank_window_adapter import (
+        WindowSelectionScorer,
+    )
+    from apps.documents.tests.test_chunk_rerank_window_scores import Scorer
+
+    user, doc, chunks, _ = docs
+    configure(monkeypatch, capacity=True, windowed=True)
+    monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", "native_closure")
+    monkeypatch.setenv("RAG_EVIDENCE_SELECTION_MODE", "adaptive")
+    monkeypatch.setattr(settings, "KG_OVERLAY_ENABLED", False)
+    monkeypatch.setattr(settings, "RAG_FULL_TEXT_ENABLED", False, raising=False)
+    monkeypatch.setattr(settings, "RAG_RRF_ENABLED", False, raising=False)
+    monkeypatch.setattr(chunk_search, "load_query_embedding", lambda query: None)
+    monkeypatch.setattr(
+        chunk_rerank_selection_provider, "current_selection_scorer",
+        lambda *, deadline, clock, turn_budget: WindowSelectionScorer(
+            Scorer(), budget=turn_budget, deadline=deadline, clock=clock,
+            pair_counter=lambda q, d: len(q) + len(d) + 8,
+        ),
+    )
+    stages, requests = [], []
+    original = chunk_search.retrieval_stages
+
+    def observe(*args, **kwargs):
+        stages.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(chunk_search, "retrieval_stages", observe)
+
+    async def complete(request, *args, **kwargs):
+        requests.append(request)
+        return request + [
+            AssistantMessage(content="Qualified evidence", stop_reason="end_turn")
+        ], "changed"
+
+    convo = Conversation(system="sys", messages=[UserMessage(content="Qualified tail")])
+    consumer = SimpleNamespace(
+        user=user, col_ref=CollectionsRef([doc.collection_id]), convo=convo
+    )
+    async with preservation_turn(consumer, max_func_calls=4) as runtime:
+        outcome = await rag_pipeline.run_direct_rag_turn(
+            consumer, SimpleNamespace(complete=complete), convo
+        )
+        assert runtime.budget.pairs_used["acquisition"] == 0
+        assert 0 < runtime.budget.pairs_used["final"] <= 45
+        assert runtime.budget.limits.retrieval_ms == 15000
+    assert outcome == "handled" and len(requests) == 1 and len(stages) == 1
+    assert stages[0]["acquisition_schedule_observed"] == "native_closure"
+    assert chunks[-1].content in requests[0][-1].content
+    assert f"[doc:{doc.id} chunk:{chunks[-1].pk}]" in requests[0][-1].content
