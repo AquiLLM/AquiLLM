@@ -71,6 +71,7 @@ class FrontierBudgetV2:
         self._identities, self._edges, self._lock = set(), set(), RLock()
         self._uncertain = False
         self._reserved_rows = 0
+        self._authority_reservations = {}
 
     def check_active(self):
         with self._lock:
@@ -83,7 +84,11 @@ class FrontierBudgetV2:
     def reserve_query(self):
         with self._lock:
             self.check_active()
-            if self.queries >= self.max_queries:
+            if (
+                self.queries
+                + sum(q for _, q, _ in self._authority_reservations.values())
+                >= self.max_queries
+            ):
                 return False
             self.queries += 1
             return True
@@ -132,17 +137,81 @@ class FrontierBudgetV2:
             self.edges += 1
             return True
 
-    def reserve_read(self, maximum_rows):
+    def reserve_authority(self, rows, queries):
+        """Protect one session's final fresh proof in the shared ledger."""
+        _count(rows, 5000)
+        _count(queries, 64)
+        with self._lock:
+            self.check_active()
+            held_rows = sum(r for r, _, _ in self._authority_reservations.values())
+            held_queries = sum(q for _, q, _ in self._authority_reservations.values())
+            if (
+                self.source_rows + self._reserved_rows + held_rows + rows
+                > self.max_source_rows
+                or self.queries + held_queries + queries > self.max_queries
+            ):
+                raise FrontierBudgetExceeded("frontier final authority cannot fit")
+            token = object()
+            self._authority_reservations[token] = rows, queries, 0
+            return token
+
+    def reserve_authority_wire(self, token, wire_bytes):
+        _count(wire_bytes, 1048576)
+        with self._lock:
+            self.check_active()
+            rows, queries, previous = self._authority_reservations[token]
+            if wire_bytes > self.available_wire_bytes() + previous:
+                raise FrontierBudgetExceeded("frontier final wire authority cannot fit")
+            self._authority_reservations[token] = rows, queries, wire_bytes
+
+    def available_wire_bytes(self):
+        with self._lock:
+            self.check_active()
+            return (
+                self.max_wire_bytes
+                - self.wire_bytes
+                - sum(wire for _, _, wire in self._authority_reservations.values())
+            )
+
+    def available_read_rows(self):
+        with self._lock:
+            self.check_active()
+            return (
+                self.max_source_rows
+                - self.source_rows
+                - self._reserved_rows
+                - sum(r for r, _, _ in self._authority_reservations.values())
+            )
+
+    def reserve_read(self, maximum_rows, *, authority=None):
         """Reserve the physical worst case before a serial datastore dispatch."""
         _count(maximum_rows, 5000)
         with self._lock:
             self.check_active()
+            held_rows = sum(r for r, _, _ in self._authority_reservations.values())
+            held_queries = sum(q for _, q, _ in self._authority_reservations.values())
+            if authority is not None:
+                rows, queries, wire = self._authority_reservations[authority]
+                if rows < maximum_rows or queries < 1:
+                    raise ValueError("frontier final authority reservation missing")
+                held_rows -= maximum_rows
+                held_queries -= 1
             if (
-                self.source_rows + self._reserved_rows + maximum_rows
+                self.source_rows + self._reserved_rows + held_rows + maximum_rows
                 > self.max_source_rows
-                or not self.reserve_query()
+                or self.queries + held_queries >= self.max_queries
             ):
                 raise FrontierBudgetExceeded("frontier physical work exhausted")
+            if authority is not None:
+                if queries == 1 and rows == maximum_rows:
+                    del self._authority_reservations[authority]
+                else:
+                    self._authority_reservations[authority] = (
+                        rows - maximum_rows,
+                        queries - 1,
+                        wire,
+                    )
+            self.queries += 1
             self._reserved_rows += maximum_rows
 
     def charge_read(self, *, reserved_rows, scanned_rows):

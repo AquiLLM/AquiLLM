@@ -1,14 +1,22 @@
 """Component reuse accounting; real persisted G3 cases remain separate oracles."""
+
 from collections import Counter
 from copy import deepcopy
 
 import pytest
 
-from apps.knowledge_graph.projection.frontier_cypher_v2 import INDEX_LOOKUP, MANIFEST_LOOKUP, RAW_LOOKUP
+from apps.knowledge_graph.projection.frontier_cypher_v2 import (
+    INDEX_LOOKUP,
+    MANIFEST_BATCH_LOOKUP,
+    MANIFEST_LOOKUP,
+    RAW_LOOKUP,
+)
 from apps.knowledge_graph.projection.frontier_reads_v2 import FrontierReadsV2
 from apps.knowledge_graph.retrieval.topology.failures import TopologyLoadError
 from apps.knowledge_graph.tests.frontier_fixture_support import FrontierFixture
-from apps.knowledge_graph.tests.frontier_index_fixture_driver import FrontierIndexFixtureDriver
+from apps.knowledge_graph.tests.frontier_index_fixture_driver import (
+    FrontierIndexFixtureDriver,
+)
 from apps.knowledge_graph.tests.test_frontier_adversarial_v2 import run
 
 
@@ -18,14 +26,25 @@ def reader(now=None):
     budget = fixture.budget()
     deadline = fixture.deadline
     if now is not None:
-        from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import FrontierBudgetV2
+        from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
+            FrontierBudgetV2,
+        )
         from lib.retrieval.turn_budget import TurnBudget, TurnLimits
-        budget = FrontierBudgetV2(turn_budget=TurnBudget(TurnLimits(), clock=lambda: now[0]),
-            deadline=10.0, clock=lambda: now[0], max_identities=200, max_edges=1000,
-            max_source_rows=5000, max_queries=64, max_wire_bytes=1048576)
+
+        budget = FrontierBudgetV2(
+            turn_budget=TurnBudget(TurnLimits(), clock=lambda: now[0]),
+            deadline=10.0,
+            clock=lambda: now[0],
+            max_identities=200,
+            max_edges=1000,
+            max_source_rows=5000,
+            max_queries=64,
+            max_wire_bytes=1048576,
+        )
         deadline = 9.0
-    reads = FrontierReadsV2(driver, ready=fixture.group.scope.ready,
-        budget=budget, deadline=deadline)
+    reads = FrontierReadsV2(
+        driver, ready=fixture.group.scope.ready, budget=budget, deadline=deadline
+    )
     selected = fixture.group.scope.ready.selected_generations[0]
     assert reads.attest(selected)
     return fixture, driver, budget, reads, selected
@@ -55,8 +74,15 @@ def test_whole_bridge_reuses_index_ancestors_but_attests_each_generation_twice()
     assert fixture.answer_identity in result.snapshot.identity_keys
     keys = [p["index_key"] for q, p in driver.calls if q == INDEX_LOOKUP]
     assert keys and max(Counter(keys).values()) == 1
-    manifests = Counter(p["generation_key"] for q, p in driver.calls if q == MANIFEST_LOOKUP)
-    assert manifests == Counter({b.generation.generation_key: 2 for b in fixture.bundles})
+    manifests = Counter(
+        pair.split(":")[0]
+        for q, p in driver.calls
+        if q == MANIFEST_BATCH_LOOKUP
+        for pair in p["lookups_csv"].split(",")
+    )
+    assert manifests == Counter(
+        {b.generation.generation_key: 2 for b in fixture.bundles}
+    )
     assert budget.queries == len(driver.calls) <= 64
     assert any(q == RAW_LOOKUP for q, _ in driver.calls)
 
@@ -73,6 +99,7 @@ def test_reuse_cannot_outlive_original_deadline_turn_or_accounting(expired):
         error = TimeoutError
     elif expired == "turn":
         from asyncio import CancelledError
+
         budget.turn_budget.close("cancelled")
         error = CancelledError
     else:
@@ -126,8 +153,12 @@ def test_new_reader_does_not_reuse_another_invocations_index():
     fixture, driver, budget, reads, selected = reader()
     key = root_key(driver, selected)
     reads.index(selected.generation_key, key)
-    other = FrontierReadsV2(driver, ready=fixture.group.scope.ready,
-        budget=budget, deadline=fixture.deadline)
+    other = FrontierReadsV2(
+        driver,
+        ready=fixture.group.scope.ready,
+        budget=budget,
+        deadline=fixture.deadline,
+    )
     assert other.attest(selected)
     other.index(selected.generation_key, key)
     assert sum(q == INDEX_LOOKUP for q, _ in driver.calls) == 2
@@ -144,7 +175,9 @@ def test_cached_index_never_caches_raw_evidence_records(corrupt):
     expected = reads.hydrate(generation, entry["refs"])
     if corrupt:
         label, key, _ = entry["refs"][0]
-        record = next(row for row in driver.raw[generation, key] if label in row["labels"])
+        record = next(
+            row for row in driver.raw[generation, key] if label in row["labels"]
+        )
         record["record"]["opaque_key"] = "f" * 64
         with pytest.raises(TopologyLoadError):
             reads.hydrate(generation, entry["refs"])
@@ -155,18 +188,29 @@ def test_cached_index_never_caches_raw_evidence_records(corrupt):
 
 
 def test_unique_index_work_still_preserves_final_attestation_reservation():
-    from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import FrontierBudgetExceeded
+    from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
+        FrontierBudgetExceeded,
+    )
+
     fixture = FrontierFixture()
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     budget = fixture.budget(max_queries=4)
     selected = fixture.group.scope.ready.selected_generations[0]
-    reads = FrontierReadsV2(driver, ready=fixture.group.scope.ready,
-        budget=budget, deadline=fixture.deadline)
+    reads = FrontierReadsV2(
+        driver,
+        ready=fixture.group.scope.ready,
+        budget=budget,
+        deadline=fixture.deadline,
+    )
     assert reads.attest(selected)
     key = root_key(driver, selected)
     reads.index(selected.generation_key, key)
-    other = next(key for key, row in driver.index.items()
-        if row["generation_key"] == selected.generation_key and key != root_key(driver, selected))
+    other = next(
+        key
+        for key, row in driver.index.items()
+        if row["generation_key"] == selected.generation_key
+        and key != root_key(driver, selected)
+    )
     with pytest.raises(FrontierBudgetExceeded):
         reads.index(selected.generation_key, other)
     assert budget.queries == len(driver.calls) == 2

@@ -121,10 +121,15 @@ def _allocate(
     caps,
     deadline,
     frontier,
+    seed_validation=None,
 ):
-    baseline, reasons = validated_seed_baseline(
+    validator = validated_seed_baseline if seed_validation is None else seed_validation.baseline
+    baseline, reasons = validator(
         baseline, authorization=authorization, settings=settings
-    )
+    ) if settings.graph_extended_enabled else (None, set())
+    if seed_validation is not None and baseline is not None:
+        seed_validation.prepare_projections(baseline, groups, runtime=runtime,
+            authorization=authorization, settings=settings, frontier=frontier)
     prepared, local_reasons = {}, {}
     for group in groups:
         frontier.check_active()
@@ -132,12 +137,15 @@ def _allocate(
             runtime=runtime,
             group=group,
             query=query,
-            baseline=group_baseline_view(baseline, group),
+            baseline=(seed_validation.group(baseline, group)
+                      if seed_validation is not None and baseline is not None
+                      else group_baseline_view(baseline, group)),
             authorization=authorization,
             settings=settings,
             caps=caps,
             deadline=deadline,
             frontier=frontier,
+            **({"seed_validation": seed_validation} if seed_validation is not None else {}),
         )
         prepared[group.group_checksum] = seeds
         local_reasons[group.group_checksum] = local
@@ -175,3 +183,14 @@ def _allocate(
             local_reasons[group],
         )
     return result, reasons
+
+
+def _allocate_closed_group_seeds_v2(*, seed_validation, **kwargs):
+    from apps.collections.services.bounded_retrieval_authorization import bounded_reauthorization_reads
+    from .closed_graph_seed_validation import _ClosedSeedValidation
+
+    if type(seed_validation) is not _ClosedSeedValidation:
+        raise TypeError("native seed validation requires the exact closed owner")
+    seed_validation.check()
+    with bounded_reauthorization_reads(kwargs["authorization"], kwargs["frontier"]):
+        return _allocate(seed_validation=seed_validation, **kwargs)

@@ -77,3 +77,34 @@
 - [ ] Run fixed new-code legacy baseline and explicit independent graph/source-window/vocabulary comparisons supported by the repaired harness.
 - [ ] Record gold passage/evidence support, candidate contributions, errors, latency and effective flags; retain failed runs.
 - [ ] Present measured improvements/regressions and comparison artifacts; keep independent holdout and production acceptance visibly separate.
+
+### Task 7: Bound native graph seed preparation inside its closed stage
+
+**Files:** graph_candidate_operation_v2.py, graph_candidate_stage_v2.py, graph_admission_seeds.py and narrow native seed/runtime/repository interfaces plus focused tests. Do not edit gateway/projection frontier transport files.
+**Base:** 93697e4f44d6466d3ca54ea99764285cad5f52b9, existing codex/graph-development-repair worktree.
+- [x] Reproduce repeated selected-scope proof overhead using real native paths and a 31-collection/530-document fixture; preserve failing query/row evidence.
+- [x] Introduce private operation-owned seed validation for exact body-free admitted references. Bind original stage/scope/admission/runtime/header/settings/query/operation, immutable dense keys and original seed references. Reject mutation, forgery, object substitution and post-exit reuse. Keep ordinary public entrypoints unchanged.
+- [x] Remove redundant full-scope scans only within that unpublished operation. Keep live fingerprint, active representation, dense owner and full-text eligibility predicates. No intermediate positives, permission cache, reusable permit or new body-loading authorization.
+- [x] Batch exact projection/chunk ownership seed reads where necessary so 31 selected collections do not trigger repeated whole-scope authorization per projection. Preserve before/after current projection state and native manifest/mention/artifact predicates. All eager body reads retain fresh authorization; full original scope is fresh at entry and publication; all existing final fences remain.
+- [x] Add adversarial tests for revocation/change between entry/publication, unadmitted seeds, settings/dependency substitution, mutated containers, expired operation and uncertain SQL cancellation. Root serializes real PostgreSQL tests; record RED/GREEN and native SQL counts.
+- [x] Independent review before commit and candidate use. No cap/deadline increase or source-scope reduction.
+
+### Task 8: Batch mandatory graph authority reads across generations
+
+**Files:** frontier gateway/client/contracts/service, projection frontier adapter/index/scope readers and focused fixtures/tests. Do not edit Task7 files.
+- [x] Reproduce the structural query bound for 31 participating generations under the shared64-query/5000-row/1MiB limits. Prove the old physical reads cannot initialize and finalize that scope before traversal.
+- [x] Add bounded generation/key tuple reads for initial/final manifests, directory/index lookup and raw scope provenance. A batch must be one bounded datastore statement, with exact per-generation validation. Preserve complete selected-document scope and fresh raw/manifest evidence.
+- [x] Bound total requests and sentinels: per-statement320-row ceiling; at most160 manifest/index pairs with two-row duplicate sentinel per key, raw at most32 pairs with ten-row sentinel. Reduce packing with the remaining row allowance; the transport enforces the existing wire/expanded limits and oversized completed frames fail closed without automatic wire splitting. These are packing bounds; never increase cumulative query/row/wire/deadline limits.
+- [x] Preserve accounting of each physical query, all returned rows and wire bytes. Reject missing/duplicate/extra/cross-generation records and changed markers/checksums. Fresh final attestation resources must be reserved before exploration, including rows. Uncertain reads suppress positives.
+- [x] Use a versioned lossless zlib/base64 JSON envelope on the new batch route when needed to reduce measured wire bytes. Charge every received envelope byte; retain the cumulative1MiB wire cap,320-row ceiling and1MiB expanded JSON limit per response. Strict bounded decoding must reject bombs, malformed/trailing streams, duplicate JSON fields and wrong counts, with original deadline checks before/after. The old route remains unchanged. Report compressed/expanded sizes separately.
+- [x] Update contract signatures/client compatibility and test real gateway boundary plus31-generation fixture and multiple groups sharing one budget. Immutable content-addressed index cache remains allowed; manifest/raw authority may not be cached across freshness fences.
+- [x] Independent review and current local integration controls before live candidate acceptance.
+
+### Task 9: Accept and roll out the repaired graph candidate
+
+**Owner:** root after Tasks7–8 review.
+- [ ] Integrate source, gateway, CI corrections; run focused combined tests, static guards and complete exact-head CI.
+- [ ] Build and verify immutable candidate web/KG/gateway sources. Keep restored development graphOFF until accepted.
+- [ ] Run matched graphON/OFF with same source snapshot, query, native identities, budgets and cache policy; require accepted packet and attributed graph contribution. Then real ASGI chat with persisted supported answer/citations, original431 unchanged.
+- [ ] Update PR246 and internal#4/#6 with current evidence and limitations. Merge/deploy254 under standing user authorization only after gates; verify public chat path and rollback readiness.
+- [ ] Run the frozen broader study and keep historical759 findings, regression measurements and independent quality acceptance distinct.

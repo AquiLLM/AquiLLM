@@ -62,14 +62,18 @@ def test_insufficient_terminal_budget_is_partial_and_never_resets(monkeypatch):
     fixture = FrontierFixture(bundles)
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     budget = fixture.budget(max_queries=52)
-    from apps.knowledge_graph.projection.frontier_cypher_v2 import MANIFEST_LOOKUP
+    from apps.knowledge_graph.projection.frontier_cypher_v2 import MANIFEST_BATCH_LOOKUP
 
     mention = FrontierSessionV2.mention
     reservations, terminal_calls = [], []
-    limits = {name: value for name, value in vars(budget).items() if name.startswith('max_')}
+    limits = {
+        name: value for name, value in vars(budget).items() if name.startswith("max_")
+    }
     deadline, turn = budget.deadline, budget.turn_budget
     terminal_entities = {
-        m.entity_key for bundle in fixture.bundles for m in bundle.automatic_memberships
+        m.entity_key
+        for bundle in fixture.bundles
+        for m in bundle.automatic_memberships
         if (m.automatic_membership_key or m.entity_key) == terminal
     }
 
@@ -79,12 +83,13 @@ def test_insufficient_terminal_budget_is_partial_and_never_resets(monkeypatch):
             terminal_calls.append((len(driver.calls), budget.queries))
             # Other admitted work consumes the original shared ledger. Reserve
             # only the remaining non-manifest work, preserving final authority reads.
-            while budget.queries + len(session.selected) < budget.max_queries:
-                assert budget.reserve_query()
+            while budget.reserve_query():
                 reservations.append(True)
         yield from mention(session, generation, head, entity, rows)
 
-    monkeypatch.setattr(FrontierSessionV2, 'mention', spend_shared_budget_before_terminal)
+    monkeypatch.setattr(
+        FrontierSessionV2, "mention", spend_shared_budget_before_terminal
+    )
     result, returned_budget = run(fixture, driver, budget)
     assert returned_budget is budget and len(terminal_calls) == 1
     assert reservations
@@ -93,12 +98,14 @@ def test_insufficient_terminal_budget_is_partial_and_never_resets(monkeypatch):
     assert result.coverage.status == "partial"
     assert result.coverage.reasons == ("frontier_budget",)
     assert budget.queries == len(driver.calls) + len(reservations) == 52
-    final_reads = driver.calls[terminal_calls[0][0]:]
-    assert len(final_reads) == len(fixture.bundles)
-    assert all(query == MANIFEST_LOOKUP for query, _ in final_reads)
-    assert {params['generation_key'] for _, params in final_reads} == {
-        bundle.generation.generation_key for bundle in fixture.bundles
-    }
+    final_reads = driver.calls[terminal_calls[0][0] :]
+    assert len(final_reads) == 1
+    assert all(query == MANIFEST_BATCH_LOOKUP for query, _ in final_reads)
+    assert {
+        pair.split(":")[0]
+        for _, params in final_reads
+        for pair in params["lookups_csv"].split(",")
+    } == {bundle.generation.generation_key for bundle in fixture.bundles}
     assert {name: getattr(budget, name) for name in limits} == limits
     assert budget.deadline == deadline and budget.turn_budget is turn
     assert budget.source_rows <= 5000

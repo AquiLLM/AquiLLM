@@ -27,14 +27,12 @@ from apps.documents.services.graph_admission_seeds import validate_final_native_
 from .graph_candidate_stage_v2 import _GraphSourceStage
 from .production_runtime import _NATIVE_GRAPH_RUN_V2, ProductionHybridBranchRuntime
 
-
 def _settings_values(settings):
     return {f.name: getattr(settings, f.name) for f in fields(settings)} if is_dataclass(settings) else vars(settings)
 
 
 def _same_references(captured, current):
     return all(a is b for a, b in zip(captured, current, strict=True))
-
 
 def _try_closed_graph_pool(
     snapshot, query, authorization, dependencies, *, diagnostics, fallback
@@ -191,7 +189,7 @@ def _run_closed_graph(
 
     scope, budget = stage.scope, stage.budget
     validate_requested_authorization(stage.runtime, authorization, snapshot.documents)
-    stage.initial_keys = set(scope.validate())
+    stage.initial_keys = frozenset(scope.validate())
     baseline, _ = stage.current(tuple(snapshot.baseline_candidates), stage.initial_keys)
     baseline = tuple(
         row for row in baseline if row.doc_id in scope.requested_document_ids
@@ -205,6 +203,7 @@ def _run_closed_graph(
     check()
     runtime = copy(graph)
     runtime.authorization = scope.authorization
+    seed_validation = stage.seed_validation(snapshot, check, runtime=runtime) if admission is not None else None
 
     def hydrate(*, selected, pairs, runtime, document_codec, deadline):
         check()
@@ -228,7 +227,8 @@ def _run_closed_graph(
         return _load_selection_inputs_v2(**kwargs, hydrate=hydrate)
 
     def execute(**kwargs):
-        return _execute_captured_graph_v2(**kwargs, selected=selected, hydrate=load)
+        return _execute_captured_graph_v2(**kwargs, selected=selected, hydrate=load,
+                                        seed_validation=seed_validation)
 
     envelope = _run_graph_v2(
         query=query,

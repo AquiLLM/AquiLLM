@@ -14,6 +14,11 @@ class ExtendedSeedRepository:
     def __init__(self, *, using="projection_source"):
         self.using = using
 
+    def _load_seed_identities_batch(self, **kwargs):
+        from .closed_seed_projection_batch import load_seed_identities_batch
+
+        return load_seed_identities_batch(self, **kwargs)
+
     def load_seed_identities(
         self,
         *,
@@ -106,9 +111,18 @@ class ExtendedSeedRepository:
 
 
 def _authority_is_current(*, authority, using, read_budget=None):
+    query = _authority_query(authority=authority, using=using)
+    return (
+        query.exists()
+        if read_budget is None
+        else bool(seed_query_rows(query.values_list("pk", flat=True), maximum=1, budget=read_budget))
+    )
+
+
+def _authority_query(*, authority, using):
     from apps.knowledge_graph.models import CollectionGraphProjection
 
-    query = CollectionGraphProjection.objects.using(using).filter(
+    return CollectionGraphProjection.objects.using(using).filter(
         pk=authority.projection_id,
         generation_key=authority.generation_id,
         state="ready",
@@ -138,15 +152,6 @@ def _authority_is_current(*, authority, using, read_budget=None):
         artifact__resolver_version=authority.resolver_version,
         artifact__resolution_config_checksum=authority.resolution_config_checksum,
         artifact__embedding_model_signature=authority.embedding_model_signature,
-    )
-    return (
-        query.exists()
-        if read_budget is None
-        else bool(
-            seed_query_rows(
-                query.values_list("pk", flat=True), maximum=1, budget=read_budget
-            )
-        )
     )
 
 
@@ -257,11 +262,22 @@ def _seed_query(*, authority, chunk_id, document_id, document_artifact_id, using
 
 
 def _seed_rows(*, authority, chunks, documents, using, limit, read_budget=None):
+    queries = _seed_queries(authority=authority, chunks=chunks, documents=documents, using=using)
+    combined = (
+        queries[0].union(*queries[1:], all=True) if len(queries) > 1 else queries[0]
+    )
+    return seed_query_rows(
+        combined.order_by("seed_chunk_id", "collection_entity_id", "canonical_id"),
+        maximum=limit + 1, budget=read_budget,
+    )
+
+
+def _seed_queries(*, authority, chunks, documents, using):
     from django.db.models import BigIntegerField, Value
 
     # Each arm retains the exact manifest/mention join and its per-chunk
     # DISTINCT. UNION ALL preserves shared entities in different chunks.
-    queries = tuple(
+    return tuple(
         _seed_query(
             authority=authority,
             chunk_id=chunk_id,
@@ -280,16 +296,4 @@ def _seed_rows(*, authority, chunks, documents, using, limit, read_budget=None):
             "automatic_link_count",
         )
         for chunk_id, document_id in chunks
-    )
-    combined = (
-        queries[0].union(*queries[1:], all=True) if len(queries) > 1 else queries[0]
-    )
-    return seed_query_rows(
-        combined.order_by(
-            "seed_chunk_id",
-            "collection_entity_id",
-            "canonical_id",
-        ),
-        maximum=limit + 1,
-        budget=read_budget,
     )

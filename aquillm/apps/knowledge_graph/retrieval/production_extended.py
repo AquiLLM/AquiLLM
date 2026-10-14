@@ -61,6 +61,7 @@ def _prepare_extended_branch(
     deadline,
     with_policy,
     read_budget=None,
+    seed_validation=None,
 ):
     runtime._exact_request(authorization, settings)
     scope = runtime._shared_scope(shared)
@@ -69,7 +70,9 @@ def _prepare_extended_branch(
     graph_seeds = getattr(baseline, "graph_seeds", None)
     from apps.documents.services.graph_admission_seeds import native_seed_rows
 
-    metadata = native_seed_rows(baseline, authorization=authorization, settings=settings)
+    metadata = (seed_validation.rows(baseline, authorization=authorization, settings=settings)
+                if seed_validation is not None and baseline is not None
+                else native_seed_rows(baseline, authorization=authorization, settings=settings))
     candidates = metadata if metadata is not None else getattr(baseline, "baseline_candidates", None)
     if (
         type(graph_seeds) is not tuple
@@ -120,14 +123,16 @@ def _prepare_extended_branch(
             with graph_stage(
                 branch="extended", stage="entity_resolution", clock=runtime.clock
             ):
-                by_chunk = repository.load_seed_identities(
-                    authority=authority,
-                    chunks=chunks,
-                    authorization=authorization,
-                    codec=runtime.codec,
-                    max_rows=_MAX_SEED_SOURCE_ROWS_PER_PROJECTION,
-                    **({"read_budget": read_budget} if read_budget is not None else {}),
-                )
+                by_chunk = seed_validation.identities(authority, chunks) if seed_validation is not None else None
+                if by_chunk is None:
+                    by_chunk = repository.load_seed_identities(
+                        authority=authority,
+                        chunks=chunks,
+                        authorization=authorization,
+                        codec=runtime.codec,
+                        max_rows=_MAX_SEED_SOURCE_ROWS_PER_PROJECTION,
+                        **({"read_budget": read_budget} if read_budget is not None else {}),
+                    )
             if set(by_chunk) - {pk for pk, _ in chunks}:
                 raise ValueError("extended source returned unrelated chunks")
         except Exception as error:

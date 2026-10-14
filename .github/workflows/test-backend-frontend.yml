@@ -170,6 +170,9 @@ jobs:
         run: >-
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_topology_manifest_batch.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_generation_batch_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_generation_gateway_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_batch_compression_v2.py
           aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter.py
           aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter_caps.py
           aquillm/apps/knowledge_graph/tests/test_topology_gateway_contracts.py
@@ -191,6 +194,8 @@ jobs:
         run: >-
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py
+          aquillm/apps/knowledge_graph/tests/test_closed_seed_projection_batch.py
+          aquillm/apps/documents/tests/test_closed_graph_seed_work.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_races.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_contexts.py
           aquillm/apps/knowledge_graph/tests/test_graph_seed_allocation_v2.py
@@ -462,6 +467,7 @@ jobs:
           aquillm/apps/memory/tests/test_chat_memory_latency.py
           aquillm/apps/ingestion/tests/test_transcribe_provider_selection.py
           aquillm/tests/test_app_startup.py
+          aquillm/tests/integration/test_ci_database_settings.py
           aquillm/tests/integration/test_rag_observability_logging.py
           aquillm/tests/integration/test_vllm_extra_args_parser.py
           aquillm/tests/integration/test_vllm_genesis_image.py
@@ -478,7 +484,7 @@ jobs:
           tests/test_check_retrieval_logging.py
           tests/test_replay_retrieval.py
           tests/test_replay_target_preflight.py
-          -x -vv --tb=short --durations=20
+          --ds=aquillm.settings_projection_test -x -vv --tb=short --durations=20
       - name: Logging and file-size guardrails
         run: |
           python scripts/check_logging_conventions.py

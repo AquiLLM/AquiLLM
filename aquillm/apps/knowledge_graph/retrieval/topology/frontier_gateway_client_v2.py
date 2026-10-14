@@ -5,14 +5,16 @@ from urllib.error import HTTPError
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import ProxyHandler, Request
 
-from .gateway_opener import build_opener
-
 from .frontier_contracts_v2 import FrontierBudgetExceeded
 from .frontier_gateway_contracts_v2 import (
+    BATCH_CHECKSUM,
+    BATCH_PATH,
+    BATCH_VERSION,
     CHECKSUM,
     PATH,
     VERSION,
     FrontierCompletedBudgetFailureV2,
+    FrontierGatewayBatchRequestV2,
     FrontierGatewayRequestV2,
     encode_request,
 )
@@ -23,6 +25,7 @@ from .gateway_client import (
     _schema_failure,
 )
 from .gateway_contracts import FAILURE_HTTP_STATUS, GatewayFailureReason, _load
+from .gateway_opener import build_opener
 
 
 class FrontierGatewayClientV2:
@@ -36,13 +39,39 @@ class FrontierGatewayClientV2:
         self.endpoint = urlunsplit((parts.scheme, parts.netloc, PATH, "", ""))
 
     def execute_frontier_read(self, *, kind, generation, keys, ready, deadline, budget):
+        return self._execute(
+            kind=kind,
+            generation=generation,
+            keys=keys,
+            ready=ready,
+            deadline=deadline,
+            budget=budget,
+        )
+
+    def execute_frontier_batch(self, *, kind, lookups, ready, deadline, budget):
+        return self._execute(
+            kind=kind, lookups=lookups, ready=ready, deadline=deadline, budget=budget
+        )
+
+    def _execute(
+        self, *, kind, ready, deadline, budget, generation=None, keys=(), lookups=None
+    ):
         budget.check_active()
-        allowance = budget.max_wire_bytes - budget.wire_bytes
+        allowance = budget.available_wire_bytes()
         if allowance <= 0:
             raise FrontierBudgetExceeded("frontier wire allowance exhausted")
-        body = encode_request(
-            FrontierGatewayRequestV2(kind, generation, keys, ready, allowance)
-        )
+        if lookups is None:
+            body = encode_request(
+                FrontierGatewayRequestV2(kind, generation, keys, ready, allowance)
+            )
+            endpoint, version, checksum = self.endpoint, VERSION, CHECKSUM
+        else:
+            body = encode_request(
+                FrontierGatewayBatchRequestV2(kind, lookups, ready, allowance)
+            )
+            parts = urlsplit(self.endpoint)
+            endpoint = urlunsplit((parts.scheme, parts.netloc, BATCH_PATH, "", ""))
+            version, checksum = BATCH_VERSION, BATCH_CHECKSUM
         remaining = min(
             deadline - budget.clock(),
             budget.turn_budget.remaining_ms() / 1000,
@@ -52,19 +81,19 @@ class FrontierGatewayClientV2:
         if timeout_ms <= 0:
             raise TimeoutError("frontier original deadline expired")
         request = Request(
-            self.endpoint,
+            endpoint,
             data=body,
             method="POST",
             headers={
                 "Authorization": "Bearer " + self.client.bearer_token,
                 "Content-Type": "application/json",
                 "Accept-Encoding": "identity",
-                "X-Topology-Schema-Version": VERSION,
-                "X-Topology-Schema-Checksum": CHECKSUM,
+                "X-Topology-Schema-Version": version,
+                "X-Topology-Schema-Checksum": checksum,
                 "X-Frontier-Timeout-Ms": str(timeout_ms),
             },
         )
-        opener = build_opener(self.endpoint, ProxyHandler({}), _RejectRedirect())
+        opener = build_opener(endpoint, ProxyHandler({}), _RejectRedirect())
         try:
             try:
                 response = opener.open(request, timeout=remaining)
@@ -72,7 +101,12 @@ class FrontierGatewayClientV2:
                 response = error  # Invalid/error bodies consume the same byte ledger.
             try:
                 return self._decode(
-                    response, allowance=allowance, budget=budget, deadline=deadline
+                    response,
+                    allowance=allowance,
+                    budget=budget,
+                    deadline=deadline,
+                    version=version,
+                    checksum=checksum,
                 )
             finally:
                 response.close()
@@ -82,7 +116,16 @@ class FrontierGatewayClientV2:
             budget.stop_uncertain()
             raise
 
-    def _decode(self, response, *, allowance, budget, deadline):
+    def _decode(
+        self,
+        response,
+        *,
+        allowance,
+        budget,
+        deadline,
+        version=VERSION,
+        checksum=CHECKSUM,
+    ):
         chunks, received = [], 0
         # urllib does not decompress bodies; request identity and reject encoded
         # responses after charging exactly the raw bytes received.
@@ -125,8 +168,8 @@ class FrontierGatewayClientV2:
             headers.get("Content-Encoding") is not None
             or headers.get("Transfer-Encoding") is not None
             or headers.get("Content-Type") != "application/json"
-            or headers.get("X-Topology-Schema-Version") != VERSION
-            or headers.get("X-Topology-Schema-Checksum") != CHECKSUM
+            or headers.get("X-Topology-Schema-Version") != version
+            or headers.get("X-Topology-Schema-Checksum") != checksum
         ):
             raise _schema_failure()
         if headers.get("Content-Length") != str(received):
@@ -154,6 +197,16 @@ class FrontierGatewayClientV2:
                     raise _schema_failure()
                 _failure(reason)
             raise _schema_failure()
+        if version == BATCH_VERSION:
+            from .frontier_gateway_codec_v2 import decode_batch_response
+
+            budget.check_active()
+            if budget.clock() >= deadline:
+                raise TimeoutError("frontier decode exceeded original deadline")
+            value = decode_batch_response(value)
+            budget.check_active()
+            if budget.clock() >= deadline:
+                raise TimeoutError("frontier decode exceeded original deadline")
         if (
             type(value) is not dict
             or set(value) != {"rows", "scanned_rows", "queries"}

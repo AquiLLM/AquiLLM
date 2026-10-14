@@ -51,6 +51,7 @@ def group_seeds(
     caps,
     deadline,
     frontier,
+    seed_validation=None,
 ):
     values, reasons = [], set()
     if settings.graph_direct_enabled:
@@ -75,7 +76,10 @@ def group_seeds(
             local = copy(runtime)
             local._shared = ProductionSharedScopeV1(group.scope)
             try:
-                extended = prepare_extended_branch(
+                from .production_extended import _prepare_extended_branch
+
+                prepare = prepare_extended_branch if seed_validation is None else _prepare_extended_branch
+                extended = prepare(
                     local,
                     baseline=baseline,
                     shared=local._shared,
@@ -83,6 +87,8 @@ def group_seeds(
                     settings=settings,
                     deadline=deadline,
                     read_budget=frontier,
+                    **({"seed_validation": seed_validation, "query": "", "with_policy": False}
+                       if seed_validation is not None else {}),
                 )
             except LocalBranchSchedulerFailure as error:
                 reasons.add(failure_reason(error))

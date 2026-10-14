@@ -37,10 +37,6 @@ def _dense_seed_keys(plan, refs):
 
 def fresh_seed_references(plan, seeds, *, dense_keys=None):
     from apps.collections.services.retrieval_authorization import revalidate_retrieval_authorization_context
-    from apps.documents.models import TextChunk
-    from .graph_candidate_metadata import captured_query, rank_refs
-    from .lexical_readiness import _matching_full_text_ids
-    from .representation_store import _active_chunk_predicates
 
     plan.check()
     scope, refs = plan.scope, plan.references
@@ -50,6 +46,18 @@ def fresh_seed_references(plan, seeds, *, dense_keys=None):
     authority = revalidate_retrieval_authorization_context(context=scope.authorization)
     if not {r.doc_id for r in wanted} <= set(authority.document_ids):
         raise SourceScopeUnavailable("source_admission_seed_unavailable")
+    return _live_seed_references(plan, wanted, dense_keys=dense_keys)
+
+
+def _live_seed_references(plan, wanted, *, dense_keys=None):
+    """Live body-free predicates; only the private closed owner supplies authority."""
+    from apps.documents.models import TextChunk
+    from .graph_candidate_metadata import captured_query, rank_refs
+    from .lexical_readiness import _matching_full_text_ids
+    from .representation_store import _active_chunk_predicates
+
+    plan.check()
+    scope = plan.scope
     found = {}
     def scoped_query(selected):
         return _active_chunk_predicates(

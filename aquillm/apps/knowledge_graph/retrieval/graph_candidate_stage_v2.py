@@ -36,11 +36,24 @@ class _GraphSourceStage:
         self.cache = ChainMap(self.pending, header[0][4])
         self.initial_keys = set()
         self.final_keys = frozenset()
+        self._active = True
+        self._seed_validation = None
+
+    def seed_validation(self, snapshot, check, *, runtime=None):
+        from .closed_graph_seed_validation import _ClosedSeedValidation
+
+        self.check()
+        if self._seed_validation is not None:
+            raise SourceScopeUnavailable("graph_original_scope_unavailable")
+        self._seed_validation = _ClosedSeedValidation(self, snapshot, check, runtime=runtime)
+        self._seed_validation.check()
+        return self._seed_validation
 
     def check(self):
         check_source_deadline()
         if (
-            current_scope() is not self.scope
+            not self._active
+            or current_scope() is not self.scope
             or graph_source_runtime() is not self.runtime
             or not self.budget.can_publish()
             or not _same_header(self.header, _closed_header(self.query, self.scope))
@@ -147,6 +160,8 @@ class _GraphSourceStage:
     def withdraw(self):
         from apps.documents.services.chunk_search_revalidation import restrict_fusion
 
+        self._active = False
+        self._seed_validation = None
         rejected = self.staged.fts_invalid_ids - self.before["fts_invalid_ids"]
         self.containers["fts_invalid_ids"].update(rejected)
         if (

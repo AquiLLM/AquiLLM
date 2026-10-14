@@ -5,11 +5,12 @@ from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
     FrontierPageV2,
 )
 
+from .frontier_generation_batch_v2 import attest_all
 from .frontier_index_build_v2 import quality_key
 from .frontier_index_contracts_v2 import digest
 from .frontier_reads_v2 import FrontierReadsV2, schema_error
+from .frontier_scope_batch_v2 import scope_rows, scope_rows_all
 from .frontier_validation_v2 import validate_relation_entry, validate_source_page
-from .frontier_scope_batch_v2 import scope_rows
 
 PAGE_FAMILIES = (
     "ProjectedEntity",
@@ -63,6 +64,33 @@ class FrontierSessionV2:
         )
 
     def initialize(self):
+        self.scope_rows = {}
+        multi = len(self.selected) > 1
+        self.reads.reserve_final(multi=multi)
+        if multi:
+            self.indexed = attest_all(self.reads, self.selected)
+            sources = {
+                g: [
+                    s.collection_key,
+                    *(
+                        d.document_key
+                        for d in self.ready.authorized_documents
+                        if d.generation_key == g
+                    ),
+                ]
+                for g, s in self.selected.items()
+                if self.indexed[g]
+            }
+            staged = scope_rows_all(self.reads, sources)
+            for generation, rows in staged.items():
+                page = page_from_rows(rows)
+                validate_source_page(
+                    page, selected=self.selected[generation], ready=self.ready
+                )
+                if {r.scope_key for r in page.provenance} != set(sources[generation]):
+                    raise schema_error()
+            self.scope_rows = staged
+            return
         for generation, selected in self.selected.items():
             self.indexed[generation] = self.reads.attest(selected)
         for generation, selected in self.selected.items():
@@ -84,6 +112,9 @@ class FrontierSessionV2:
             self.scope_rows[generation] = rows
 
     def final_attestation(self):
+        if len(self.selected) > 1:
+            attest_all(self.reads, self.selected, final=True)
+            return
         for selected in self.selected.values():
             self.reads.attest(selected, final=True)
 

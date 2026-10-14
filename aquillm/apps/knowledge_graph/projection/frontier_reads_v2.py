@@ -1,34 +1,40 @@
 """Meter every equality lookup and validate authenticated source records."""
 
 from copy import deepcopy
-from dataclasses import fields
 
-from apps.knowledge_graph.retrieval.topology.contracts import TopologyFailureReason
 from apps.knowledge_graph.retrieval.topology.failures import TopologyLoadError
 from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
     FrontierBudgetExceeded,
 )
 from apps.knowledge_graph.retrieval.topology.frontier_gateway_contracts_v2 import (
     FrontierCompletedBudgetFailureV2,
+    FrontierGatewayBatchRequestV2,
 )
 
 from .frontier_cypher_v2 import (
-    INDEX_BATCH_LOOKUP, INDEX_LOOKUP, MANIFEST_LOOKUP, RAW_LOOKUP,
+    INDEX_BATCH_LOOKUP,
+    INDEX_BATCH_MULTI_LOOKUP,
+    INDEX_LOOKUP,
+    MANIFEST_BATCH_LOOKUP,
+    MANIFEST_LOOKUP,
+    RAW_BATCH_MULTI_LOOKUP,
+    RAW_LOOKUP,
 )
-from .frontier_index_contracts_v2 import decode_record, marker_present, record_digest
+from .frontier_index_contracts_v2 import decode_record
+from .frontier_source_validation_v2 import KINDS as KINDS
+from .frontier_source_validation_v2 import schema_error as schema_error
+from .frontier_source_validation_v2 import validate_marker, validate_raw
 from .memgraph_driver import MemgraphDriverError
-from .memgraph_pagination import FAMILY_IDENTITY_FIELDS
-from .memgraph_records import FAMILIES, _dto
 
 QUERIES = {
-    "manifest": MANIFEST_LOOKUP, "index": INDEX_LOOKUP,
-    "index_batch": INDEX_BATCH_LOOKUP, "raw": RAW_LOOKUP,
+    "manifest": MANIFEST_LOOKUP,
+    "index": INDEX_LOOKUP,
+    "index_batch": INDEX_BATCH_LOOKUP,
+    "raw": RAW_LOOKUP,
+    "manifest_batch": MANIFEST_BATCH_LOOKUP,
+    "index_batch_multi": INDEX_BATCH_MULTI_LOOKUP,
+    "raw_batch_multi": RAW_BATCH_MULTI_LOOKUP,
 }
-KINDS = dict(FAMILIES)
-
-
-def schema_error(message="frontier source schema mismatch"):
-    return TopologyLoadError(TopologyFailureReason.BACKEND_SCHEMA_MISMATCH)
 
 
 class FrontierReadsV2:
@@ -37,24 +43,68 @@ class FrontierReadsV2:
         self.deadline = min(deadline, budget.deadline)
         self.manifests = {}
         self._index_records = {}
+        self._final_authority = None
 
-    def read(self, kind, generation, keys=()):
-        maximum = 10 * len(keys) if kind == "raw" else 2
+    def reserve_final(self, *, multi):
+        if self._final_authority is None:
+            count = len(self.ready.selected_generations)
+            self._final_authority = self.budget.reserve_authority(
+                2 * count, (count + 159) // 160 if multi else count
+            )
+
+    def reserve_final_wire(self, rows, *, multi):
+        if self._final_authority is None:
+            return
+        from apps.knowledge_graph.retrieval.topology.frontier_gateway_codec_v2 import (
+            encode_batch_response,
+        )
+        from apps.knowledge_graph.retrieval.topology.gateway_contracts import _canonical
+
+        ordered = sorted(rows, key=_canonical) if multi else rows
+        payload = _canonical({"rows": ordered, "scanned_rows": len(rows), "queries": 1})
+        wire = encode_batch_response(payload) if multi else payload
+        self.budget.reserve_authority_wire(self._final_authority, len(wire))
+
+    def read_batch(self, kind, lookups, *, final=False):
+        request = FrontierGatewayBatchRequestV2(
+            kind,
+            lookups,
+            self.ready,
+            max(1, self.budget.max_wire_bytes - self.budget.wire_bytes),
+        )
+        return self.read(
+            kind, None, lookups=lookups, maximum=request.maximum, final=final
+        )
+
+    def read(
+        self, kind, generation, keys=(), *, lookups=None, maximum=None, final=False
+    ):
+        maximum = (
+            maximum if lookups is not None else (10 * len(keys) if kind == "raw" else 2)
+        )
         if kind == "index_batch":
             if not 1 <= len(keys) <= 32:
                 raise ValueError("frontier index batch exceeds its bound")
             maximum = 2 * len(keys)
         if maximum > 320 or maximum < 1:
             raise ValueError("frontier lookup batch exceeds its bound")
+        if not final and self.budget.available_wire_bytes() <= 0:
+            raise FrontierBudgetExceeded("frontier reserves final wire authority")
         if (
             kind != "manifest"
+            and lookups is None
+            and self._final_authority is None
             and self.budget.queries + len(self.ready.selected_generations)
             >= self.budget.max_queries
         ):
             raise FrontierBudgetExceeded(
                 "frontier reserves final authority verification"
             )
-        self.budget.reserve_read(maximum)
+        self.budget.reserve_read(
+            maximum, authority=self._final_authority if final else None
+        )
+        if final:
+            self._final_authority = None
         remaining = min(
             self.deadline - self.budget.clock(),
             self.budget.turn_budget.remaining_ms() / 1000,
@@ -62,12 +112,26 @@ class FrontierReadsV2:
         if remaining <= 0:
             raise TimeoutError("frontier original deadline expired")
         parameters = {"generation_key": generation}
-        if kind == "index":
+        if lookups is not None:
+            parameters = {"lookups_csv": ",".join(g + ":" + k for g, k in lookups)}
+        elif kind == "index":
             parameters = {"index_key": keys[0]}
         elif kind in {"raw", "index_batch"}:
             parameters["keys_csv"] = ",".join(keys)
         try:
-            if callable(getattr(self.driver, "execute_frontier_read", None)):
+            if lookups is not None and callable(
+                getattr(self.driver, "execute_frontier_batch", None)
+            ):
+                rows = self.driver.execute_frontier_batch(
+                    kind=kind,
+                    lookups=lookups,
+                    ready=self.ready,
+                    deadline=self.deadline,
+                    budget=self.budget,
+                )
+            elif lookups is None and callable(
+                getattr(self.driver, "execute_frontier_read", None)
+            ):
                 rows = self.driver.execute_frontier_read(
                     kind=kind,
                     generation=generation,
@@ -112,36 +176,21 @@ class FrontierReadsV2:
 
     def attest(self, selected, *, final=False):
         generation = selected.generation_key
-        rows = self.read("manifest", generation)
+        rows = self.read("manifest", generation, final=final)
         if len(rows) != 1 or type(rows[0]) is not dict or set(rows[0]) != {"record"}:
             raise schema_error()
         marker = rows[0]["record"]
-        if type(marker) is not dict:
-            raise schema_error()
-        names = (
-            "collection_key",
-            "generation_key",
-            "projection_key",
-            "graph_checksum",
-            "schema_version",
-            "projection_version",
-            "identifier_key_version",
-            "membership_epoch",
-            "membership_checksum",
+        indexed = self.validate_marker(selected, marker, final=final)
+        if not final:
+            self.reserve_final_wire(rows, multi=False)
+        return indexed
+
+    def validate_marker(self, selected, marker, *, final=False, store=True):
+        generation = selected.generation_key
+        indexed = validate_marker(
+            selected, marker, initial=self.manifests.get(generation), final=final
         )
-        if any(marker.get(n) != getattr(selected, n) for n in names) or (
-            marker.get("state") != "ready"
-            or marker.get("artifact_key") != selected.active_artifact_key
-        ):
-            raise TopologyLoadError(TopologyFailureReason.READINESS_MISMATCH)
-        try:
-            indexed = marker_present(marker)
-        except (ValueError, TypeError):
-            raise schema_error() from None
-        if final:
-            if self.manifests.get(generation) != marker:
-                raise TopologyLoadError(TopologyFailureReason.READINESS_MISMATCH)
-        else:
+        if not final and store:
             self.manifests[generation] = marker
         return indexed
 
@@ -155,7 +204,11 @@ class FrontierReadsV2:
         identity = generation, key
         if identity not in self._index_records:
             rows = self.read("index", generation, (key,))
-            if len(rows) != 1 or type(rows[0]) is not dict or set(rows[0]) != {"record"}:
+            if (
+                len(rows) != 1
+                or type(rows[0]) is not dict
+                or set(rows[0]) != {"record"}
+            ):
                 raise schema_error()
             try:
                 decoded = decode_record(
@@ -236,48 +289,7 @@ class FrontierReadsV2:
             expected[label, key] = checksum
         keys = tuple(sorted({k for _, k in expected}))
         rows = self.read("raw", generation, keys)
-        actual, occupancies = {}, {}
-        for row in rows:
-            if type(row) is not dict or set(row) != {"lookup_key", "record", "labels"}:
-                raise schema_error()
-            key, properties, labels = row["lookup_key"], row["record"], row["labels"]
-            if (
-                key not in keys
-                or type(properties) is not dict
-                or type(labels) is not list
-            ):
-                raise schema_error()
-            occupancies[key] = occupancies.get(key, 0) + 1
-            families = set(labels) & set(KINDS)
-            if (
-                occupancies[key] > 9
-                or len(families) != 1
-                or set(labels) != families | {"ProjectedRecord"}
-            ):
-                raise schema_error()
-            label = next(iter(families))
-            if (
-                (label, key) in actual
-                or properties.get("generation_key") != generation
-                or properties.get("opaque_key") != key
-            ):
-                raise schema_error()
-            try:
-                names = {f.name for f in fields(KINDS[label])} | {
-                    "opaque_key",
-                    "generation_key",
-                }
-                if set(properties) - names:
-                    raise ValueError
-                value = _dto(KINDS[label], properties)
-                if getattr(value, FAMILY_IDENTITY_FIELDS[label]) != key:
-                    raise ValueError
-            except (KeyError, TypeError, ValueError):
-                raise schema_error() from None
-            actual[label, key] = value
-        if any(
-            k not in actual or record_digest(actual[k]) != v
-            for k, v in expected.items()
-        ):
-            raise schema_error()
-        return {k: actual[k] for k in expected}
+        return self.validate_raw(generation, expected, keys, rows)
+
+    def validate_raw(self, generation, expected, keys, rows):
+        return validate_raw(generation, expected, keys, rows)

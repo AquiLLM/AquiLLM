@@ -74,6 +74,7 @@ def _execute_captured_graph_v2(
     frontier,
     selected,
     hydrate,
+    seed_validation=None,
 ):
     """Private eager core; native owner or public caller captures before entry."""
     frontier.check_active()
@@ -123,7 +124,10 @@ def _execute_captured_graph_v2(
     )
     references, scores, reasons = [], {}, set(selected.coverage.reasons)
     try:
-        allocations, seed_reasons = allocate_group_seeds_v2(
+        from .graph_seed_allocation_v2 import _allocate_closed_group_seeds_v2
+
+        allocate = allocate_group_seeds_v2 if seed_validation is None else _allocate_closed_group_seeds_v2
+        allocations, seed_reasons = allocate(
             groups=selected.groups,
             runtime=runtime,
             query=query,
@@ -133,6 +137,7 @@ def _execute_captured_graph_v2(
             caps=caps,
             deadline=deadline,
             frontier=frontier,
+            **({"seed_validation": seed_validation} if seed_validation is not None else {}),
         )
     except (FrontierBudgetExceeded, TimeoutError) as exc:
         reason = (

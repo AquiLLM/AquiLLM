@@ -94,7 +94,8 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
             assert caught.value.coverage.reasons == ("frontier_budget",)
             assert caught.value.reserved_source_rows == 0
             assert caught.value.work_uncertain is False
-            assert budget.queries == budget.source_rows == len(driver.calls) == 1
+            assert budget.source_rows == 2
+            assert budget.queries == len(driver.calls) == 1
             assert budget.wire_bytes == sum(body_sizes) <= wire_cap
             print(
                 "FRONTIER_HTTP_COMPLETED_BUDGET",
