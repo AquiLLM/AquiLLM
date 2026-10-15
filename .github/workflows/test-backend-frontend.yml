@@ -171,6 +171,7 @@ jobs:
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_topology_manifest_batch.py
           aquillm/apps/knowledge_graph/tests/test_frontier_generation_batch_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_window_feasibility_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_generation_gateway_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_batch_compression_v2.py
           aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter.py
