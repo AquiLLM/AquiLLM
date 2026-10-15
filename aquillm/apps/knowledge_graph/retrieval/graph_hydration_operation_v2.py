@@ -154,7 +154,6 @@ def _selection_rows(
 
 def _hydrate_closed_selection_rows(*, selected, pairs, runtime, scope, codec,
                                   document_codec, deadline, stage, admission):
-    from apps.documents.services.graph_admission_adapter import selector_body_reader
     from .graph_candidate_stage_v2 import _GraphSourceStage
     if (type(stage) is not _GraphSourceStage or stage.scope is not scope
             or stage.runtime is not runtime or scope.representation is not selected.representation_snapshot):
@@ -162,20 +161,25 @@ def _hydrate_closed_selection_rows(*, selected, pairs, runtime, scope, codec,
     stage.check()
     return _hydrate_selection_rows(selected=selected, pairs=pairs, runtime=runtime,
         scope=scope, codec=codec, document_codec=document_codec, deadline=deadline,
-        body_reader=selector_body_reader(admission, stage), _source_stage=stage)
+        body_reader=None, _source_stage=stage, _source_admission=admission)
 
 
 def _hydrate_selection_rows(
-    *, selected, pairs, runtime, scope, codec, document_codec, deadline, body_reader, _source_stage=None
+    *, selected, pairs, runtime, scope, codec, document_codec, deadline, body_reader,
+    _source_stage=None, _source_admission=None
 ):
     """Private eager mapping/body/provenance core; positive state is caller-owned."""
     from apps.documents.models import TextChunk
     if _source_stage is not None:
+        from apps.documents.services.graph_admission_adapter import selector_body_reader
+        from apps.documents.services.graph_source_admission import NativeSourceAdmission
         from .graph_candidate_stage_v2 import _GraphSourceStage
-        if (type(_source_stage) is not _GraphSourceStage or _source_stage.scope is not scope
-                or _source_stage.runtime is not runtime):
+        if (body_reader is not None or type(_source_stage) is not _GraphSourceStage or _source_stage.scope is not scope
+                or _source_stage.runtime is not runtime or (_source_admission is not None and (
+                    type(_source_admission) is not NativeSourceAdmission or _source_admission.scope is not scope))):
             raise SourceScopeUnavailable("graph_original_scope_unavailable")
         _source_stage.check()
+        body_reader = selector_body_reader(_source_admission, _source_stage)
 
     authorization = runtime.authorization
     requested = (

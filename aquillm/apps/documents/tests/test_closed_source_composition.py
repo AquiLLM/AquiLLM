@@ -184,3 +184,50 @@ def test_missing_tool_scope_keeps_prelock_runtime_identity(pair, monkeypatch, mu
         tool_scope(runtime, using="default")
     assert changed and getattr(runtime, "_frozen_retrieval_scope", None) is None
     assert runtime.cache == {} and runtime.budget.sources_used == 0
+
+
+@pytest.mark.parametrize("route", ["stage_reader", "stage_admission", "standalone"])
+def test_hydration_arbitrary_reader_rejected_only_with_source_stage(monkeypatch, route):
+    from types import SimpleNamespace
+    from django.test.utils import CaptureQueriesContext
+    from apps.documents.models import TextChunk
+    from apps.documents.services.representation_contracts import SourceScopeUnavailable
+    from apps.knowledge_graph.retrieval import graph_hydration_operation_v2 as hydration
+
+    original, observed = hydration._hydrate_selection_rows, []
+    closed = route != "standalone"
+    table = connection.ops.quote_name(TextChunk._meta.db_table)
+
+    def inject(**kwargs):
+        stage, called = kwargs["_source_stage"], []
+        stage.check()  # The genuine original stage is live, not a stand-in.
+        before = (stage.budget.sources_used, stage.budget.text_used.copy(), dict(stage.pending))
+        def read(query):
+            called.append(True)
+            return tuple(query)
+        kwargs["body_reader"] = read
+        if route == "stage_admission":
+            kwargs.update(body_reader=None, _source_admission=SimpleNamespace(
+                scope=stage.scope, query=stage.query, graph_read=lambda query, native_read: read(query)))
+        elif not closed:
+            kwargs["_source_stage"] = None
+        with CaptureQueriesContext(connection) as queries:
+            if closed:
+                with pytest.raises(SourceScopeUnavailable):
+                    original(**kwargs)
+                result = (), {}
+            else:
+                result = original(**kwargs)
+                assert result[0]
+        body_sql = any(f"FROM {table}" in item["sql"] for item in queries)
+        assert bool(called) is body_sql is not closed
+        assert before == (stage.budget.sources_used, stage.budget.text_used, stage.pending)
+        observed.append(True)
+        return result
+
+    with graph_frame(monkeypatch) as active:
+        monkeypatch.setattr(hydration, "_hydrate_selection_rows", inject)
+        rows, diagnostics = run_graph(active)
+        assert diagnostics["graph_status"] == ("miss" if closed else "hit")
+        assert len(rows) == (1 if closed else 2)
+    assert observed
