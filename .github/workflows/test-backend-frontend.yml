@@ -259,6 +259,8 @@ jobs:
           tests/test_graph_replay_provenance.py
           aquillm/apps/documents/tests/test_native_graph_limit_closure.py
           aquillm/apps/documents/tests/test_graph_source_admission.py
+          aquillm/apps/documents/tests/test_closed_source_composition.py
+          aquillm/apps/documents/tests/test_closed_source_capture_mutations.py
           aquillm/apps/documents/tests/test_graph_admission_channels.py
           aquillm/apps/documents/tests/test_graph_admission_publication.py
           aquillm/apps/documents/tests/test_graph_admission_seeds.py

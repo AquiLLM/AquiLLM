@@ -7,19 +7,13 @@ from apps.collections.services.retrieval_authorization import (
     revalidate_retrieval_authorization_context,
 )
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
-from apps.documents.services.representation_store import (
-    validate_representation_snapshot,
-)
+from apps.documents.services.representation_store import validate_representation_snapshot
 from apps.knowledge_graph.projection.memberships import (
     load_automatic_membership_assignments,
     membership_decision_checksum,
 )
-from apps.knowledge_graph.projection.representation_binding import (
-    validate_record_binding,
-)
-from apps.knowledge_graph.projection.representation_inputs import (
-    validate_artifact_selection,
-)
+from apps.knowledge_graph.projection.representation_binding import validate_record_binding
+from apps.knowledge_graph.projection.representation_inputs import validate_artifact_selection
 
 from .graph_handoff import GraphCoverageV2
 from .membership_certificate_authority import certified_membership_checksums
@@ -42,6 +36,12 @@ def mismatch():
 
 
 def validate_original_scope(*, authorization, representation_snapshot):
+    _validate_original_authorization(authorization)
+    validate_representation_snapshot(representation_snapshot, using=authorization.database_alias)
+    _validate_original_selection_shape(authorization, representation_snapshot)
+
+
+def _validate_original_authorization(authorization):
     if type(authorization) is not RetrievalAuthorizationContext:
         raise TypeError("authorization must be exact")
     current = revalidate_retrieval_authorization_context(context=authorization)
@@ -50,17 +50,22 @@ def validate_original_scope(*, authorization, representation_snapshot):
         or frozenset(current.document_ids) != authorization.selected_document_ids
     ):
         raise ReadyScopeError(ReadyScopeFailureReason.AUTHORIZATION_CONTEXT_INVALID)
-    validate_representation_snapshot(
-        representation_snapshot, using=authorization.database_alias
-    )
+
+
+def _validate_original_selection_shape(authorization, representation_snapshot):
     selections = representation_snapshot.selections
-    if {
-        s.document.id for s in selections
-    } != authorization.selected_document_ids or any(
+    if {s.document.id for s in selections} != authorization.selected_document_ids or any(
         s.document.collection_id not in authorization.selected_collection_ids
         for s in selections
     ):
         mismatch()
+
+
+def _validate_original_scope_header(*, authorization, representation_snapshot):
+    from apps.documents.services.representation_store import ordered_selections
+    _validate_original_authorization(authorization)
+    ordered_selections(representation_snapshot)
+    _validate_original_selection_shape(authorization, representation_snapshot)
 
 
 def load_authorities_v2(*, authorization, settings, representation_snapshot, codec):
@@ -126,18 +131,10 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
         if (
             state is None
             or artifact is None
-            or (
-                row.collection_pk_snapshot,
-                row.artifact_pk_snapshot,
-                row.membership_epoch,
-                row.membership_checksum,
-            )
-            != (
-                row.collection_id,
-                state.active_artifact_id,
-                state.registry_epoch,
-                state.membership_checksum,
-            )
+            or (row.collection_pk_snapshot, row.artifact_pk_snapshot,
+                row.membership_epoch, row.membership_checksum)
+            != (row.collection_id, state.active_artifact_id,
+                state.registry_epoch, state.membership_checksum)
         ):
             mismatch()
         if (
@@ -237,13 +234,30 @@ def select_ready_scope_v2(
     *, authorization, settings, representation_snapshot, requested_document_ids=None
 ) -> SelectedGraphScopeV2:
     from django.core.exceptions import ValidationError
+    try:
+        validate_original_scope(authorization=authorization, representation_snapshot=representation_snapshot)
+    except (SourceScopeUnavailable, ValidationError, TypeError, ValueError) as exc:
+        if isinstance(exc, ReadyScopeError):
+            raise
+        mismatch()
+    return _select_ready_scope_v2(authorization=authorization, settings=settings,
+        representation_snapshot=representation_snapshot, requested_document_ids=requested_document_ids)
+
+
+def _select_closed_ready_scope_v2(**kwargs):
+    _validate_original_scope_header(authorization=kwargs["authorization"],
+        representation_snapshot=kwargs["representation_snapshot"])
+    return _select_ready_scope_v2(**kwargs)
+
+
+def _select_ready_scope_v2(
+    *, authorization, settings, representation_snapshot, requested_document_ids=None
+):
+    from django.core.exceptions import ValidationError
 
     from apps.knowledge_graph.projection.runtime import projection_identifier_codec
 
     try:
-        validate_original_scope(
-            authorization=authorization, representation_snapshot=representation_snapshot
-        )
         codec = projection_identifier_codec(settings)
         authorities = load_authorities_v2(
             authorization=authorization,
@@ -262,26 +276,12 @@ def select_ready_scope_v2(
     for row in authorities:
         grouped[compatible_signature(row)].append(row)
     try:
-        groups = tuple(
-            sorted(
-                (
-                    assemble_group_v2(
-                        authorities=tuple(rows),
-                        authorization=authorization,
-                        codec=codec,
-                        representation_snapshot=representation_snapshot,
-                    )
-                    for rows in grouped.values()
-                ),
-                key=lambda group: group.group_checksum,
-            )
-        )
+        groups = tuple(sorted((assemble_group_v2(authorities=tuple(rows), authorization=authorization,
+            codec=codec, representation_snapshot=representation_snapshot) for rows in grouped.values()),
+            key=lambda group: group.group_checksum))
         count = sum(len(g.scope.selected_document_ids) for g in groups)
-        total = len(
-            authorization.selected_document_ids
-            if requested_document_ids is None
-            else requested_document_ids
-        )
+        total = len(authorization.selected_document_ids
+            if requested_document_ids is None else requested_document_ids)
         coverage = GraphCoverageV2(
             total,
             count,
@@ -289,12 +289,7 @@ def select_ready_scope_v2(
             () if count == total else ("not_ready",),
             False,
         )
-        return SelectedGraphScopeV2(
-            groups,
-            authorization.authorization_context_signature,
-            representation_snapshot,
-            coverage,
-            requested_document_ids,
-        )
+        return SelectedGraphScopeV2(groups, authorization.authorization_context_signature,
+            representation_snapshot, coverage, requested_document_ids)
     except (TypeError, ValueError):
         mismatch()

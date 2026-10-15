@@ -72,7 +72,7 @@ def test_concurrent_tools_share_original_snapshot(pair):
 @pytest.mark.parametrize("pause", ["before_check", "before_lock"])
 def test_first_public_read_adopts_concurrent_original_only_under_lock(pair, monkeypatch, pause):
     """A real first installation can happen on either side of the entry check."""
-    from apps.documents.services import chunk_search_scope, source_deadline
+    from apps.documents.services import representation_store, source_deadline
 
     a, b, _, old, chunk, runtime = pair
     waiting, resume, worker = Event(), Event(), local()
@@ -112,8 +112,8 @@ def test_first_public_read_adopts_concurrent_original_only_under_lock(pair, monk
         finally:
             close_old_connections()
 
-    with patch.object(chunk_search_scope, "freeze_active_representations",
-                      wraps=chunk_search_scope.freeze_active_representations) as freeze:
+    with patch.object(representation_store, "_capture_active_representations",
+                      wraps=representation_store._capture_active_representations) as freeze:
         with ThreadPoolExecutor(max_workers=1) as pool:
             pending = pool.submit(read_waiter)
             try:

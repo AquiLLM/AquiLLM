@@ -3,7 +3,7 @@
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
-from apps.documents.services.representation_store import active_chunk_scope
+from apps.documents.services.representation_store import active_chunk_scope, _active_chunk_predicates
 from apps.knowledge_graph.projection.identifiers import (
     OpaqueProjectionKey,
     ProjectionIdentifierDomain,
@@ -24,6 +24,17 @@ def validate_captured_selection(*, selected, authorization, settings, codec):
         authorization=authorization,
         representation_snapshot=selected.representation_snapshot,
     )
+    _validate_captured_authorities(selected=selected, authorization=authorization, settings=settings, codec=codec)
+
+
+def _validate_closed_captured_selection(*, selected, authorization, settings, codec):
+    from .ready_scope_repository_v2 import _validate_original_scope_header
+    _validate_original_scope_header(authorization=authorization,
+        representation_snapshot=selected.representation_snapshot)
+    _validate_captured_authorities(selected=selected, authorization=authorization, settings=settings, codec=codec)
+
+
+def _validate_captured_authorities(*, selected, authorization, settings, codec):
     if (
         selected.authorization_context_signature
         != authorization.authorization_context_signature
@@ -134,10 +145,29 @@ def _materialize(*, selected, refs, authorization):
         return ()
 
 
-def _materialize_rows(*, selected, refs, authorization, codec, body_reader):
+def _materialize_closed_rows(*, selected, refs, authorization, codec, stage):
+    from .graph_candidate_stage_v2 import _GraphSourceStage
+    if (type(stage) is not _GraphSourceStage or stage.scope.authorization is not authorization
+            or stage.scope.representation is not selected.representation_snapshot):
+        raise SourceScopeUnavailable("graph_original_scope_unavailable")
+    stage.check()
+    return _materialize_rows(selected=selected, refs=refs, authorization=authorization,
+        codec=codec, body_reader=stage.read, _source_stage=stage)
+
+
+def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _source_stage=None):
     """Private exact eager reversal; owning callers retain fresh whole boundaries."""
     from apps.documents.models import TextChunk
     from apps.knowledge_graph.models import ProjectionChunkReference
+    if _source_stage is not None:
+        from .graph_candidate_stage_v2 import _GraphSourceStage
+        if (type(_source_stage) is not _GraphSourceStage
+                or _source_stage.scope.representation is not selected.representation_snapshot
+                or _source_stage.scope.authorization is not authorization
+                or getattr(body_reader, "__self__", None) is not _source_stage
+                or getattr(body_reader, "__func__", None) is not _GraphSourceStage.read):
+            raise SourceScopeUnavailable("graph_original_scope_unavailable")
+        _source_stage.check()
 
     from .ready_materialization import (
         DjangoPrivateChunkMapRepository,
@@ -169,7 +199,7 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader):
                 self, *, chunk_predicates, authorized_document_ids, database_alias
             ):
                 return body_reader(
-                    active_chunk_scope(
+                    (_active_chunk_predicates if _source_stage is not None else active_chunk_scope)(
                         TextChunk.objects.using(database_alias).filter(
                             pk__in=tuple(row[0] for row in chunk_predicates),
                             doc_id__in=authorized_document_ids,

@@ -97,63 +97,82 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
         and parent_connection.get_autocommit()
         and not parent_connection.execute_wrappers
     )
-    check()
-    with _metadata_database(scope, header, check):
-        check()
-        validate_requested_authorization(scope.runtime, authorization, documents)
-        channels, dense, terms, timings, coverage, error = capture_metadata(
-            model, query, scope, limits, observation, check,
-            allow_lexical_overlap=allow_lexical_overlap,
-        )
-        from apps.knowledge_graph.retrieval.graph_runtime_v2 import _caps
+    from apps.knowledge_graph.retrieval.graph_candidate_stage_v2 import _GraphSourceStage
+    stage = _GraphSourceStage(scope, base, header)
+    from .graph_admission_read import _read_initial_captured_refs
+    try:
+        with header[0][5]:
+            check()
+            stage.check()
+            with _metadata_database(scope, header, check):
+                check()
+                validate_requested_authorization(scope.runtime, authorization, documents)
+                channels, dense, terms, timings, coverage, error = capture_metadata(
+                    model, query, scope, limits, observation, check,
+                    stage=stage, allow_lexical_overlap=allow_lexical_overlap,
+                )
+                from apps.knowledge_graph.retrieval.graph_runtime_v2 import _caps
 
-        cap = min(20, config.max_candidates, _caps(dependencies.settings).max_results)
-        budget = scope.runtime.budget
-        charged = charged_sources(budget)
-        active = sum(bool(channels[name]) for name in CHANNELS)
-        baseline_allowance, graph_ceiling = allocation(
-            max(0, budget.limits.unique_sources - len(charged)), cap, active
-        )
-        ids = {name: tuple(r.pk for r in refs) for name, refs in channels.items()}
-        all_refs = {r.pk: r for refs in channels.values() for r in refs}
-        reused = tuple(pk for pk in fair_prefix(ids, 45) if all_refs[pk].identity in charged)
-        novel = {name: tuple(pk for pk in lane if all_refs[pk].identity not in charged)
-                 for name, lane in ids.items()}
-        protected = ()
-        if dict(ranking)["protected_exact"] and terms and any(
-            term.case_sensitive or term.kind == "phrase" for term in terms
-        ):
-            protected = tuple(r.pk for r in channels["exact"]
-                              if r.exact_coverage == len(terms))[:1]
-        selected = set(reused + fair_prefix(novel, baseline_allowance, protected=protected))
-        baseline_order = tuple(dict.fromkeys(r.pk for name in
-                              ("dense", "trigram", "exact", "full_text") for r in channels[name]))
-        initial_ids = tuple(pk for pk in baseline_order if pk in selected)[:45]
-        check()
-    plan = NativeSourceAdmission(
-        scope, header, operation, parent_deadline, dependencies, dependencies_before, settings_before, ranking,
-        tuple((name, channels[name]) for name in CHANNELS), tuple(dense.items()),
-        query, graph_ceiling, initial_ids, frozenset(),
-    )
-    initial = plan.initial()
-    plan = replace(plan, graph_start=charged_sources(budget))
-    plan.counts["baseline_initial_hydrated"] = len(initial)
-    by_id = {r.pk: r for r in initial}
-    baseline = initial
-    from .chunk_search_candidates import HybridCandidateSnapshot
+                cap = min(20, config.max_candidates, _caps(dependencies.settings).max_results)
+                budget = scope.runtime.budget
+                charged = charged_sources(budget)
+                active = sum(bool(channels[name]) for name in CHANNELS)
+                baseline_allowance, graph_ceiling = allocation(
+                    max(0, budget.limits.unique_sources - len(charged)), cap, active
+                )
+                ids = {name: tuple(r.pk for r in refs) for name, refs in channels.items()}
+                all_refs = {r.pk: r for refs in channels.values() for r in refs}
+                reused = tuple(pk for pk in fair_prefix(ids, 45) if all_refs[pk].identity in charged)
+                novel = {name: tuple(pk for pk in lane if all_refs[pk].identity not in charged)
+                         for name, lane in ids.items()}
+                protected = ()
+                if dict(ranking)["protected_exact"] and terms and any(
+                    term.case_sensitive or term.kind == "phrase" for term in terms
+                ):
+                    protected = tuple(r.pk for r in channels["exact"]
+                                      if r.exact_coverage == len(terms))[:1]
+                selected = set(reused + fair_prefix(novel, baseline_allowance, protected=protected))
+                baseline_order = tuple(dict.fromkeys(r.pk for name in
+                                      ("dense", "trigram", "exact", "full_text") for r in channels[name]))
+                initial_ids = tuple(pk for pk in baseline_order if pk in selected)[:45]
+                check()
+            plan = NativeSourceAdmission(
+                scope, header, operation, parent_deadline, dependencies, dependencies_before, settings_before, ranking,
+                tuple((name, channels[name]) for name in CHANNELS), tuple(dense.items()),
+                query, graph_ceiling, initial_ids, frozenset(),
+            )
+            stage.check()
+            initial, plan = _read_initial_captured_refs(plan, stage)
+            channels, dense = dict(plan.channels), dict(plan.dense)
+            ids = plan.channel_ids
+            check()
+            stage.check()
+            def publish_check():
+                check()
+                plan.check()
+                stage.check()
+            stage.publish(initial, publish_check)
+            plan.check()
+            plan = replace(plan, graph_start=charged_sources(budget))
+            plan.counts["baseline_initial_hydrated"] = len(initial)
+            by_id = {r.pk: r for r in initial}
+            baseline = initial
+            from .chunk_search_candidates import HybridCandidateSnapshot
 
-    return HybridCandidateSnapshot(
-        documents=tuple(documents),
-        vector_results=tuple(by_id[pk] for pk in ids["dense"] if pk in by_id),
-        trigram_results=tuple(by_id[pk] for pk in ids["trigram"] if pk in by_id),
-        exact_results=tuple(by_id[pk] for pk in ids["exact"] if pk in by_id),
-        vector_chunk_ids=ids["dense"], trigram_chunk_ids=ids["trigram"],
-        exact_chunk_ids=ids["exact"], baseline_candidates=baseline,
-        graph_seeds=build_graph_seeds(channels["dense"], channels["trigram"], channels["exact"], config),
-        exact_terms=tuple(t.text for t in terms), vector_error=error or initial_error,
-        vector_ms=timings["vector"], trigram_ms=timings["trigram"], exact_ms=timings["exact"],
-        pre_dedupe_count=sum(len(rs) for rs in channels.values()), graph_seed_error=False,
-        effective_limits=limits, full_text_results=tuple(by_id[pk] for pk in ids["full_text"] if pk in by_id),
-        full_text_chunk_ids=ids["full_text"], full_text_coverage=coverage,
-        fusion_v2=scope.fusion_v2, source_admission=plan,
-    )
+            return HybridCandidateSnapshot(
+                documents=tuple(documents),
+                vector_results=tuple(by_id[pk] for pk in ids["dense"] if pk in by_id),
+                trigram_results=tuple(by_id[pk] for pk in ids["trigram"] if pk in by_id),
+                exact_results=tuple(by_id[pk] for pk in ids["exact"] if pk in by_id),
+                vector_chunk_ids=ids["dense"], trigram_chunk_ids=ids["trigram"],
+                exact_chunk_ids=ids["exact"], baseline_candidates=baseline,
+                graph_seeds=build_graph_seeds(channels["dense"], channels["trigram"], channels["exact"], config),
+                exact_terms=tuple(t.text for t in terms), vector_error=error or initial_error,
+                vector_ms=timings["vector"], trigram_ms=timings["trigram"], exact_ms=timings["exact"],
+                pre_dedupe_count=sum(len(rs) for rs in channels.values()), graph_seed_error=False,
+                effective_limits=limits, full_text_results=tuple(by_id[pk] for pk in ids["full_text"] if pk in by_id),
+                full_text_chunk_ids=ids["full_text"], full_text_coverage=coverage,
+                fusion_v2=scope.fusion_v2, source_admission=plan,
+            )
+    finally:
+        stage.withdraw()

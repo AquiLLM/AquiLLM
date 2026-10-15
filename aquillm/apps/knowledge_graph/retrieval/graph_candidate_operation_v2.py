@@ -19,7 +19,6 @@ from apps.documents.services.graph_admission_adapter import (
 from apps.documents.services.graph_admission_adapter import (
     deferred_baseline,
     order_graph_pool,
-    selector_body_reader,
 )
 from apps.documents.services.graph_admission_adapter import (
     observe_published_graph as observe_published_graph,
@@ -143,12 +142,12 @@ def _run_closed_graph(
     from apps.knowledge_graph.resolution.vocabulary_authority import validate_ready
 
     from .graph_evidence_repository_v2 import _load_selection_inputs_v2
-    from .graph_hydration_operation_v2 import _hydrate_selection_rows
+    from .graph_hydration_operation_v2 import _hydrate_closed_selection_rows
     from .graph_runtime_contracts_v2 import GraphRuntimeEnvelopeV2
     from .graph_runtime_execution_v2 import _execute_captured_graph_v2
     from .graph_runtime_v2 import _run_graph_v2
-    from .ready_materialization_v2 import _materialize_rows, validate_captured_selection
-    from .ready_scope_repository_v2 import select_ready_scope_v2
+    from .ready_materialization_v2 import _materialize_closed_rows, _validate_closed_captured_selection
+    from .ready_scope_repository_v2 import _select_closed_ready_scope_v2
     from .ready_scope_v2 import graph_selection_digest_v2
 
     scope, budget = stage.scope, stage.budget
@@ -158,7 +157,7 @@ def _run_closed_graph(
     baseline = tuple(
         row for row in baseline if row.doc_id in scope.requested_document_ids
     )
-    selected = select_ready_scope_v2(
+    selected = _select_closed_ready_scope_v2(
         authorization=scope.authorization,
         settings=settings,
         representation_snapshot=scope.representation,
@@ -177,7 +176,7 @@ def _run_closed_graph(
         check()
         for group in selected.groups:
             validate_ready(group.scope, scope.authorization)
-        rows, fingerprints = _hydrate_selection_rows(
+        rows, fingerprints = _hydrate_closed_selection_rows(
             selected=selected,
             pairs=pairs,
             runtime=runtime,
@@ -185,7 +184,8 @@ def _run_closed_graph(
             codec=graph.codec,
             document_codec=document_codec,
             deadline=deadline,
-            body_reader=selector_body_reader(admission, stage),
+            stage=stage,
+            admission=admission,
         )
         stage.fingerprints(fingerprints)
         check()
@@ -238,12 +238,12 @@ def _run_closed_graph(
                     coverage=envelope.handoff.coverage,
                     invocation=envelope.frontier_invocation,
                 )
-    rows = _materialize_rows(
+    rows = _materialize_closed_rows(
         selected=selected,
         refs=envelope.handoff.candidates,
         authorization=scope.authorization,
         codec=graph.codec,
-        body_reader=stage.read,
+        stage=stage,
     )
     if len(rows) != len(envelope.handoff.candidates) or any(
         row.doc_id not in scope.requested_document_ids for row in rows
@@ -269,7 +269,7 @@ def _run_closed_graph(
         },
     )
     ordered = bounded_pool_v2(ordered, baseline)
-    validate_captured_selection(
+    _validate_closed_captured_selection(
         selected=selected,
         authorization=scope.authorization,
         settings=settings,

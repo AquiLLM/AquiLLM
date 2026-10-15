@@ -163,17 +163,17 @@ def test_actual_native_admission_dispatch_uses_captured_owner_subset(monkeypatch
         graph_frame,
     )
 
-    owned, original = [], _GraphSourceStage.__init__
+    owned, original = [], _GraphSourceStage.read_captured
 
-    def initialize(self, *args):
-        original(self, *args)
+    def read_captured(self, *args):
         owned.append((self, len(calls)))
+        return original(self, *args)
 
     with graph_frame(
         monkeypatch, prepare_sources=pressure_rows, dataset=True
     ) as active:
         calls = predicate_calls(monkeypatch)
-        monkeypatch.setattr(_GraphSourceStage, "__init__", initialize)
+        monkeypatch.setattr(_GraphSourceStage, "read_captured", read_captured)
         snapshot = collect(active)
         assert snapshot.source_admission is not None and owned
         refs = snapshot.source_admission.references

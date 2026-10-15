@@ -157,6 +157,10 @@ def validate_representation_snapshot(snapshot: RepresentationSnapshotV1, *, usin
 def freeze_active_representations(
     documents: tuple[DocumentRefV1, ...], *, using: str
 ) -> RepresentationSnapshotV1:
+    return validate_representation_snapshot(_capture_active_representations(documents, using=using), using=using)
+
+
+def _capture_active_representations(documents, *, using):
     if type(documents) is not tuple:
         _unavailable()
     from apps.documents.models import DocumentRepresentationState
@@ -172,9 +176,7 @@ def freeze_active_representations(
         expected[key] = ref
         document_ids.add(ref.id)
     if not expected:
-        return validate_representation_snapshot(
-            RepresentationSnapshotV1(()), using=using
-        )
+        return RepresentationSnapshotV1(())
     identity = ("model_label", "document_pkid", "document_id")
     rows = (
         DocumentRepresentationState.objects.using(using)
@@ -218,7 +220,8 @@ def freeze_active_representations(
                 RepresentationSelectionV1(ref, None, ref.source_hash, None)
             )
     snapshot = RepresentationSnapshotV1(tuple(selections))
-    return validate_representation_snapshot(snapshot, using=using)
+    ordered_selections(snapshot)
+    return snapshot
 
 
 def active_chunk_scope(queryset, *, snapshot, document_id=None):

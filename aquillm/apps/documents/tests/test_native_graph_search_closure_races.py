@@ -71,7 +71,7 @@ def test_material_replacement_during_graph_never_switches_route(monkeypatch, mut
     from apps.knowledge_graph.retrieval import ready_scope_repository_v2 as ready
 
     with native_case(monkeypatch) as case:
-        original = ready.select_ready_scope_v2
+        original = ready._select_closed_ready_scope_v2
 
         def select(**kwargs):
             result = original(**kwargs)
@@ -99,7 +99,7 @@ def test_material_replacement_during_graph_never_switches_route(monkeypatch, mut
                 )
             return result
 
-        monkeypatch.setattr(ready, "select_ready_scope_v2", select)
+        monkeypatch.setattr(ready, "_select_closed_ready_scope_v2", select)
         with pytest.raises(SourceScopeUnavailable):
             run_current_or_native(case)
         assert case.inference == [] and case.fetched == [] and case.events == []
@@ -245,7 +245,7 @@ def test_equal_scalar_query_and_header_values_are_not_identity_guards(monkeypatc
     from apps.knowledge_graph.retrieval import ready_scope_repository_v2 as owner
 
     with native_case(monkeypatch) as case:
-        original, digest = owner.select_ready_scope_v2, case.scope.query_digest
+        original, digest = owner._select_closed_ready_scope_v2, case.scope.query_digest
 
         def select(**kwargs):
             result = original(**kwargs)
@@ -259,7 +259,7 @@ def test_equal_scalar_query_and_header_values_are_not_identity_guards(monkeypatc
             )
             return result
 
-        monkeypatch.setattr(owner, "select_ready_scope_v2", select)
+        monkeypatch.setattr(owner, "_select_closed_ready_scope_v2", select)
         assert run_current_or_native(case).final_rows[2]
 
 

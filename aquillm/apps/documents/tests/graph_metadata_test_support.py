@@ -49,7 +49,7 @@ def install_overlap_probe(monkeypatch, runtime, scope):
     lexical_entered, dense_entered = Event(), Event()
     observed = {"parent_thread": get_ident()}
     original_trigram, original_exact = metadata._trigram_refs, metadata._exact_refs
-    original_dense = embedding_index_query.rank_compatible_chunks
+    original_dense = embedding_index_query._rank_closed_metadata_chunks
     def trigram(*args, **kwargs):
         acquired = runtime.lock.acquire(blocking=False)
         if acquired:
@@ -72,7 +72,7 @@ def install_overlap_probe(monkeypatch, runtime, scope):
         return original_dense(*args, **kwargs)
     monkeypatch.setattr(metadata, "_trigram_refs", trigram)
     monkeypatch.setattr(metadata, "_exact_refs", exact)
-    monkeypatch.setattr(embedding_index_query, "rank_compatible_chunks", dense)
+    monkeypatch.setattr(embedding_index_query, "_rank_closed_metadata_chunks", dense)
     return observed
 
 
@@ -83,7 +83,7 @@ def assert_between_lane_rejection(monkeypatch, legacy, runtime, scope, observati
     from apps.documents.services import graph_metadata_worker as worker
     from apps.documents.tests.test_graph_admission_channels import capture
     entered, release, exact_dispatched = Event(), Event(), Event()
-    original_trigram, original_dense = metadata._trigram_refs, embedding_index_query.rank_compatible_chunks
+    original_trigram, original_dense = metadata._trigram_refs, embedding_index_query._rank_closed_metadata_chunks
     original_start, jobs = worker.start_lexical_metadata, []
     def start(*args, **kwargs):
         job = original_start(*args, **kwargs)
@@ -111,7 +111,7 @@ def assert_between_lane_rejection(monkeypatch, legacy, runtime, scope, observati
     monkeypatch.setattr(worker, "start_lexical_metadata", start)
     monkeypatch.setattr(metadata, "_trigram_refs", trigram)
     monkeypatch.setattr(metadata, "_exact_refs", exact)
-    monkeypatch.setattr(embedding_index_query, "rank_compatible_chunks", dense)
+    monkeypatch.setattr(embedding_index_query, "_rank_closed_metadata_chunks", dense)
     try:
         with pytest.raises(ValueError):
             capture(legacy, runtime, query, observation)

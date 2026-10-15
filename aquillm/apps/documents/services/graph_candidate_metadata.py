@@ -140,9 +140,10 @@ def _exact_refs(text, query, limit):
 
 
 def capture_metadata(model, query, scope, limits, observation, check, *,
-                     allow_lexical_overlap=False):
+                     stage, allow_lexical_overlap=False):
     check()
     initial_keys = set(scope.validate())
+    stage.initial_keys = initial_keys
     job, profile, connection = None, None, None
     try:
         if (allow_lexical_overlap and not controls()["full_text"]
@@ -165,7 +166,7 @@ def capture_metadata(model, query, scope, limits, observation, check, *,
 
 def _capture_metadata(model, query, scope, limits, observation, check,
                       initial_keys, job, profile, connection):
-    from .embedding_index_query import rank_compatible_chunks
+    from .embedding_index_query import _rank_closed_metadata_chunks
 
     original = scope.runtime._frozen_retrieval_scope
     channels, dense, timings = {}, {}, {}
@@ -175,7 +176,7 @@ def _capture_metadata(model, query, scope, limits, observation, check,
     vector_error = None
     if observation is not None and scope.dense is not None:
         try:
-            ranked = rank_compatible_chunks(
+            ranked = _rank_closed_metadata_chunks(
                 snapshot=scope.representation, dense_snapshot=scope.dense,
                 query=observation, limit=min(45, limits.vector), using=scope.using,
                 budget=scope.runtime.budget,
@@ -231,11 +232,16 @@ def _capture_metadata(model, query, scope, limits, observation, check,
     timings["exact"] = (lexical.exact_ms if lexical is not None else
                           (perf_counter() - started) * 1000)
     check()
-    final_keys = initial_keys & set(scope.validate())
-    channels["dense"] = tuple(r for r in vectors
-                              if dense[r.pk].embedding_generation_key in final_keys)
+    channels, dense = _reconcile_metadata(channels, dense, initial_keys)
+    if job is not None:
+        accept_parent_profile(connection, profile, check=check)
+    return channels, dense, terms, timings, coverage, vector_error
+
+
+def _reconcile_metadata(channels, dense, final_keys):
+    channels = {**channels, "dense": tuple(r for r in channels["dense"]
+        if dense[r.pk].embedding_generation_key in final_keys)}
     dense = {pk: r for pk, r in dense.items() if r.embedding_generation_key in final_keys}
-    check()
     # A single PK cannot silently adopt a later revision from another channel.
     captured = {}
     for refs in channels.values():
@@ -243,6 +249,4 @@ def _capture_metadata(model, query, scope, limits, observation, check,
             if ref.pk in captured and captured[ref.pk].fingerprint != ref.fingerprint:
                 raise SourceScopeUnavailable("source_scope_unavailable")
             captured[ref.pk] = ref
-    if job is not None:
-        accept_parent_profile(connection, profile, check=check)
-    return channels, dense, terms, timings, coverage, vector_error
+    return channels, dense

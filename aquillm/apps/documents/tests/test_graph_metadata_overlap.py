@@ -200,7 +200,7 @@ def test_original_owner_mutation_rejects_before_body_publication(
     with serving_query(legacy, transport, monkeypatch) as (runtime, scope, observation):
         entered, release, cleaned = Event(), Event(), Event()
         original_trigram = metadata._trigram_refs
-        original_dense = embedding_index_query.rank_compatible_chunks
+        original_dense = embedding_index_query._rank_closed_metadata_chunks
         original_cleanup = worker.connections.close_all
         original_start, jobs = worker.start_lexical_metadata, []
         token = None
@@ -227,7 +227,7 @@ def test_original_owner_mutation_rejects_before_body_publication(
             release.set()
             return original_dense(*args, **kwargs)
         monkeypatch.setattr(metadata, "_trigram_refs", trigram)
-        monkeypatch.setattr(embedding_index_query, "rank_compatible_chunks", dense)
+        monkeypatch.setattr(embedding_index_query, "_rank_closed_metadata_chunks", dense)
         monkeypatch.setattr(worker.connections, "close_all", cleanup)
         monkeypatch.setattr(worker, "start_lexical_metadata", start)
         try:
@@ -264,7 +264,7 @@ def test_lexical_failure_propagates_while_dense_failure_keeps_lexical_results(
             assert runtime.budget.sources_used == 0
             assert runtime.cache == scope.bodies == {}
         else:
-            monkeypatch.setattr(embedding_index_query, "rank_compatible_chunks", fail)
+            monkeypatch.setattr(embedding_index_query, "_rank_closed_metadata_chunks", fail)
             snapshot = capture(legacy, runtime, "source", observation)
             assert snapshot.vector_error == "upstream_unavailable"
             assert snapshot.vector_chunk_ids == ()

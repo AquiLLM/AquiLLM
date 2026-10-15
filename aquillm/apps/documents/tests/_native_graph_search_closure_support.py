@@ -127,7 +127,7 @@ def native_case(
             _, case.fetched, case.events = install_failure(
                 monkeypatch, active, now, expired=expired, mutation=mutation
             )
-            select = ready.select_ready_scope_v2
+            select = ready._select_closed_ready_scope_v2
 
             def failed(**kwargs):
                 try:
@@ -136,7 +136,7 @@ def native_case(
                     case.after_graph = True
                     case.after_graph_query_index = len(connection.queries)
 
-            monkeypatch.setattr(ready, "select_ready_scope_v2", failed)
+            monkeypatch.setattr(ready, "_select_closed_ready_scope_v2", failed)
         validate = chunk_search_scope.FrozenRetrievalScope.validate
 
         def checked(current):

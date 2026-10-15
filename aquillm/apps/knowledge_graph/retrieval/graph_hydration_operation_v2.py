@@ -11,7 +11,7 @@ from apps.documents.services.chunk_search_scope import current_scope
 from apps.documents.services.chunk_search_scoped_rows import fingerprint
 from apps.documents.services.graph_source_runtime import graph_source_runtime
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
-from apps.documents.services.representation_store import active_chunk_scope
+from apps.documents.services.representation_store import active_chunk_scope, _active_chunk_predicates
 from apps.documents.services.source_deadline import check_source_deadline
 from apps.documents.services.source_loading import (
     bounded_source_database,
@@ -152,11 +152,30 @@ def _selection_rows(
     return tuple(results), fingerprints
 
 
+def _hydrate_closed_selection_rows(*, selected, pairs, runtime, scope, codec,
+                                  document_codec, deadline, stage, admission):
+    from apps.documents.services.graph_admission_adapter import selector_body_reader
+    from .graph_candidate_stage_v2 import _GraphSourceStage
+    if (type(stage) is not _GraphSourceStage or stage.scope is not scope
+            or stage.runtime is not runtime or scope.representation is not selected.representation_snapshot):
+        raise SourceScopeUnavailable("graph_original_scope_unavailable")
+    stage.check()
+    return _hydrate_selection_rows(selected=selected, pairs=pairs, runtime=runtime,
+        scope=scope, codec=codec, document_codec=document_codec, deadline=deadline,
+        body_reader=selector_body_reader(admission, stage), _source_stage=stage)
+
+
 def _hydrate_selection_rows(
-    *, selected, pairs, runtime, scope, codec, document_codec, deadline, body_reader
+    *, selected, pairs, runtime, scope, codec, document_codec, deadline, body_reader, _source_stage=None
 ):
     """Private eager mapping/body/provenance core; positive state is caller-owned."""
     from apps.documents.models import TextChunk
+    if _source_stage is not None:
+        from .graph_candidate_stage_v2 import _GraphSourceStage
+        if (type(_source_stage) is not _GraphSourceStage or _source_stage.scope is not scope
+                or _source_stage.runtime is not runtime):
+            raise SourceScopeUnavailable("graph_original_scope_unavailable")
+        _source_stage.check()
 
     authorization = runtime.authorization
     requested = (
@@ -175,23 +194,15 @@ def _hydrate_selection_rows(
             *(When(pk=pk, then=rank) for rank, pk in enumerate(pks)),
             output_field=IntegerField(),
         )
-        query = active_chunk_scope(
+        query = (_active_chunk_predicates if _source_stage is not None else active_chunk_scope)(
             TextChunk.objects.using(authorization.database_alias).filter(
                 pk__in=pks, doc_id__in=requested
             ),
             snapshot=selected.representation_snapshot,
         ).order_by(order)
         bodies = body_reader(query)
-    return _selection_rows(
-        mapped,
-        bodies,
-        selected,
-        codec,
-        document_codec,
-        authorization.database_alias,
-        runtime,
-        deadline,
-    )
+    return _selection_rows(mapped, bodies, selected, codec, document_codec,
+        authorization.database_alias, runtime, deadline)
 
 
 def hydrate_selection_operation(*, selected, pairs, runtime, document_codec, deadline):

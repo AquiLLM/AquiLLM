@@ -29,7 +29,7 @@ def install_failure(monkeypatch, active, now, *, expired, mutation=None, early_t
     from lib import replay_observation
 
     f, _, source, scope, _, _, operation, _ = active
-    original, fetch = ready.select_ready_scope_v2, source_body_batch._fetch_body_rows
+    original, fetch = ready._select_closed_ready_scope_v2, source_body_batch._fetch_body_rows
     tokens, fetched, events = [], [], []
 
     def select(**kwargs):
@@ -78,7 +78,7 @@ def install_failure(monkeypatch, active, now, *, expired, mutation=None, early_t
         fetched.extend(row.pk for row in rows)
         return rows
 
-    monkeypatch.setattr(ready, "select_ready_scope_v2", select)
+    monkeypatch.setattr(ready, "_select_closed_ready_scope_v2", select)
     monkeypatch.setattr(source_body_batch, "_fetch_body_rows", read)
     monkeypatch.setattr(replay_observation, "graph_selected_sources_v2", events.append)
     return tokens, fetched, events
