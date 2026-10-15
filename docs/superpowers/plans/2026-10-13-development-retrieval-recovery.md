@@ -145,7 +145,7 @@
 
 ### Task 13: Complete scope reads within the original frontier budget
 
-**Entry gate:** Task12 implementation and independent review must be accepted before dispatch. Root supplies its exact reviewed commit and measured product SQL report. This task is planned, not yet authorized to edit product code. Use the existing codex/graph-development-repair worktree and PR246; no new branch, worktree or PR.
+**Entry gate satisfied:** Task12 is independently accepted at daf4b2b48d921c12697e2c536b44fb8e3f4004b1 (task-12-independent-review.md and task-12-fix1-review.md; measured SQL and exact coverage boundaries in task-12-report.md). Root authorizes Task13 product implementation and the sole local source/PostgreSQL/Memgraph slot. The measured local native fixture is18queries/19rows; remote15/294 remains projected and requires closing native replay. Use the existing codex/graph-development-repair worktree and PR246; no new branch, worktree or PR.
 
 **Binding design:** Read Q/resume-complete-raw-scope-product-design.md in full. Its exact constants, two strict request schemas, fixed query, scope state, original-ledger accounting, failure ordering, allowed file boundaries and nine acceptance steps are requirements. Q is .superpowers/sdd/2026-10-13-development-retrieval-recovery. The design's synthetic15/294 prefix is projected remote arithmetic, not an observed integrated native result. Consume Task12's truthful local fixture counts without reshaping its fixtures.
 
