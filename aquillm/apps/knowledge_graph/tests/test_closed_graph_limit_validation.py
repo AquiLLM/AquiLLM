@@ -167,3 +167,89 @@ def test_failed_observation_snapshot_copies_scalars_and_retains_over_cap_charges
 
         assert scalar_snapshot(error.observations)
         assert set(vars(error)) == {"reason", "observations"}
+
+
+@pytest.mark.parametrize(
+    "mutation", ["authority", "callback", "count", "invocation_count", "reason"]
+)
+def test_allowed_snapshot_keys_cannot_carry_unvalidated_values(monkeypatch, mutation):
+    from apps.knowledge_graph.retrieval import graph_runtime_v2 as runtime
+    from apps.knowledge_graph.retrieval.closed_graph_attempt_v2 import (
+        _ClosedGraphLimited,
+    )
+
+    with graph_frame(monkeypatch) as active:
+        original, callbacks = runtime._run_graph_v2, []
+
+        def callback():
+            callbacks.append(True)
+            raise AssertionError("observation callbacks must never execute")
+
+        def failed(**kwargs):
+            envelope = original(**kwargs)
+            error = _ClosedGraphLimited(
+                "deadline",
+                coverage=envelope.handoff.coverage,
+                invocation=envelope.frontier_invocation,
+            )
+            snapshot = error.observations
+            if mutation == "authority":
+                snapshot["graph_coverage_v2"] = active[3]
+            elif mutation == "callback":
+                snapshot["frontier_invocations"] = callback
+            elif mutation == "count":
+                snapshot["frontier_budget"]["queries_used"] = True
+            elif mutation == "invocation_count":
+                snapshot["frontier_invocations"][0]["frontier_budget"]["rows_used"] = (
+                    object()
+                )
+            else:
+                snapshot["graph_coverage_v2"]["reasons"] = ("unknown",)
+            error.observations = dict(snapshot)
+            raise error
+
+        monkeypatch.setattr(runtime, "_run_graph_v2", failed)
+        calls = finishing_spies(monkeypatch)
+        outcome = attempt_for(active, active[4], "What is A?").run_native_closure(
+            closure_reserve_ms=1250
+        )
+        assert outcome.kind == "failure" and outcome.pool is None
+        assert outcome.diagnostics == {
+            "graph_status": "error",
+            "graph_candidate_count": 0,
+        }
+        assert calls == [] and callbacks == []
+        assert active[2].cache == {} and active[3].bodies == {}
+
+
+def test_consumed_limit_snapshot_does_not_alias_later_exception_mutations(monkeypatch):
+    from apps.knowledge_graph.retrieval import graph_runtime_v2 as runtime
+    from apps.knowledge_graph.retrieval.closed_graph_attempt_v2 import (
+        _ClosedGraphLimited,
+    )
+
+    with graph_frame(monkeypatch) as active:
+        original, errors = runtime._run_graph_v2, []
+
+        def failed(**kwargs):
+            envelope = original(**kwargs)
+            error = _ClosedGraphLimited(
+                "deadline",
+                coverage=envelope.handoff.coverage,
+                invocation=envelope.frontier_invocation,
+            )
+            errors.append(error)
+            raise error
+
+        monkeypatch.setattr(runtime, "_run_graph_v2", failed)
+        outcome = attempt_for(active, active[4], "What is A?").run_native_closure(
+            closure_reserve_ms=1250
+        )
+        before = outcome.diagnostics["frontier_budget"]["queries_used"]
+        assert before > 0 and outcome.diagnostics["graph_failure_reason"] == "deadline"
+        errors[0].observations["frontier_budget"]["queries_used"] = object()
+        errors[0].observations["frontier_invocations"][0]["query_sha256"] = object()
+        assert outcome.diagnostics["frontier_budget"]["queries_used"] == before
+        assert (
+            type(outcome.diagnostics["frontier_invocations"][0]["query_sha256"]) is str
+        )

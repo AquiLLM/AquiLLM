@@ -279,14 +279,7 @@ class _ClosedGraphAttempt:
                 )
             stage.withdraw()
             observations = self._diagnostics("error")
-            if (type(exc) is _ClosedGraphLimited
-                    and type(getattr(exc, "reason", None)) is str
-                    and exc.reason in {"deadline", "frontier_budget"}
-                    and type(getattr(exc, "observations", None)) is dict
-                    and not (exc.observations.keys() - {
-                        "graph_coverage_v2", "frontier_budget", "frontier_invocations"
-                    })):
-                observations.update(exc.observations, graph_failure_reason=exc.reason)
+            observations.update(owner._limit_observations(exc))
             return _ClosedGraphAttemptResult(
                 "failure",
                 None,

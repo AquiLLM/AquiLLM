@@ -61,6 +61,53 @@ def _same_references(captured, current):
     return all(a is b for a, b in zip(captured, current, strict=True))
 
 
+def _limit_observations(exc):
+    from .graph_frontier_observation_v2 import (
+        FrontierBudgetObservationV2,
+        GraphFrontierInvocationV2,
+    )
+    from .graph_handoff import GraphCoverageV2
+
+    try:
+        if type(exc) is not _ClosedGraphLimited:
+            return {}
+        reason, raw = exc.reason, exc.observations
+        if (type(reason) is not str or reason not in {"deadline", "frontier_budget"}
+                or type(raw) is not dict):
+            return {}
+        snapshot = {}
+        if raw:
+            if (any(type(key) is not str for key in raw) or set(raw) != {
+                    "graph_coverage_v2", "frontier_budget", "frontier_invocations"}):
+                return {}
+            invocations = raw["frontier_invocations"]
+            if type(invocations) is not list or len(invocations) != 1:
+                return {}
+            invocation = invocations[0]
+            if (type(invocation) is not dict
+                    or any(type(key) is not str for key in invocation)):
+                return {}
+            coverage = raw["graph_coverage_v2"]
+            budgets = (raw["frontier_budget"], invocation["frontier_budget"])
+            for value in (coverage, invocation, *budgets):
+                if type(value) is not dict or any(type(k) is not str for k in value):
+                    return {}
+            coverage = GraphCoverageV2(**coverage)
+            copies = []
+            for budget in budgets:
+                copied_invocation = GraphFrontierInvocationV2(**{
+                    **invocation,
+                    "frontier_budget": FrontierBudgetObservationV2(**budget),
+                })
+                copies.append(_graph_observations(coverage, copied_invocation))
+            if copies[0] != copies[1]:
+                return {}
+            snapshot = copies[0]
+        return {**snapshot, "graph_failure_reason": reason}
+    except Exception:
+        return {}  # Malformed/forged exceptions remain generic graph errors.
+
+
 def _try_closed_graph_pool(
     snapshot, query, authorization, dependencies, *, diagnostics, fallback
 ):
@@ -79,35 +126,17 @@ def _try_closed_graph_pool(
     pool, observation = fallback(admit_deferred=outcome.admit_deferred)
     reason = outcome.diagnostics.get("graph_failure_reason")
     if type(reason) is str and reason in {"deadline", "frontier_budget"}:
-        observation = {
-            **observation,
-            **{
-                key: outcome.diagnostics[key]
-                for key in (
-                    "graph_failure_reason",
-                    "graph_coverage_v2",
-                    "frontier_budget",
-                    "frontier_invocations",
-                )
-                if key in outcome.diagnostics
-            },
-        }
+        keys = ("graph_failure_reason", "graph_coverage_v2", "frontier_budget",
+                "frontier_invocations")
+        observation = {**observation, **{
+            key: outcome.diagnostics[key] for key in keys if key in outcome.diagnostics
+        }}
     return pool, observation
 
 
 def _run_closed_graph(
-    stage,
-    snapshot,
-    query,
-    authorization,
-    graph,
-    settings,
-    deadline,
-    check,
-    diagnostics,
-    admission,
-    *,
-    native_closure=False,
+    stage, snapshot, query, authorization, graph, settings, deadline, check,
+    diagnostics, admission, *, native_closure=False,
 ):
     from apps.documents.services.chunk_search_scoped_rows import _retain_dense
     from apps.documents.services.hybrid_graph_v2 import bounded_pool_v2
