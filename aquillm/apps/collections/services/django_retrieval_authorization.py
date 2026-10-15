@@ -120,9 +120,7 @@ class DjangoCollectionRetrievalPermissionPolicy:
     ):
         from apps.collections.models import CollectionPermission
         from apps.documents.models.document import _get_document_types
-        from apps.documents.services.representation_tuple_predicate import (
-            ExactTupleMembership,
-        )
+        from apps.documents.services._uuid_membership import uuid_membership
         from apps.knowledge_graph.retrieval.graph_seed_reads_v2 import seed_query_rows
 
         principal_id = self._principal_id(principal)
@@ -143,8 +141,11 @@ class DjangoCollectionRetrievalPermissionPolicy:
         )
         if not authorized:
             return ()
-        membership = ExactTupleMembership(
-            ("id",), tuple((value,) for value in selected_document_ids)
+        models = tuple(_get_document_types())
+        membership = uuid_membership(
+            ("id",), tuple((value,) for value in selected_document_ids),
+            using=database_alias,
+            fields=tuple(model._meta.get_field("id") for model in models),
         )
         queries = tuple(
             model._base_manager.using(database_alias)
@@ -154,7 +155,7 @@ class DjangoCollectionRetrievalPermissionPolicy:
             )
             .order_by()
             .values_list("collection_id", "id")
-            for model in _get_document_types()
+            for model in models
         )
         combined = queries[0].union(*queries[1:], all=True)
         rows = seed_query_rows(

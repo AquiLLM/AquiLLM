@@ -1,6 +1,7 @@
 """Fresh bounded scalar reads for one complete representation validation."""
 from django.db.models import CharField, F, Value
 
+from ._uuid_membership import uuid_membership
 from .representation_contracts import SourceScopeUnavailable
 from .representation_tuple_predicate import ExactTupleMembership
 
@@ -18,11 +19,15 @@ def validate_document_rows(selections, *, using):
         _unavailable()
     if not expected:
         return
-    membership = ExactTupleMembership(("id",), tuple((value,) for value in expected))
+    models = tuple(DESCENDED_FROM_DOCUMENT)
+    membership = uuid_membership(
+        ("id",), tuple((value,) for value in expected), using=using,
+        fields=tuple(model._meta.get_field("id") for model in models),
+    )
     # One current SQL statement still visits every allowlisted concrete type.
     # UNION ALL preserves duplicate UUIDs; a global sentinel bounds hydration.
     owners = []
-    for model in DESCENDED_FROM_DOCUMENT:
+    for model in models:
         owners.append(model._base_manager.using(using).filter(membership).annotate(
             _canonical=SourceSHA256(F("full_text")),
             _owner_model=Value(model._meta.label_lower, output_field=CharField()),
