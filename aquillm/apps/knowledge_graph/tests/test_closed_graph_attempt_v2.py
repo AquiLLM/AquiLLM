@@ -115,9 +115,9 @@ def test_native_reserve_partitions_effective_parent_after_authorization_cleanup(
                 now[0] += elapsed / 1000
             cleanups.append(True)
 
-        def run(*args):
+        def run(*args, **kwargs):
             seen.append(((args[6] - graph.clock()) * 1000, _DEADLINE.get()))
-            return original_run(*args)
+            return original_run(*args, **kwargs)
 
         monkeypatch.setattr(owner, "bounded_source_database", database)
         monkeypatch.setattr(owner, "_run_closed_graph", run)

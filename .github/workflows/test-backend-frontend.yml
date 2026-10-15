@@ -195,6 +195,8 @@ jobs:
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py
           aquillm/apps/knowledge_graph/tests/test_closed_graph_attempt_v2.py
+          aquillm/apps/knowledge_graph/tests/test_closed_graph_limits_v2.py
+          aquillm/apps/knowledge_graph/tests/test_closed_graph_limit_validation.py
           aquillm/apps/knowledge_graph/tests/test_closed_seed_projection_batch.py
           aquillm/apps/documents/tests/test_closed_graph_seed_work.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_races.py
@@ -221,6 +223,7 @@ jobs:
           python -m pytest
           tests/test_graph_source_admission_policy.py
           tests/test_graph_replay_provenance.py
+          aquillm/apps/documents/tests/test_native_graph_limit_closure.py
           aquillm/apps/documents/tests/test_graph_source_admission.py
           aquillm/apps/documents/tests/test_graph_admission_channels.py
           aquillm/apps/documents/tests/test_graph_admission_publication.py

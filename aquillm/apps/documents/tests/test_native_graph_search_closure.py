@@ -186,9 +186,9 @@ def test_clock_translation_keeps_original_tail_and_never_tops_up(
         deadline = case.operation.deadline
         case.now[0] += elapsed
 
-        def run(*args):
+        def run(*args, **kwargs):
             seen.append((args[6] - case.graph.clock()) * 1000)
-            return original(*args)
+            return original(*args, **kwargs)
 
         monkeypatch.setattr(graph, "_run_closed_graph", run)
         result = run_current_or_native(case)

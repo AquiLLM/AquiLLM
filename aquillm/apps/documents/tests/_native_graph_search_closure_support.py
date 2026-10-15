@@ -74,6 +74,7 @@ def native_case(
     graph_epoch=0.0,
     start=0.0,
     rrf=False,
+    controlled_graph_clock=False,
 ):
     monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", "native_closure")
     monkeypatch.setattr(settings, "KG_OVERLAY_ENABLED", graph_on, raising=False)
@@ -89,7 +90,7 @@ def native_case(
         timeout_ms=10_000,
     ) as active:
         f, graph, source, scope, _, dependencies, operation, driver = active
-        if fail:
+        if fail or controlled_graph_clock:
             graph.clock = lambda: graph_epoch + now[0]
         monkeypatch.setattr(settings, "RAG_RRF_ENABLED", rrf)
         monkeypatch.setattr(settings, "RAG_PROTECTED_EXACT_ENABLED", rrf, raising=False)

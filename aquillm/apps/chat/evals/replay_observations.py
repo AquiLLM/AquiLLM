@@ -39,7 +39,7 @@ def _safe_graph_reasons(reasons):
             SharedBranchFailureReason,
         )
         for reason in enum
-    }
+    } | {"deadline", "frontier_budget"}
     # Exact strings only: never stringify arbitrary diagnostics or exceptions.
     return [
         reason for reason in reasons if type(reason) is str and reason in allowed

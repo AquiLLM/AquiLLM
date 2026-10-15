@@ -4,12 +4,14 @@ import json
 from types import SimpleNamespace
 from uuid import UUID
 
+import pytest
+
 from apps.chat.evals.replay_observations import fingerprint, summarize
 from lib import replay_observation
 from lib.evidence_observation import observe
 
 
-def stage_event():
+def stage_event(diagnostics=None, *, sink=None):
     rows = tuple(
         SimpleNamespace(pk=i, doc_id=UUID(int=1), content=f"private-{i}")
         for i in (101, 102, 103)
@@ -25,14 +27,20 @@ def stage_event():
         effective_limits=None,
     )
     events = []
-    with observe(lambda name, data: events.append((name, data))):
+
+    def collect(name, data):
+        events.append((name, data))
+        if sink is not None:
+            sink(name, data)
+
+    with observe(collect):
         replay_observation.retrieval_stages(
             "private question",
             3,
             snapshot,
             SimpleNamespace(combined_candidates=rows, graph_candidates=()),
             rows,
-            {"graph_status": "hit"},
+            diagnostics if diagnostics is not None else {"graph_status": "hit"},
             overlay_enabled=True,
             hybrid_pool=rows,
             graph_seed_attempted=True,
@@ -164,4 +172,75 @@ def test_emitter_rejects_invalid_ids_and_contains_observer_failures():
 
     with observe(broken) as state:
         replay_observation.graph_selected_sources_v2((103,))
+    assert state.failed.is_set()
+
+
+class _String(str):
+    pass
+
+
+@pytest.mark.parametrize(
+    "reason,want",
+    [
+        ("deadline", ["deadline"]),
+        ("frontier_budget", ["frontier_budget"]),
+        ("unknown", []),
+        ("readiness_mismatch", []),
+        (_String("deadline"), []),
+        (object(), []),
+        (None, []),
+    ],
+)
+@pytest.mark.parametrize("readiness", [0, 1, 2])
+def test_limit_reason_survives_official_emitter_and_summary_without_readiness_inflation(
+    reason, want, readiness
+):
+    diagnostics = {"graph_status": "error", "graph_failure_reason": reason}
+    for key in ("graph_direct_reason", "graph_extended_reason")[:readiness]:
+        diagnostics[key] = "readiness_mismatch"
+    stage = stage_event(diagnostics)
+    expected = ["readiness_mismatch"] * readiness + want
+    assert stage["graph"]["reasons"] == (expected or None)
+    assert stage["readiness_failure_count"] == (readiness or None)
+    result = summarize([("retrieval_stages", stage)], [], [])
+    graph = result["stages"][0]["graph"]
+    assert graph["reasons"] == (expected or None)
+    assert graph["readiness_failure_count"] == (readiness or None)
+    assert result["graph_source_provenance"]["status"] == "unavailable"
+
+
+def test_limit_diagnostics_observer_is_lazy_and_failure_contained():
+    replay_observation.retrieval_stages(
+        None,
+        None,
+        object(),
+        object(),
+        object(),
+        object(),
+        overlay_enabled=True,
+        hybrid_pool=None,
+        graph_seed_attempted=True,
+    )
+    called = []
+
+    def broken(name, data):
+        called.append(name)
+        raise RuntimeError("observer")
+
+    stage = stage_event(
+        {"graph_status": "error", "graph_failure_reason": "deadline"}, sink=broken
+    )
+    assert called == ["retrieval_stages"] and stage["graph"]["reasons"] == ["deadline"]
+    with observe(lambda *args: None) as state:
+        replay_observation.retrieval_stages(
+            None,
+            None,
+            object(),
+            object(),
+            object(),
+            object(),
+            overlay_enabled=True,
+            hybrid_pool=None,
+            graph_seed_attempted=True,
+        )
     assert state.failed.is_set()

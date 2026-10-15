@@ -35,7 +35,11 @@ from apps.documents.services.source_loading import (
     bounded_source_database as bounded_source_database,
 )
 
-from .closed_graph_attempt_v2 import _capture_closed_graph_attempt
+from .closed_graph_attempt_v2 import (
+    _capture_closed_graph_attempt,
+    _ClosedGraphLimited,
+    _graph_observations,
+)
 from .graph_candidate_stage_v2 import _GraphSourceStage as _GraphSourceStage
 from .production_runtime import (
     _NATIVE_GRAPH_RUN_V2 as _NATIVE_GRAPH_RUN_V2,
@@ -56,6 +60,7 @@ def _settings_values(settings):
 def _same_references(captured, current):
     return all(a is b for a, b in zip(captured, current, strict=True))
 
+
 def _try_closed_graph_pool(
     snapshot, query, authorization, dependencies, *, diagnostics, fallback
 ):
@@ -71,14 +76,39 @@ def _try_closed_graph_pool(
         return outcome.pool, outcome.diagnostics
     if outcome.kind == "invalid":
         return (), outcome.diagnostics
-    return fallback(admit_deferred=outcome.admit_deferred)
+    pool, observation = fallback(admit_deferred=outcome.admit_deferred)
+    reason = outcome.diagnostics.get("graph_failure_reason")
+    if type(reason) is str and reason in {"deadline", "frontier_budget"}:
+        observation = {
+            **observation,
+            **{
+                key: outcome.diagnostics[key]
+                for key in (
+                    "graph_failure_reason",
+                    "graph_coverage_v2",
+                    "frontier_budget",
+                    "frontier_invocations",
+                )
+                if key in outcome.diagnostics
+            },
+        }
+    return pool, observation
 
 
 def _run_closed_graph(
-    stage, snapshot, query, authorization, graph, settings, deadline, check, diagnostics, admission
+    stage,
+    snapshot,
+    query,
+    authorization,
+    graph,
+    settings,
+    deadline,
+    check,
+    diagnostics,
+    admission,
+    *,
+    native_closure=False,
 ):
-    from dataclasses import asdict
-
     from apps.documents.services.chunk_search_scoped_rows import _retain_dense
     from apps.documents.services.hybrid_graph_v2 import bounded_pool_v2
     from apps.knowledge_graph.resolution.vocabulary_authority import validate_ready
@@ -108,7 +138,11 @@ def _run_closed_graph(
     check()
     runtime = copy(graph)
     runtime.authorization = scope.authorization
-    seed_validation = stage.seed_validation(snapshot, check, runtime=runtime) if admission is not None else None
+    seed_validation = (
+        stage.seed_validation(snapshot, check, runtime=runtime)
+        if admission is not None
+        else None
+    )
 
     def hydrate(*, selected, pairs, runtime, document_codec, deadline):
         check()
@@ -132,8 +166,9 @@ def _run_closed_graph(
         return _load_selection_inputs_v2(**kwargs, hydrate=hydrate)
 
     def execute(**kwargs):
-        return _execute_captured_graph_v2(**kwargs, selected=selected, hydrate=load,
-                                        seed_validation=seed_validation)
+        return _execute_captured_graph_v2(
+            **kwargs, selected=selected, hydrate=load, seed_validation=seed_validation
+        )
 
     envelope = _run_graph_v2(
         query=query,
@@ -147,9 +182,33 @@ def _run_closed_graph(
         requested_document_ids=scope.requested_document_ids,
         execute=execute,
     )
-    if type(envelope) is not GraphRuntimeEnvelopeV2 or envelope.selection is not selected:
+    if (
+        type(envelope) is not GraphRuntimeEnvelopeV2
+        or envelope.selection is not selected
+    ):
         raise ValueError("V2 replaced captured selection")
     envelope.__post_init__()
+    observations = _graph_observations(
+        envelope.handoff.coverage, envelope.frontier_invocation
+    )
+    try:
+        check()
+    except _ClosedGraphLimited as exc:
+        if type(exc) is not _ClosedGraphLimited:
+            raise
+        raise _ClosedGraphLimited(
+            exc.reason,
+            coverage=envelope.handoff.coverage,
+            invocation=envelope.frontier_invocation,
+        ) from None
+    if native_closure and not envelope.handoff.candidates:
+        for reason in ("deadline", "frontier_budget"):
+            if reason in envelope.handoff.coverage.reasons:
+                raise _ClosedGraphLimited(
+                    reason,
+                    coverage=envelope.handoff.coverage,
+                    invocation=envelope.frontier_invocation,
+                )
     rows = _materialize_rows(
         selected=selected,
         refs=envelope.handoff.candidates,
@@ -166,9 +225,12 @@ def _run_closed_graph(
         raise ValueError("V2 evidence changed after selection hydration")
     baseline_ids = {row.pk for row in baseline}
     baseline = deferred_baseline(admission, stage, baseline)
-    combined = baseline + tuple(row for row in rows if row.pk not in {b.pk for b in baseline})
+    combined = baseline + tuple(
+        row for row in rows if row.pk not in {b.pk for b in baseline}
+    )
     ordered = order_graph_pool(
-        snapshot, combined,
+        snapshot,
+        combined,
         query=query,
         scope=stage.staged,
         graph_authority=graph_selection_digest_v2(selected),
@@ -193,13 +255,14 @@ def _run_closed_graph(
         raise ValueError("V2 final source fence changed")
     check()
     added = len(({row.pk for row in final} & {row.pk for row in rows}) - baseline_ids)
-    observations = {**diagnostics("hit" if added else "miss", added),
-                    "graph_coverage_v2": asdict(envelope.handoff.coverage)}
-    observations.update(frontier_budget=asdict(envelope.frontier_budget),
-                        frontier_invocations=[asdict(envelope.frontier_invocation)])
+    observations = {**diagnostics("hit" if added else "miss", added), **observations}
     if admission is not None:
         observations["source_admission"] = {
-            **admission.diagnostics(), "graph_selected": len(rows), "graph_novel_selected": added,
+            **admission.diagnostics(),
+            "graph_selected": len(rows),
+            "graph_novel_selected": added,
         }
-    selected_pks = tuple(dict.fromkeys(row.pk for row in rows if row.pk in {r.pk for r in final}))
+    selected_pks = tuple(
+        dict.fromkeys(row.pk for row in rows if row.pk in {r.pk for r in final})
+    )
     return (final, observations), final, selected_pks

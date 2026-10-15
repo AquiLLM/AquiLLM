@@ -1,7 +1,7 @@
 """Single-use native graph work; recovery remains outside this owner."""
 
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, fields
 from typing import Literal
 
 from apps.documents.services.chunk_search_rank_policy import controls
@@ -16,6 +16,60 @@ class _ClosedGraphAttemptResult:
     pool: tuple | None
     diagnostics: dict
     admit_deferred: bool = False
+
+
+class _ClosedGraphLimited(TimeoutError):
+    """Only a known graph limit and detached, validated observations escape."""
+
+    def __init__(self, reason, *, coverage=None, invocation=None):
+        if type(reason) is not str or reason not in {"deadline", "frontier_budget"}:
+            raise ValueError("unsupported closed graph limit")
+        super().__init__(reason)
+        self.reason = reason
+        self.observations = (
+            {}
+            if coverage is None and invocation is None
+            else _graph_observations(coverage, invocation)
+        )
+
+
+def _graph_observations(coverage, invocation):
+    from ._graph_v2_validation import checksum, count
+    from .graph_frontier_observation_v2 import (
+        FrontierBudgetObservationV2,
+        GraphFrontierInvocationV2,
+    )
+    from .graph_handoff import GraphCoverageV2
+
+    if (type(coverage) is not GraphCoverageV2
+            or type(invocation) is not GraphFrontierInvocationV2):
+        raise TypeError("graph observations require exact captured DTOs")
+    coverage.__post_init__()
+    frontier = invocation.frontier_budget
+    if type(frontier) is not FrontierBudgetObservationV2:
+        raise TypeError("graph observations require the exact frontier DTO")
+    for name in ("query_sha256", "requested_subset_signature",
+                 "request_algorithm_signature"):
+        checksum(getattr(invocation, name), name)
+    identity = invocation.invocation_id
+    if (type(identity) is not str or len(identity) != 32
+            or any(c not in "0123456789abcdef" for c in identity)):
+        raise ValueError("invalid frontier invocation identity")
+    maxima = dict(max_queries=64, max_rows=5000, max_bytes=1048576,
+                  max_identities=200, max_edges=1000, max_depth=2)
+    for field in fields(frontier):
+        name, value = field.name, getattr(frontier, field.name)
+        if name == "policy_signature":
+            checksum(value, name)
+        elif name in {"accounting_complete", "uncertain"}:
+            if type(value) is not bool:
+                raise TypeError("frontier accounting flags must be exact booleans")
+        else:
+            # Physical charges may exceed admission caps; retain actual debits.
+            count(value, name, maxima.get(name, 9_223_372_036_854_775_807))
+    return {"graph_coverage_v2": asdict(coverage),
+            "frontier_budget": asdict(frontier),
+            "frontier_invocations": [asdict(invocation)]}
 
 
 def _capture_closed_graph_attempt(
@@ -178,7 +232,7 @@ class _ClosedGraphAttempt:
 
             def phase_check():
                 if clock() >= deadline:
-                    raise TimeoutError("graph phase deadline")
+                    raise _ClosedGraphLimited("deadline")
                 self._check()
 
             parent = self._parent_deadline
@@ -207,13 +261,15 @@ class _ClosedGraphAttempt:
                             phase_check,
                             self._diagnostics,
                             self._admission,
+                            native_closure=native_closure,
                         )
+                    phase_check()  # Classify DB cleanup expiry before child scope exit.
                 # Preparation and DB cleanup precede publication under the same lock.
                 phase_check()
                 stage.publish(final_rows, phase_check)
                 owner.observe_published_graph(selected_pks)
                 return _ClosedGraphAttemptResult("success", result[0], result[1])
-        except Exception:
+        except Exception as exc:
             # Never recover through a replacement or expired original authority.
             try:
                 self._check()
@@ -222,10 +278,19 @@ class _ClosedGraphAttempt:
                     "invalid", None, self._diagnostics("error")
                 )
             stage.withdraw()
+            observations = self._diagnostics("error")
+            if (type(exc) is _ClosedGraphLimited
+                    and type(getattr(exc, "reason", None)) is str
+                    and exc.reason in {"deadline", "frontier_budget"}
+                    and type(getattr(exc, "observations", None)) is dict
+                    and not (exc.observations.keys() - {
+                        "graph_coverage_v2", "frontier_budget", "frontier_invocations"
+                    })):
+                observations.update(exc.observations, graph_failure_reason=exc.reason)
             return _ClosedGraphAttemptResult(
                 "failure",
                 None,
-                self._diagnostics("error"),
+                observations,
                 admit_deferred=deadline is None or clock() < deadline,
             )
         finally:

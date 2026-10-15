@@ -123,6 +123,12 @@ def retrieval_stages(
             if key in diagnostics and diagnostics[key] not in (None, "none", "not_run")
         ]
         readiness_failures = reasons.count("readiness_mismatch") or None
+        failure_reason = diagnostics.get("graph_failure_reason")
+        if type(failure_reason) is str and failure_reason in {
+            "deadline",
+            "frontier_budget",
+        }:
+            reasons.append(failure_reason)
         # Disabled retrieval is known to contribute zero graph candidates.
         # Keep unknown/unavailable observations distinct on enabled paths.
         graph_rows = None if overlay_enabled else ()
