@@ -1,8 +1,8 @@
+from apps.knowledge_graph.retrieval.native_seed_metadata_layout import layout as _metadata_layout
 from django.db import models
 from django.db.models import Q
 
 from .artifacts import ImmutableGraphQuerySet, ValidatedGraphModel
-
 
 class OntologyVersion(ValidatedGraphModel):
     """Checksummed ontology definition with explicit activation lifecycle."""
@@ -63,3 +63,5 @@ class OntologyVersion(ValidatedGraphModel):
             models.Index(fields=["kind", "status"], name="kg_ontology_kind_status_idx"),
             models.Index(fields=["checksum"], name="kg_ontology_checksum_idx"),
         ]
+
+_NATIVE_METADATA_LAYOUTS = tuple(_metadata_layout(m) for m in (OntologyVersion,))

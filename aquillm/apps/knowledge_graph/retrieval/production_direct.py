@@ -39,7 +39,7 @@ def _local(reason, error):
     raise LocalBranchSchedulerFailure(HybridBranchKind.DIRECT, reason) from error
 
 
-def _prepare_direct(runtime, *, query, scope, deadline, with_policy, read_budget=None):
+def _prepare_direct(runtime, *, query, scope, deadline, with_policy, read_budget=None, metadata=None, group=None):
     from apps.knowledge_graph.retrieval.query_ontology import load_query_ontology
 
     if runtime.clock() >= deadline:
@@ -47,11 +47,15 @@ def _prepare_direct(runtime, *, query, scope, deadline, with_policy, read_budget
     artifact_ids = tuple(sorted({row.artifact_id for row in scope.projections}))
     try:
         with graph_stage(branch="direct", stage="ontology", clock=runtime.clock):
-            ontology_outcome = load_query_ontology(
-                selected_artifact_ids=artifact_ids,
-                using=runtime.authorization.database_alias,
-                **({"read_budget": read_budget} if read_budget is not None else {}),
-            )
+            if metadata is not None:
+                from .native_query_ontology import load_native_ontology
+                ontology_outcome = load_native_ontology(metadata, group=group)
+            else:
+                ontology_outcome = load_query_ontology(
+                    selected_artifact_ids=artifact_ids,
+                    using=runtime.authorization.database_alias,
+                    **({"read_budget": read_budget} if read_budget is not None else {}),
+                )
     except Exception as error:
         _local(DirectBranchFailureReason.DIRECT_SEED_INVALID, error)
     if runtime.clock() >= deadline:
@@ -117,7 +121,10 @@ def _prepare_direct(runtime, *, query, scope, deadline, with_policy, read_budget
                 scope.projections[0].resolver_version,
                 scope.projections[0].embedding_model_signature,
             )
-            repository = DirectSeedRepository(
+            from .native_direct_seed_repository import _NativeDirectSeedRepository
+            repository_type = DirectSeedRepository if metadata is None else _NativeDirectSeedRepository
+            repository = repository_type(
+                **({} if metadata is None else {"metadata": metadata, "group": group}),
                 scope=direct_scope,
                 codec=runtime.codec,
                 span_inputs=span_inputs,
@@ -175,3 +182,7 @@ def prepare_direct_with_policy(runtime, *, query, scope, deadline):
 
 
 __all__ = ["prepare_direct_seeds", "prepare_direct_with_policy"]
+
+_NATIVE_METADATA_DEPENDENCIES = (_prepare_direct, DirectSeedRepository, resolve_direct_seed_components, reconstruct_entity_texts)
+
+_NATIVE_PREPARE_DIRECT_SEEDS = prepare_direct_seeds

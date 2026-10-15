@@ -50,6 +50,8 @@ def native_frame(
     frontier_timeout=5,
     custom_slots=False,
     max_source_rows=5000,
+    metadata=False,
+    prepare_runtime=None,
 ):
     def sources(f):
         (large_selected_scope if large else small_native_scope)(f)
@@ -87,8 +89,12 @@ def native_frame(
     with graph_frame(monkeypatch, prepare_sources=sources, dataset=True) as active:
         f, graph, source, scope, _, dependencies, _, _ = active
         graph.authorization = scope.authorization
+        if metadata:
+            del graph._direct_seeds
         dependencies.settings.graph_direct_enabled = False
         dependencies.settings.graph_extended_enabled = True
+        if prepare_runtime is not None:
+            prepare_runtime(graph)
         snapshot = capture(active)
         selected = select_ready_scope_v2(
             authorization=scope.authorization,
@@ -99,7 +105,8 @@ def native_frame(
         base = TextChunk.objects.all()
         stage = _GraphSourceStage(scope, base, _closed_header(base, scope))
         stage.initial_keys = set(scope.validate())
-        owner = stage.seed_validation(snapshot, stage.check)
+        owner = stage.seed_validation(snapshot, stage.check,
+            **({"selected": selected} if metadata else {}))
         view, _ = owner.baseline(
             snapshot, authorization=scope.authorization, settings=dependencies.settings
         )

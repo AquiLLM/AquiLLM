@@ -181,7 +181,8 @@ def test_stale_current_membership_rejects_mapping_before_candidate_query(
 
 
 def test_repository_deduplicates_entities_before_applying_the_result_cap() -> None:
-    source = inspect.getsource(direct_seed_repository._load_candidate_rows)
+    from apps.knowledge_graph.retrieval.direct_seed_queryset import _candidate_queryset
+    source = inspect.getsource(_candidate_queryset)
     assert source.index(".distinct()") < source.index('[: int(options["limit"]) + 1]')
 
 

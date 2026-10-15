@@ -39,13 +39,13 @@ class _GraphSourceStage:
         self._active = True
         self._seed_validation = None
 
-    def seed_validation(self, snapshot, check, *, runtime=None):
+    def seed_validation(self, snapshot, check, *, runtime=None, selected=None):
         from .closed_graph_seed_validation import _ClosedSeedValidation
 
         self.check()
         if self._seed_validation is not None:
             raise SourceScopeUnavailable("graph_original_scope_unavailable")
-        self._seed_validation = _ClosedSeedValidation(self, snapshot, check, runtime=runtime)
+        self._seed_validation = _ClosedSeedValidation(self, snapshot, check, runtime=runtime, selected=selected)
         self._seed_validation.check()
         return self._seed_validation
 

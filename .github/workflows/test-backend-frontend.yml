@@ -211,6 +211,8 @@ jobs:
           KG_REQUIRE_POSTGRES_TESTS: "1"
         run: >-
           python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_native_seed_metadata_binding.py
+          aquillm/apps/knowledge_graph/tests/test_native_metadata_budget_v2.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py
           aquillm/apps/knowledge_graph/tests/test_closed_graph_attempt_v2.py
           aquillm/apps/knowledge_graph/tests/test_closed_graph_limits_v2.py
@@ -468,6 +470,11 @@ jobs:
           KG_REQUIRE_POSTGRES_TESTS: "1"
         run: >-
           python -m pytest
+          aquillm/apps/knowledge_graph/tests/test_native_direct_proof_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_native_direct_proof_races.py
+          aquillm/apps/knowledge_graph/tests/test_native_ontology_proof_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_native_chunk_owner_proof_postgres.py
+          aquillm/apps/knowledge_graph/tests/test_native_metadata_plans_postgres.py
           aquillm/apps/knowledge_graph/tests/test_seed_lookup_postgres.py
           aquillm/apps/knowledge_graph/tests/test_extended_seed_batch.py
           aquillm/apps/knowledge_graph/tests/test_extended_seed_lookup.py

@@ -1,6 +1,7 @@
 """Immutable collection build manifests over active document artifacts."""
 
 from __future__ import annotations
+from apps.knowledge_graph.retrieval.native_seed_metadata_layout import layout as _metadata_layout
 
 import json
 import re
@@ -23,7 +24,6 @@ from .artifacts import (
 )
 
 _HASH_PATTERN = r"^[0-9a-f]{64}$"
-
 
 def _manifest_source_is_eligible(destination: object, source: object) -> bool:
     """Validate one exact source without collapsing production and eval lifecycles."""
@@ -59,7 +59,6 @@ def _manifest_source_is_eligible(destination: object, source: object) -> bool:
         and source_status == GraphArtifact.Status.ACTIVE
     )
 
-
 def _hash_payload(payload: object) -> str:
     encoded = json.dumps(
         payload,
@@ -68,7 +67,6 @@ def _hash_payload(payload: object) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return sha256(encoded).hexdigest()
-
 
 def collection_input_source_signature(
     *,
@@ -323,3 +321,5 @@ __all__ = [
     "collection_manifest_source_hash",
     "document_membership_signature",
 ]
+
+_NATIVE_METADATA_LAYOUTS = tuple(_metadata_layout(m) for m in (CollectionArtifactInput,))

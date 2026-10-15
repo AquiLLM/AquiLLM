@@ -10,7 +10,7 @@ def load_seed_identities_batch(
     repository, *, requests, authorization, codec, max_rows, read_budget=None,
 ):
     return _load_batch(repository, requests=requests, authorization=authorization,
-                       codec=codec, max_rows=max_rows, read_budget=read_budget, proof=None)
+                       codec=codec, max_rows=max_rows, read_budget=read_budget, proof=None, metadata=None)
 
 
 def load_native_closed_seed_identities_batch(repository, *, owner, requests,
@@ -33,15 +33,20 @@ def load_native_closed_seed_identities_batch(repository, *, owner, requests,
         return repository._load_seed_identities_batch(requests=requests, authorization=authorization,
                                                      codec=codec, max_rows=max_rows, read_budget=read_budget)
     try:
+        metadata = owner._native_metadata
+        if metadata is not None:
+            metadata.check()
+            if metadata.budget is not read_budget:
+                raise ValueError("native metadata batch ledger changed")
         return _load_batch(repository, requests=requests, authorization=authorization,
-                           codec=codec, max_rows=max_rows, read_budget=read_budget, proof=proof)
+                           codec=codec, max_rows=max_rows, read_budget=read_budget, proof=proof, metadata=metadata)
     except BaseException:
         if proof is not None:
             proof.failed = True
         raise
 
 
-def _load_batch(repository, *, requests, authorization, codec, max_rows, read_budget, proof):
+def _load_batch(repository, *, requests, authorization, codec, max_rows, read_budget, proof, metadata):
     """One unpublished bounded read, retaining fresh authority at both ends."""
     if (type(requests) is not tuple or not 1 <= len(requests) <= 64
             or not 1 <= max_rows <= 4999):
@@ -78,9 +83,13 @@ def _load_batch(repository, *, requests, authorization, codec, max_rows, read_bu
             raise ValueError("extended seed authority is stale or unauthorized")
 
     validate()
-    if _chunk_documents(chunk_ids=tuple(requested), using=repository.using,
-                        read_budget=read_budget) != requested:
-        raise ValueError("extended seed chunk ownership is stale")
+    if metadata is None:
+        if _chunk_documents(chunk_ids=tuple(requested), using=repository.using,
+                            read_budget=read_budget) != requested:
+            raise ValueError("extended seed chunk ownership is stale")
+    else:
+        from .native_chunk_owner_proof import require_chunk_owners
+        require_chunk_owners(metadata, requested=requested, using=repository.using)
     limit = max_rows
     if read_budget is not None:
         # Retain space for the final full-scope policy read, its duplicate

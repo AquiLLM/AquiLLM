@@ -5,6 +5,7 @@ Retrieval and reranking live in apps.documents.services.chunk_*.
 """
 
 from __future__ import annotations
+from apps.knowledge_graph.retrieval.native_seed_metadata_layout import layout as _metadata_layout
 
 from collections.abc import Callable
 from typing import TYPE_CHECKING
@@ -23,7 +24,6 @@ if TYPE_CHECKING:
 
 logger = structlog.stdlib.get_logger(__name__)
 
-
 class TextChunkQuerySet(EmbeddingQuerySet):
     """Custom QuerySet for TextChunk with document filtering."""
 
@@ -31,13 +31,11 @@ class TextChunkQuerySet(EmbeddingQuerySet):
         ids = [getattr(doc_or_id, "id", doc_or_id) for doc_or_id in docs_or_ids]
         return self.filter(doc_id__in=ids)
 
-
 def _get_descended_from_document():
     """Lazy import to avoid circular dependency."""
     from .document_types import DESCENDED_FROM_DOCUMENT
 
     return DESCENDED_FROM_DOCUMENT
-
 
 def doc_id_validator(id):
     descended_from_document = _get_descended_from_document()
@@ -215,3 +213,5 @@ class TextChunk(models.Model):
             authorization_context=authorization_context,
             hybrid_graph_dependencies=hybrid_graph_dependencies,
         )
+
+_NATIVE_METADATA_LAYOUTS = (_metadata_layout(TextChunk),)

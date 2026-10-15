@@ -18,7 +18,7 @@ class _ClosedSeedView:
 
 
 class _ClosedSeedValidation:
-    def __init__(self, stage, snapshot, check, *, runtime=None):
+    def __init__(self, stage, snapshot, check, *, runtime=None, selected=None):
         self.stage, self.snapshot, self.check_operation = stage, snapshot, check
         self.plan = snapshot.source_admission
         if type(self.plan) is not NativeSourceAdmission or self.plan.scope is not stage.scope:
@@ -45,11 +45,15 @@ class _ClosedSeedValidation:
         self.mapping = None
         from apps.collections.services.native_closed_seed_policy_proof import _native_closed_seed_policy
         self._native_policy = _native_closed_seed_policy(self)
+        from .native_seed_metadata_owner import native_metadata
+        self._native_metadata = native_metadata(self, selected)
+        self._original_metadata = self._native_metadata
 
     def check(self):
         self.check_operation()
         self.plan.check()
         if (self.stage._seed_validation is not self
+                or self._native_metadata is not self._original_metadata
                 or self.snapshot.source_admission is not self.plan
                 or self.plan.scope is not self.stage.scope
                 or self.plan.query != self.query
@@ -149,3 +153,7 @@ class _ClosedSeedValidation:
         if set(values) != {pk for pk, _ in chunks}:
             raise SourceScopeUnavailable("source_admission_seed_unavailable")
         return dict(values)
+
+
+_NATIVE_METADATA_OWNER_METHODS = tuple((n, getattr(_ClosedSeedValidation, n)) for n in (
+    "check", "rows", "prepare_projections", "identities"))

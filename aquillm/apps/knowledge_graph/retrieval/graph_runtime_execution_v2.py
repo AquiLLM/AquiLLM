@@ -85,12 +85,17 @@ def _execute_captured_graph_v2(
     ):
         raise ValueError("ready selector replaced original authority")
     requests = []
+    from .graph_runtime_seeds_v2 import _group_request_native
+    native = seed_validation is not None and seed_validation._native_metadata is not None
+    if native and seed_validation._native_metadata.selected is not selected:
+        raise ValueError("native metadata original selection changed")
     for g in selected.groups:
         frontier.check_active()
         requests.append(
             GraphGroupRelationRequestV2(
                 g.group_checksum,
-                group_request(
+                (_group_request_native if native else group_request)(
+                    **({"owner": seed_validation} if native else {}),
                     query=query,
                     group=g,
                     authorization=authorization,

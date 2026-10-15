@@ -1,3 +1,4 @@
+from apps.knowledge_graph.retrieval.native_seed_metadata_layout import layout as _metadata_layout
 from .association_checksums import canonical_link_decision_checksum
 
 import re
@@ -27,7 +28,6 @@ _PINNED_DOCUMENT_ARTIFACT_STATUSES = (
     GraphArtifact.Status.SUPERSEDED,
 )
 
-
 def _current_link_filters(prefix: str = "") -> dict[str, object]:
     """Return one fail-closed mapping path pinned by an active collection graph."""
 
@@ -55,13 +55,11 @@ def _current_link_filters(prefix: str = "") -> dict[str, object]:
         f"{path}manifest_input__document_id": F(f"{path}document_entity__document_id"),
     }
 
-
 class CollectionEntityDocumentLinkQuerySet(CollectionArtifactChildQuerySet):
     """Expose automatic links whose complete graph path remains current."""
 
     def current(self):
         return self.filter(**_current_link_filters())
-
 
 class CollectionEntityDocumentLink(
     CollectionArtifactChildModelMixin, ValidatedGraphModel
@@ -656,3 +654,5 @@ class CanonicalEntityLink(ValidatedGraphModel):
                     )
         if errors:
             raise ValidationError(errors)
+
+_NATIVE_METADATA_LAYOUTS = tuple(_metadata_layout(m) for m in (CanonicalEntityLink, CollectionEntityDocumentLink,))

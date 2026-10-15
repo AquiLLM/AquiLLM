@@ -168,7 +168,7 @@ def _run_closed_graph(
     runtime = copy(graph)
     runtime.authorization = scope.authorization
     seed_validation = (
-        stage.seed_validation(snapshot, check, runtime=runtime)
+        stage.seed_validation(snapshot, check, runtime=runtime, selected=selected)
         if admission is not None
         else None
     )

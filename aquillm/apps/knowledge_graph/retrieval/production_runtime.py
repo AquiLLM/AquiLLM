@@ -50,7 +50,6 @@ from .ready_materialization import materialize_selected_ready_chunks
 from .ready_scope_repository import load_selected_ready_scope
 from .topology.contracts import HybridBranchKind
 
-
 class ProductionHybridBranchRuntime:
     def __init__(
         self,
@@ -295,6 +294,7 @@ class ProductionHybridBranchRuntime:
                 authorization=authorization,
             )
 
-
 _NATIVE_GRAPH_RUN_V2 = ProductionHybridBranchRuntime.run_v2
 __all__ = ["ProductionHybridBranchRuntime", "graph_candidates"]
+
+_NATIVE_METADATA_RUNTIME_METHODS = tuple((n, getattr(ProductionHybridBranchRuntime, n)) for n in ("_direct_seeds", "_extractor"))
