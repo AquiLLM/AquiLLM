@@ -106,6 +106,9 @@ def representation_snapshot_digest(snapshot: RepresentationSnapshotV1) -> str:
     )
 
 
+_NATIVE_REPRESENTATION_DIGEST = representation_snapshot_digest
+
+
 def validate_document_reference(ref, *, using):
     document_payload(ref)
     from apps.documents.models import DESCENDED_FROM_DOCUMENT

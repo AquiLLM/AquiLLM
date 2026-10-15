@@ -1,10 +1,9 @@
 """Original capture inputs and one checked native operation lifetime."""
 
-from copy import deepcopy
-
 from django.db import connections
 
 from .native_seed_metadata_eligibility import supported
+from .native_seed_metadata_values import capture_selected, compare
 from .ready_scope_v2 import SelectedGraphScopeV2
 from .topology.frontier_contracts_v2 import FrontierBudgetV2
 
@@ -12,7 +11,10 @@ from .topology.frontier_contracts_v2 import FrontierBudgetV2
 def native_metadata(owner, selected):
     if type(selected) is not SelectedGraphScopeV2 or not supported(owner):
         return None
-    return _NativeSeedMetadata(owner, selected)
+    try:
+        return _NativeSeedMetadata(owner, selected)
+    except (TypeError, ValueError):
+        return None
 
 
 class _NativeSeedMetadata:
@@ -35,6 +37,7 @@ class _NativeSeedMetadata:
             (a, connections[a], connections[a].ops)
             for a in {self.using, "projection_source"}
         )
+        self.value = capture_selected(selected)
         self.groups = selected.groups
         self.bindings = tuple(
             (
@@ -46,7 +49,6 @@ class _NativeSeedMetadata:
             )
             for g in self.groups
         )
-        self.value = deepcopy(selected)
         self.codec = self.runtime.codec
         self.codec_values = (
             self.codec._key,
@@ -102,11 +104,6 @@ class _NativeSeedMetadata:
                 or self.owner.execution_runtime is not self.runtime
                 or scope.authorization is not self.authorization
                 or selected.groups is not self.groups
-                or selected != self.value
-                or selected.authorization_context_signature
-                != self.authorization.authorization_context_signature
-                or selected.representation_snapshot is not scope.representation
-                or selected.requested_document_ids != scope.requested_document_ids
                 or self.runtime.codec is not self.codec
                 or self.codec_values
                 != (self.codec._key, self.codec.key_version, self.codec.codec_version)
@@ -122,6 +119,14 @@ class _NativeSeedMetadata:
                 or not supported(self.owner)
             ):
                 raise ValueError("native metadata dependencies changed")
+            compare(self.value, selected)
+            if (
+                selected.authorization_context_signature
+                != self.authorization.authorization_context_signature
+                or selected.representation_snapshot is not scope.representation
+                or selected.requested_document_ids != scope.requested_document_ids
+            ):
+                raise ValueError("native metadata selected context changed")
             for group, captured_scope, projections, ready, generations in self.bindings:
                 if (
                     group.scope is not captured_scope
@@ -130,14 +135,9 @@ class _NativeSeedMetadata:
                     or ready.selected_generations is not generations
                 ):
                     raise ValueError("native metadata captured objects changed")
-                group.__post_init__()
-                ready.__post_init__()
-            selected.__post_init__()
-            for repository, scope, value, spans, binding in self.direct_inputs:
+            for repository, scope, value, binding in self.direct_inputs:
                 if (
                     repository._scope is not scope
-                    or scope != value
-                    or repository._spans != spans
                     or binding
                     != (
                         repository._codec,
@@ -150,6 +150,7 @@ class _NativeSeedMetadata:
                     or repository._read_budget is not self.budget
                 ):
                     raise ValueError("native direct repository inputs changed")
+                compare(value, scope, repository._spans)
             self.budget.check_active()
         except BaseException:
             self.failed = True

@@ -1,9 +1,8 @@
 """Private repository seam for an already checked closed native group."""
 
-from copy import deepcopy
-
 from .direct_seed_repository import DirectSeedRepository
 from .native_direct_seed_statement import candidate_rows
+from .native_seed_metadata_values import capture_direct
 
 
 class _NativeDirectSeedRepository(DirectSeedRepository):
@@ -20,8 +19,7 @@ class _NativeDirectSeedRepository(DirectSeedRepository):
             (
                 self,
                 self._scope,
-                deepcopy(self._scope),
-                self._spans.copy(),
+                capture_direct(self._scope, self._spans),
                 (
                     self._codec,
                     self._using,

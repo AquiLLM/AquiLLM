@@ -218,6 +218,7 @@ jobs:
         run: >-
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_native_seed_metadata_binding.py
+          aquillm/apps/knowledge_graph/tests/test_native_metadata_value_binding.py
           aquillm/apps/knowledge_graph/tests/test_native_metadata_budget_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_native_ledger_v3.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py

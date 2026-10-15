@@ -39,6 +39,7 @@ _QUOTE = _NATIVE_QUOTE_NAME
 
 def supported(owner):
     from apps.documents import models as document_models
+    from apps.documents.services import representation_store
     from apps.knowledge_graph import models as graph_models
     from apps.knowledge_graph.projection import identifiers as ids
     from apps.knowledge_graph.projection.membership_identifiers import _current_binding
@@ -52,9 +53,11 @@ def supported(owner):
     from . import native_direct_seed_statement as native_statement
     from . import native_query_ontology as native_ontology
     from . import native_seed_metadata_owner as metadata_owner
+    from . import native_seed_metadata_values as values
     from . import production_direct as direct
     from . import production_runtime as runtime_module
     from . import query_ontology as qo
+    from . import ready_scope, ready_scope_v2
     from .closed_graph_seed_validation import (
         _NATIVE_METADATA_OWNER_METHODS,
         _ClosedSeedValidation,
@@ -64,11 +67,40 @@ def supported(owner):
         _NATIVE_METADATA_RUNTIME_METHODS,
         ProductionHybridBranchRuntime,
     )
+    from .topology import contracts
 
     runtime = owner.execution_runtime
     using = owner.stage.scope.using
     if (
         type(owner) is not _ClosedSeedValidation
+        or ready_scope_v2.GraphAuthorityGroupV2.__post_init__
+        is not ready_scope_v2._NATIVE_GRAPH_GROUP_VALIDATOR
+        or ready_scope_v2.SelectedGraphScopeV2.__post_init__
+        is not ready_scope_v2._NATIVE_GRAPH_SELECTION_VALIDATOR
+        or ready_scope_v2.graph_authority_group_checksum_v2
+        is not ready_scope_v2._NATIVE_GRAPH_GROUP_CHECKSUM
+        or contracts.ReadyGenerationBundleV1.__post_init__
+        is not contracts._NATIVE_READY_BUNDLE_VALIDATOR
+        or contracts.ready_generation_bundle_checksum
+        is not contracts._NATIVE_READY_BUNDLE_CHECKSUM
+        or ready_scope_v2.ready_generation_bundle_checksum
+        is not contracts._NATIVE_READY_BUNDLE_CHECKSUM
+        or ready_scope.ready_generation_bundle_checksum
+        is not contracts._NATIVE_READY_BUNDLE_CHECKSUM
+        or representation_store.representation_snapshot_digest
+        is not representation_store._NATIVE_REPRESENTATION_DIGEST
+        or ready_scope_v2.representation_snapshot_digest
+        is not representation_store._NATIVE_REPRESENTATION_DIGEST
+        or values._NATIVE_GRAPH_GROUP_VALIDATOR
+        is not ready_scope_v2._NATIVE_GRAPH_GROUP_VALIDATOR
+        or values._NATIVE_GRAPH_SELECTION_VALIDATOR
+        is not ready_scope_v2._NATIVE_GRAPH_SELECTION_VALIDATOR
+        or values._NATIVE_READY_BUNDLE_VALIDATOR
+        is not contracts._NATIVE_READY_BUNDLE_VALIDATOR
+        or any(getattr(values, n) is not f for n, f in values._NATIVE_VALUE_FUNCTIONS)
+        or metadata_owner.capture_selected is not values.capture_selected
+        or metadata_owner.compare is not values.compare
+        or native_repository.capture_direct is not values.capture_direct
         or any(
             n in owner.__dict__ or method(getattr(owner, n)) is not f
             for n, f in _NATIVE_METADATA_OWNER_METHODS
