@@ -28,17 +28,31 @@ from .gateway_contracts import (
     decode_request,
     encode_response,
 )
-from .gateway_workers import GATEWAY_WORKERS
+from .gateway_wire import (
+    _failure as _failure,
+)
 from .gateway_wire import (
     _header_values as _header_values,
-    _single_header as _single_header,
-    _response_headers as _response_headers,
-    _respond as _respond,
-    _failure as _failure,
-    _read_body as _read_body,
-    _wire_valid as _wire_valid,
+)
+from .gateway_wire import (
     _length as _length,
 )
+from .gateway_wire import (
+    _read_body as _read_body,
+)
+from .gateway_wire import (
+    _respond as _respond,
+)
+from .gateway_wire import (
+    _response_headers as _response_headers,
+)
+from .gateway_wire import (
+    _single_header as _single_header,
+)
+from .gateway_wire import (
+    _wire_valid as _wire_valid,
+)
+from .gateway_workers import GATEWAY_WORKERS
 
 _FAMILY_CAPS: Final = {
     TopologyQueryName.GENERATION_MANIFESTS: 128,
@@ -259,6 +273,10 @@ async def app(scope, receive, send) -> None:
         from .frontier_gateway_service_v2 import topology_frontier
 
         await topology_frontier(scope, receive, send, batch=True)
+    elif route == ("POST", "/v2/topology/frontier/batch-binary"):
+        from .frontier_gateway_service_v2 import topology_frontier
+
+        await topology_frontier(scope, receive, send, binary=True)
     else:
         await _respond(send, 404, b'{"reason":"not_found"}')
 

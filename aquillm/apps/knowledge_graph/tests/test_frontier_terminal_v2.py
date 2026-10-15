@@ -23,17 +23,19 @@ def test_terminal_identity_acquires_own_or_other_generation_mention(
     fixture.caps = replace(fixture.caps, max_depth=depth)
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     copy_calls, relation_streams = [], []
-    copies, entries = FrontierSessionV2.copies, FrontierSessionV2.entries
+    prepare, entries = FrontierSessionV2.prepare_copies, FrontierSessionV2.entries
 
-    def record_copies(session, generation, identity):
-        copy_calls.append((generation, identity))
-        yield from copies(session, generation, identity)
+    def record_copies(session, pairs, *, relation_heads):
+        copy_calls.extend(pairs)
+        if any(identity == terminal for _, identity in pairs):
+            assert not relation_heads
+        return prepare(session, pairs, relation_heads=relation_heads)
 
     def record_entries(session, generation, head, stream):
         relation_streams.append(stream)
         yield from entries(session, generation, head, stream)
 
-    monkeypatch.setattr(FrontierSessionV2, "copies", record_copies)
+    monkeypatch.setattr(FrontierSessionV2, "prepare_copies", record_copies)
     monkeypatch.setattr(FrontierSessionV2, "entries", record_entries)
     result, budget = run(fixture, driver)
     assert chunk in {r.chunk_key for r in result.evidence_candidates}

@@ -45,6 +45,11 @@ def decode_batch_response(value):
             raise ValueError("frontier compressed stream exceeds exact bound")
     except (Base64Error, UnicodeError, zlib.error):
         raise ValueError("frontier compressed stream invalid") from None
+    return validate_expanded_payload(expanded)
+
+
+def validate_expanded_payload(expanded):
+    """One semantic contract for both lossless batch response envelopes."""
     result = _load(expanded, maximum=MAX_EXPANDED_BYTES)
     if (
         type(result) is not dict

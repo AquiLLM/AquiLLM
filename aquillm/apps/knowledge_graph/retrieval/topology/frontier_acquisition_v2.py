@@ -12,6 +12,13 @@ def acquire_frontier(session, assembly, seeds, caps, budget):
     visited, mention_streams = set(), []
     for depth in range(caps.max_depth + 1):
         heap, serial = [], 0
+        pairs = tuple(
+            (generation, identity)
+            for identity in sorted(set(frontier))
+            for generation in sorted(session.selected)
+            if (generation, identity) not in visited
+        )
+        prepared = session.prepare_copies(pairs, relation_heads=depth < caps.max_depth)
         # Read every competing stream head before admitting this round.
         for identity in sorted(frontier):
             for generation in sorted(session.selected):
@@ -19,7 +26,7 @@ def acquire_frontier(session, assembly, seeds, caps, budget):
                 if pair in visited:
                     continue
                 visited.add(pair)
-                for copy, rows in session.copies(generation, identity):
+                for copy, rows in prepared[pair]:
                     if not budget.admit_identity(identity) or not assembly.add_copy(
                         identity, depth, rows
                     ):

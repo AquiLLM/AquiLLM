@@ -144,34 +144,42 @@ class FrontierSessionV2:
         stream = "copies/" + identity
         head = self.reads.head(generation, stream)
         for entry in self.entries(generation, head, stream):
-            if entry["family"] != "copy" or set(entry["links"]) != {
-                "relations",
-                "mentions",
-            }:
-                raise schema_error()
-            predicates = entry["links"]["relations"]
-            if (
-                type(predicates) is not dict
-                or len(predicates) > 128
-                or any(
-                    name not in dict(self.request.predicate_weights)
-                    for name in predicates
-                )
-            ):
-                raise schema_error()
+            self.validate_copy_entry(entry)
             rows = self.reads.hydrate(generation, entry["refs"])
-            page = page_from_rows(rows)
-            validate_source_page(
-                page, selected=self.selected[generation], ready=self.ready
-            )
-            if len(page.nodes) != 1 or any(
-                (m.automatic_membership_key or m.entity_key) != identity
-                for m in page.memberships
-            ):
-                raise schema_error()
-            if entry["order"] != [page.nodes[0].entity_key]:
-                raise schema_error()
+            self.validate_copy_rows(generation, identity, entry, rows)
             yield entry, rows
+
+    def validate_copy_entry(self, entry):
+        if entry["family"] != "copy" or set(entry["links"]) != {
+            "relations",
+            "mentions",
+        }:
+            raise schema_error()
+        predicates = entry["links"]["relations"]
+        if (
+            type(predicates) is not dict
+            or len(predicates) > 128
+            or any(
+                name not in dict(self.request.predicate_weights) for name in predicates
+            )
+        ):
+            raise schema_error()
+
+    def validate_copy_rows(self, generation, identity, entry, rows):
+        page = page_from_rows(rows)
+        validate_source_page(page, selected=self.selected[generation], ready=self.ready)
+        if len(page.nodes) != 1 or any(
+            (m.automatic_membership_key or m.entity_key) != identity
+            for m in page.memberships
+        ):
+            raise schema_error()
+        if entry["order"] != [page.nodes[0].entity_key]:
+            raise schema_error()
+
+    def prepare_copies(self, pairs, *, relation_heads):
+        from .frontier_copy_batch_v2 import prepare_copies
+
+        return prepare_copies(self, pairs, relation_heads=relation_heads)
 
     def relation(self, generation, entry, *, stream, depth):
         before = self.budget.source_rows

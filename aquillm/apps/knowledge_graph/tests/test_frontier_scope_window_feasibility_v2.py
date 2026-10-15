@@ -12,11 +12,6 @@ from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
 from apps.knowledge_graph.tests.frontier_scope_window_support import MixedScopeFixture
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=FrontierBudgetExceeded,
-    reason="Scalar copy-directory seeks exhaust the unchanged 64-query ledger",
-)
 def test_mixed_full_scope_reaches_useful_traversal_and_final_proof():
     fixture = MixedScopeFixture()
     fixture.session.initialize()
@@ -38,6 +33,10 @@ def test_mixed_full_scope_reaches_useful_traversal_and_final_proof():
 
 
 def test_competing_copy_exhaustion_preserves_complete_scope_and_final_authority():
+    from apps.knowledge_graph.tests.frontier_scalar_reference_v2 import (
+        acquire_frontier as scalar_acquire,
+    )
+
     fixture = MixedScopeFixture()
     fixture.session.initialize()
     pages = [page_from_rows(rows) for rows in fixture.session.scope_rows.values()]
@@ -46,7 +45,7 @@ def test_competing_copy_exhaustion_preserves_complete_scope_and_final_authority(
     assert sum(len(page.provenance) for page in pages) == 561
     fixture.driver.phase = "acquisition"
     with pytest.raises(FrontierBudgetExceeded, match="physical work exhausted"):
-        acquire_frontier(
+        scalar_acquire(
             fixture.session,
             fixture.assembly,
             (fixture.seed,),

@@ -75,7 +75,8 @@ def http_gateway(monkeypatch, request):
     transport = client_module.FrontierGatewayClientV2(
         TopologyGatewayClient(
             f"http://127.0.0.1:{server.server_port}", "private-gateway-token", 5.0
-        )
+        ),
+        binary_batches=False,
     )
     fixture.session.reads.driver = transport
     try:

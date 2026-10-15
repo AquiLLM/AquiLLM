@@ -41,13 +41,13 @@ def test_discovered_identity_reseeds_other_generation(monkeypatch):
     from apps.knowledge_graph.projection.frontier_adapter_v2 import FrontierSessionV2
 
     calls = []
-    original = FrontierSessionV2.copies
+    original = FrontierSessionV2.prepare_copies
 
-    def copies(session, generation, identity):
-        calls.append((generation, identity))
-        yield from original(session, generation, identity)
+    def prepare(session, pairs, **kwargs):
+        calls.extend(pairs)
+        return original(session, pairs, **kwargs)
 
-    monkeypatch.setattr(FrontierSessionV2, "copies", copies)
+    monkeypatch.setattr(FrontierSessionV2, "prepare_copies", prepare)
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     loader = canonical_frontier_loader_v2(
         selection=fixture.selection,
@@ -65,6 +65,11 @@ def test_discovered_identity_reseeds_other_generation(monkeypatch):
     )
     assert fixture.answer_identity in result.snapshot.identity_keys
     assert (fixture.generation_b, fixture.shared_identity) in calls
+    for identity in {identity for _, identity in calls}:
+        assert {g for g, i in calls if i == identity} == {
+            b.generation.generation_key for b in fixture.bundles
+        }
+    assert len(calls) == len(set(calls))
     assert all(
         row.discovery_hop == 2
         for row in result.snapshot.audit_rows

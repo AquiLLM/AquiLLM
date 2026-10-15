@@ -229,28 +229,19 @@ class FrontierReadsV2:
         return read_indices(self, generation, keys)
 
     def head(self, generation, name):
+        from .frontier_directory_proof_v2 import directory_step
+
         key = self.manifests[generation]["frontier_root_key"]
         seen, low, high = set(), "", "\uffff"
         while key is not None:
             if key in seen or len(seen) > 32:
                 raise schema_error()
             seen.add(key)
-            kind, node = self.index(generation, key)
-            if (
-                kind != "directory"
-                or type(node) is not dict
-                or set(node) != {"name", "head", "left", "right"}
-            ):
-                raise schema_error()
-            current = node["name"]
-            if type(current) is not str or not low < current < high:
-                raise schema_error()
-            if current == name:
-                return node["head"]
-            if name < current:
-                key, high = node["left"], current
-            else:
-                key, low = node["right"], current
+            found, key, low, high = directory_step(
+                self.index(generation, key), name, low, high
+            )
+            if found:
+                return key
         return None
 
     def entry(self, generation, key, *, stream, previous=None):

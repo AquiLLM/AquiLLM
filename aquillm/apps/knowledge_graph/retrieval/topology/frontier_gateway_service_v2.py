@@ -13,6 +13,8 @@ from .failures import TopologyLoadError
 from .frontier_gateway_contracts_v2 import (
     BATCH_CHECKSUM,
     BATCH_VERSION,
+    BINARY_CHECKSUM,
+    BINARY_VERSION,
     CHECKSUM,
     VERSION,
     FrontierCompletedBudgetFailureV2,
@@ -29,7 +31,7 @@ async def respond(send, status, payload, *, version=VERSION, checksum=CHECKSUM):
     )
 
 
-def read_payload(driver, request, deadline, maximum):
+def read_payload(driver, request, deadline, maximum, *, binary=False):
     remaining = deadline - v1.monotonic()
     if remaining <= 0:
         raise TimeoutError
@@ -66,7 +68,12 @@ def read_payload(driver, request, deadline, maximum):
             raise FrontierCompletedBudgetFailureV2(len(rows))
         if v1.monotonic() >= deadline:
             raise TimeoutError
-        payload = encode_batch_response(payload)
+        if binary:
+            from .frontier_binary_codec_v2 import encode_binary_response
+
+            payload = encode_binary_response(payload)
+        else:
+            payload = encode_batch_response(payload)
     if len(payload) > min(maximum, request.response_bytes):
         raise FrontierCompletedBudgetFailureV2(len(rows))
     if v1.monotonic() >= deadline:
@@ -74,10 +81,13 @@ def read_payload(driver, request, deadline, maximum):
     return payload
 
 
-async def topology_frontier(scope, receive, send, *, batch=False):
+async def topology_frontier(scope, receive, send, *, batch=False, binary=False):
+    batch = batch or binary
     version, checksum = (
         (BATCH_VERSION, BATCH_CHECKSUM) if batch else (VERSION, CHECKSUM)
     )
+    if binary:
+        version, checksum = BINARY_VERSION, BINARY_CHECKSUM
     reply = partial(respond, version=version, checksum=checksum)
     started = v1.monotonic()
     try:
@@ -130,6 +140,7 @@ async def topology_frontier(scope, receive, send, *, batch=False):
             request,
             deadline,
             settings.max_response_bytes,
+            binary=binary,
             expires=deadline,
             clock=v1.monotonic,
         )
@@ -154,4 +165,11 @@ async def topology_frontier(scope, receive, send, *, batch=False):
     except Exception:
         await reply(send, 503, {"reason": "unavailable"})
         return
-    await v1._respond(send, 200, payload, version=version, checksum=checksum)
+    await v1._respond(
+        send,
+        200,
+        payload,
+        version=version,
+        checksum=checksum,
+        content_type=b"application/octet-stream" if binary else b"application/json",
+    )

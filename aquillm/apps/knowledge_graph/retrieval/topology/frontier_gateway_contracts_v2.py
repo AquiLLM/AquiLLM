@@ -21,6 +21,11 @@ BATCH_VERSION = "topology-frontier-batch-v2"
 BATCH_CHECKSUM = sha256(
     b"frontier-batch-v2:generation-key-pairs:manifest160:index160:raw32:limit2:limit10:scalar-csv:relative-timeout:zlib1-base64-envelope:expanded1048576:strict-single-stream:canonical-row-order"
 ).hexdigest()
+BINARY_PATH = PATH + "/batch-binary"
+BINARY_VERSION = "topology-frontier-batch-binary-v2"
+BINARY_CHECKSUM = sha256(
+    b"/v2/topology/frontier/batch-binary:topology-frontier-batch-binary-v2:KGFZ0001:expanded-u32be:zlib1:single-stream:manifest160:index160:raw32:limit2:limit10:rows320:expanded1048576:canonical-row-order:json-errors"
+).hexdigest()
 
 
 @dataclass(frozen=True, slots=True)

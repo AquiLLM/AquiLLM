@@ -10,6 +10,9 @@ from .frontier_gateway_contracts_v2 import (
     BATCH_CHECKSUM,
     BATCH_PATH,
     BATCH_VERSION,
+    BINARY_CHECKSUM,
+    BINARY_PATH,
+    BINARY_VERSION,
     CHECKSUM,
     PATH,
     VERSION,
@@ -29,12 +32,13 @@ from .gateway_opener import build_opener
 
 
 class FrontierGatewayClientV2:
-    def __init__(self, client):
+    def __init__(self, client, *, binary_batches=True):
         if type(client) is not TopologyGatewayClient:
             raise TypeError(
                 "frontier transport requires validated internal gateway config"
             )
         self.client = client
+        self.binary_batches = binary_batches
         parts = urlsplit(client._endpoint)
         self.endpoint = urlunsplit((parts.scheme, parts.netloc, PATH, "", ""))
 
@@ -72,6 +76,9 @@ class FrontierGatewayClientV2:
             parts = urlsplit(self.endpoint)
             endpoint = urlunsplit((parts.scheme, parts.netloc, BATCH_PATH, "", ""))
             version, checksum = BATCH_VERSION, BATCH_CHECKSUM
+            if self.binary_batches:
+                endpoint = urlunsplit((parts.scheme, parts.netloc, BINARY_PATH, "", ""))
+                version, checksum = BINARY_VERSION, BINARY_CHECKSUM
         remaining = min(
             deadline - budget.clock(),
             budget.turn_budget.remaining_ms() / 1000,
@@ -167,7 +174,12 @@ class FrontierGatewayClientV2:
         if (
             headers.get("Content-Encoding") is not None
             or headers.get("Transfer-Encoding") is not None
-            or headers.get("Content-Type") != "application/json"
+            or headers.get("Content-Type")
+            != (
+                "application/octet-stream"
+                if version == BINARY_VERSION and response.status == 200
+                else "application/json"
+            )
             or headers.get("X-Topology-Schema-Version") != version
             or headers.get("X-Topology-Schema-Checksum") != checksum
         ):
@@ -176,7 +188,8 @@ class FrontierGatewayClientV2:
             if received == allowance:
                 raise FrontierBudgetExceeded("frontier wire allowance exhausted")
             raise _schema_failure()
-        value = _load(body, maximum=allowance)
+        binary = version == BINARY_VERSION and response.status == 200
+        value = None if binary else _load(body, maximum=allowance)
         if response.status != 200:
             if type(value) is dict and value.get("reason") == "frontier_budget":
                 if (
@@ -197,13 +210,16 @@ class FrontierGatewayClientV2:
                     raise _schema_failure()
                 _failure(reason)
             raise _schema_failure()
-        if version == BATCH_VERSION:
+        if version in {BATCH_VERSION, BINARY_VERSION}:
+            from .frontier_binary_codec_v2 import decode_binary_response
             from .frontier_gateway_codec_v2 import decode_batch_response
 
             budget.check_active()
             if budget.clock() >= deadline:
                 raise TimeoutError("frontier decode exceeded original deadline")
-            value = decode_batch_response(value)
+            value = (
+                decode_binary_response(body) if binary else decode_batch_response(value)
+            )
             budget.check_active()
             if budget.clock() >= deadline:
                 raise TimeoutError("frontier decode exceeded original deadline")

@@ -172,6 +172,11 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_topology_manifest_batch.py
           aquillm/apps/knowledge_graph/tests/test_frontier_generation_batch_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_window_feasibility_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_copy_feasibility_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_copy_batch_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_copy_proofs_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_binary_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_binary_worker_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_generation_gateway_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_batch_compression_v2.py
           aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter.py
