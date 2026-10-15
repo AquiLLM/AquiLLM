@@ -229,6 +229,7 @@ jobs:
           aquillm/apps/collections/tests/test_native_closed_seed_policy_proof.py
           aquillm/apps/collections/tests/test_native_closed_seed_policy_scope.py
           aquillm/apps/collections/tests/test_native_closed_seed_policy_compatibility.py
+          aquillm/apps/collections/tests/test_native_closed_seed_policy_predicates.py
           aquillm/apps/collections/tests/test_native_closed_seed_policy_accounting.py
           aquillm/apps/collections/tests/test_native_closed_seed_policy_publication.py
           aquillm/apps/documents/tests/test_closed_graph_seed_work.py

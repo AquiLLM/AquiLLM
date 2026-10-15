@@ -1,6 +1,8 @@
 """Native policy dependency identities, layout and compatibility eligibility."""
 
 from django.db import models
+from django.db.models.fields.related_lookups import RelatedExact, RelatedIn
+from django.db.models.lookups import Exact, In
 
 from apps.collections.models import Collection, CollectionPermission
 from apps.documents.models import (
@@ -23,9 +25,11 @@ from .django_retrieval_authorization import (
     _NATIVE_PRINCIPAL_TYPE,
     _NATIVE_QUERYSET_METHODS,
     _POLICY_CHECKSUM,
+    _POLICY_PREDICATE_DEFINITIONS,
     _POLICY_VERSION,
     DjangoCollectionRetrievalPermissionPolicy,
 )
+from .native_closed_seed_policy_predicates import _native_policy_predicates
 
 _MODELS = (
     PDFDocument,
@@ -86,6 +90,19 @@ _NATIVE_TABLE_LAYOUT = tuple(
     (m, m._meta, m._meta.db_table)
     for m in (*_MODELS, CollectionPermission, _NATIVE_PRINCIPAL_TYPE, Collection)
 )
+
+
+def _policy_predicates():
+    # The ordinary UUID relation uses uuid_membership, not an id__in lookup.
+    # These twelve effective lookups are the predicates our fixed SQL bypasses.
+    return tuple(
+        (m._meta.get_field("collection"), "in", RelatedIn) for m in _MODELS
+    ) + (
+        (CollectionPermission._meta.get_field("collection"), "in", RelatedIn),
+        (CollectionPermission._meta.get_field("user"), "exact", RelatedExact),
+        (CollectionPermission._meta.get_field("permission"), "in", In),
+        (_NATIVE_PRINCIPAL_TYPE._meta.get_field("is_active"), "exact", Exact),
+    )
 
 
 def _native_field(field, kind):
@@ -182,6 +199,9 @@ def _supported(self, connection):
     fields = self._fields()
     if (
         not all(_native_field(f, kind) for f, kind in fields)
+        or not _native_policy_predicates(
+            _policy_predicates(), _POLICY_PREDICATE_DEFINITIONS
+        )
         or tuple(_field_header(f) for f, _ in fields) != _NATIVE_FIELD_LAYOUT
         or any(
             m._meta is not meta or meta.db_table != table

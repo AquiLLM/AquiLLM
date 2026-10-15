@@ -10,6 +10,9 @@ from django.conf import settings
 from django.contrib.auth.models import User
 from django.db import models
 
+from .native_closed_seed_policy_predicates import (
+    _POLICY_PREDICATE_DEFINITIONS as _POLICY_PREDICATE_DEFINITIONS,
+)
 from .retrieval_authorization import (
     OpaquePrincipalReference,
     RetrievalAuthorizationContext,

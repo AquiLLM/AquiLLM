@@ -61,6 +61,7 @@ class _NativeClosedSeedPolicyProof:
             self.policy.__dict__.copy(),
         )
         self.failed = False
+        self.selected = False
 
     def select(self, *, authorization, repository, read_budget):
         """Unsupported paths choose legacy before any proof dispatch."""
@@ -91,6 +92,12 @@ class _NativeClosedSeedPolicyProof:
         ):
             raise ValueError("native seed policy original inputs changed")
         _validate_reauthorization_context(authorization, read_budget)
+        if self.selected:
+            try:
+                self._check()
+            except BaseException:
+                self.failed = True
+                raise
         self.repository = repository
         connection = connections[authorization.database_alias]
         if not self._supported(connection):
@@ -117,6 +124,7 @@ class _NativeClosedSeedPolicyProof:
             _method(connection.ops.quote_name),
         )
         self._check()
+        self.selected = True
         return self
 
     def _fields(self):
@@ -128,7 +136,8 @@ class _NativeClosedSeedPolicyProof:
     def _check(self):
         self.owner.check()
         if (
-            self.owner.stage.scope.authorization is not self.authorization
+            self.failed
+            or self.owner.stage.scope.authorization is not self.authorization
             or _context_header(self.authorization) != self.context_header
             or self.authorization.reauthorization_capability is not self.capability
             or self.capability._policy is not self.policy
