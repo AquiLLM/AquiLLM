@@ -3,6 +3,7 @@
 from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import _key
 
 from .frontier_reads_v2 import KINDS, schema_error
+from .frontier_scope_preparation_v2 import ScopePreparation  # noqa: F401
 
 
 def _heads(reads, generation, names):
@@ -84,68 +85,8 @@ def scope_rows(reads, generation, sources):
 
 def scope_rows_all(reads, sources):
     """Advance all selected streams together, retaining independent tree bounds."""
-    from .frontier_generation_batch_v2 import hydrate_all, indices_all
+    from apps.knowledge_graph.retrieval.topology.frontier_window_owner_v2 import (
+        run_preparation,
+    )
 
-    pending = {
-        (g, "scope/" + source): (
-            reads.manifests[g]["frontier_root_key"],
-            set(),
-            "",
-            "\uffff",
-        )
-        for g, keys in sources.items()
-        for source in keys
-    }
-    heads = {}
-    while pending:
-        for key, seen, _, _ in pending.values():
-            if key in seen or len(seen) > 32:
-                raise schema_error()
-            seen.add(key)
-        records = indices_all(
-            reads, ((g, state[0]) for (g, _), state in pending.items())
-        )
-        following = {}
-        for (generation, name), (key, seen, low, high) in pending.items():
-            kind, node = records[generation, key]
-            if (
-                kind != "directory"
-                or type(node) is not dict
-                or set(node) != {"name", "head", "left", "right"}
-            ):
-                raise schema_error()
-            current = node["name"]
-            if type(current) is not str or not low < current < high:
-                raise schema_error()
-            if current == name:
-                if node["head"] is None:
-                    raise schema_error()
-                heads[generation, name] = node["head"]
-                continue
-            child = node["left"] if name < current else node["right"]
-            if child is None:
-                raise schema_error()
-            following[generation, name] = (
-                child,
-                seen,
-                low if name < current else current,
-                current if name < current else high,
-            )
-        pending = following
-    indices_all(reads, ((g, head) for (g, _), head in heads.items()))
-    expected = {}
-    for (generation, stream), head in heads.items():
-        entry = reads.entry(generation, head, stream=stream)
-        if entry["family"] != "scope" or entry["next"] is not None:
-            raise schema_error()
-        for ref in entry["refs"]:
-            if type(ref) is not list or len(ref) != 3 or ref[0] not in KINDS:
-                raise schema_error()
-            label, key, checksum = ref
-            _key(key)
-            _key(checksum)
-            identity = generation, label, key
-            if identity in expected and expected[identity] != checksum:
-                raise schema_error()
-            expected[identity] = checksum
-    return hydrate_all(reads, expected)
+    return run_preparation(ScopePreparation(reads, sources))

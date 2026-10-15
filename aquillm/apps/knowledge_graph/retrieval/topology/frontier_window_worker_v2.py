@@ -1,0 +1,97 @@
+"""One occupied worker runs a bounded physical prefix of a finite preparation."""
+
+from apps.knowledge_graph.projection.frontier_preparation_reads_v2 import OwnerBoundary
+from apps.knowledge_graph.projection.frontier_reads_v2 import FrontierReadsV2
+
+from . import gateway_service as v1
+from .frontier_binary_codec_v2 import decode_binary_response
+from .frontier_contracts_v2 import FrontierBudgetExceeded
+from .frontier_gateway_contracts_v2 import (
+    FrontierCompletedBudgetFailureV2,
+    FrontierGatewayBatchRequestV2,
+)
+from .frontier_gateway_service_v2 import read_payload
+from .frontier_window_checkpoint_v2 import restore
+from .frontier_window_codec_v2 import KINDS, MAGIC
+from .frontier_window_contracts_v2 import CompletedWindowBudgetFailure
+
+
+class PlanningCursor:
+    """Numeric pre-hold allowance only; cannot reserve or authorize any read."""
+
+    def __init__(self, rows, deadline):
+        self.rows, self.deadline = rows, deadline
+
+    def check_active(self):
+        if self.clock() >= self.deadline:
+            raise TimeoutError("frontier original request expiry")
+
+    def available_read_rows(self):
+        self.check_active()
+        return self.rows
+
+    @staticmethod
+    def clock():
+        return v1.monotonic()
+
+
+def read_window(driver, request, deadline, maximum):
+    grant = request.grant
+    cursor = PlanningCursor(grant.planning_rows, deadline)
+    reads = FrontierReadsV2(None, ready=request.ready, budget=cursor, deadline=deadline)
+    state = restore(reads, request.operation, request.checkpoint)
+    frames, queries, scanned, raw_count, expanded, wire = [], 0, 0, 0, 0, 41
+    while queries < grant.queries:
+        cursor.check_active()
+        try:
+            effect = state.next_read(cursor.rows)
+        except (OwnerBoundary, FrontierBudgetExceeded):
+            break
+        if effect is None:
+            break
+        raw = effect.kind == "raw_batch_multi"
+        ordinary_rows = (
+            len(effect.pairs)
+            if not raw
+            else sum((g, key) in effect.pairs for g, _, key in state.expected)
+        )
+        if (
+            (raw and raw_count >= 4)
+            or scanned + effect.maximum > grant.rows
+            or scanned + ordinary_rows > 320
+        ):
+            break
+        physical_request = FrontierGatewayBatchRequestV2(
+            effect.kind, effect.pairs, request.ready, 1048576
+        )
+        try:
+            frame = read_payload(
+                driver, physical_request, deadline, 1048576, binary=True
+            )
+        except FrontierCompletedBudgetFailureV2 as exc:
+            raise CompletedWindowBudgetFailure(
+                request.request_digest, queries + 1, scanned + exc.scanned_rows
+            ) from exc
+        payload = decode_binary_response(frame)
+        rows = tuple(payload["rows"])
+        queries += 1
+        scanned += len(rows)
+        raw_count += raw
+        cursor.rows -= len(rows)
+        expanded += int.from_bytes(frame[8:12], "big")
+        wire += 5 + len(frame)
+        if scanned > 320 or expanded > 1048576 or wire > min(maximum, grant.wire):
+            raise CompletedWindowBudgetFailure(request.request_digest, queries, scanned)
+        state.apply_result(rows)
+        frames.append(
+            bytes([KINDS[effect.kind]]) + len(frame).to_bytes(4, "big") + frame
+        )
+    cursor.check_active()
+    if not frames:
+        raise ValueError("frontier window did not complete a physical read")
+    return (
+        MAGIC
+        + bytes.fromhex(request.request_digest)
+        + bytes([len(frames)])
+        + b"".join(frames)
+    )

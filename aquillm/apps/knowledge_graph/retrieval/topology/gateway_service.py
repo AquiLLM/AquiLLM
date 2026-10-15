@@ -277,6 +277,10 @@ async def app(scope, receive, send) -> None:
         from .frontier_gateway_service_v2 import topology_frontier
 
         await topology_frontier(scope, receive, send, binary=True)
+    elif route == ("POST", "/v2/topology/frontier/window"):
+        from .frontier_gateway_service_v2 import topology_frontier
+
+        await topology_frontier(scope, receive, send, window=True)
     else:
         await _respond(send, 404, b'{"reason":"not_found"}')
 

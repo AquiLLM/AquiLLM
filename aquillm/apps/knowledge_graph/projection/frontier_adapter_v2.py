@@ -62,6 +62,7 @@ class FrontierSessionV2:
                 "authorization": self.ready.authorization_context_signature,
             }
         )
+        self.reads.request_digest = self.request_digest
 
     def initialize(self):
         self.scope_rows = {}

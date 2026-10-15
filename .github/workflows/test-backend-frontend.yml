@@ -177,6 +177,18 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_frontier_copy_proofs_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_binary_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_binary_worker_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_preparation_state_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_budget_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_codec_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_worker_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_boundaries_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_request_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_mask_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_overflow_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_cleanup_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_authority_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_failures_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_window_feasibility_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_generation_gateway_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_batch_compression_v2.py
           aquillm/apps/knowledge_graph/tests/test_projected_topology_adapter.py

@@ -1,10 +1,9 @@
 """Authenticate every competing copy stream before admitting a depth's edges."""
 
-from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import _key
-
+from .frontier_copy_preparation_v2 import CopyPreparation  # noqa: F401
 from .frontier_directory_proof_v2 import directory_step
-from .frontier_generation_batch_v2 import hydrate_all, indices_all
-from .frontier_reads_v2 import KINDS, schema_error
+from .frontier_generation_batch_v2 import indices_all
+from .frontier_reads_v2 import schema_error
 
 
 def copy_heads(session, pairs):
@@ -73,44 +72,10 @@ def copy_entries(session, heads):
 
 def prepare_copies(session, pairs, *, relation_heads):
     """Return fresh per-operation raw subsets, never an authority cache."""
-    reads = session.reads
-    entries = copy_entries(session, copy_heads(session, pairs))
-    expected = {}
-    for (generation, _), copies in entries.items():
-        for entry in copies:
-            reads._check_index_deadline()
-            for ref in entry["refs"]:
-                if type(ref) is not list or len(ref) != 3 or ref[0] not in KINDS:
-                    raise schema_error()
-                label, key, checksum = ref
-                _key(key)
-                _key(checksum)
-                target = generation, label, key
-                if target in expected and expected[target] != checksum:
-                    raise schema_error()
-                expected[target] = checksum
-    fresh = hydrate_all(reads, expected)
-    prepared, first = {pair: [] for pair in pairs}, []
-    for (generation, identity), copies in entries.items():
-        for entry in copies:
-            reads._check_index_deadline()
-            rows = {
-                (label, key): fresh[generation][label, key]
-                for label, key, _ in entry["refs"]
-            }
-            session.validate_copy_rows(generation, identity, entry, rows)
-            prepared[generation, identity].append((entry, rows))
-            if relation_heads:
-                for predicate, head in sorted(entry["links"]["relations"].items()):
-                    if head is not None:
-                        first.append(
-                            (
-                                generation,
-                                head,
-                                "relations/" + entry["order"][0] + "/" + predicate,
-                            )
-                        )
-    indices_all(reads, ((generation, head) for generation, head, _ in first))
-    for generation, head, stream in first:
-        reads.entry(generation, head, stream=stream)
-    return prepared
+    from apps.knowledge_graph.retrieval.topology.frontier_window_owner_v2 import (
+        run_preparation,
+    )
+
+    return run_preparation(
+        CopyPreparation(session, pairs, relation_heads=relation_heads)
+    )

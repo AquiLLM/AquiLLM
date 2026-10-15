@@ -20,6 +20,7 @@ from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
     FrontierBudgetExceeded,
 )
 from apps.knowledge_graph.retrieval.topology.gateway_client import TopologyGatewayClient
+from apps.knowledge_graph.retrieval.topology.gateway_contracts import _canonical
 from apps.knowledge_graph.tests.frontier_scope_window_support import MixedScopeFixture
 from apps.knowledge_graph.tests.test_topology_gateway_service import _call, _settings
 
@@ -27,7 +28,7 @@ from apps.knowledge_graph.tests.test_topology_gateway_service import _call, _set
 class GatewayOpener:
     """Replace only the socket; execute actual ASGI routes and production codecs."""
 
-    def __init__(self, fixture, monkeypatch):
+    def __init__(self, fixture, monkeypatch, *, windows=False):
         runtime = service.TopologyGatewayRuntime(
             replace(_settings(), timeout_ms=5000), fixture.driver, object()
         )
@@ -37,7 +38,8 @@ class GatewayOpener:
         monkeypatch.setattr(service, "_get_runtime", lambda *_: runtime)
         monkeypatch.setattr(client, "build_opener", lambda *_: self)
         fixture.session.reads.driver = client.FrontierGatewayClientV2(
-            TopologyGatewayClient("http://localhost", "private-gateway-token", 5.0)
+            TopologyGatewayClient("http://localhost", "private-gateway-token", 5.0),
+            preparation_windows=windows,
         )
         self.frames = []
         self.encoded = []
@@ -53,6 +55,7 @@ class GatewayOpener:
 
     def open(self, request, timeout):
         before = len(self.encoded)
+        physical_before = len(self.fixture.driver.calls)
         messages = asyncio.run(
             _call(
                 path=urlsplit(request.full_url).path,
@@ -72,13 +75,33 @@ class GatewayOpener:
         response.headers = Message()
         for name, value in messages[0]["headers"]:
             response.headers[name.decode()] = value.decode()
+        request_value = json.loads(request.data)
+        window_frames = []
+        if body.startswith(b"KGFW0001"):
+            offset = 41
+            for _ in range(body[40]):
+                size = int.from_bytes(body[offset + 1 : offset + 5], "big")
+                offset += 5
+                window_frames.append(
+                    (int.from_bytes(body[offset + 8 : offset + 12], "big"), size)
+                )
+                offset += size
         self.frames.append(
             {
                 "path": urlsplit(request.full_url).path,
                 "phase": self.fixture.driver.phase,
                 "status": response.status,
                 "wire": len(body),
-                "allowance": json.loads(request.data)["response_bytes"],
+                "allowance": request_value.get(
+                    "response_bytes",
+                    request_value.get("grant", {}).get("wire"),
+                ),
+                "request_bytes": len(request.data),
+                "checkpoint_bytes": len(_canonical(request_value["checkpoint"]))
+                if "checkpoint" in request_value
+                else 0,
+                "physical_queries": len(self.fixture.driver.calls) - physical_before,
+                "window_frames": window_frames,
                 "encoded": (
                     [(int.from_bytes(body[8:12], "big"), len(body))]
                     if body.startswith(b"KGFZ0001")

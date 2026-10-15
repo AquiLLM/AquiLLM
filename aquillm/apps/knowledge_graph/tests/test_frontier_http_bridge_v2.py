@@ -33,7 +33,7 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
     runtime = service.TopologyGatewayRuntime(settings, driver, object())
     monkeypatch.setattr(service, "load_topology_gateway_settings", lambda _: settings)
     monkeypatch.setattr(service, "_get_runtime", lambda *_: runtime)
-    body_sizes, timeouts = [], []
+    body_sizes, timeouts, physical_counts = [], [], []
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -67,6 +67,7 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
             self.end_headers()
             body = sent[1]["body"]
             body_sizes.append(len(body))
+            physical_counts.append(body[40] if body.startswith(b"KGFW0001") else 1)
             self.wfile.write(body)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -114,7 +115,8 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
         )
         assert fixture.answer_identity in result.snapshot.identity_keys
         assert budget.wire_bytes == sum(body_sizes) > 0
-        assert budget.queries == len(body_sizes) == len(driver.calls) <= 64
+        assert budget.queries == sum(physical_counts) == len(driver.calls) <= 64
+        assert len(body_sizes) < budget.queries
         assert budget.wire_bytes <= 1048576 and budget.deadline == deadline
         assert all(0 < value <= 5000 for value in timeouts)
         print(

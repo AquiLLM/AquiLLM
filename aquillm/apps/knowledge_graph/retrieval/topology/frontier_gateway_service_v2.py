@@ -22,6 +22,7 @@ from .frontier_gateway_contracts_v2 import (
     decode_batch_request,
     decode_request,
 )
+from .frontier_window_contracts_v2 import CompletedWindowBudgetFailure
 from .gateway_contracts import FAILURE_HTTP_STATUS, _canonical
 
 
@@ -81,13 +82,20 @@ def read_payload(driver, request, deadline, maximum, *, binary=False):
     return payload
 
 
-async def topology_frontier(scope, receive, send, *, batch=False, binary=False):
+async def topology_frontier(
+    scope, receive, send, *, batch=False, binary=False, window=False
+):
     batch = batch or binary
     version, checksum = (
         (BATCH_VERSION, BATCH_CHECKSUM) if batch else (VERSION, CHECKSUM)
     )
     if binary:
         version, checksum = BINARY_VERSION, BINARY_CHECKSUM
+    if window:
+        from .frontier_window_contracts_v2 import CHECKSUM as WINDOW_CHECKSUM
+        from .frontier_window_contracts_v2 import VERSION as WINDOW_VERSION
+
+        version, checksum = WINDOW_VERSION, WINDOW_CHECKSUM
     reply = partial(respond, version=version, checksum=checksum)
     started = v1.monotonic()
     try:
@@ -125,7 +133,14 @@ async def topology_frontier(scope, receive, send, *, batch=False, binary=False):
         body = await asyncio.wait_for(
             v1._read_body(receive, length), max(0, deadline - v1.monotonic())
         )
-        request = (decode_batch_request if batch else decode_request)(body)
+        if window:
+            from .frontier_window_contracts_v2 import (
+                decode_request as decode_window_request,
+            )
+
+            request = decode_window_request(body)
+        else:
+            request = (decode_batch_request if batch else decode_request)(body)
     except TimeoutError:
         await reply(send, 504, {"reason": "deadline"})
         return
@@ -134,16 +149,35 @@ async def topology_frontier(scope, receive, send, *, batch=False, binary=False):
         return
     try:
         runtime = v1._get_runtime(settings)
+        runner = partial(read_payload, binary=binary)
+        if window:
+            from .frontier_window_worker_v2 import read_window
+
+            runner = read_window
+
         payload = await v1.GATEWAY_WORKERS.run(
-            read_payload,
+            runner,
             runtime.driver,
             request,
             deadline,
             settings.max_response_bytes,
-            binary=binary,
             expires=deadline,
             clock=v1.monotonic,
         )
+    except CompletedWindowBudgetFailure as exc:
+        receipt = _canonical(
+            {
+                "reason": "frontier_budget",
+                "request_digest": exc.request_digest,
+                "queries": exc.queries,
+                "scanned_rows": exc.scanned_rows,
+            }
+        )
+        if len(receipt) > min(request.grant.wire, settings.max_response_bytes):
+            await v1._respond(send, 503, b"", version=version, checksum=checksum)
+        else:
+            await v1._respond(send, 422, receipt, version=version, checksum=checksum)
+        return
     except FrontierCompletedBudgetFailureV2 as exc:
         await reply(
             send,
@@ -171,5 +205,7 @@ async def topology_frontier(scope, receive, send, *, batch=False, binary=False):
         payload,
         version=version,
         checksum=checksum,
-        content_type=b"application/octet-stream" if binary else b"application/json",
+        content_type=b"application/octet-stream"
+        if binary or window
+        else b"application/json",
     )
