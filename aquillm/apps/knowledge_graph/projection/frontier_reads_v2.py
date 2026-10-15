@@ -19,6 +19,7 @@ from .frontier_cypher_v2 import (
     MANIFEST_LOOKUP,
     RAW_BATCH_MULTI_LOOKUP,
     RAW_LOOKUP,
+    SCOPE_RAW_COMPLETE_BATCH_LOOKUP,
 )
 from .frontier_index_contracts_v2 import decode_record
 from .frontier_source_validation_v2 import KINDS as KINDS
@@ -34,6 +35,7 @@ QUERIES = {
     "manifest_batch": MANIFEST_BATCH_LOOKUP,
     "index_batch_multi": INDEX_BATCH_MULTI_LOOKUP,
     "raw_batch_multi": RAW_BATCH_MULTI_LOOKUP,
+    "scope_raw_complete_batch": SCOPE_RAW_COMPLETE_BATCH_LOOKUP,
 }
 
 
@@ -46,6 +48,9 @@ class FrontierReadsV2:
         self._final_authority = None
 
     def reserve_final(self, *, multi):
+        from .frontier_scope_complete_v3 import complete_scope_enabled
+
+        self.complete_scope_windows = complete_scope_enabled(self.driver)
         if self._final_authority is None:
             count = len(self.ready.selected_generations)
             self._final_authority = self.budget.reserve_authority(

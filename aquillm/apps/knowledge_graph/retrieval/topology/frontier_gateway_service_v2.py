@@ -22,6 +22,7 @@ from .frontier_gateway_contracts_v2 import (
     decode_batch_request,
     decode_request,
 )
+from .frontier_scope_window_contracts_v3 import ScopeRawRequest, protocol_headers_valid
 from .frontier_window_contracts_v2 import CompletedWindowBudgetFailure
 from .gateway_contracts import FAILURE_HTTP_STATUS, _canonical
 
@@ -37,7 +38,8 @@ def read_payload(driver, request, deadline, maximum, *, binary=False):
     if remaining <= 0:
         raise TimeoutError
     parameters = {}
-    if type(request) is FrontierGatewayBatchRequestV2:
+    batch = type(request) in {FrontierGatewayBatchRequestV2, ScopeRawRequest}
+    if batch:
         parameters = {"lookups_csv": ",".join(g + ":" + k for g, k in request.lookups)}
     elif request.kind == "index":
         parameters = {"index_key": request.keys[0]}
@@ -59,10 +61,12 @@ def read_payload(driver, request, deadline, maximum, *, binary=False):
         raise TopologyLoadError(_failure(exc.code)) from exc
     if type(rows) is not tuple or len(rows) > request.maximum:
         raise ValueError("frontier backend shape invalid")
-    if type(request) is FrontierGatewayBatchRequestV2:
+    if type(request) is ScopeRawRequest and len(rows) == 320:
+        raise FrontierCompletedBudgetFailureV2(320)
+    if batch:
         rows = tuple(sorted(rows, key=_canonical))
     payload = _canonical({"rows": rows, "scanned_rows": len(rows), "queries": 1})
-    if type(request) is FrontierGatewayBatchRequestV2:
+    if batch:
         from .frontier_gateway_codec_v2 import MAX_EXPANDED_BYTES, encode_batch_response
 
         if len(payload) > min(maximum, MAX_EXPANDED_BYTES):
@@ -83,7 +87,14 @@ def read_payload(driver, request, deadline, maximum, *, binary=False):
 
 
 async def topology_frontier(
-    scope, receive, send, *, batch=False, binary=False, window=False
+    scope,
+    receive,
+    send,
+    *,
+    batch=False,
+    binary=False,
+    window=False,
+    complete_scope=False,
 ):
     batch = batch or binary
     version, checksum = (
@@ -96,6 +107,11 @@ async def topology_frontier(
         from .frontier_window_contracts_v2 import VERSION as WINDOW_VERSION
 
         version, checksum = WINDOW_VERSION, WINDOW_CHECKSUM
+    if complete_scope:
+        from .frontier_scope_window_contracts_v3 import CHECKSUM as checksum
+        from .frontier_scope_window_contracts_v3 import VERSION as version
+
+        window = True
     reply = partial(respond, version=version, checksum=checksum)
     started = v1.monotonic()
     try:
@@ -129,6 +145,10 @@ async def topology_frontier(
             raise ValueError
         if v1._header_values(scope, b"content-encoding"):
             raise ValueError
+        if complete_scope and not protocol_headers_valid(
+            (k.decode("latin1") for k, _ in scope.get("headers", ())), request=True
+        ):
+            raise ValueError
         deadline = started + min(timeout_ms, settings.timeout_ms) / 1000
         body = await asyncio.wait_for(
             v1._read_body(receive, length), max(0, deadline - v1.monotonic())
@@ -138,7 +158,18 @@ async def topology_frontier(
                 decode_request as decode_window_request,
             )
 
-            request = decode_window_request(body)
+            if complete_scope:
+                from .frontier_scope_window_contracts_v3 import (
+                    decode_request as decode_scope,
+                )
+
+                def check():
+                    if v1.monotonic() >= deadline:
+                        raise TimeoutError
+
+                request = decode_scope(body, check)
+            else:
+                request = decode_window_request(body)
         else:
             request = (decode_batch_request if batch else decode_request)(body)
     except TimeoutError:
@@ -153,7 +184,7 @@ async def topology_frontier(
         if window:
             from .frontier_window_worker_v2 import read_window
 
-            runner = read_window
+            runner = partial(read_window, complete_scope=complete_scope)
 
         payload = await v1.GATEWAY_WORKERS.run(
             runner,

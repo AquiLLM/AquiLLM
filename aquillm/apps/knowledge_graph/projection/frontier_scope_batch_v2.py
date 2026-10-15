@@ -50,6 +50,8 @@ def _heads(reads, generation, names):
 
 
 def scope_rows(reads, generation, sources):
+    if getattr(reads, "complete_scope_windows", False):
+        return scope_rows_all(reads, {generation: sources})[generation]
     expected = {}
     for offset in range(0, len(sources), 32):
         names = tuple("scope/" + source for source in sources[offset : offset + 32])
@@ -89,4 +91,8 @@ def scope_rows_all(reads, sources):
         run_preparation,
     )
 
-    return run_preparation(ScopePreparation(reads, sources))
+    from .frontier_scope_complete_v3 import ScopeCompletePreparation
+
+    complete = getattr(reads, "complete_scope_windows", False)
+    state = (ScopeCompletePreparation if complete else ScopePreparation)(reads, sources)
+    return run_preparation(state)

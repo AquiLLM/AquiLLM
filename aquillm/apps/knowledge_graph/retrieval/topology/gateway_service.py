@@ -1,6 +1,4 @@
-"""Dependency-free ASGI service for four fixed projected-topology reads."""
-
-from __future__ import annotations
+"""Dependency-free ASGI service for fixed projected-topology reads."""
 
 from dataclasses import dataclass
 from functools import partial
@@ -281,6 +279,10 @@ async def app(scope, receive, send) -> None:
         from .frontier_gateway_service_v2 import topology_frontier
 
         await topology_frontier(scope, receive, send, window=True)
+    elif route == ("POST", "/v3/topology/frontier/scope-window"):
+        from .frontier_gateway_service_v2 import topology_frontier
+
+        await topology_frontier(scope, receive, send, complete_scope=True)
     else:
         await _respond(send, 404, b'{"reason":"not_found"}')
 

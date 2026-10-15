@@ -11,7 +11,16 @@ from .frontier_window_contracts_v2 import CHECKSUM, PATH, VERSION
 from .gateway_client import _RejectRedirect
 
 
-def execute_window(transport, *, body, grant, deadline, budget):
+def execute_window(transport, *, body, grant, deadline, budget, complete_scope=False):
+    path, version, checksum = PATH, VERSION, CHECKSUM
+    single = False
+    if complete_scope:
+        from .frontier_scope_window_contracts_v3 import CHECKSUM as checksum
+        from .frontier_scope_window_contracts_v3 import PATH as path
+        from .frontier_scope_window_contracts_v3 import VERSION as version
+        from .frontier_scope_window_contracts_v3 import decode_request
+
+        single = decode_request(body, budget.check_active).mode == "single"
     budget.check_active()
     remaining = min(
         deadline - budget.clock(),
@@ -22,7 +31,7 @@ def execute_window(transport, *, body, grant, deadline, budget):
     if timeout_ms <= 0:
         raise TimeoutError("frontier original deadline expired")
     parts = urlsplit(transport.endpoint)
-    endpoint = urlunsplit((parts.scheme, parts.netloc, PATH, "", ""))
+    endpoint = urlunsplit((parts.scheme, parts.netloc, path, "", ""))
     request = Request(
         endpoint,
         data=body,
@@ -31,8 +40,8 @@ def execute_window(transport, *, body, grant, deadline, budget):
             "Authorization": "Bearer " + transport.client.bearer_token,
             "Content-Type": "application/json",
             "Accept-Encoding": "identity",
-            "X-Topology-Schema-Version": VERSION,
-            "X-Topology-Schema-Checksum": CHECKSUM,
+            "X-Topology-Schema-Version": version,
+            "X-Topology-Schema-Checksum": checksum,
             "X-Frontier-Timeout-Ms": str(timeout_ms),
         },
     )
@@ -47,9 +56,10 @@ def execute_window(transport, *, body, grant, deadline, budget):
             allowance=grant.wire,
             budget=budget,
             deadline=deadline,
-            version=VERSION,
-            checksum=CHECKSUM,
+            version=version,
+            checksum=checksum,
             window_digest=sha256(body).hexdigest(),
+            scope_single=single,
         )
     finally:
         response.close()

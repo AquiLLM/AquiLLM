@@ -54,3 +54,5 @@ RAW_BATCH_MULTI_LOOKUP = (
     "WITH n LIMIT 10 RETURN properties(n) AS record, labels(n) AS labels } "
     "RETURN generation_key, lookup_key, record, labels"
 )
+
+SCOPE_RAW_COMPLETE_BATCH_LOOKUP = RAW_BATCH_MULTI_LOOKUP + " LIMIT 320"

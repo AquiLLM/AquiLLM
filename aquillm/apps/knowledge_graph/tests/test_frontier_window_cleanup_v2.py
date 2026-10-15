@@ -20,25 +20,42 @@ from apps.knowledge_graph.retrieval.topology.frontier_window_worker_v2 import (
 )
 from apps.knowledge_graph.retrieval.topology.gateway_workers import GatewayWorkerPool
 from apps.knowledge_graph.tests.frontier_copy_batch_support import CopyFixture
+from apps.knowledge_graph.tests.frontier_scope_complete_support import scope_state
 from apps.knowledge_graph.tests.frontier_window_test_support import WindowOpener
 
 
 @pytest.mark.asyncio
-async def test_window_encoding_keeps_one_worker_occupied_after_timeout(monkeypatch):
+@pytest.mark.parametrize("complete_scope", [False, True])
+async def test_window_encoding_keeps_one_worker_occupied_after_timeout(
+    monkeypatch, complete_scope
+):
     fixture, release, pool = CopyFixture(), Event(), GatewayWorkerPool()
-    state = CopyPreparation(fixture.session, fixture.pairs, relation_heads=True)
+    if complete_scope:
+        from apps.knowledge_graph.retrieval.topology.frontier_scope_window_contracts_v3 import (
+            decode_request as decode,
+        )
+        from apps.knowledge_graph.retrieval.topology.frontier_scope_window_contracts_v3 import (
+            encode_request as encode,
+        )
+
+        fixture, state = scope_state()
+        ledger = fixture.budget
+    else:
+        state = CopyPreparation(fixture.session, fixture.pairs, relation_heads=True)
+        ledger = fixture.ledger
+        encode, decode = encode_request, decode_request
     state.next_read()
     operation, checkpoint = snapshot(state)
-    grant = fixture.ledger.reserve_window()
-    body = encode_request(
+    grant = ledger.reserve_window()
+    body = encode(
         fixture.session.ready,
         operation,
         checkpoint,
         grant,
         1,
-        fixture.ledger.check_active,
+        ledger.check_active,
     )
-    request = decode_request(body)
+    request = decode(body)
     encode, entered = codec.encode_binary_response, []
 
     def blocked(payload):
@@ -51,7 +68,13 @@ async def test_window_encoding_keeps_one_worker_occupied_after_timeout(monkeypat
     def call():
         deadline = monotonic() + 0.1
         return pool.run(
-            read_window, fixture.driver, request, deadline, 1048576, expires=deadline
+            read_window,
+            fixture.driver,
+            request,
+            deadline,
+            1048576,
+            expires=deadline,
+            complete_scope=complete_scope,
         )
 
     before = len(fixture.driver.calls)

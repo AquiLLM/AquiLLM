@@ -172,6 +172,12 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_topology_manifest_batch.py
           aquillm/apps/knowledge_graph/tests/test_frontier_generation_batch_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_window_feasibility_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_complete_v3.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_protocol_v3.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_failures_v3.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_single_v3.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_controls_v3.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_headers_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_copy_feasibility_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_copy_batch_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_copy_proofs_v2.py
@@ -213,6 +219,7 @@ jobs:
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_native_seed_metadata_binding.py
           aquillm/apps/knowledge_graph/tests/test_native_metadata_budget_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_native_ledger_v3.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py
           aquillm/apps/knowledge_graph/tests/test_closed_graph_attempt_v2.py
           aquillm/apps/knowledge_graph/tests/test_closed_graph_limits_v2.py
@@ -556,6 +563,8 @@ jobs:
           aquillm/tests/integration/test_projection_database_fetch_deadline.py
           aquillm/tests/integration/test_projection_representation_publication_races.py
           aquillm/tests/integration/test_projection_representation_state_boundary.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_v3.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_bounds_v3.py
           -q --tb=short
       - name: Clean up the owned test stack
         if: always()

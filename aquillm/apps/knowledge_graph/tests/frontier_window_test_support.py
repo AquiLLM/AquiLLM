@@ -13,7 +13,7 @@ from apps.knowledge_graph.tests.test_topology_gateway_service import _call, _set
 
 
 class WindowOpener:
-    def __init__(self, fixture, monkeypatch):
+    def __init__(self, fixture, monkeypatch, *, complete_scope=False):
         self.responses, self.requests, self.mutate = [], [], None
         runtime = service.TopologyGatewayRuntime(
             replace(_settings(), timeout_ms=5000), fixture.driver, object()
@@ -24,7 +24,8 @@ class WindowOpener:
         monkeypatch.setattr(service, "_get_runtime", lambda *_: runtime)
         monkeypatch.setattr(client, "build_opener", lambda *_: self)
         fixture.session.reads.driver = client.FrontierGatewayClientV2(
-            TopologyGatewayClient("http://localhost", "private-gateway-token", 5.0)
+            TopologyGatewayClient("http://localhost", "private-gateway-token", 5.0),
+            complete_scope_windows=complete_scope,
         )
 
     def open(self, request, timeout):

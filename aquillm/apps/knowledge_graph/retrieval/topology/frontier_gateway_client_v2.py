@@ -21,6 +21,8 @@ from .frontier_gateway_contracts_v2 import (
     FrontierGatewayRequestV2,
     encode_request,
 )
+from .frontier_scope_window_contracts_v3 import VERSION as SCOPE_VERSION
+from .frontier_scope_window_contracts_v3 import protocol_headers_valid
 from .frontier_window_contracts_v2 import VERSION as WINDOW_VERSION
 from .frontier_window_contracts_v2 import CompletedWindowBudgetFailure
 from .gateway_client import (
@@ -34,7 +36,14 @@ from .gateway_opener import build_opener
 
 
 class FrontierGatewayClientV2:
-    def __init__(self, client, *, binary_batches=True, preparation_windows=True):
+    def __init__(
+        self,
+        client,
+        *,
+        binary_batches=True,
+        preparation_windows=True,
+        complete_scope_windows=True,
+    ):
         if type(client) is not TopologyGatewayClient:
             raise TypeError(
                 "frontier transport requires validated internal gateway config"
@@ -42,6 +51,9 @@ class FrontierGatewayClientV2:
         self.client = client
         self.binary_batches = binary_batches
         self.preparation_windows = preparation_windows and binary_batches
+        self.complete_scope_windows = (
+            complete_scope_windows and self.preparation_windows
+        )
         parts = urlsplit(client._endpoint)
         self.endpoint = urlunsplit((parts.scheme, parts.netloc, PATH, "", ""))
 
@@ -49,6 +61,11 @@ class FrontierGatewayClientV2:
         from .frontier_window_client_v2 import execute_window
 
         return execute_window(self, **kwargs)
+
+    def execute_frontier_scope_window(self, **kwargs):
+        from .frontier_window_client_v2 import execute_window
+
+        return execute_window(self, complete_scope=True, **kwargs)
 
     def execute_frontier_read(self, *, kind, generation, keys, ready, deadline, budget):
         return self._execute(
@@ -141,6 +158,7 @@ class FrontierGatewayClientV2:
         version=VERSION,
         checksum=CHECKSUM,
         window_digest=None,
+        scope_single=False,
     ):
         chunks, received = [], 0
         # urllib does not decompress bodies; request identity and reject encoded
@@ -172,6 +190,8 @@ class FrontierGatewayClientV2:
         if budget.clock() >= deadline:
             raise TimeoutError("frontier response arrived late")
         headers = response.headers
+        if version == SCOPE_VERSION and not protocol_headers_valid(headers.keys()):
+            raise _schema_failure()
         names = (
             "Content-Type",
             "Content-Length",
@@ -186,7 +206,7 @@ class FrontierGatewayClientV2:
             or headers.get("Content-Type")
             != (
                 "application/octet-stream"
-                if version in {BINARY_VERSION, WINDOW_VERSION}
+                if version in {BINARY_VERSION, WINDOW_VERSION, SCOPE_VERSION}
                 and response.status == 200
                 else "application/json"
             )
@@ -198,16 +218,20 @@ class FrontierGatewayClientV2:
             if received == allowance:
                 raise FrontierBudgetExceeded("frontier wire allowance exhausted")
             raise _schema_failure()
-        binary = version in {BINARY_VERSION, WINDOW_VERSION} and response.status == 200
+        binary = (
+            version in {BINARY_VERSION, WINDOW_VERSION, SCOPE_VERSION}
+            and response.status == 200
+        )
         value = None if binary else _load(body, maximum=allowance)
         if response.status != 200:
             if type(value) is dict and value.get("reason") == "frontier_budget":
-                if version == WINDOW_VERSION:
+                if version in {WINDOW_VERSION, SCOPE_VERSION}:
                     if (
                         set(value)
                         != {"reason", "request_digest", "queries", "scanned_rows"}
                         or response.status != 422
                         or value["request_digest"] != window_digest
+                        or (scope_single and value["queries"] != 1)
                     ):
                         raise _schema_failure()
                     raise CompletedWindowBudgetFailure(
@@ -231,10 +255,17 @@ class FrontierGatewayClientV2:
                     raise _schema_failure()
                 _failure(reason)
             raise _schema_failure()
-        if version == WINDOW_VERSION:
+        if version in {WINDOW_VERSION, SCOPE_VERSION}:
             from .frontier_window_codec_v2 import decode_container
 
-            frames = decode_container(body, window_digest)
+            if version == SCOPE_VERSION:
+                from .frontier_scope_window_codec_v3 import (
+                    decode_container as decode_scope,
+                )
+
+                frames = decode_scope(body, window_digest, single=scope_single)
+            else:
+                frames = decode_container(body, window_digest)
             budget.check_active()
             if budget.clock() >= deadline:
                 raise TimeoutError("frontier window decode exceeded original deadline")

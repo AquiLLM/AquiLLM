@@ -103,7 +103,9 @@ class PreparationReads:
         effect, self.effect = self.effect, None
         if effect is None:
             raise ValueError("preparation has no pending physical read")
-        raw = effect.kind == "raw_batch_multi"
+        raw = effect.kind in {"raw_batch_multi", "scope_raw_complete_batch"}
+        if effect.kind == "scope_raw_complete_batch" and len(rows) >= 320:
+            raise FrontierBudgetExceeded("frontier complete scope capacity exhausted")
         grouped = keyed_rows(rows, effect.pairs, raw=raw)
         if not raw:
             decoded = {}

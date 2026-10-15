@@ -45,13 +45,18 @@ class GenerationDriver(FrontierIndexFixtureDriver):
                 elif query == QUERIES.get("index_batch_multi"):
                     if lookup in self.index:
                         rows.append({**identity, "record": self.index[lookup]})
-                elif query == QUERIES.get("raw_batch_multi"):
+                elif query in {
+                    QUERIES.get("raw_batch_multi"),
+                    QUERIES.get("scope_raw_complete_batch"),
+                }:
                     rows.extend(
                         {**r, **identity}
                         for r in self.raw.get((generation, lookup), ())[:10]
                     )
                 else:
                     raise AssertionError("unexpected fixed batch query")
+            if query == QUERIES.get("scope_raw_complete_batch"):
+                rows = rows[:320]
             rows = tuple(rows)
         else:
             rows = super().execute_read(

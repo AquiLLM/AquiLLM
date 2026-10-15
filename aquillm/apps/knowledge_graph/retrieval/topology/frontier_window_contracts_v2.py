@@ -62,6 +62,11 @@ def encode_request(ready, operation, checkpoint, grant, sequence, check):
         grant=asdict(grant),
         sequence=sequence,
     )
+    return encode_value(value, check)
+
+
+def encode_value(value, check):
+    """Canonical bounded serialization shared by the two fixed route profiles."""
     encoder = json.JSONEncoder(
         ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
     )
@@ -82,7 +87,22 @@ def encode_request(ready, operation, checkpoint, grant, sequence, check):
 def decode_request(body):
     value = _load(body, maximum=MAX_REQUEST_BYTES)
     exact(value, {"ready", "operation", "checkpoint", "grant", "sequence"})
-    data = value["ready"]
+    ready = decode_ready(value["ready"])
+    grant = decode_grant(value["grant"], value["sequence"])
+    validate_checkpoint(ready, value["operation"], value["checkpoint"])
+    if body != _canonical(value):
+        raise ValueError("frontier window request not canonical")
+    return WindowRequest(
+        ready,
+        value["operation"],
+        value["checkpoint"],
+        grant,
+        value["sequence"],
+        sha256(body).hexdigest(),
+    )
+
+
+def decode_ready(data):
     exact(
         data,
         {
@@ -99,7 +119,7 @@ def decode_request(body):
         or len(data["authorized_documents"]) > 10000
     ):
         raise ValueError("frontier ready counts invalid")
-    ready = ReadyGenerationBundleV1(
+    return ReadyGenerationBundleV1(
         tuple(
             SelectedCollectionGenerationV1(**g) for g in data["selected_generations"]
         ),
@@ -107,7 +127,9 @@ def decode_request(body):
         data["authorization_context_signature"],
         data["bundle_checksum"],
     )
-    grant = value["grant"]
+
+
+def decode_grant(grant, sequence):
     exact(grant, {"queries", "rows", "wire", "planning_rows"})
     if any(
         type(grant[k]) is not int or not 1 <= grant[k] <= maximum
@@ -119,16 +141,6 @@ def decode_request(body):
         }.items()
     ) or grant["rows"] != min(grant["planning_rows"], grant["queries"] * 320):
         raise ValueError("frontier window grant invalid")
-    if type(value["sequence"]) is not int or not 1 <= value["sequence"] <= 64:
+    if type(sequence) is not int or not 1 <= sequence <= 64:
         raise ValueError("frontier window sequence invalid")
-    validate_checkpoint(ready, value["operation"], value["checkpoint"])
-    if body != _canonical(value):
-        raise ValueError("frontier window request not canonical")
-    return WindowRequest(
-        ready,
-        value["operation"],
-        value["checkpoint"],
-        WindowGrant(**grant),
-        value["sequence"],
-        sha256(body).hexdigest(),
-    )
+    return WindowGrant(**grant)

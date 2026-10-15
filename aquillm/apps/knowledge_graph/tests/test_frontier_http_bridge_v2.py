@@ -80,6 +80,8 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
         loader = create_canonical_frontier_loader_v2(
             selection=fixture.selection, codec=fixture.codec, gateway_client=gateway
         )
+        # This compatibility fixture implements the unchanged legacy query family.
+        loader.adapter.driver.complete_scope_windows = False
         budget = fixture.budget(max_wire_bytes=wire_cap)
         deadline = budget.deadline
         if wire_cap == 256:

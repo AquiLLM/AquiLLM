@@ -68,18 +68,33 @@ def publish(state, staged):
 
 def run_preparation(state):
     reads, budget = state.reads, state.reads.budget
+    from apps.knowledge_graph.projection.frontier_scope_complete_v3 import (
+        ScopeCompletePreparation,
+    )
+
+    from .frontier_scope_window_contracts_v3 import (
+        encode_request as encode_scope_request,
+    )
+
+    complete = isinstance(state, ScopeCompletePreparation)
     while (effect := state.next_read()) is not None:
-        execute = getattr(reads.driver, "execute_frontier_window", None)
+        execute = getattr(
+            reads.driver,
+            "execute_frontier_scope_window" if complete else "execute_frontier_window",
+            None,
+        )
         if not callable(execute) or not getattr(
             reads.driver, "preparation_windows", False
         ):
+            if complete:
+                raise schema_error()
             state.apply_result(reads.read_batch(effect.kind, effect.pairs))
             continue
         operation, checkpoint = snapshot(state)
         proposed = preview_window(budget)
         sequence = getattr(reads, "_window_sequence", 0) + 1
         try:
-            body = encode_request(
+            body = (encode_scope_request if complete else encode_request)(
                 reads.ready,
                 operation,
                 checkpoint,
@@ -88,8 +103,20 @@ def run_preparation(state):
                 reads._check_index_deadline,
             )
         except CheckpointTooLarge:
-            state.apply_result(reads.read_batch(effect.kind, effect.pairs))
-            continue
+            if not complete:
+                state.apply_result(reads.read_batch(effect.kind, effect.pairs))
+                continue
+            if effect.kind != "scope_raw_complete_batch":
+                raise
+            body = encode_scope_request(
+                reads.ready,
+                operation,
+                None,
+                proposed,
+                sequence,
+                reads._check_index_deadline,
+                pairs=effect.pairs,
+            )
         grant = budget.reserve_window()
         try:
             if grant != proposed:

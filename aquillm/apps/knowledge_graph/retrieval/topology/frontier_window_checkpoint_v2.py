@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 from apps.knowledge_graph.projection.frontier_adapter_v2 import FrontierSessionV2
 from apps.knowledge_graph.projection.frontier_copy_preparation_v2 import CopyPreparation
+from apps.knowledge_graph.projection.frontier_scope_complete_v3 import (
+    ScopeCompletePreparation,
+)
 from apps.knowledge_graph.projection.frontier_scope_preparation_v2 import (
     ScopePreparation,
 )
@@ -25,7 +28,11 @@ def snapshot(state):
         ]
 
     operation = {
-        "kind": "copy" if copying else "scope",
+        "kind": "copy"
+        if copying
+        else (
+            "scope_complete" if isinstance(state, ScopeCompletePreparation) else "scope"
+        ),
         "roots": [
             [slots[g], marker["frontier_root_key"]]
             for g, marker in reads.manifests.items()
@@ -103,10 +110,15 @@ class CopyContext:
         )
 
 
-def restore(reads, operation, checkpoint):
+def restore(reads, operation, checkpoint, *, complete_scope=False):
     from .frontier_window_validation_v2 import validate_checkpoint
 
-    validate_checkpoint(reads.ready, operation, checkpoint)
+    if complete_scope:
+        from .frontier_scope_window_contracts_v3 import validate_scope_checkpoint
+
+        validate_scope_checkpoint(reads.ready, operation, checkpoint)
+    else:
+        validate_checkpoint(reads.ready, operation, checkpoint)
     generations = [g.generation_key for g in reads.ready.selected_generations]
     roots = {generations[i]: key for i, key in operation["roots"]}
     reads.manifests = {g: {"frontier_root_key": key} for g, key in roots.items()}
@@ -132,7 +144,9 @@ def restore(reads, operation, checkpoint):
             relation_heads=operation["relation_heads"],
         )
     else:
-        state = ScopePreparation(reads, {})
+        state = (ScopeCompletePreparation if complete_scope else ScopePreparation)(
+            reads, {}
+        )
     state.stage = checkpoint["stage"]
     state.guard = {(generations[i], key) for i, key in checkpoint["guard"]}
     state.pending = {}

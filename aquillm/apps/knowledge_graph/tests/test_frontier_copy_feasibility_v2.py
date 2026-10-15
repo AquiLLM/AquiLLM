@@ -28,7 +28,7 @@ from apps.knowledge_graph.tests.test_topology_gateway_service import _call, _set
 class GatewayOpener:
     """Replace only the socket; execute actual ASGI routes and production codecs."""
 
-    def __init__(self, fixture, monkeypatch, *, windows=False):
+    def __init__(self, fixture, monkeypatch, *, windows=False, complete_scope=False):
         runtime = service.TopologyGatewayRuntime(
             replace(_settings(), timeout_ms=5000), fixture.driver, object()
         )
@@ -40,6 +40,7 @@ class GatewayOpener:
         fixture.session.reads.driver = client.FrontierGatewayClientV2(
             TopologyGatewayClient("http://localhost", "private-gateway-token", 5.0),
             preparation_windows=windows,
+            complete_scope_windows=complete_scope,
         )
         self.frames = []
         self.encoded = []
@@ -77,7 +78,7 @@ class GatewayOpener:
             response.headers[name.decode()] = value.decode()
         request_value = json.loads(request.data)
         window_frames = []
-        if body.startswith(b"KGFW0001"):
+        if body.startswith((b"KGFW0001", b"KGFS0001")):
             offset = 41
             for _ in range(body[40]):
                 size = int.from_bytes(body[offset + 1 : offset + 5], "big")
@@ -89,6 +90,7 @@ class GatewayOpener:
         self.frames.append(
             {
                 "path": urlsplit(request.full_url).path,
+                "stage": request_value.get("checkpoint", {}).get("stage"),
                 "phase": self.fixture.driver.phase,
                 "status": response.status,
                 "wire": len(body),
@@ -107,7 +109,14 @@ class GatewayOpener:
                     if body.startswith(b"KGFZ0001")
                     else self.encoded[before:]
                 ),
-                "rows": self.fixture.driver.transcript[-1]["rows"],
+                "rows": sum(
+                    row["rows"]
+                    for row in self.fixture.driver.transcript[physical_before:]
+                ),
+                "frame_rows": [
+                    row["rows"]
+                    for row in self.fixture.driver.transcript[physical_before:]
+                ],
                 "kind": self.fixture.driver.transcript[-1]["kind"],
             }
         )
