@@ -8,6 +8,7 @@ from uuid import UUID
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.db import models
 
 from .retrieval_authorization import (
     OpaquePrincipalReference,
@@ -164,6 +165,26 @@ class DjangoCollectionRetrievalPermissionPolicy:
             budget=read_budget,
         )
         return tuple(sorted(rows, key=lambda row: (row[0], row[1].int)))
+
+
+# Captured beside the definition: a class override before the private helper is
+# imported must never become that helper's definition of the builtin policy.
+_NATIVE_POLICY_METHODS = (
+    ("_principal_id", DjangoCollectionRetrievalPermissionPolicy._principal_id),
+    ("opaque_principal_reference", DjangoCollectionRetrievalPermissionPolicy.opaque_principal_reference),
+    ("current_authorized_document_scope", DjangoCollectionRetrievalPermissionPolicy.current_authorized_document_scope),
+    ("current_authorized_selected_document_scope", DjangoCollectionRetrievalPermissionPolicy.current_authorized_selected_document_scope),
+)
+_NATIVE_PRINCIPAL_TYPE = User
+_NATIVE_MANAGER_METHODS = tuple((name, getattr(models.Manager, name))
+                               for name in ("get_queryset", "using"))
+_NATIVE_QUERYSET_METHODS = tuple((name, getattr(models.QuerySet, name))
+                                for name in ("using", "filter", "order_by", "values_list", "union",
+                                             "__getitem__", "_filter_or_exclude", "_chain", "_clone", "_fetch_all"))
+_NATIVE_FIELD_METHODS = tuple((kind, tuple((name, getattr(kind, name, None)) for name in (
+    "get_prep_value", "get_db_prep_value", "get_db_prep_save", "get_db_converters", "from_db_value", "to_python",
+))) for kind in (models.UUIDField, models.ForeignKey, models.AutoField, models.BigAutoField,
+                 models.BooleanField, models.CharField))
 
 
 def _hybrid_enabled() -> bool:

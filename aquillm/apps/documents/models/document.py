@@ -39,6 +39,9 @@ def _get_document_types():
     ]
 
 
+_NATIVE_DOCUMENT_TYPES = _get_document_types
+
+
 # Type alias for any document subclass
 type DocumentChild = Any  # Will be properly typed when all document types are defined
 

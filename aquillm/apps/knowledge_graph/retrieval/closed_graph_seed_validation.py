@@ -43,6 +43,8 @@ class _ClosedSeedValidation:
         self.views = []
         self.projections = ()
         self.mapping = None
+        from apps.collections.services.native_closed_seed_policy_proof import _native_closed_seed_policy
+        self._native_policy = _native_closed_seed_policy(self)
 
     def check(self):
         self.check_operation()
@@ -127,7 +129,8 @@ class _ClosedSeedValidation:
         # Custom repositories keep their ordinary independently guarded route.
         if runtime.projection_repository_factory is not None:
             return
-        self.mapping = (ExtendedSeedRepository()._load_seed_identities_batch(
+        self.mapping = (ExtendedSeedRepository()._load_native_closed_seed_identities_batch(
+            owner=self,
             requests=requests, authorization=authorization, codec=runtime.codec,
             max_rows=4999, read_budget=frontier,
         ) if requests else {})

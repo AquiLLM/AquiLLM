@@ -9,6 +9,39 @@ from .extended_seed_repository import _authority_query, _chunk_documents, _seed_
 def load_seed_identities_batch(
     repository, *, requests, authorization, codec, max_rows, read_budget=None,
 ):
+    return _load_batch(repository, requests=requests, authorization=authorization,
+                       codec=codec, max_rows=max_rows, read_budget=read_budget, proof=None)
+
+
+def load_native_closed_seed_identities_batch(repository, *, owner, requests,
+                                            authorization, codec, max_rows, read_budget):
+    from apps.collections.services.native_closed_seed_policy_proof import _NativeClosedSeedPolicyProof
+    from .closed_graph_seed_validation import _ClosedSeedValidation
+
+    if type(owner) is not _ClosedSeedValidation or codec is not owner.execution_runtime.codec:
+        raise ValueError("native closed seed owner changed")
+    owner.check()
+    if owner._native_policy is None:
+        return repository._load_seed_identities_batch(requests=requests, authorization=authorization,
+                                                     codec=codec, max_rows=max_rows, read_budget=read_budget)
+    if (type(owner._native_policy) is not _NativeClosedSeedPolicyProof
+            or owner._native_policy.owner is not owner):
+        raise ValueError("native closed seed owner changed")
+    proof = owner._native_policy.select(authorization=authorization, repository=repository,
+                                        read_budget=read_budget)
+    if proof is None:
+        return repository._load_seed_identities_batch(requests=requests, authorization=authorization,
+                                                     codec=codec, max_rows=max_rows, read_budget=read_budget)
+    try:
+        return _load_batch(repository, requests=requests, authorization=authorization,
+                           codec=codec, max_rows=max_rows, read_budget=read_budget, proof=proof)
+    except BaseException:
+        if proof is not None:
+            proof.failed = True
+        raise
+
+
+def _load_batch(repository, *, requests, authorization, codec, max_rows, read_budget, proof):
     """One unpublished bounded read, retaining fresh authority at both ends."""
     if (type(requests) is not tuple or not 1 <= len(requests) <= 64
             or not 1 <= max_rows <= 4999):
@@ -27,10 +60,16 @@ def load_seed_identities_batch(
         raise ValueError("extended seed batch exceeds its chunk cap")
 
     def validate():
-        current = revalidate_retrieval_authorization_context(context=authorization)
-        if (not set(requested.values()) <= set(current.document_ids)
-                or not {a.collection_id for a in owners.values()} <= set(current.collection_ids)):
-            raise ValueError("extended seed authority is stale or unauthorized")
+        if proof is None:
+            current = revalidate_retrieval_authorization_context(context=authorization)
+            if (not set(requested.values()) <= set(current.document_ids)
+                    or not {a.collection_id for a in owners.values()} <= set(current.collection_ids)):
+                raise ValueError("extended seed authority is stale or unauthorized")
+        else:
+            proof.require_current()
+            if (not set(requested.values()) <= authorization.selected_document_ids
+                    or not {a.collection_id for a in owners.values()} <= authorization.selected_collection_ids):
+                raise ValueError("extended seed authority is stale or unauthorized")
         queries = tuple(_authority_query(authority=a, using=repository.using).order_by()
                         .values_list("pk", flat=True) for a in owners.values())
         query = queries[0].union(*queries[1:], all=True) if len(queries) > 1 else queries[0]
@@ -46,7 +85,7 @@ def load_seed_identities_batch(
     if read_budget is not None:
         # Retain space for the final full-scope policy read, its duplicate
         # sentinel, exact projection-state rows and the seed overflow sentinel.
-        final_authority_rows = (len(authorization.selected_collection_ids)
+        final_authority_rows = (1 if proof is not None else len(authorization.selected_collection_ids)
                                 + len(authorization.selected_document_ids) + 1)
         limit = min(limit, read_budget.max_source_rows - read_budget.source_rows
                     - final_authority_rows - len(owners) - 1)

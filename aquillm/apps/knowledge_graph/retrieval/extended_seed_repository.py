@@ -19,6 +19,11 @@ class ExtendedSeedRepository:
 
         return load_seed_identities_batch(self, **kwargs)
 
+    def _load_native_closed_seed_identities_batch(self, *, owner, **kwargs):
+        from .closed_seed_projection_batch import load_native_closed_seed_identities_batch
+
+        return load_native_closed_seed_identities_batch(self, owner=owner, **kwargs)
+
     def load_seed_identities(
         self,
         *,
@@ -108,6 +113,11 @@ class ExtendedSeedRepository:
         result = {chunk_id: tuple(sorted(keys)) for chunk_id, keys in result.items()}
         validate_authority()
         return result
+
+
+_NATIVE_BATCH_METHODS = tuple((name, getattr(ExtendedSeedRepository, name)) for name in (
+    "__init__", "_load_seed_identities_batch", "_load_native_closed_seed_identities_batch",
+))
 
 
 def _authority_is_current(*, authority, using, read_budget=None):
