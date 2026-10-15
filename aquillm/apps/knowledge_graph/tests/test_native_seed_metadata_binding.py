@@ -5,7 +5,9 @@ import pytest
 from apps.collections.tests.native_closed_seed_policy_fixtures import small_native_scope
 from apps.documents.services.hybrid_graph_v2 import hybrid_graph_candidate_pool_v2
 from apps.documents.tests.test_graph_source_admission import capture
+from apps.knowledge_graph.models import GraphArtifact
 from apps.knowledge_graph.retrieval.graph_candidate_stage_v2 import _GraphSourceStage
+from apps.knowledge_graph.retrieval.graph_runtime_seeds_v2 import _group_request_native
 from apps.knowledge_graph.tests.test_graph_candidate_operation_work import graph_frame
 
 pytestmark = pytest.mark.django_db(transaction=True, databases="__all__")
@@ -66,6 +68,7 @@ def test_original_closed_capture_enables_native_metadata_before_ontology(monkeyp
         "model_alias",
         "connection_ops",
         "predicate",
+        "lookup_resolver",
     ],
 )
 def test_selected_native_dependency_drift_latches_without_redispatch(
@@ -74,10 +77,6 @@ def test_selected_native_dependency_drift_latches_without_redispatch(
     from django.db import connection
 
     from apps.collections.tests.native_closed_seed_policy_fixtures import native_frame
-    from apps.knowledge_graph.models import GraphArtifact
-    from apps.knowledge_graph.retrieval.graph_runtime_seeds_v2 import (
-        _group_request_native,
-    )
     from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
         FrontierBudgetV2,
     )
@@ -129,6 +128,12 @@ def test_selected_native_dependency_drift_latches_without_redispatch(
 
             original = models.Q
             monkeypatch.setattr(models, "Q", lambda *a, **kw: original(*a, **kw))
+        elif drift == "lookup_resolver":
+            monkeypatch.setattr(
+                GraphArtifact._meta.get_field("status"),
+                "get_lookup",
+                lambda _: pytest.fail("custom lookup resolver executed"),
+            )
         elif drift == "compiler":
             from django.db.models.sql.compiler import SQLCompiler
 
@@ -169,7 +174,6 @@ def test_preexisting_custom_implementation_uses_generic_before_work(
     monkeypatch, custom
 ):
     from apps.collections.tests.native_closed_seed_policy_fixtures import native_frame
-    from apps.knowledge_graph.models import GraphArtifact
     from apps.knowledge_graph.retrieval import direct_seed_queryset
     from apps.knowledge_graph.retrieval.native_seed_metadata_owner import (
         native_metadata,
@@ -199,3 +203,97 @@ def test_preexisting_custom_implementation_uses_generic_before_work(
             monkeypatch.setattr(models, "Q", lambda *a, **kw: original(*a, **kw))
         assert native_metadata(owner, selected) is None
         assert budget.queries == budget.source_rows == 0
+
+
+@pytest.mark.parametrize(
+    "registration",
+    ["instance", "class", "inherited", "transform", "implementation", "unrelated"],
+)
+@pytest.mark.parametrize("selected", [False, True])
+def test_effective_lookup_registration_preserves_native_selection_boundary(
+    monkeypatch, registration, selected
+):
+    from django.db import connection, models
+    from django.test.utils import CaptureQueriesContext
+
+    from apps.collections.tests.native_closed_seed_policy_fixtures import native_frame
+    from apps.knowledge_graph.retrieval.native_seed_metadata_owner import (
+        native_metadata,
+    )
+
+    class FalseExact(models.Lookup):
+        lookup_name = "exact"
+
+        def as_sql(self, compiler, connection):
+            return "FALSE", []
+
+    class FalseTransform(models.Transform):
+        lookup_name = "exact"
+        output_field = models.CharField()
+        as_sql = FalseExact.as_sql
+
+    with native_frame(monkeypatch, metadata=True) as frame:
+        _, owner, _, groups, budget = frame
+        metadata = owner._native_metadata
+        assert metadata is not None
+        kwargs = dict(
+            owner=owner,
+            query="Atlas",
+            group=groups[0],
+            authorization=owner.stage.scope.authorization,
+            read_budget=budget,
+        )
+        if selected:
+            _group_request_native(**kwargs)
+        before = (budget.queries, budget.source_rows)
+        field = GraphArtifact._meta.get_field("status")
+        target, registry = field, "instance_lookups"
+        if registration in {"class", "inherited"}:
+            target = type(field) if registration == "class" else models.Field
+            registry = "class_lookups"
+        ordinary = GraphArtifact.objects.filter(status="active").values("id")
+        original_sql, _ = ordinary.query.sql_with_params()
+        try:
+            with monkeypatch.context() as patch:
+                patch.setattr(
+                    target,
+                    registry,
+                    dict(target.__dict__.get(registry, {})),
+                    raising=False,
+                )
+                if registration == "implementation":
+                    patch.setattr(
+                        field.get_lookup("exact"), "as_sql", FalseExact.as_sql
+                    )
+                else:
+                    target.register_lookup(
+                        FalseTransform if registration == "transform" else FalseExact,
+                        lookup_name="unused_i1"
+                        if registration == "unrelated"
+                        else "exact",
+                    )
+                changed = GraphArtifact.objects.filter(status="active").values("id")
+                changed_sql, _ = changed.query.sql_with_params()
+                if registration == "unrelated":
+                    assert changed_sql == original_sql
+                else:
+                    assert changed_sql != original_sql and "WHERE FALSE" in changed_sql
+                with CaptureQueriesContext(connection) as queries:
+                    if registration == "unrelated":
+                        if selected:
+                            metadata.check()
+                        else:
+                            assert native_metadata(owner, metadata.selected) is not None
+                    elif selected:
+                        with pytest.raises(ValueError):
+                            _group_request_native(**kwargs)
+                        assert metadata.failed
+                        with pytest.raises(ValueError):
+                            _group_request_native(**kwargs)
+                    else:
+                        assert native_metadata(owner, metadata.selected) is None
+                assert len(queries) == 0
+                assert (budget.queries, budget.source_rows) == before
+        finally:
+            if registration in {"class", "inherited"}:
+                target._clear_cached_class_lookups()
