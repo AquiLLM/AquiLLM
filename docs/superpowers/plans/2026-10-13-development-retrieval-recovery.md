@@ -292,8 +292,8 @@ Task23 owns graph_source_admission.py, graph_admission_read.py and focused tests
 
 ### Task25: explain the final-scoring rejection before changing selection
 
-- [ ] Reuse the bounded private observer on immutable7bafd8cb to capture allowlisted scalar selection status and window-preparation failure counts. Do not expose query/source text or alter inference, limits, or production selection. Distinguish preparation failure, unknown coverage, deadline, and pair-budget exhaustion from evidence; zero submitted pairs alone does not identify the cause.
-- [ ] Fix the established cause with a genuine regression and preserve truthful score coverage, source authority and all existing budgets. Review and test the concrete correction before another normal-budget candidate replay.
+- [x] Reuse the bounded private observer on immutable7bafd8cb to capture allowlisted scalar selection status and window-preparation failure counts. Do not expose query/source text or alter inference, limits, or production selection. Distinguish preparation failure, unknown coverage, deadline, and pair-budget exhaustion from evidence; zero submitted pairs alone does not identify the cause.
+- [x] Fix the established cause with a genuine regression and preserve truthful score coverage, source authority and all existing budgets. Review and test the concrete correction before another normal-budget candidate replay.
 
 ### Task26: remove duplicate code-identity scans within each check
 
@@ -302,10 +302,17 @@ Task23 owns graph_source_admission.py, graph_admission_read.py and focused tests
 - [x] Independently review the narrow change. Preserve late field-list mutation refusal both after method guards and during manager access; both controls failed before correction. Final affected selection:93 passed,3 existing warnings; Ruff, compilation, byte identity and diff checks passed. Review finding resolved.
 - [ ] Measure a new immutable candidate. No deadline or capacity increase, no claimed performance gain from local fixture timing alone.
 
-Task25r2 completed the native replay with source/data/runtime fences intact, but its selection observer failed because preservation mode does not publish the legacy rag_metrics event. Retained observations show45 plans,1 image override,1 unknown counter and0 submitted pairs; exact score status was not captured. The existing adapter forces image captions to unknown counts, and dispatch refuses a pool containing any incomplete plan. A corrected scalar capture and mixed-pool regression must distinguish that cause from cache reuse or deadline fallback.
+Task25r2 retained native completion but could not capture selection status because preservation mode does not publish legacy rag_metrics. Task25r3 corrected the bounded scalar observer and passed every source/data/runtime and observer fence:44 complete preparations,1 unknown image-caption plan, rank_fallback/incomplete_scores,0 reused pairs and0 new pairs. This establishes a caption-counting defect before inference, not a scoring timeout or cache reuse. Graph retrieval separately took12.724s;81 native metadata checks consumed595ms. The Task27 correction is locally tested and reviewed; normal-budget live acceptance remains open.
 
 ### Task27: score exact caption text without claiming image coverage
 
-- [ ] Reproduce mixed text/image-caption evidence disabling all final model scoring; design the smallest explicit text-input capability change with truthful coverage and cache identity.
-- [ ] Keep unsupported counters and lost proof unavailable, preserve whole-pool score comparability, exact caption/source identity, image publication authority,45-pair capacity and3-second scoring allowance. Test through final selection, including graph candidates beyond the old prefix.
-- [ ] Independently review, run affected regression checks and verify the corrected immutable candidate before any serving rollout.
+- [x] Reproduce mixed text/image-caption evidence disabling all final model scoring. The window adapter sends only query/text pairs, so count and score stored captions with its verified text counter; mark the score/cache policy text-content-v1. Complete coverage describes caption text, never pixels.
+- [x] Keep unsupported counters and lost proof unavailable, preserve whole-pool score comparability, exact caption/source identity, image publication authority,45-pair capacity and3-second scoring allowance. Real native acquisition, current-source hydration and final selection reproduce the old rank fallback; the corrected mixed45 pool scores all candidates and allows relevant graph text beyond the old prefix to win without a bonus. Final affected selection:91 passed,3 existing warnings.
+- [x] Independently review and run affected regression checks: no important findings,91 affected tests passed, and reviewed source hashes match tested bytes.
+- [ ] Verify the corrected immutable candidate before any serving rollout.
+
+### Task28: narrow known graph-owner SQL during hydration and materialization
+
+- [ ] Use exact owner IDs already present in mapped chunk predicates to narrow native SQL construction. Retain full-scope authority/source/generation checks, immutable source tuples, original limits and publication fences.
+- [ ] In native materialization, use the existing scoped read core only for the exact original bound reader. Preserve custom/class-wrapper invocation, current instance-wrapper rejection, and public legacy behavior.
+- [ ] Prove actual530-owner native queries avoid unrelated-owner SQL work; verify late permission, lifetime and unrelated-source changes still reject publication. Review before integration and server measurement.

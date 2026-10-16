@@ -67,6 +67,8 @@ def compatible_window_score(scorer, score, query, chunk):
 
 
 class WindowSelectionScorer:
+    """Score stored text, including captions; coverage never includes pixels."""
+
     scoring_kind = "pointwise"
 
     def __init__(
@@ -93,7 +95,7 @@ class WindowSelectionScorer:
             else clock() + (budget.remaining_ms() / 1000 if budget is not None else 0)
         )
         self.scorer_fingerprint = fingerprint_text(
-            "window-max-v1:"
+            "window-max-v1:text-content-v1:"
             + (scorer_identity or getattr(provider, "scorer_fingerprint", "unknown"))
             + ":"
             + getattr(pair_counter, "identity", "unknown")
@@ -115,14 +117,11 @@ class WindowSelectionScorer:
         revision = getattr(chunk, "source_revision", "")
         key = (query, source, revision)
         if key not in self._plans:
-            counter = self.pair_counter
-            if getattr(chunk, "modality", "text") == "image":
-                counter = unknown_pair_count
             self._plans[key] = replace(
                 prepare_source_windows(
                     query,
                     source,
-                    pair_counter=counter,
+                    pair_counter=self.pair_counter,
                     budget=self.budget,
                     deadline=self.deadline,
                     clock=self.clock,

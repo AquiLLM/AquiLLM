@@ -479,6 +479,8 @@ jobs:
           aquillm/apps/documents/tests/test_chunk_rerank_window_fences.py
           aquillm/apps/documents/tests/test_chunk_rerank_window_scores.py
           aquillm/apps/documents/tests/test_chunk_rerank_windows.py
+          aquillm/apps/documents/tests/test_window_caption_scoring.py
+          aquillm/apps/documents/tests/test_window_caption_selection.py
           aquillm/apps/documents/tests/test_pair_worker_lifecycle.py
           aquillm/apps/documents/tests/test_pair_worker_refresh.py
           aquillm/apps/documents/tests/test_pair_worker_publication.py
