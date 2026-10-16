@@ -46,12 +46,12 @@ async def test_uncaptured_original_query_admission_captures_once_and_searches(
 ):
     controls(monkeypatch, "vocabulary", source)
     runtime = await database_sync_to_async(uncaptured)(query_corpus)
-    real_freeze, captures = chunk_search_scope.freeze_active_representations, []
-    def freeze(*args, **kwargs):
-        value = real_freeze(*args, **kwargs)
+    real_capture, captures = chunk_search_scope._capture_tool_scope, []
+    def capture(*args, **kwargs):
+        value = real_capture(*args, **kwargs)
         captures.append(value)
         return value
-    monkeypatch.setattr(chunk_search_scope, "freeze_active_representations", freeze)
+    monkeypatch.setattr(chunk_search_scope, "_capture_tool_scope", capture)
     from apps.chat.services.rag_pipeline import _run_vector_search
     try:
         with source_runtime_scope(runtime):
@@ -179,11 +179,11 @@ async def test_initialized_first_admission_cannot_downgrade_after_binding_and_sc
         runtime = media_runtime()
         principal, frozen = runtime._media_principal_binding, runtime._frozen_retrieval_scope
         assert not hasattr(runtime, "_query_admission_attempt")
-        calls, real = [], chunk_search_scope.freeze_active_representations
-        def freeze(*args, **kwargs):
+        calls, real = [], chunk_search_scope._capture_tool_scope
+        def capture(*args, **kwargs):
             calls.append(True)
             return real(*args, **kwargs)
-        monkeypatch.setattr(chunk_search_scope, "freeze_active_representations", freeze)
+        monkeypatch.setattr(chunk_search_scope, "_capture_tool_scope", capture)
         del runtime._media_principal_binding
         del runtime._frozen_retrieval_scope
         try:
