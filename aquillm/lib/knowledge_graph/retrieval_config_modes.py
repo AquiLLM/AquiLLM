@@ -10,6 +10,12 @@ def validate_graph_modes(settings, error):
     ):
         if getattr(settings, key[3:].lower()) not in choices:
             raise error(key, "selects an unsupported mode")
+    if settings.graph_remediation_mode != "v2":
+        for kind in ("overall", "direct", "extended"):
+            if getattr(settings, f"graph_{kind}_timeout_ms") > 5000:
+                raise error(
+                    f"KG_GRAPH_{kind.upper()}_TIMEOUT_MS", "above 5000 requires v2 mode"
+                )
 
 
 def require_graph_settings(settings, keys, error):

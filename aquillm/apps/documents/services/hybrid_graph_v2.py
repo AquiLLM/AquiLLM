@@ -102,7 +102,7 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
             raise ValueError("V2 requires the original frozen retrieval scope")
         budget = scope.runtime.budget
         timeout = settings.graph_overall_timeout_ms
-        if type(timeout) is not int or not 1 <= timeout <= 5000:
+        if type(timeout) is not int or not 1 <= timeout <= 20_000:
             raise ValueError("graph timeout is invalid")
         deadline = min(started + timeout / 1000, started + budget.remaining_ms() / 1000)
         with source_preparation_scope(deadline, perf_counter, budget), scope.database():

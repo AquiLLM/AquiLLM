@@ -21,6 +21,7 @@ from apps.knowledge_graph.projection.identifiers import ProjectionIdentifierDoma
 from apps.knowledge_graph.resolution.vocabulary_authority import validate_ready
 
 from . import ready_materialization_v2 as materializer
+from . import ready_provenance_v2 as _provenance
 from .graph_evidence_selection_v2 import GraphEvidenceSelectionInputV2
 from .materialization import _chunk_objects, _private_rows
 from .ready_materialization import DjangoPrivateChunkMapRepository
@@ -96,14 +97,11 @@ def _mapped_pairs(
     return tuple(result)
 
 
-def _selection_rows(
-    mapped, bodies, selected, codec, document_codec, using, runtime, deadline
-):
+def _validated_rows(mapped, bodies, selected, runtime, deadline):
     from apps.documents.models import TextChunk
 
     selections = {s.document.id: s for s in selected.representation_snapshot.selections}
     by_pk = {row.pk: row for row in bodies}
-    results, fingerprints = [], {}
     for ref, source, group, authority, predicate in mapped:
         _live(runtime, deadline)
         try:
@@ -121,7 +119,23 @@ def _selection_rows(
                 != ref.representation_generation_key
             ):
                 continue
-            provenance = materializer.provenance_for_chunk(
+            yield ref, source, authority, chunk
+        except _REJECTED:
+            continue
+
+
+def _selection_rows(mapped, bodies, selected, codec, document_codec, using,
+                    runtime, deadline, *, native=False):
+    rows = _validated_rows(mapped, bodies, selected, runtime, deadline)
+    reader = materializer.provenance_for_chunk
+    if native and _provenance._supports_phase_provenance(reader):
+        rows = tuple(rows)
+        reader = _provenance._phase_provenance_reader((a, c) for _, _, a, c in rows)
+    results, fingerprints = [], {}
+    for ref, source, authority, chunk in rows:
+        _live(runtime, deadline)
+        try:
+            provenance = reader(
                 authority=authority, chunk=chunk, codec=codec, using=using
             )
             if not set(ref.evidence_provenance_keys) <= set(provenance):
@@ -138,14 +152,10 @@ def _selection_rows(
                 generation=authority.generation_id,
                 source=chunk.doc_id,
             ).value
-            results.append(
-                GraphEvidenceSelectionInputV2(
-                    source,
-                    chunk.content,
-                    sha256(chunk.content.encode()).hexdigest(),
-                    document_key,
-                )
-            )
+            results.append(GraphEvidenceSelectionInputV2(
+                source, chunk.content, sha256(chunk.content.encode()).hexdigest(),
+                document_key,
+            ))
             fingerprints.setdefault(chunk.pk, fingerprint(chunk))
         except _REJECTED:
             continue
@@ -208,7 +218,8 @@ def _hydrate_selection_rows(
         ).order_by(order)
         bodies = body_reader(query)
     return _selection_rows(mapped, bodies, selected, codec, document_codec,
-        authorization.database_alias, runtime, deadline)
+        authorization.database_alias, runtime, deadline,
+        native=_source_stage is not None)
 
 
 def hydrate_selection_operation(*, selected, pairs, runtime, document_codec, deadline):
@@ -230,39 +241,29 @@ def hydrate_selection_operation(*, selected, pairs, runtime, document_codec, dea
             if scope is not None:
                 scope.validate()
             materializer.validate_captured_selection(
-                selected=selected,
-                authorization=authorization,
-                settings=settings,
-                codec=codec,
+                selected=selected, authorization=authorization,
+                settings=settings, codec=codec,
             )
             for group in selected.groups:
                 validate_ready(group.scope, authorization)
 
             def read(query):
                 return source_query_rows(
-                    query,
-                    runtime=runtime,
+                    query, runtime=runtime,
                     require_existing=getattr(runtime, "_frozen_retrieval_scope", None)
                     is not None,
                 )
 
             results, fingerprints = _hydrate_selection_rows(
-                selected=selected,
-                pairs=pairs,
-                runtime=runtime,
-                scope=scope,
-                codec=codec,
-                document_codec=document_codec,
-                deadline=deadline,
-                body_reader=read,
+                selected=selected, pairs=pairs, runtime=runtime, scope=scope,
+                codec=codec, document_codec=document_codec,
+                deadline=deadline, body_reader=read,
             )
             for group in selected.groups:
                 validate_ready(group.scope, authorization)
             materializer.validate_captured_selection(
-                selected=selected,
-                authorization=authorization,
-                settings=settings,
-                codec=codec,
+                selected=selected, authorization=authorization,
+                settings=settings, codec=codec,
             )
             frozen = getattr(runtime, "_frozen_retrieval_scope", None)
             if frozen is not None:
@@ -288,8 +289,7 @@ def hydrate_selection_operation(*, selected, pairs, runtime, document_codec, dea
         if scope is not None:
             scope.bodies.update(
                 {
-                    pk: value
-                    for pk, value in fingerprints.items()
+                    pk: value for pk, value in fingerprints.items()
                     if pk not in scope.bodies
                 }
             )

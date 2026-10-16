@@ -166,7 +166,7 @@ def _entity_membership(using, entity_ids, document_filtered):
     return Q(collection_entity_id__in=entity_ids)
 
 
-def load_entity_mentions(
+def _load_entity_mention_rows(
     *,
     using: str,
     artifact_id: int,
@@ -244,7 +244,21 @@ def load_entity_mentions(
     normalized = tuple(
         dict(zip(aliases, (row[field] for field in fields), strict=True)) for row in raw
     )
-    return expand_entity_mentions(normalized, chunks)
+    return normalized
+
+
+def load_entity_mentions(
+    *, using: str, artifact_id: int, entity_ids: tuple[int, ...],
+    chunks: Mapping[int, tuple[UUID, int]], batch_size: int,
+    document_filtered: bool = False,
+) -> tuple[dict, ...]:
+    return expand_entity_mentions(_load_entity_mention_rows(
+        using=using, artifact_id=artifact_id, entity_ids=entity_ids, chunks=chunks,
+        batch_size=batch_size, document_filtered=document_filtered,
+    ), chunks)
+
+
+_NATIVE_LOAD_ENTITY_MENTIONS = load_entity_mentions
 
 
 def load_projection_topology(

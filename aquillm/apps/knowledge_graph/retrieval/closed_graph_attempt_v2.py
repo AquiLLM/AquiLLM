@@ -192,7 +192,7 @@ class _ClosedGraphAttempt:
         try:
             bound = capture_operation_bound(stage.budget)
             timeout = self._settings.graph_overall_timeout_ms
-            if type(timeout) is not int or not 1 <= timeout <= 5000:
+            if type(timeout) is not int or not 1 <= timeout <= 20_000:
                 raise ValueError("graph timeout is invalid")
             clock = graph.clock
             if native_closure:

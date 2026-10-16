@@ -173,7 +173,8 @@ def effective_config(settings, config):
         "token_budget": rag_config.evidence_token_budget(),
         "proposal_controls": configured_proposal_controls(),
         "turn_limits": asdict(
-            TurnLimits(actions=min(3, rag_config.direct_rag_max_queries()))
+            TurnLimits(actions=min(3, rag_config.direct_rag_max_queries()),
+                       retrieval_ms=rag_config.retrieval_timeout_ms())
         ),
     }
 

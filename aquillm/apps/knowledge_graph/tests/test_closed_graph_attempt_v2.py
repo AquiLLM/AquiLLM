@@ -85,6 +85,9 @@ def test_private_failure_does_not_read_public_baseline_or_publish_graph(monkeypa
         (100, 0, 1500, 100),
         (5000, 100, 1500, 150),
         (5000, 0, 1250, 0),
+        (20000, 0, 30000, 20000),
+        (20000, 0, 8000, 6750),
+        (20000, 10000, 30000, 18750),
     ],
 )
 def test_native_reserve_partitions_effective_parent_after_authorization_cleanup(
@@ -93,8 +96,8 @@ def test_native_reserve_partitions_effective_parent_after_authorization_cleanup(
     from apps.knowledge_graph.retrieval import graph_candidate_operation_v2 as owner
 
     now = [0.0]
-    budget = TurnBudget(TurnLimits(), clock=lambda: now[0])
-    with graph_frame(monkeypatch, budget=budget, timeout_ms=4000) as active:
+    budget = TurnBudget(TurnLimits(retrieval_ms=30000), clock=lambda: now[0])
+    with graph_frame(monkeypatch, budget=budget, timeout_ms=30000) as active:
         _, graph, _, _, snapshot, dependencies, operation, _ = active
         graph.clock = lambda: 1000 + now[0]
         dependencies.settings.graph_overall_timeout_ms = cap

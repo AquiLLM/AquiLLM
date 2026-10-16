@@ -106,6 +106,7 @@ jobs:
           aquillm/apps/chat/tests/test_rag_selection.py
           aquillm/apps/chat/tests/test_rag_selection_scoring.py
           aquillm/apps/chat/tests/test_rag_selection_scoring_edges.py
+          aquillm/apps/chat/tests/test_rag_window_pair_admission.py
           aquillm/apps/chat/tests/test_rag_selection_hydration.py
           aquillm/apps/chat/tests/test_rag_selection_pipeline.py
           aquillm/apps/chat/tests/test_rag_selected_evidence.py
@@ -256,6 +257,8 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_ready_materialization_v2.py
           aquillm/apps/knowledge_graph/tests/test_ready_provenance_document_reads.py
           aquillm/apps/knowledge_graph/tests/test_ready_provenance_entity_membership.py
+          aquillm/apps/knowledge_graph/tests/test_ready_provenance_phase_batch.py
+          aquillm/apps/knowledge_graph/tests/test_ready_provenance_phase_metadata.py
           aquillm/apps/knowledge_graph/tests/test_ready_authority_work_v2.py
           aquillm/apps/knowledge_graph/tests/test_membership_source_query_work.py
           aquillm/apps/knowledge_graph/tests/test_projection_memberships.py
@@ -296,6 +299,7 @@ jobs:
           aquillm/apps/documents/tests/test_uuid_preparation_results.py
           aquillm/apps/documents/tests/test_uuid_preparation_reuse_work.py
           aquillm/apps/documents/tests/test_graph_expired_fallback.py
+          aquillm/apps/documents/tests/test_graph_v2_configured_deadline.py
           aquillm/apps/documents/tests/test_source_body_batch.py
           aquillm/apps/documents/tests/test_source_body_batch_invariants.py
           aquillm/apps/documents/tests/test_source_body_publication.py
@@ -476,6 +480,7 @@ jobs:
           aquillm/apps/chat/tests/test_rag_source_types.py
           aquillm/apps/chat/tests/test_rag_synthesis_lifecycle.py
           aquillm/apps/chat/tests/test_rag_turn_budget.py
+          aquillm/apps/chat/tests/test_rag_configured_deadlines.py
           aquillm/apps/chat/tests/test_rag_turn_lifecycle.py
           aquillm/apps/chat/tests/test_rag_websocket_lifecycle.py
           aquillm/apps/chat/tests/test_tool_payload_compaction.py

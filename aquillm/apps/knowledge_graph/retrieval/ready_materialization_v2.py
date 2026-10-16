@@ -15,6 +15,7 @@ from apps.knowledge_graph.projection.runtime import (
     projection_identifier_codec,
 )
 
+from . import ready_provenance_v2 as _provenance
 from .graph_handoff import GraphCandidateRefV2
 from .ready_provenance_v2 import provenance_for_chunk
 from .ready_scope_repository_v2 import load_authorities_v2, validate_original_scope
@@ -97,10 +98,23 @@ def _materialize_inputs(selected, refs):
         raise ValueError("duplicate candidate keys")
 
 
+def _validated_rows(rows, refs, group, selections):
+    from apps.documents.models import TextChunk
+    for row, ref in zip(rows, refs, strict=True):
+        chunk = row.candidate_object
+        selection = selections.get(chunk.doc_id)
+        if (type(chunk) is not TextChunk or selection is None
+                or chunk.doc_id not in group.scope.selected_document_ids
+                or selection.generation_key != ref.representation_generation_key
+                or chunk.representation_generation_id
+                != ref.representation_generation_key):
+            raise ValueError("materialization source identity changed")
+        yield row, ref, group.scope.projection_for_generation(ref.graph_generation_key)
+
+
 def _materialize(*, selected, refs, authorization):
     from apps.documents.services.graph_source_runtime import graph_source_runtime
     from apps.documents.services.source_loading import source_query_rows
-
     _materialize_inputs(selected, refs)
     if not refs:
         return ()
@@ -175,7 +189,6 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _sou
         DjangoPrivateChunkMapRepository,
         materialize_selected_ready_chunks,
     )
-
     _materialize_inputs(selected, refs)
     if not refs:
         return ()
@@ -219,13 +232,11 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _sou
                 ).order_by("pk")
                 if _source_stage is not None:
                     from .graph_candidate_stage_v2 import _NATIVE_GRAPH_SOURCE_READ
-
                     if (type(body_reader) is MethodType
                             and body_reader.__self__ is _source_stage
                             and body_reader.__func__ is _NATIVE_GRAPH_SOURCE_READ):
                         return _source_stage._read(query, document_ids=document_ids)
                 return body_reader(query)
-
         result = {}
         repository = ActiveRepository(source_using=authorization.database_alias)
         for group in selected.groups:
@@ -256,24 +267,17 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _sou
                 authorization=authorization,
                 repository=repository,
             )
-            for row, ref in zip(rows, group_refs, strict=True):
+            validated = _validated_rows(rows, group_refs, group, selections)
+            reader = provenance_for_chunk
+            if (_source_stage is not None
+                    and _provenance._supports_phase_provenance(reader)):
+                validated = tuple(validated)
+                reader = _provenance._phase_provenance_reader(
+                    (owner, row.candidate_object) for row, _, owner in validated)
+            for row, ref, owner in validated:
                 chunk = row.candidate_object
-                selection = selections.get(chunk.doc_id)
-                if (
-                    type(chunk) is not TextChunk
-                    or selection is None
-                    or chunk.doc_id not in group.scope.selected_document_ids
-                    or selection.generation_key != ref.representation_generation_key
-                    or chunk.representation_generation_id
-                    != ref.representation_generation_key
-                ):
-                    return ()
-                provenance = provenance_for_chunk(
-                    authority=group.scope.projection_for_generation(
-                        ref.graph_generation_key
-                    ),
-                    chunk=chunk,
-                    codec=codec,
+                provenance = reader(
+                    authority=owner, chunk=chunk, codec=codec,
                     using=authorization.database_alias,
                 )
                 if not set(ref.evidence_provenance_keys) <= set(provenance):

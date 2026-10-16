@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Callable
 from contextlib import nullcontext
 from copy import copy
-from dataclasses import dataclass
 from time import monotonic
 
 from apps.chat.services.rag_retrieval import FusedRetrievalPool
@@ -15,7 +14,11 @@ from apps.chat.services.rag_selection_policy import (
     normalize_relevance_scores as _normalize,
 )
 from apps.chat.services.rag_selection_reuse import _reused_scores, retained_scores_match
-from apps.chat.services.rag_selection_types import SelectionCandidate
+from apps.chat.services.rag_selection_types import PreparedSelection, SelectionCandidate
+from apps.chat.services.rag_selection_window_admission import (
+    admit_window_sources,
+    complete_admitted_rows,
+)
 from apps.collections.services.retrieval_authorization import (
     RetrievalAuthorizationContext,
 )
@@ -39,16 +42,6 @@ from apps.documents.services.source_deadline import (
     check_source_deadline,
     source_preparation_scope,
 )
-
-
-@dataclass(frozen=True)
-class PreparedSelection:
-    candidates: tuple[SelectionCandidate, ...]
-    score_status: str
-    reused_pairs: int
-    new_pairs: int
-    scoring_duration_ms: float
-    fallback_reason: str | None
 
 
 @bound_source_finalization
@@ -112,6 +105,7 @@ def prepare_selection_candidates(
     score_start = clock()
     fallback_reason = None
     final_inputs = {}
+    admitted = first
     if used_scorer is None:
         fallback_reason = "scorer_unavailable"
     elif first:
@@ -146,7 +140,11 @@ def prepare_selection_candidates(
                 scorer=used_scorer,
                 final_inputs=final_inputs if final_inputs else None,
             )
-            missing = tuple(item for item in first if item.chunk.pk not in reused)
+            if allow_new_scores and clock() < deadline:
+                admitted = admit_window_sources(
+                    first, scorer=used_scorer, query=primary_query, reused=reused,
+                )
+            missing = tuple(item for item in admitted if item.chunk.pk not in reused)
             if missing and allow_new_scores and clock() < deadline:
                 # Listwise scores depend on the complete ordered pool.
                 to_score = (
@@ -236,15 +234,17 @@ def prepare_selection_candidates(
         if initial_by_id.get(item.chunk.pk) == (item.source_fingerprint, item.excerpt)
     )
     scores = {**reused, **new_scores}
+    model_rows = complete_admitted_rows(retained, admitted, scores)
     model_complete = (
-        bool(retained)
+        bool(model_rows)
         and used_scorer is not None
         and used_scorer.scoring_kind in {"pointwise", "listwise"}
-        and retained_scores_match(retained, scores, final_inputs)
+        and retained_scores_match(model_rows, scores, final_inputs)
         and clock() < deadline
         and (turn_budget is None or turn_budget.can_publish())
     )
     if model_complete:
+        retained = model_rows
         relevance = _normalize(tuple(scores[item.chunk.pk].value for item in retained))
         status = "model"
     else:

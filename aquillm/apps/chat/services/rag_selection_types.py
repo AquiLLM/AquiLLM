@@ -27,6 +27,16 @@ class SelectionCandidate:
 
 
 @dataclass(frozen=True)
+class PreparedSelection:
+    candidates: tuple[SelectionCandidate, ...]
+    score_status: str
+    reused_pairs: int
+    new_pairs: int
+    scoring_duration_ms: float
+    fallback_reason: str | None
+
+
+@dataclass(frozen=True)
 class SelectionLimits:
     max_passages: int
     max_per_document: int

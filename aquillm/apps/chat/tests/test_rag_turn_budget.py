@@ -100,7 +100,7 @@ def test_nested_limits_only_narrow_parent_allowances():
     {"materialized_codepoints": 250_001}, {"tokenized_codepoints": 1_000_001},
     {"acquisition_pairs": 91}, {"final_pairs": 46},
     {"in_flight_pairs": 7}, {"planner_calls": 3},
-    {"retrieval_ms": 15_001}, {"final_scoring_ms": 3_001},
+    {"retrieval_ms": 30_001}, {"final_scoring_ms": 3_001},
     {"actions": True}, {"actions": -1},
 ])
 def test_pilot_limits_cannot_be_raised_or_malformed(override):
