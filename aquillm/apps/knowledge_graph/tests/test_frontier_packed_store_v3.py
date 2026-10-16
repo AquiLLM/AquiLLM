@@ -90,17 +90,17 @@ class StoreDriver:
         store.write_frontier_index(self, self.bundle, batch_size=32, timeout=5.0)
 
 
-def test_unmarked_writer_stays_binary_until_explicit_private_activation():
-    driver = StoreDriver()
-    driver.write()
-    assert driver.marker["frontier_version"] == VERSION
-
-
-def test_private_writer_activation_only_selects_unmarked_staging(monkeypatch):
-    monkeypatch.setattr(store, "_NEW_INDEX_VERSION", PACKED, raising=False)
+def test_new_unmarked_staging_uses_packed_recipe():
     driver = StoreDriver()
     driver.write()
     assert driver.marker["frontier_version"] == PACKED
+
+
+def test_private_writer_rollback_only_selects_unmarked_staging(monkeypatch):
+    monkeypatch.setattr(store, "_NEW_INDEX_VERSION", VERSION)
+    driver = StoreDriver()
+    driver.write()
+    assert driver.marker["frontier_version"] == VERSION
 
 
 @pytest.mark.parametrize("version", [VERSION, PACKED])

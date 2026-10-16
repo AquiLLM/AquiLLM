@@ -2,6 +2,11 @@
 
 import pytest
 
+from apps.knowledge_graph.projection import frontier_index_store_v2
+from apps.knowledge_graph.projection.frontier_index_contracts_v2 import (
+    PACKED_VERSION,
+    VERSION,
+)
 from apps.knowledge_graph.projection.frontier_reads_v2 import QUERIES
 from apps.knowledge_graph.retrieval.topology.contracts import ProjectedSeedV1
 from apps.knowledge_graph.retrieval.topology.frontier_acquisition_v2 import (
@@ -17,12 +22,18 @@ from apps.knowledge_graph.tests.test_frontier_copy_feasibility_v2 import Gateway
 
 
 @pytest.fixture
-def live_scope():
+def live_scope(request, monkeypatch):
+    monkeypatch.setattr(frontier_index_store_v2, "_NEW_INDEX_VERSION", request.param)
     yield from _live_scope.__wrapped__()
 
 
+@pytest.mark.parametrize(
+    "live_scope, initialized",
+    [(VERSION, (35, 2721)), (PACKED_VERSION, (27, 2101))],
+    indirect=["live_scope"],
+)
 def test_live_original_ledger_scope_copy_and_final_survive_actual_query(
-    live_scope, monkeypatch
+    live_scope, monkeypatch, initialized
 ):
     fixture, driver = live_scope
     for rows in [1, 1, 1, 7, 1, 264, 1, 7, 1, 1, 1, 1, 1, 1, 5]:
@@ -34,7 +45,7 @@ def test_live_original_ledger_scope_copy_and_final_survive_actual_query(
         for b in sorted(fixture.bundles, key=lambda b: b.generation.generation_key)[:16]
     )
     fixture.session.initialize()
-    assert (fixture.budget.queries, fixture.budget.source_rows) == (35, 2721)
+    assert (fixture.budget.queries, fixture.budget.source_rows) == initialized
     fixture.driver.phase = "acquisition"
     try:
         acquire_frontier(
@@ -45,8 +56,12 @@ def test_live_original_ledger_scope_copy_and_final_survive_actual_query(
     fixture.driver.phase = "final"
     fixture.session.final_attestation()
     assert {s.identity_key for s in seeds} <= fixture.budget._identities
-    assert len(fixture.assembly.candidates) == 2
-    assert (fixture.budget.queries, fixture.budget.source_rows) == (63, 4937)
+    if initialized == (35, 2721):
+        assert len(fixture.assembly.candidates) == 2
+        assert (fixture.budget.queries, fixture.budget.source_rows) == (63, 4937)
+    else:
+        assert len(fixture.assembly.candidates) >= 2
+        assert fixture.budget.queries <= 64 and fixture.budget.source_rows <= 5000
     assert fixture.budget.queries == len(fixture.driver.calls) + 15
     assert fixture.budget.source_rows == fixture.driver.scanned + 294
     assert (

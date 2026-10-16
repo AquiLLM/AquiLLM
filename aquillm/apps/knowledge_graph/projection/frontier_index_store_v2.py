@@ -3,7 +3,7 @@
 from .frontier_index_build_v2 import build_frontier_index
 from .frontier_index_contracts_v2 import (
     MARKER_FIELDS,
-    VERSION,
+    PACKED_VERSION,
     decode_record,
     marker_present,
 )
@@ -12,8 +12,8 @@ from .memgraph_records import FAMILIES, _dto, _properties
 from .memgraph_streaming import _BUNDLE_FIELDS, _COUNT_FIELDS, stream_family_records
 from .records import CollectionGraphProjectionBundleV1, ProjectionGenerationMarkerV1
 
-# Reader-first rollout: activate packed publication only after compatible readers.
-_NEW_INDEX_VERSION = VERSION
+# Deploy this writer only after compatible readers; existing markers keep their recipe.
+_NEW_INDEX_VERSION = PACKED_VERSION
 
 
 def _stored_version(marker):
