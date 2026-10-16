@@ -74,6 +74,29 @@ def final_selection(packet, max_passages, token_budget):
     )
 
 
+def _coverage_reasons(coverage):
+    from apps.knowledge_graph.retrieval.graph_handoff import GraphCoverageV2
+
+    fields = {
+        "selected_documents",
+        "ready_documents",
+        "status",
+        "reasons",
+        "exhaustive",
+    }
+    if (
+        type(coverage) is not dict
+        or len(coverage) != len(fields)
+        or any(type(key) is not str for key in coverage)
+        or coverage.keys() != fields
+    ):
+        return ()
+    try:
+        return GraphCoverageV2(**coverage).reasons
+    except (TypeError, ValueError):
+        return ()
+
+
 def retrieval_stages(
     query,
     top_k,
@@ -123,12 +146,23 @@ def retrieval_stages(
             if key in diagnostics and diagnostics[key] not in (None, "none", "not_run")
         ]
         readiness_failures = reasons.count("readiness_mismatch") or None
+        reasons = [
+            reason
+            for index, reason in enumerate(reasons)
+            if reason not in reasons[:index]
+        ]
         failure_reason = diagnostics.get("graph_failure_reason")
-        if type(failure_reason) is str and failure_reason in {
+        if type(failure_reason) is not str or failure_reason not in {
             "deadline",
             "frontier_budget",
         }:
-            reasons.append(failure_reason)
+            failure_reason = None
+        for reason in (
+            failure_reason,
+            *_coverage_reasons(diagnostics.get("graph_coverage_v2")),
+        ):
+            if reason is not None and reason not in reasons:
+                reasons.append(reason)
         # Disabled retrieval is known to contribute zero graph candidates.
         # Keep unknown/unavailable observations distinct on enabled paths.
         graph_rows = None if overlay_enabled else ()
@@ -186,6 +220,7 @@ def retrieval_stages(
                     graph_status if graph_status in ("hit", "miss", "error") else None
                 ),
                 "reasons": reasons if reasons else None,
+                "failure_reason": failure_reason,
                 "branch_statuses": branch_statuses or None,
                 "candidate_provenance": (
                     "finalized_novel"

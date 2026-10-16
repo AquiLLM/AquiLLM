@@ -199,12 +199,14 @@ def test_limit_reason_survives_official_emitter_and_summary_without_readiness_in
     for key in ("graph_direct_reason", "graph_extended_reason")[:readiness]:
         diagnostics[key] = "readiness_mismatch"
     stage = stage_event(diagnostics)
-    expected = ["readiness_mismatch"] * readiness + want
+    expected = (["readiness_mismatch"] if readiness else []) + want
     assert stage["graph"]["reasons"] == (expected or None)
+    assert stage["graph"]["failure_reason"] == (want[0] if want else None)
     assert stage["readiness_failure_count"] == (readiness or None)
     result = summarize([("retrieval_stages", stage)], [], [])
     graph = result["stages"][0]["graph"]
     assert graph["reasons"] == (expected or None)
+    assert graph["failure_reason"] == (want[0] if want else None)
     assert graph["readiness_failure_count"] == (readiness or None)
     assert result["graph_source_provenance"]["status"] == "unavailable"
 

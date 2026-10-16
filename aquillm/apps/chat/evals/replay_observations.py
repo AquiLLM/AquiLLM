@@ -1,6 +1,7 @@
 """Redacted replay reports from private in-memory retrieval events."""
 
 import hashlib
+from typing import get_args
 
 from .replay_stage_contracts import (
     materialized_pool,
@@ -28,6 +29,7 @@ def _safe_graph_reasons(reasons):
         ExtendedBranchFailureReason,
         SharedBranchFailureReason,
     )
+    from apps.knowledge_graph.retrieval.graph_handoff import GraphCoverageReason
 
     if type(reasons) not in (list, tuple):
         return None
@@ -39,7 +41,7 @@ def _safe_graph_reasons(reasons):
             SharedBranchFailureReason,
         )
         for reason in enum
-    } | {"deadline", "frontier_budget"}
+    } | set(get_args(GraphCoverageReason))
     # Exact strings only: never stringify arbitrary diagnostics or exceptions.
     return [
         reason for reason in reasons if type(reason) is str and reason in allowed
@@ -120,6 +122,12 @@ def summarize(events, packet, targets):
     }
     for stage in stages:
         graph = stage.get("graph", {})
+        failure_reason = graph.get("failure_reason")
+        if type(failure_reason) is not str or failure_reason not in {
+            "deadline",
+            "frontier_budget",
+        }:
+            failure_reason = None
         pool = materialized_pool(stage)
         result["stages"].append(
             {
@@ -136,6 +144,7 @@ def summarize(events, packet, targets):
                 },
                 "graph": {
                     "reasons": _safe_graph_reasons(graph.get("reasons")),
+                    "failure_reason": failure_reason,
                     "ready": graph.get("ready"),
                     "status": graph.get("status"),
                     "branch_statuses": graph.get("branch_statuses"),
