@@ -4,14 +4,16 @@ from collections.abc import Mapping
 from math import isfinite
 from uuid import UUID
 
-from django.db.models import Exists, F
+from django.db import connections
+from django.db.models import Exists, F, Q
+from django.db.models.lookups import In, Lookup
 
 from apps.knowledge_graph.models import (
     CollectionEntityDocumentLink,
     OntologyVersion,
 )
 
-from .limits import MAX_DETAIL_ROWS
+from .limits import MAX_DETAIL_ROWS, MAX_ENTITY_ROWS
 from .limits import bounded_projection_rows as _bounded
 
 
@@ -137,6 +139,33 @@ def load_relation_directions(
     }
 
 
+class _ExactBigintMembership(Lookup):
+    lookup_name = "exact_bigint_membership"
+    prepare_rhs = False
+
+    def as_sql(self, compiler, connection):
+        if connection.vendor != "postgresql":
+            return In(self.lhs, self.rhs).as_sql(compiler, connection)
+        # Compile the expression so nested overflow queries retain their aliases.
+        lhs, params = self.process_lhs(compiler, connection)
+        return lhs + " = ANY(%s::bigint[])", (*params, list(self.rhs))
+
+
+def _entity_membership(using, entity_ids, document_filtered):
+    if (
+        document_filtered is True
+        and connections[using].vendor == "postgresql"
+        and type(entity_ids) is tuple
+        and 0 < len(entity_ids) <= MAX_ENTITY_ROWS
+        and all(
+            type(value) is int and 0 < value <= 9223372036854775807
+            for value in entity_ids
+        )
+    ):
+        return _ExactBigintMembership(F("collection_entity_id"), entity_ids)
+    return Q(collection_entity_id__in=entity_ids)
+
+
 def load_entity_mentions(
     *,
     using: str,
@@ -155,8 +184,8 @@ def load_entity_mentions(
         "document_entity__mention_links__mention__metadata",
     )
     query = CollectionEntityDocumentLink.objects.using(using).filter(
+        _entity_membership(using, entity_ids, document_filtered),
         artifact_id=artifact_id,
-        collection_entity_id__in=entity_ids,
         status="active",
         outcome="automatic",
         resolver_version=F("artifact__resolver_version"),
