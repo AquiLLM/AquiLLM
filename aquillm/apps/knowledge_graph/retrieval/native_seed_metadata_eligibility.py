@@ -47,8 +47,10 @@ def supported(owner):
     from . import direct_seed_queries as queries
     from . import direct_seed_queryset as builder
     from . import direct_seed_repository as repository
+    from . import direct_seed_sql as seed_sql
     from . import graph_runtime_execution_v2 as execution
     from . import graph_runtime_seeds_v2 as seeds
+    from . import graph_seed_reads_v2 as seed_reads
     from . import native_direct_seed_repository as native_repository
     from . import native_direct_seed_statement as native_statement
     from . import native_query_ontology as native_ontology
@@ -100,6 +102,9 @@ def supported(owner):
         or any(getattr(values, n) is not f for n, f in values._NATIVE_VALUE_FUNCTIONS)
         or metadata_owner.capture_selected is not values.capture_selected
         or metadata_owner.compare is not values.compare
+        or seed_reads._metered_seed_rows is not seed_reads._NATIVE_SEED_METER
+        or seed_reads.bounded_seed_read is not seed_reads._NATIVE_SEED_BOUND
+        or seed_sql.bounded_seed_read is not seed_reads._NATIVE_SEED_BOUND
         or native_repository.capture_direct is not values.capture_direct
         or any(
             n in owner.__dict__ or method(getattr(owner, n)) is not f

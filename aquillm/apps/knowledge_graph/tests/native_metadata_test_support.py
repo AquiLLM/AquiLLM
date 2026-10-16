@@ -38,7 +38,9 @@ class StatementHarness:
             raise ValueError("test statement lifetime failed")
         self.budget.check_active()
 
-    def read(self, sql, params, *, using, maximum):
+    def read(
+        self, sql, params, *, using, maximum, deadline=None, clock=None, alias=False
+    ):
         def read():
             assert self.budget._reserved_rows == maximum
             self.maxima.append(maximum)
@@ -47,7 +49,8 @@ class StatementHarness:
                 return tuple(cursor.fetchall())
 
         return _metered_seed_rows(
-            read, using=using, maximum=maximum, budget=self.budget
+            read, using=using, maximum=maximum, budget=self.budget,
+            deadline=deadline, clock=clock, alias=alias, after_read=self.check,
         )
 
 

@@ -72,6 +72,10 @@ def test_real_native_cursor_uncertainty_poison_and_restore(scoped_aliases, chang
                 using=kwargs["using"],
                 maximum=kwargs["maximum"],
                 budget=harness.budget,
+                deadline=kwargs["deadline"],
+                clock=kwargs["clock"],
+                alias=kwargs["alias"],
+                after_read=harness.check,
             )
 
         harness.read = missing

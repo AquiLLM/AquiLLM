@@ -8,7 +8,6 @@ from apps.knowledge_graph.models import CollectionGraphMembershipState as State
 
 from .direct_seed_contracts import DirectResolutionTier
 from .direct_seed_queryset import _candidate_queryset
-from .direct_seed_sql import bounded_seed_read
 from .direct_seed_types import DirectSeedCandidateRow
 from .native_seed_metadata_eligibility import environment_sql
 
@@ -137,16 +136,22 @@ def candidate_rows(metadata, **options):
         if type(options["limit"]) is not int or not 1 <= options["limit"] <= 128:
             raise ValueError("native candidate limit is outside its hard cap")
         metadata.check()
+        if type(options["deadline"]) not in (int, float) or not isfinite(
+            options["deadline"]
+        ):
+            raise ValueError("native candidate deadline must be finite")
+        if options["clock"] is not metadata.budget.clock:
+            raise ValueError("native candidate clock changed")
         sql, params = statement(metadata, options)
-        with bounded_seed_read(
+        rows = metadata.read(
+            sql,
+            params,
             using=metadata.using,
+            maximum=options["limit"] + 2,
             deadline=min(options["deadline"], metadata.budget.deadline),
             clock=options["clock"],
             alias=options["tier"] is DirectResolutionTier.ALIAS,
-        ):
-            rows = metadata.read(
-                sql, params, using=metadata.using, maximum=options["limit"] + 2
-            )
+        )
         result = validate(
             rows, count=len(options["membership_states"]), limit=options["limit"]
         )

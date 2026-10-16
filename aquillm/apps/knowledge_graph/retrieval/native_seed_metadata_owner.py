@@ -1,5 +1,7 @@
 """Original capture inputs and one checked native operation lifetime."""
 
+from math import isfinite
+
 from django.db import connections
 
 from .native_seed_metadata_eligibility import supported
@@ -181,7 +183,9 @@ class _NativeSeedMetadata:
             for p in group.scope.projections
         )
 
-    def read(self, sql, params, *, using, maximum):
+    def read(
+        self, sql, params, *, using, maximum, deadline=None, clock=None, alias=False
+    ):
         from .graph_seed_reads_v2 import _metered_seed_rows
 
         def read():
@@ -195,8 +199,24 @@ class _NativeSeedMetadata:
 
         try:
             self.check()
+            if (
+                (deadline is not None and (
+                    type(deadline) not in (int, float) or not isfinite(deadline)
+                ))
+                or type(alias) is not bool
+                or (clock is not None and (
+                    clock is not self.runtime.clock or clock is not self.budget.clock
+                ))
+            ):
+                raise ValueError("native metadata read bounds changed")
             rows = _metered_seed_rows(
-                read, using=using, maximum=maximum, budget=self.budget
+                read, using=using, maximum=maximum, budget=self.budget,
+                deadline=deadline, clock=clock, alias=alias,
+                after_read=(
+                    self.check
+                    if deadline is not None or clock is not None or alias
+                    else None
+                ),
             )
             self.check()
             return rows
