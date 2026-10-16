@@ -19,6 +19,7 @@ from lib.retrieval.turn_budget import TurnBudget
 from .graph_runtime_contracts_v2 import (
     GraphRuntimeEnvelopeV2,
 )
+from .frontier_ranking_validation_v2 import POLICY, frontier_tags
 from .production_runtime_support import topology_caps
 from .topology.contracts import HybridBranchKind
 from .topology.frontier_contracts_v2 import FrontierBudgetV2
@@ -94,8 +95,10 @@ def _run_graph_v2(
     baseline,
     requested_document_ids,
     execute,
+    acquisition_policy=POLICY,
 ):
     """Private runner shared with the eager native operation; no permit escapes."""
+    frontier_tags(acquisition_policy)
     if getattr(settings, "graph_remediation_mode", "legacy") != "v2":
         raise ValueError("whole V2 runtime requires explicit v2 mode")
     if (
@@ -148,7 +151,9 @@ def _run_graph_v2(
             frontier=frontier,
         )
     finally:
-        observation = capture_frontier_budget_v2(frontier, max_depth=caps.max_depth)
+        observation = capture_frontier_budget_v2(
+            frontier, max_depth=caps.max_depth, acquisition_policy=acquisition_policy
+        )
         invocation = publish_frontier_budget_v2(
             observation,
             query=query,

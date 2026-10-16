@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 
+from .frontier_ranking_validation_v2 import POLICY, frontier_tags
 from .graph_frontier_observation_v2 import GraphFrontierInvocationV2
 from .graph_handoff import GraphHandoffV2, validate_graph_handoff_v2
 from .ready_scope_v2 import SelectedGraphScopeV2, _digest, graph_selection_digest_v2
@@ -52,9 +53,11 @@ class GraphRuntimeEnvelopeV2:
                 raise ValueError("handoff representation is outside captured group")
 
 
-def graph_algorithm_signature_v2(*, selected, requests, caps, budget, configs):
+def graph_algorithm_signature_v2(*, selected, requests, caps, budget, configs,
+                                 acquisition_policy=POLICY):
     from .projected_relation_ranking_v2 import relation_algorithm_signature_v2
 
+    tags = frontier_tags(acquisition_policy)
     groups = {g.group_checksum for g in selected.groups}
     if (
         len(requests) != len(groups)
@@ -81,10 +84,7 @@ def graph_algorithm_signature_v2(*, selected, requests, caps, budget, configs):
                 (r.authority_group_checksum, relation_request_digest(r.request))
                 for r in requests
             ),
-            "frontier_policy": (
-                "canonical-frontier-v2/global-priority-quality-keyset-v2/"
-                "nonexhaustive/authorized-transit"
-            ),
+            "frontier_policy": tags[0].replace("_", "-") + "/" + acquisition_policy,
             "seed_policy": "global-prefix/group-equal-mass/global-round-robin-cap-v2",
             "selection_policy": (
                 "query-lexical-predicate-reliability/provenance-associations-v2/"

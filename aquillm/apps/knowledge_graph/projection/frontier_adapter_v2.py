@@ -1,5 +1,8 @@
 """Authenticated requested neighborhoods over the derived equality index."""
 
+from apps.knowledge_graph.retrieval.frontier_ranking_validation_v2 import (
+    CONSUMED_POLICY, POLICY, frontier_tags,
+)
 from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
     FrontierCursorV2,
     FrontierPageV2,
@@ -34,17 +37,23 @@ def page_from_rows(rows, *, scanned_rows=0, next_cursor=None):
 
 
 class Neo4jCanonicalFrontierAdapterV2:
-    def __init__(self, driver):
+    def __init__(self, driver, *, acquisition_policy=POLICY):
+        frontier_tags(acquisition_policy)
         self.driver = driver
+        self.acquisition_policy = acquisition_policy
 
     def open(self, *, group, request, budget, deadline):
         return FrontierSessionV2(
-            self.driver, group=group, request=request, budget=budget, deadline=deadline
+            self.driver, group=group, request=request, budget=budget, deadline=deadline,
+            acquisition_policy=self.acquisition_policy,
         )
 
 
 class FrontierSessionV2:
-    def __init__(self, driver, *, group, request, budget, deadline):
+    def __init__(self, driver, *, group, request, budget, deadline,
+                 acquisition_policy=POLICY):
+        frontier_tags(acquisition_policy)
+        self.acquisition_policy = acquisition_policy
         self.group, self.request, self.budget = group, request, budget
         self.ready = group.scope.ready
         self.reads = FrontierReadsV2(
@@ -60,11 +69,14 @@ class FrontierSessionV2:
                 "weights": request.predicate_weights,
                 "policy": request.policy_version,
                 "authorization": self.ready.authorization_context_signature,
+                **({"acquisition_policy": acquisition_policy}
+                   if acquisition_policy != POLICY else {}),
             }
         )
         self.reads.request_digest = self.request_digest
 
     def initialize(self):
+        frontier_tags(self.acquisition_policy)
         self.scope_rows = {}
         multi = len(self.selected) > 1
         self.reads.reserve_final(multi=multi)
@@ -77,6 +89,7 @@ class FrontierSessionV2:
                         d.document_key
                         for d in self.ready.authorized_documents
                         if d.generation_key == g
+                        and self.acquisition_policy != CONSUMED_POLICY
                     ),
                 ]
                 for g, s in self.selected.items()
@@ -103,6 +116,7 @@ class FrontierSessionV2:
                     d.document_key
                     for d in self.ready.authorized_documents
                     if d.generation_key == generation
+                    and self.acquisition_policy != CONSUMED_POLICY
                 ),
             ]
             rows = scope_rows(self.reads, generation, sources)

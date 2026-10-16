@@ -114,9 +114,15 @@ class CountingGenerationDriver(GenerationDriver):
 
 
 class MixedScopeFixture:
-    def __init__(self, *, copies=256):
+    def __init__(self, *, copies=256, mention_only=False):
         scopes = GenerationFixture().bundles
         self.bundles = tuple(mixed_bundle(scope, copies) for scope in scopes)
+        if mention_only:
+            self.bundles = tuple(replace(
+                bundle, relations=(), relation_semantics=(), evidence=(),
+                counts=replace(bundle.counts, relation_count=0,
+                               relation_semantics_count=0, evidence_count=0),
+            ) for bundle in self.bundles)
         parts = tuple(_ready(bundle) for bundle in self.bundles)
         selected = tuple(
             sorted(
@@ -168,7 +174,7 @@ class MixedScopeFixture:
         self.caps = _caps()
         # Put useful content in the first generation searched, not behind misses.
         first = min(self.bundles, key=lambda b: b.generation.generation_key)
-        self.seed = ProjectedSeedV1(first.relations[0].source_entity_key, 1.0)
+        self.seed = ProjectedSeedV1(first.entity_mentions[0].entity_key, 1.0)
         self.seed_generation = first.generation.generation_key
         # Direct-document fixture has no alternate representation generation.
         binding = SimpleNamespace(representation=lambda _generation, _document: None)

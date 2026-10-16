@@ -146,6 +146,7 @@ def _run_closed_graph(
     from .graph_runtime_contracts_v2 import GraphRuntimeEnvelopeV2
     from .graph_runtime_execution_v2 import _execute_captured_graph_v2
     from .graph_runtime_v2 import _run_graph_v2
+    from .frontier_ranking_validation_v2 import CONSUMED_POLICY, POLICY
     from .ready_materialization_v2 import _materialize_closed_rows, _validate_closed_captured_selection
     from .ready_scope_repository_v2 import _select_closed_ready_scope_v2
     from .ready_scope_v2 import graph_selection_digest_v2
@@ -171,6 +172,8 @@ def _run_closed_graph(
         if admission is not None
         else None
     )
+    native = seed_validation is not None and seed_validation._native_metadata is not None
+    acquisition_policy = CONSUMED_POLICY if native else POLICY
 
     def hydrate(*, selected, pairs, runtime, document_codec, deadline):
         check()
@@ -195,10 +198,9 @@ def _run_closed_graph(
         return _load_selection_inputs_v2(**kwargs, hydrate=hydrate)
 
     def execute(**kwargs):
-        return _execute_captured_graph_v2(
-            **kwargs, selected=selected, hydrate=load, seed_validation=seed_validation
+        return _execute_captured_graph_v2(**kwargs, selected=selected, hydrate=load,
+            seed_validation=seed_validation, acquisition_policy=acquisition_policy,
         )
-
     envelope = _run_graph_v2(
         query=query,
         runtime=runtime,
@@ -210,6 +212,7 @@ def _run_closed_graph(
         baseline=snapshot,
         requested_document_ids=scope.requested_document_ids,
         execute=execute,
+        acquisition_policy=acquisition_policy,
     )
     if (
         type(envelope) is not GraphRuntimeEnvelopeV2

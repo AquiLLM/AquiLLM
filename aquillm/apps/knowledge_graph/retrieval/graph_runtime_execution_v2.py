@@ -2,6 +2,7 @@
 
 from apps.knowledge_graph.projection.frontier_snapshot_v2 import frontier_config
 
+from .frontier_ranking_validation_v2 import CONSUMED_POLICY, POLICY, frontier_tags
 from .graph_evidence_repository_v2 import load_selection_inputs_v2
 from .graph_evidence_selection_v2 import (
     GraphEvidenceSelectionEnvelopeV2,
@@ -75,6 +76,7 @@ def _execute_captured_graph_v2(
     selected,
     hydrate,
     seed_validation=None,
+    acquisition_policy=None,
 ):
     """Private eager core; native owner or public caller captures before entry."""
     frontier.check_active()
@@ -89,6 +91,11 @@ def _execute_captured_graph_v2(
     native = seed_validation is not None and seed_validation._native_metadata is not None
     if native and seed_validation._native_metadata.selected is not selected:
         raise ValueError("native metadata original selection changed")
+    expected_policy = CONSUMED_POLICY if native else POLICY
+    acquisition_policy = expected_policy if acquisition_policy is None else acquisition_policy
+    frontier_tags(acquisition_policy)
+    if acquisition_policy != expected_policy:
+        raise ValueError("frontier acquisition policy differs from native owner")
     for g in selected.groups:
         frontier.check_active()
         requests.append(
@@ -117,12 +124,14 @@ def _execute_captured_graph_v2(
         caps=caps,
         budget=frontier,
         configs=configs,
+        acquisition_policy=acquisition_policy,
     )
     loader = (
         create_canonical_frontier_loader_v2(
             selection=selected,
             codec=runtime.codec,
             gateway_client=runtime.topology_loader.driver,
+            acquisition_policy=acquisition_policy,
         )
         if selected.groups
         else None

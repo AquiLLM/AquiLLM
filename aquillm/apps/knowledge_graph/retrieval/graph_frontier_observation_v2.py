@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from lib.evidence_observation import publish
 
-from .frontier_ranking_validation_v2 import POLICY
+from .frontier_ranking_validation_v2 import POLICY, frontier_tags
 from .ready_scope_v2 import _digest
 from .topology.frontier_contracts_v2 import FrontierBudgetV2
 
@@ -37,7 +37,8 @@ class GraphFrontierInvocationV2:
     request_algorithm_signature: str | None
 
 
-def capture_frontier_budget_v2(budget, *, max_depth):
+def capture_frontier_budget_v2(budget, *, max_depth, acquisition_policy=POLICY):
+    frontier_tags(acquisition_policy)
     if type(budget) is not FrontierBudgetV2:
         raise TypeError("observation requires the original frontier ledger")
     with budget._lock:
@@ -53,7 +54,7 @@ def capture_frontier_budget_v2(budget, *, max_depth):
             policy_signature=_digest(
                 {
                     "version": "frontier-budget-v2/physical-reservation/raw-http-v2",
-                    "acquisition_policy": POLICY,
+                    "acquisition_policy": acquisition_policy,
                     "source_query_policy": (
                         "seed-data/seed-reauthorization/frontier-data-v2;"
                         "returned-records/not-plan-scans;"

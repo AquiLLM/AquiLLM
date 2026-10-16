@@ -123,6 +123,7 @@ def _caps(value) -> None:
 def _algorithm(value) -> None:
     vector = tuple(getattr(value, name) for name in _ALGORITHM_TAGS)
     if vector == ("canonical_frontier_v2", "frontier_transition_v2", "frontier_evidence_v2", "frontier_seed_v2"): return
+    if vector == ("canonical_frontier_v3", "frontier_transition_v2", "frontier_evidence_v3", "frontier_seed_v2"): return
     for name, expected in _ALGORITHM_TAGS.items():
         if getattr(value, name) != expected: raise ValueError(f"{name} must be {expected}")
 def _audit(value) -> None:
@@ -142,7 +143,7 @@ def _validate_snapshot(s) -> None:
     _exact(s.algorithm, ProjectedAlgorithmSignatureV1, "algorithm"); _exact(s.caps, ProjectedSnapshotCapsV1, "caps"); _exact(s.allowed_scope, ProjectedAllowedScopeV1, "allowed_scope")
     _count(s.load_max_hops, "load_max_hops", 1, s.caps.max_hops); _rows(s.identity_keys, str, "identities", s.caps.max_nodes, _opaque_key)
     if not s.identity_keys:
-        if s.algorithm.algorithm_version != "canonical_frontier_v2": raise ValueError("identity_keys must not be empty")
+        if s.algorithm.algorithm_version not in ("canonical_frontier_v2", "canonical_frontier_v3"): raise ValueError("identity_keys must not be empty")
         if s.seed_identities or s.relation_groups or s.mentions or s.audit_rows: raise ValueError("empty identities require a closed empty V2 graph")
     specs = (
         (s.seed_identities, ProjectedSeedIdentityV1, s.caps.max_nodes, _seed_key),
@@ -172,7 +173,10 @@ def _validate_closure(s) -> None:
     artifacts = {row.artifact_key: row for row in s.artifact_provenance}
     collection_rows = [row for row in s.artifact_provenance if row.scope_type is ProjectedScopeTypeV1.COLLECTION]; document_rows = [row for row in s.artifact_provenance if row.scope_type is ProjectedScopeTypeV1.DOCUMENT]
     collection_artifacts = {row.artifact_key: row for row in collection_rows}; document_artifacts = {row.artifact_key: row for row in document_rows}
-    if len(artifacts) != len(s.artifact_provenance) or len(collection_rows) != len(collections) or len(document_rows) != len(documents) or {row.scope_key for row in collection_rows} != collections or {row.scope_key for row in document_rows} != documents: raise ValueError("artifact provenance scope closure is broken")
+    consumed = s.algorithm.algorithm_version == "canonical_frontier_v3"
+    document_scopes = {row.scope_key for row in document_rows}
+    document_closed = (len(document_rows) == len(document_scopes) and document_scopes <= documents) if consumed else (len(document_rows) == len(documents) and document_scopes == documents)
+    if len(artifacts) != len(s.artifact_provenance) or len(collection_rows) != len(collections) or not document_closed or {row.scope_key for row in collection_rows} != collections: raise ValueError("artifact provenance scope closure is broken")
     if any(row.collection_key not in collections or (row in collection_rows and row.scope_key != row.collection_key) for row in s.artifact_provenance): raise ValueError("artifact provenance collection closure is broken")
     physical_rows = [row for row in s.audit_rows if type(row) is ProjectedPhysicalRelationAuditV1]; physical = {row.relation_key: row for row in physical_rows}
     physical_semantics = [(row.artifact_key, row.source_entity_key, row.relation_type, row.target_entity_key) for row in physical_rows]
@@ -208,6 +212,7 @@ def _validate_closure(s) -> None:
     counts = Counter(row.identity_key for row in s.mentions)
     for mention in s.mentions:
         if mention.identity_key not in s.identity_keys or mention.evidence.document_key not in documents or counts[mention.identity_key] > s.caps.max_mentions_per_entity: raise ValueError("mention cap/scope closure is broken")
+        if consumed and mention.evidence.document_key not in document_scopes: raise ValueError("mention document provenance closure is broken")
         coordinate = mention.evidence.document_key, mention.evidence.chunk_number
         if coordinates.setdefault(mention.evidence.chunk_key, coordinate) != coordinate: raise ValueError("chunk coordinate closure is broken")
 

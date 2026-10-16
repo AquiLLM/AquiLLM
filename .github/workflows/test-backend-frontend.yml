@@ -222,6 +222,11 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_native_metadata_budget_v2.py
           aquillm/apps/knowledge_graph/tests/test_task17_native_single_bound.py
           aquillm/apps/knowledge_graph/tests/test_task17_native_bound_failures.py
+          aquillm/apps/knowledge_graph/tests/test_consumed_source_closure_v3.py
+          aquillm/apps/knowledge_graph/tests/test_consumed_source_candidates_v3.py
+          aquillm/apps/knowledge_graph/tests/test_consumed_source_rejections_v3.py
+          aquillm/apps/knowledge_graph/tests/test_consumed_source_native_v3.py
+          aquillm/apps/knowledge_graph/tests/test_consumed_source_native_ledger_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_native_ledger_v3.py
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_work.py
           aquillm/apps/knowledge_graph/tests/test_closed_graph_attempt_v2.py
@@ -573,6 +578,7 @@ jobs:
           aquillm/tests/integration/test_projection_representation_state_boundary.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_bounds_v3.py
+          aquillm/apps/knowledge_graph/tests/test_consumed_source_physical_v3.py
           -q --tb=short
       - name: Clean up the owned test stack
         if: always()
