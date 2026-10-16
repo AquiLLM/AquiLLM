@@ -282,6 +282,7 @@ jobs:
           aquillm/apps/documents/tests/test_representation_tool_scope.py
           aquillm/apps/documents/tests/test_graph_captured_owner_work.py
           aquillm/apps/documents/tests/test_graph_captured_owner_fences.py
+          aquillm/apps/documents/tests/test_graph_admission_captured_dispatch.py
           aquillm/apps/documents/tests/test_fresh_authorization_membership_work.py
           aquillm/apps/documents/tests/test_uuid_preparation_callsite_compile.py
           aquillm/apps/documents/tests/test_uuid_preparation_compile.py

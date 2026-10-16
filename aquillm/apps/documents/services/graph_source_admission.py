@@ -4,7 +4,7 @@ from dataclasses import dataclass, field, replace
 from json import loads
 
 from .chunk_search_rank_policy import controls, ordered_candidates
-from .graph_candidate_metadata import captured_query, rank_refs
+from .graph_candidate_metadata import rank_refs
 from .graph_source_admission_policy import POLICY, charged_sources, fair_prefix
 from .representation_contracts import SourceScopeUnavailable
 
@@ -118,9 +118,9 @@ class NativeSourceAdmission:
         if reader is None:
             rows = self._closed_read(ids)
         else:
-            from apps.documents.models import TextChunk
+            from .graph_admission_read import read_owned_refs
 
-            rows = reader(captured_query(TextChunk, tuple(refs[pk] for pk in ids), self.scope))
+            rows = read_owned_refs(self, tuple(refs[pk] for pk in ids), reader)
             self.populate(rows, staged)
         self.check()
         self.counts["baseline_top_up"] = len(rows)
@@ -133,7 +133,7 @@ class NativeSourceAdmission:
                                    for pk in lanes[name]))
 
     def graph_read(self, query, reader):
-        from apps.documents.models import TextChunk
+        from .graph_admission_read import read_owned_refs
 
         self.check()
         budget = self.scope.runtime.budget
@@ -148,7 +148,7 @@ class NativeSourceAdmission:
             elif novel < allowance:
                 retained.append(ref)
                 novel += 1
-        rows = reader(captured_query(TextChunk, tuple(retained), self.scope)) if retained else ()
+        rows = read_owned_refs(self, tuple(retained), reader) if retained else ()
         self.check()
         self.counts["graph_input_metadata"] = len(refs)
         self.counts["graph_input_hydrated"] = len(rows)

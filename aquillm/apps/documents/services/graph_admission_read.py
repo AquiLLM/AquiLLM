@@ -1,6 +1,26 @@
 """Source-only eager staging for the native plan, including ordering and cleanup."""
 
 
+def read_owned_refs(plan, refs, reader):
+    """Narrow only the original native bound reader in this exact plan scope."""
+    from types import MethodType
+
+    from apps.documents.models import TextChunk
+    from apps.knowledge_graph.retrieval.graph_candidate_stage_v2 import (
+        _NATIVE_GRAPH_SOURCE_READ,
+        _GraphSourceStage,
+    )
+
+    from .graph_candidate_metadata import captured_query
+
+    if (type(reader) is MethodType
+            and type(reader.__self__) is _GraphSourceStage
+            and reader.__self__.scope is plan.scope
+            and reader.__func__ is _NATIVE_GRAPH_SOURCE_READ):
+        return reader.__self__.read_captured(refs)
+    return reader(captured_query(TextChunk, refs, plan.scope))
+
+
 def _read_stage(plan, ids, stage, *, baseline=(), order=False):
     from .chunk_search_scoped_rows import _retain_dense
 

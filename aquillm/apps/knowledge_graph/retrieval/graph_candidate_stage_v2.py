@@ -176,3 +176,6 @@ class _GraphSourceStage:
                     "full_text": set(self.scope.fts_rows) - self.scope.fts_invalid_ids
                 },
             )
+
+
+_NATIVE_GRAPH_SOURCE_READ = _GraphSourceStage.read
