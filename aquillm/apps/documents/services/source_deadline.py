@@ -9,6 +9,11 @@ _DEADLINE = ContextVar("source_preparation_deadline", default=None)
 
 
 def source_remaining_ms(default):
+    from lib.retrieval.operation import Operation, _OPERATION
+
+    operation = _OPERATION.get()
+    if type(operation) is Operation and operation.deadline is not None:
+        default = min(default, max(0, int(operation.remaining_ms())))
     current = _DEADLINE.get()
     if current is None:
         return default

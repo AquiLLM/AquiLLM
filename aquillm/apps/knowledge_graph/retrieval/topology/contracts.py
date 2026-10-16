@@ -1,5 +1,4 @@
 # ruff: noqa: E501
-# fmt: off
 """Provider-neutral contracts for bounded authorized graph topology loading."""
 from __future__ import annotations
 
@@ -164,6 +163,7 @@ class ReadyGenerationBundleV1:
         )
         if self.bundle_checksum != expected:
             raise ValueError("bundle_checksum does not bind the exact ready bundle")
+_NATIVE_READY_BUNDLE_CHECKSUM, _NATIVE_READY_BUNDLE_VALIDATOR = ready_generation_bundle_checksum, ReadyGenerationBundleV1.__post_init__
 @final
 @dataclass(frozen=True, slots=True)
 class ProjectedSeedV1:

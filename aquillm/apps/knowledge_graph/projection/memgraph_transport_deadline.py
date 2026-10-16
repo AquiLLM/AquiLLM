@@ -1,4 +1,5 @@
 """Retain one operation across session acquisition, callbacks and schema dispatch."""
+
 from functools import wraps
 
 from .operation_context import current_operation
@@ -8,15 +9,29 @@ class TransportDeadline:
     def __init__(self, timeout):
         self.timeout = timeout
         self.operation = current_operation()
+        self.deadline = None
+        if self.operation is not None:
+            from .database_deadline import monotonic
+
+            self.deadline = monotonic() + min(
+                timeout, self.operation.call_remaining_ms() / 1000
+            )
 
     def remaining(self):
         if self.operation is None:
             return self.timeout
-        return min(self.timeout, self.operation.remaining_ms() / 1000)
+        from .database_deadline import monotonic
+
+        remaining = min(
+            self.deadline - monotonic(), self.operation.remaining_ms() / 1000
+        )
+        if remaining <= 0:
+            raise TimeoutError("projection_transport_deadline")
+        return remaining
 
     def check(self):
         if self.operation is not None:
-            self.operation.remaining_ms()
+            self.remaining()
 
 
 def transaction_function(self, callback, *, timeout: float):
@@ -44,7 +59,9 @@ def execute_managed(driver, callback, *, timeout, write):
     deadline.check()
     with driver._connection().session(database=driver._database) as session:
         execute = session.execute_write if write else session.execute_read
-        result = execute(driver._transaction_function(bounded, timeout=deadline.remaining()))
+        result = execute(
+            driver._transaction_function(bounded, timeout=deadline.remaining())
+        )
         deadline.check()
         return result
 

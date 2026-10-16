@@ -10,6 +10,7 @@ from django.db import connections
 from apps.chat.services.rag_config import (
     direct_rag_max_queries,
     rag_preservation_config,
+    retrieval_timeout_ms,
 )
 from apps.collections.services.django_retrieval_authorization import (
     build_selected_scope_authorization_context,
@@ -62,7 +63,8 @@ async def preservation_turn(consumer, *, max_func_calls):
         parent.budget
         if parent
         else TurnBudget(
-            TurnLimits(actions=min(3, direct_rag_max_queries(), max_func_calls))
+            TurnLimits(actions=min(3, direct_rag_max_queries(), max_func_calls),
+                       retrieval_ms=retrieval_timeout_ms())
         )
     )
     task = asyncio.current_task()

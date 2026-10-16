@@ -1,4 +1,5 @@
 from __future__ import annotations
+from apps.knowledge_graph.retrieval.native_seed_metadata_layout import layout as _metadata_layout
 
 import re
 from math import isfinite
@@ -20,13 +21,11 @@ from .artifacts import (
     ValidatedGraphModel,
 )
 
-
 class ResolutionStatus(models.TextChoices):
     ACTIVE = "active", "Active"
     SUPPRESSED = "suppressed", "Suppressed"
     REJECTED = "rejected", "Rejected"
     SUPERSEDED = "superseded", "Superseded"
-
 
 class EntityMention(ValidatedGraphModel):
     """Exact entity evidence extracted from one persisted chunk."""
@@ -232,7 +231,6 @@ class EntityMention(ValidatedGraphModel):
                     )
         if errors:
             raise ValidationError(errors)
-
 
 class DocumentEntity(ValidatedGraphModel):
     """Entity resolved within a document artifact."""
@@ -906,3 +904,5 @@ class CanonicalEntity(ValidatedGraphModel):
             )
         if errors:
             raise ValidationError(errors)
+
+_NATIVE_METADATA_LAYOUTS = tuple(_metadata_layout(m) for m in (CanonicalEntity, CollectionEntity, DocumentEntity, DocumentEntityMention, EntityMention,))

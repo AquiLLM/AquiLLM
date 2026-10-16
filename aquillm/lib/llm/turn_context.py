@@ -77,11 +77,13 @@ def is_retrieval_tool(name):
 
 
 def tool_timeout(name=None, *, retrieval=False):
-    seconds = min(10.0, max(0.001, float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))))
     state = current_turn()
+    bounded_retrieval = state is not None and (retrieval or is_retrieval_tool(name))
+    maximum = 30.0 if bounded_retrieval else 10.0
+    seconds = min(maximum, max(0.001, float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))))
     return (
         min(seconds, state.budget.remaining_ms() / 1000)
-        if state and (retrieval or is_retrieval_tool(name))
+        if bounded_retrieval
         else seconds
     )
 

@@ -5,16 +5,33 @@ from hashlib import md5
 
 import pytest
 from django.db import connection
-from django.db.models.query import QuerySet
 
-from apps.documents.models import DocumentRepresentationState, RawTextDocument, TextChunk
+from apps.documents.models import (
+    DocumentRepresentationState,
+    RawTextDocument,
+    TextChunk,
+)
 from apps.documents.services.chunk_search_scope import FrozenRetrievalScope
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
-from apps.knowledge_graph.models import CollectionGraphProjection, ProjectionChunkReference
+from apps.documents.tests.source_body_test_hooks import install_body_hook
+from apps.knowledge_graph.models import (
+    CollectionGraphProjection,
+    ProjectionChunkReference,
+)
+from apps.knowledge_graph.resolution.vocabulary_capture import (
+    VocabularyGraphUnavailable,
+)
 from apps.knowledge_graph.retrieval.ready_scope import ReadyScopeError
-from apps.knowledge_graph.resolution.vocabulary_capture import VocabularyGraphUnavailable
+from apps.knowledge_graph.tests.hydration_operation_support import (
+    assert_text,
+    bad_provenance,
+    candidate,
+    commit_change,
+    frame,
+    hydrate,
+    prepared,
+)
 from lib.retrieval.turn_budget import TurnLimits
-from apps.knowledge_graph.tests.hydration_operation_support import prepared, frame, hydrate, candidate, bad_provenance, commit_change, assert_text
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -64,7 +81,9 @@ def test_private_hydration_keeps_45_ranked_rows_without_refilling_prefix(monkeyp
 
 
 def test_public_materializer_still_rejects_41_before_any_body_admission(monkeypatch):
-    from apps.knowledge_graph.retrieval.ready_materialization_v2 import materialize_graph_candidates_v2
+    from apps.knowledge_graph.retrieval.ready_materialization_v2 import (
+        materialize_graph_candidates_v2,
+    )
     case = prepared(monkeypatch, 41)
     with frame(case) as active:
         refs = tuple(candidate(active, ref) for ref in active.refs)
@@ -95,7 +114,9 @@ def test_bad_middle_reference_does_not_drop_good_siblings(monkeypatch, bad):
 
 
 def test_public_materializer_retains_all_or_nothing_provenance_semantics(monkeypatch):
-    from apps.knowledge_graph.retrieval.ready_materialization_v2 import materialize_graph_candidates_v2
+    from apps.knowledge_graph.retrieval.ready_materialization_v2 import (
+        materialize_graph_candidates_v2,
+    )
     case = prepared(monkeypatch)
     with frame(case) as active:
         refs = (candidate(active, active.refs[0]), candidate(active, bad_provenance(active.refs[1])))
@@ -155,13 +176,12 @@ def test_committed_late_authority_change_discards_every_provisional_selection(mo
     from apps.collections.models import CollectionPermission
     from apps.knowledge_graph.projection import django_projection_topology as topology
     case = prepared(monkeypatch, 2, vocabulary=change == "vocabulary")
-    original_mentions, original_first = topology.load_entity_mentions, QuerySet.first
+    original_mentions = topology.load_entity_mentions
     fetched, writers = [], []
     with connection.cursor() as cursor:
         cursor.execute("SELECT pg_backend_pid()")
         reader_pid = cursor.fetchone()[0]
-    def first(queryset):
-        row = original_first(queryset)
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None:
             fetched.append(row.pk)
         return row
@@ -173,7 +193,7 @@ def test_committed_late_authority_change_discards_every_provisional_selection(mo
                 writers.append(pool.submit(commit_change, case, change).result(timeout=10))
         return result
     with frame(case, requested=frozenset({case.f.documents["A"].id})) as active:
-        monkeypatch.setattr(QuerySet, "first", first)
+        install_body_hook(monkeypatch, first)
         monkeypatch.setattr(topology, "load_entity_mentions", mentions)
         try:
             rows = hydrate(active)
@@ -217,6 +237,7 @@ def test_invalid_envelope_beyond_prefix_still_rejects_before_bodies(monkeypatch,
 @pytest.mark.parametrize("closed", ["budget", "operation"])
 def test_late_closed_lifetime_cannot_publish_selection_or_fingerprints(monkeypatch, closed):
     from asyncio import CancelledError
+
     from apps.documents.services.source_loading import SourcePreparationLimited
     from apps.knowledge_graph.projection import django_projection_topology as topology
     case = prepared(monkeypatch, 2)
@@ -245,9 +266,8 @@ def test_late_closed_lifetime_cannot_publish_selection_or_fingerprints(monkeypat
 
 def test_crossed_private_pk_never_reads_selected_but_nonrequested_body(monkeypatch):
     case = prepared(monkeypatch, 2)
-    fetched, original = [], QuerySet.first
-    def first(queryset):
-        row = original(queryset)
+    fetched = []
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None:
             fetched.append((row.pk, row.doc_id))
         return row
@@ -255,7 +275,7 @@ def test_crossed_private_pk_never_reads_selected_but_nonrequested_body(monkeypat
         # The initial private-map filter still sees requested A; the physical PK is B.
         assert ProjectionChunkReference.objects.filter(chunk=case.chunks[1]).update(
             integer_chunk_pk=case.f.chunks["B"].pk) == 1
-        monkeypatch.setattr(QuerySet, "first", first)
+        install_body_hook(monkeypatch, first)
         rows = hydrate(active, (active.refs[1], active.refs[0]))
         assert_text(rows, ("A00",))
         assert fetched == [(case.chunks[0].pk, case.f.documents["A"].id)]

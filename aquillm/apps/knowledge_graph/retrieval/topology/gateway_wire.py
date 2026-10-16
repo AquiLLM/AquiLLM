@@ -28,10 +28,14 @@ def _single_header(scope: dict[str, Any], name: bytes) -> bytes | None:
 
 
 def _response_headers(
-    body: bytes, *, version=SCHEMA_VERSION, checksum=SCHEMA_CHECKSUM
+    body: bytes,
+    *,
+    version=SCHEMA_VERSION,
+    checksum=SCHEMA_CHECKSUM,
+    content_type=b"application/json",
 ) -> list[tuple[bytes, bytes]]:
     return [
-        (b"content-type", b"application/json"),
+        (b"content-type", content_type),
         (b"content-length", str(len(body)).encode()),
         (b"x-topology-schema-version", version.encode()),
         (b"x-topology-schema-checksum", checksum.encode()),
@@ -45,12 +49,15 @@ async def _respond(
     *,
     version=SCHEMA_VERSION,
     checksum=SCHEMA_CHECKSUM,
+    content_type=b"application/json",
 ) -> None:
     await send(
         {
             "type": "http.response.start",
             "status": status,
-            "headers": _response_headers(body, version=version, checksum=checksum),
+            "headers": _response_headers(
+                body, version=version, checksum=checksum, content_type=content_type
+            ),
         }
     )
     await send({"type": "http.response.body", "body": body})

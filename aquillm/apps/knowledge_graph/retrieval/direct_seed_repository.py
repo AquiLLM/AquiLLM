@@ -94,6 +94,11 @@ class DirectSeedRepository:
         if tuple(sorted(row["collection_id"] for row in states)) != self._scope.selected_collection_ids or tuple(sorted(actual)) != self._scope.selected_artifact_ids or len(actual) != len(states) or actual != expected:
             raise ValueError("current membership state does not match ready projection")
         return states
+    def _candidate_rows_for_match(self, *, ready, **options):
+        membership_states = self._current_membership_states(ready)
+        check_seed_deadline(self._deadline, clock=self._clock)
+        return self._row_loader(membership_states=membership_states, **options)
+
     def _matches(
         self,
         *,
@@ -119,9 +124,8 @@ class DirectSeedRepository:
             ),
         }.get(tier, "")
         # fmt: off
-        membership_states = self._current_membership_states(ready)
-        check_seed_deadline(self._deadline, clock=self._clock)
-        rows = self._row_loader(
+        rows = self._candidate_rows_for_match(
+            ready=ready,
             deadline=self._deadline,
             clock=self._clock,
             tier=tier,
@@ -131,7 +135,6 @@ class DirectSeedRepository:
             model_signature=model_signature,
             minimum_similarity=minimum_similarity,
             ontology_type=span.ontology_type,
-            membership_states=membership_states,
             automatic_only=True,
             scope=self._scope,
             using=self._using,
@@ -206,3 +209,8 @@ class DirectSeedRepository:
 
 __all__ = ["DirectSeedCandidateRow", "DirectSeedRepository", "DirectSeedScopeV1", "repository_predicates"]
 # fmt: on
+
+_NATIVE_DIRECT_REPOSITORY = DirectSeedRepository
+_NATIVE_DIRECT_METHODS = tuple((n, getattr(DirectSeedRepository, n)) for n in ("__init__", "_current_membership_states", "_candidate_rows_for_match", "_matches", "exact_identifier_matches", "canonical_name_matches", "indexed_alias_matches", "embedding_matches"))
+
+_NATIVE_METADATA_DEPENDENCIES = (_load_candidate_rows, _load_membership_states, check_seed_deadline, normalize_entity_label, parse_stable_identifier)

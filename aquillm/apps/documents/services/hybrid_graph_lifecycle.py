@@ -26,11 +26,15 @@ def start_graph(query, authorization, dependencies, enabled):
     from apps.knowledge_graph.retrieval.scheduler import HybridGraphBranchScheduler
 
     try:
+        from .hybrid_graph_deadline import captured_graph_bound, graph_rerank_reserve_ms
+        bound = captured_graph_bound()
         return HybridGraphBranchScheduler(dependencies.runtime).start(
             query=query,
             authorization=authorization,
             settings=settings,
             deadline=perf_counter() + timeout / 1000,
+            caller_bound=bound,
+            downstream_reserve_ms=graph_rerank_reserve_ms() if bound is not None else 0,
         )
     except Exception:
         return None

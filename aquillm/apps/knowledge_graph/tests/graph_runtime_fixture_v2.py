@@ -122,10 +122,14 @@ def persisted_runtime(monkeypatch, *, dataset=False):
     runtime._direct_seeds = seeds
 
     def loader(**kwargs):
+        policy = kwargs.get("acquisition_policy")
+        from apps.knowledge_graph.retrieval.frontier_ranking_validation_v2 import POLICY
+        policy = POLICY if policy is None else policy
         return canonical_frontier_loader_v2(
             selection=kwargs["selection"],
             codec=kwargs["codec"],
-            adapter=Neo4jCanonicalFrontierAdapterV2(driver),
+            adapter=Neo4jCanonicalFrontierAdapterV2(driver, acquisition_policy=policy),
+            acquisition_policy=policy,
         )
 
     monkeypatch.setattr(graph, "create_canonical_frontier_loader_v2", loader)

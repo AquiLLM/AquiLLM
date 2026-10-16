@@ -135,6 +135,23 @@ def revalidate_retrieval_authorization_context(
 ) -> CurrentAuthorizedScopeV1:
     """Return current permission intersected with the immutable selected scope."""
 
+    read_budget = _validate_reauthorization_context(context, read_budget)
+    capability = context.reauthorization_capability
+    rows = current_selected_rows(
+        principal=capability._principal,
+        policy=capability._policy,
+        database_alias=context.database_alias,
+        selected_collection_ids=context.selected_collection_ids,
+        selected_document_ids=context.selected_document_ids,
+        read_budget=read_budget,
+    )
+    return _intersect(
+        rows, context.selected_collection_ids, context.selected_document_ids
+    )
+
+
+def _validate_reauthorization_context(context, read_budget=None):
+    """Shared immutable-context checks; this grants no current permission."""
     if type(context) is not RetrievalAuthorizationContext:
         raise TypeError("context must be an exact RetrievalAuthorizationContext")
     read_budget = resolve_read_budget(context, read_budget)
@@ -152,17 +169,7 @@ def revalidate_retrieval_authorization_context(
     version, checksum = _policy_signature(capability._policy)
     if (version, checksum) != (context.policy_version, context.policy_checksum):
         raise ValueError("permission policy signature changed")
-    rows = current_selected_rows(
-        principal=capability._principal,
-        policy=capability._policy,
-        database_alias=context.database_alias,
-        selected_collection_ids=context.selected_collection_ids,
-        selected_document_ids=context.selected_document_ids,
-        read_budget=read_budget,
-    )
-    return _intersect(
-        rows, context.selected_collection_ids, context.selected_document_ids
-    )
+    return read_budget
 
 
 __all__ = [

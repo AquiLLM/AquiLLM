@@ -1,4 +1,5 @@
 from __future__ import annotations
+from apps.knowledge_graph.retrieval.native_seed_metadata_layout import layout as _metadata_layout
 
 import json
 import re
@@ -27,7 +28,6 @@ _RESNAPSHOT_FINAL_ERROR_CODES = frozenset(
     {"resnapshot_churn", "scope_deleted", "scope_ineligible", "representation_changed"}
 )
 
-
 def graph_identity_checksum(namespace: object, value: object) -> str:
     """Hash a version-only identity when no richer immutable policy exists."""
 
@@ -41,7 +41,6 @@ def graph_identity_checksum(namespace: object, value: object) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return sha256(payload).hexdigest()
-
 
 def _activation_audit_values(artifact: object, run: object) -> dict[str, object]:
     """Freeze one exact terminal occurrence before its graph rows may be removed."""
@@ -126,7 +125,6 @@ def _activation_audit_values(artifact: object, run: object) -> dict[str, object]
         "activated_source_hash": getattr(artifact, "source_hash", ""),
         "activated_occurrence_signature": signature,
     }
-
 
 ASSEMBLY_NOT_APPLICABLE_VERSION = "not-applicable"
 ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM = graph_identity_checksum(
@@ -2360,3 +2358,5 @@ class GraphRebuildRequest(ValidatedGraphModel):
                     for field in sorted(mismatched_audit)
                 }
             )
+
+_NATIVE_METADATA_LAYOUTS = tuple(_metadata_layout(m) for m in (GraphArtifact,))

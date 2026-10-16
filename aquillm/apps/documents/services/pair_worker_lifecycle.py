@@ -1,18 +1,18 @@
 """Default-off ASGI worker capability renewal; no request-time warm inference."""
 
 import asyncio
-import json
+import json  # noqa: F401 - attestation module uses the historical patch hooks
 import os
 import threading
-from pathlib import Path
-from time import monotonic, time
+from pathlib import Path  # noqa: F401
+from time import monotonic, time  # noqa: F401
 
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 from . import chunk_rerank_config as config
 from .chunk_rerank_pair_capability import (
-    _valid_identity,
-    initialize_worker_pair_capability,
+    _prepare_worker_pair_capability,
+    _valid_identity,  # noqa: F401
     invalidate_pair_capability,
     registered_pair_counter,
 )
@@ -62,7 +62,7 @@ class PairCapabilityController:
         self,
         *,
         load=load_attested_attempt,
-        initialize=initialize_worker_pair_capability,
+        initialize=_prepare_worker_pair_capability,
         timeout=15,
     ):
         self.load, self.initialize = load, initialize
@@ -71,24 +71,37 @@ class PairCapabilityController:
         self.generation = 0
         self.stopping = False
         self.protocol_binding = None
+        self._lock = threading.RLock()
+        self._counter_revocation = None
 
     def invalidate(self):
-        self.generation += 1
-        if self.budget:
-            self.budget.close("worker_invalidated")
+        with self._lock:
+            self.generation += 1
+            if self.budget:
+                self.budget.close("worker_invalidated")
+            self._revoke()
+
+    def _revoke(self):
+        if self._counter_revocation is not None:
+            self._counter_revocation.set()
+            self._counter_revocation = None
         invalidate_pair_capability()
         if self.protocol_binding is not None:
-            from .rerank_transport_policy import revoke_rerank_protocol
+            from .pair_worker_refresh import revoke_local_protocol
 
             base, binding = self.protocol_binding
-            revoke_rerank_protocol(base, binding)
+            revoke_local_protocol(base, binding)
             self.protocol_binding = None
 
     async def attempt(self):
-        self.invalidate()
         if self.stopping or (self.thread and self.thread.is_alive()):
+            self.invalidate()
             return None
-        generation = self.generation
+        with self._lock:
+            self.generation += 1
+            generation = self.generation
+            if self.budget:
+                self.budget.close("worker_refresh")
         self.budget = budget = TurnBudget(
             TurnLimits(
                 acquisition_pairs=3,
@@ -102,49 +115,11 @@ class PairCapabilityController:
 
         def work():
             try:
-                args = self.load()
-                if args and budget.can_publish():
-                    expiry = args.pop("attestation_expires", time() + 300)
-                    with budget._lock:
-                        budget._deadline = min(
-                            budget._deadline, monotonic() + max(0, expiry - time())
-                        )
-                    self.identity = args.get("identity")
-                    counter = self.initialize(**args, budget=budget)
-                    if (
-                        counter
-                        and generation == self.generation
-                        and budget.can_publish()
-                    ):
-                        # Never outlive the independent deployment proof.
-                        object.__setattr__(
-                            counter,
-                            "expires",
-                            min(counter.expires, monotonic() + max(0, expiry - time())),
-                        )
-                        result.append(counter)
-                        provider = args.get("provider")
-                        if provider is not None and counter.expires > monotonic():
-                            from .rerank_transport_policy import (
-                                RerankProtocolV1,
-                                register_rerank_protocol,
-                            )
+                from .pair_worker_refresh import prepare_attempt
 
-                            now = time()
-                            binding = RerankProtocolV1(
-                                provider.endpoint,
-                                provider.shape,
-                                provider.model_name,
-                                now,
-                                min(expiry, now + counter.expires - monotonic()),
-                            )
-                            base = config.rerank_base_url()
-
-                            def bind_protocol():
-                                register_rerank_protocol(base, binding)
-                                self.protocol_binding = (base, binding)
-
-                            budget.publish(bind_protocol)
+                counter = prepare_attempt(self, budget, generation)
+                if counter is not None:
+                    result.append(counter)
             except Exception:
                 # Unknown capability is the specified outcome of warm failure.
                 pass
@@ -258,5 +233,6 @@ def protocol_warm_enabled():
 
 
 # Keep one controller class and the existing public import/patch path.
-from .pair_worker_protocol import RerankProtocolController
+from .pair_worker_protocol import RerankProtocolController  # noqa: E402
+
 RerankProtocolController.__module__ = __name__

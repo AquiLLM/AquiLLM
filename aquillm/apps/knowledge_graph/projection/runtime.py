@@ -20,8 +20,10 @@ from .state_repository import FunctionProjectionStateRepository
 _PROJECTION_SETTING_NAMES = frozenset(
     (
         "KG_GRAPH_OVERALL_TIMEOUT_MS",
+        "KG_GRAPH_REMEDIATION_MODE",
         "KG_MEMGRAPH_DATABASE",
         "KG_MEMGRAPH_PROJECTION_ENABLED",
+        "KG_MEMBERSHIP_CERTIFICATE_ENABLED",
         "KG_MEMGRAPH_PROJECTION_PASSWORD",
         "KG_MEMGRAPH_PROJECTION_USERNAME",
         "KG_MEMGRAPH_URI",
@@ -33,6 +35,7 @@ _PROJECTION_SETTING_NAMES = frozenset(
         "KG_PROJECTION_MAX_ATTEMPTS",
         "KG_PROJECTION_MAX_LAG_SECONDS",
         "KG_PROJECTION_TIMEOUT_MS",
+        "KG_PROJECTION_JOB_TIMEOUT_MS",
         "KG_PROJECTION_POSTGRES_SOURCE_DSN",
         "KG_PROJECTION_POSTGRES_STATE_DSN",
         "KG_PROJECTION_QUEUE",
@@ -45,9 +48,7 @@ _PROJECTION_SETTING_NAMES = frozenset(
 def _projection_hook_enabled(source: Mapping[str, str]) -> bool:
     value = source.get("KG_MEMGRAPH_PROJECTION_HOOK_ENABLED", "0")
     if value not in {"0", "1"}:
-        raise ValueError(
-            "KG_MEMGRAPH_PROJECTION_HOOK_ENABLED must be exactly 0 or 1"
-        )
+        raise ValueError("KG_MEMGRAPH_PROJECTION_HOOK_ENABLED must be exactly 0 or 1")
     return value == "1"
 
 
@@ -92,6 +93,8 @@ def memgraph_projection_repository(
         settings.memgraph_projection_password.get_secret_value(),
         database=settings.memgraph_database,
         max_transaction_retry_time=0.0,
+        connection_timeout=min(settings.projection_timeout_ms, 5000) / 1000,
+        connection_acquisition_timeout=min(settings.projection_timeout_ms, 5000) / 1000,
     )
     return MemgraphProjectionRepository(driver)
 
@@ -177,9 +180,7 @@ def enqueue_activated_collection_projection(
             try:
                 from .tasks import reconcile_knowledge_graph_projections
 
-                reconcile_knowledge_graph_projections.delay(
-                    collection_id=collection_id
-                )
+                reconcile_knowledge_graph_projections.delay(collection_id=collection_id)
             except Exception:
                 # The durable outbox remains pending for a later reconciliation.
                 return

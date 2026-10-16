@@ -15,6 +15,7 @@ sys.path.insert(0, str(ROOT / "aquillm"))
 from apps.chat.evals.replay_controls import (  # noqa: E402
     MODE_CHOICES,
     MODE_DEFAULTS,
+    effective_schedule_config,
     validate_modes,
 )
 from apps.chat.evals.retrieval_replay import (  # noqa: E402
@@ -150,6 +151,7 @@ def effective_config(settings, config):
     from lib.retrieval.turn_budget import TurnLimits
 
     return {
+        **effective_schedule_config(),
         "vector_cap": config.vector_top_k,
         "trigram_cap": config.trigram_top_k,
         "candidate_multiplier": getattr(settings, "RAG_CANDIDATE_MULTIPLIER", 3.0),
@@ -171,7 +173,8 @@ def effective_config(settings, config):
         "token_budget": rag_config.evidence_token_budget(),
         "proposal_controls": configured_proposal_controls(),
         "turn_limits": asdict(
-            TurnLimits(actions=min(3, rag_config.direct_rag_max_queries()))
+            TurnLimits(actions=min(3, rag_config.direct_rag_max_queries()),
+                       retrieval_ms=rag_config.retrieval_timeout_ms())
         ),
     }
 

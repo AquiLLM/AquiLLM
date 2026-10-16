@@ -22,6 +22,20 @@ TAGS = (
     "frontier_seed_v2",
 )
 POLICY = "global-priority-quality-keyset-v2/nonexhaustive/authorized-transit"
+CONSUMED_POLICY = (
+    "global-priority-quality-keyset-v3/nonexhaustive/authorized-transit/"
+    "consumed-source-closure"
+)
+CONSUMED_TAGS = (
+    "canonical_frontier_v3", "frontier_transition_v2",
+    "frontier_evidence_v3", "frontier_seed_v2",
+)
+
+
+def frontier_tags(policy):
+    if type(policy) is not str or policy not in (POLICY, CONSUMED_POLICY):
+        raise ValueError("frontier acquisition policy differs")
+    return CONSUMED_TAGS if policy == CONSUMED_POLICY else TAGS
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,8 +62,7 @@ class FrontierRankingContextV2:
             value = getattr(self, name)
             if type(value) is not int or not 0 <= value <= maximum:
                 raise ValueError("frontier context cap is invalid")
-        if self.acquisition_policy != POLICY:
-            raise ValueError("frontier acquisition policy differs")
+        frontier_tags(self.acquisition_policy)
 
 
 def frontier_algorithm(config, request, context):
@@ -61,15 +74,16 @@ def frontier_algorithm(config, request, context):
     if type(context) is not FrontierRankingContextV2:
         raise TypeError("frontier signature requires its captured context")
     context.__post_init__()
+    tags = frontier_tags(context.acquisition_policy)
     signature = digest(
         {
-            "tags": TAGS,
+            "tags": tags,
             "config": canonical_algorithm_json(config).decode(),
             "request": asdict(request),
             "context": asdict(context),
         }
     )
-    return ProjectedAlgorithmSignatureV1(*TAGS, signature)
+    return ProjectedAlgorithmSignatureV1(*tags, signature)
 
 
 def validate_frontier_ranking(*, snapshot, seeds, request, config, context):

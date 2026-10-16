@@ -124,7 +124,9 @@ def rank_relations_v2(
     # Reuse the exact original caps, algorithm and admitted-seed validation.
     if (
         type(snapshot) is ProjectedAuthorizedGraphSnapshotV1
-        and snapshot.algorithm.algorithm_version == "canonical_frontier_v2"
+        and snapshot.algorithm.algorithm_version in (
+            "canonical_frontier_v2", "canonical_frontier_v3"
+        )
     ):
         from .frontier_ranking_validation_v2 import validate_frontier_ranking
 

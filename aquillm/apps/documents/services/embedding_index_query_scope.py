@@ -62,9 +62,11 @@ def _authorized_runtime(snapshot, budget, using, *, runtime):
     current = revalidate_retrieval_authorization_context(context=runtime.authorization)
     if not budget.can_publish():
         raise SourcePreparationLimited("source deadline")
+    document_ids = frozenset(current.document_ids)
+    collection_ids = frozenset(current.collection_ids)
     if any(
-        s.document.id not in current.document_ids
-        or s.document.collection_id not in current.collection_ids
+        s.document.id not in document_ids
+        or s.document.collection_id not in collection_ids
         for s in ordered_selections(snapshot)
     ):
         raise SourceScopeUnavailable("source_scope_unavailable")

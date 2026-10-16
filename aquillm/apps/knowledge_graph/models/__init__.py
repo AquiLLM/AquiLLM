@@ -24,6 +24,7 @@ from .inputs import (
     document_membership_signature,
 )
 from .ontology import OntologyVersion
+from .membership_certificates import CollectionGraphMembershipCertificate
 from .projections import (
     CollectionGraphMembershipState,
     CollectionGraphProjection,
@@ -44,6 +45,7 @@ __all__ = [
     "CollectionRelation",
     "CollectionRelationEvidence",
     "CollectionGraphMembershipState",
+    "CollectionGraphMembershipCertificate",
     "CollectionGraphProjection",
     "ASSEMBLY_NOT_APPLICABLE_CONFIG_CHECKSUM",
     "ASSEMBLY_NOT_APPLICABLE_VERSION",

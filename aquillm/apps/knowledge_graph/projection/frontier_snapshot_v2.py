@@ -5,7 +5,7 @@ from struct import unpack
 
 from apps.knowledge_graph.retrieval import projected_types as t
 from apps.knowledge_graph.retrieval.frontier_ranking_validation_v2 import (
-    frontier_algorithm,
+    CONSUMED_POLICY, frontier_algorithm,
 )
 from apps.knowledge_graph.retrieval.ppr import PPRAlgorithmConfig
 from apps.knowledge_graph.retrieval.projected_snapshot_codec import audit_order
@@ -41,6 +41,7 @@ class FrontierAssemblyV2:
             {},
         )
         self.physical, self.evidence = {}, {}
+        self.provenance = {}
         self.evidence_refs = FrontierEvidenceV2(
             binding,
             context.group_checksum,
@@ -49,6 +50,21 @@ class FrontierAssemblyV2:
             ).max_evidence_rows,
         )
         self.candidates = self.evidence_refs.chunks
+
+    def _page_provenance(self, page):
+        if getattr(self.context, "acquisition_policy", None) != CONSUMED_POLICY:
+            return {}
+        retained = {
+            r.scope_key: r for rows in self.session.scope_rows.values()
+            for (label, _), r in rows.items() if label == "ArtifactProvenance"
+        }
+        retained.update(self.provenance)
+        pending = {}
+        for row in page.provenance:
+            if (pending.setdefault(row.scope_key, row) != row
+                    or retained.get(row.scope_key, row) != row):
+                raise ValueError("conflicting admitted document provenance")
+        return pending
 
     def add_copy(self, identity, hop, rows):
         members = [
@@ -80,6 +96,7 @@ class FrontierAssemblyV2:
         quality = unpack(
             ">d", bytes(255 - b for b in bytes.fromhex(entry["order"][0]))
         )[0]
+        provenance_rows = self._page_provenance(page)
         self.evidence_refs.add_page(
             page,
             generation=generation,
@@ -87,6 +104,7 @@ class FrontierAssemblyV2:
             origin=origin,
             entry=entry,
         )
+        self.provenance.update(provenance_rows)
         self.hops.setdefault(target, hop + 1)
         self.members.update(memberships)
         current = self.groups.get(key)
@@ -101,9 +119,11 @@ class FrontierAssemblyV2:
         return True
 
     def add_mention(self, page, generation, identity):
+        provenance_rows = self._page_provenance(page)
         self.evidence_refs.add_page(
             page, generation=generation, ready=self.session.ready, origin=identity
         )
+        self.provenance.update(provenance_rows)
         for row in page.mention_evidence:
             self.mentions[generation, row.mention_key] = (identity, row)
 
@@ -198,6 +218,16 @@ class FrontierAssemblyV2:
             for key, row in rows.items()
             if key[0] == "ArtifactProvenance"
         }
+        for row in self.provenance.values():
+            scope_rows["ArtifactProvenance", row.scope_key] = row
+        if getattr(self.context, "acquisition_policy", None) == CONSUMED_POLICY:
+            for signature, _, _ in self.candidates.values():
+                generation, _, document, _ = signature
+                source = scope_rows.get(("ArtifactProvenance", document))
+                if (source is None or source.scope_type != "document"
+                        or source.collection_key
+                        != self.session.selected[generation].collection_key):
+                    raise ValueError("candidate document provenance closure is broken")
         snapshot = t.ProjectedAuthorizedGraphSnapshotV1(
             frontier_algorithm(config, request, self.context),
             snapshot_caps,

@@ -3,7 +3,6 @@
 from dataclasses import replace
 
 import pytest
-from django.db.models.query import QuerySet
 
 from apps.documents.models import TextChunk
 from apps.documents.services import chunk_search_scoped_rows as materialization
@@ -14,6 +13,7 @@ from apps.documents.tests.test_source_metadata_closed_operation import captured
 from lib.embeddings.tests.test_document_provider import transport as transport
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
+from .source_body_test_hooks import install_body_hook
 from .test_scoped_source_consolidation import assert_unpublished, revoke
 
 pytestmark = pytest.mark.django_db(transaction=True)
@@ -54,16 +54,15 @@ def test_budget_replacement_cannot_move_charges_to_a_new_ledger(
 ):
     _, scope, query, expected = captured(2, "none", transport, monkeypatch, settings)
     original, replacement = scope.runtime.budget, TurnBudget(TurnLimits())
-    real_first, fetched = QuerySet.first, []
+    fetched = []
 
-    def first(queryset):
-        row = real_first(queryset)
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None:
             fetched.append(row.pk)
             scope.runtime.budget = replacement
         return row
 
-    monkeypatch.setattr(QuerySet, "first", first)
+    install_body_hook(monkeypatch, first)
     try:
         with source_runtime_scope(scope.runtime):
             with pytest.raises(SourceScopeUnavailable):
@@ -85,16 +84,15 @@ def test_reentrant_publication_cannot_be_overwritten_by_outer_operation(
     transport, monkeypatch, settings
 ):
     _, scope, query, expected = captured(1, "none", transport, monkeypatch, settings)
-    real_first, inner = QuerySet.first, []
+    inner = []
 
-    def first(queryset):
-        row = real_first(queryset)
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None and not inner:
             inner.append(None)
             inner[0] = materialization.scoped_rows(query, scope, lexical=True)
         return row
 
-    monkeypatch.setattr(QuerySet, "first", first)
+    install_body_hook(monkeypatch, first)
     try:
         with source_runtime_scope(scope.runtime):
             with pytest.raises(SourceScopeUnavailable):

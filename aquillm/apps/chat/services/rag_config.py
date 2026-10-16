@@ -43,6 +43,11 @@ def direct_rag_max_queries() -> int:
     return min(3, _env_int("RAG_DIRECT_MAX_QUERIES", 3, minimum=1))
 
 
+def retrieval_timeout_ms() -> int:
+    """Opt-in time allowance; source, query and scoring work caps stay fixed."""
+    return min(30_000, _env_int("RAG_RETRIEVAL_TIMEOUT_MS", 15_000, minimum=3_000))
+
+
 def evidence_token_budget() -> int:
     return _env_int("RAG_EVIDENCE_TOKEN_BUDGET", 3500, minimum=256)
 
@@ -136,6 +141,7 @@ __all__ = [
     "max_snippets_per_doc",
     "query_rewrite_enabled",
     "rag_preservation_config",
+    "retrieval_timeout_ms",
     "synthesis_max_tokens",
     "tool_default_top_k",
 ]

@@ -40,6 +40,20 @@ def group_request(*, query, group, authorization, read_budget=None):
     )
 
 
+def _group_request_native(*, owner, query, group, authorization, read_budget):
+    from .native_query_ontology import load_native_ontology
+
+    metadata = owner._native_metadata.bind(group=group, budget=read_budget, authorization=authorization)
+    outcome = load_native_ontology(metadata, group=group)
+    ontology = outcome.ontology
+    if ontology is None or ontology.checksum != group.ontology_checksum:
+        raise ValueError("captured group has no exact approved ontology")
+    result = parse_relation_request_v2(query, ontology_checksum=ontology.checksum,
+        allowed_relations=frozenset(ontology.relations))
+    metadata.check()
+    return result
+
+
 def group_seeds(
     *,
     runtime,
@@ -51,13 +65,17 @@ def group_seeds(
     caps,
     deadline,
     frontier,
+    seed_validation=None,
 ):
     values, reasons = [], set()
     if settings.graph_direct_enabled:
         try:
-            direct = runtime._direct_seeds(
+            from .native_direct_seed_repository import _prepare_direct_native
+            native = seed_validation is not None and seed_validation._native_metadata is not None
+            direct = (_prepare_direct_native if native else runtime._direct_seeds)(
+                **({"runtime": runtime, "owner": seed_validation, "group": group} if native else {}),
                 query=query,
-                scope=group.scope,
+                **({} if native else {"scope": group.scope}),
                 deadline=deadline,
                 read_budget=frontier,
             )
@@ -75,7 +93,10 @@ def group_seeds(
             local = copy(runtime)
             local._shared = ProductionSharedScopeV1(group.scope)
             try:
-                extended = prepare_extended_branch(
+                from .production_extended import _prepare_extended_branch
+
+                prepare = prepare_extended_branch if seed_validation is None else _prepare_extended_branch
+                extended = prepare(
                     local,
                     baseline=baseline,
                     shared=local._shared,
@@ -83,6 +104,8 @@ def group_seeds(
                     settings=settings,
                     deadline=deadline,
                     read_budget=frontier,
+                    **({"seed_validation": seed_validation, "query": "", "with_policy": False}
+                       if seed_validation is not None else {}),
                 )
             except LocalBranchSchedulerFailure as error:
                 reasons.add(failure_reason(error))
@@ -104,3 +127,5 @@ def group_seeds(
     keys = ordered[: caps.max_seeds]
     total = fsum(masses[k] for k in keys)
     return tuple(ProjectedSeedV1(k, masses[k] / total) for k in sorted(keys)), reasons
+
+_NATIVE_GROUP_REQUEST = group_request

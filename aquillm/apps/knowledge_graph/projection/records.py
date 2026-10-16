@@ -276,3 +276,13 @@ class CollectionGraphProjectionBundleV1:
 
     def __post_init__(self) -> None:
         validate_bundle(self)
+
+
+_NATIVE_MEMBERSHIP_BINDING = {
+    **{name: globals()[name] for name in (
+        "AutomaticCanonicalMembershipV1", "_ValidatedRecord", "_key", "_token",
+        "_count", "fields", "NULLABLE_RECORD_FIELDS")},
+    **{"AutomaticCanonicalMembershipV1." + name: getattr(AutomaticCanonicalMembershipV1, name)
+       for name in ("__init__", "__post_init__", "__getattribute__", "__new__",
+                    *AutomaticCanonicalMembershipV1.__dataclass_fields__)},
+}

@@ -74,11 +74,15 @@ def test_alias_query_binds_scope_provenance_and_text_to_one_join(monkeypatch) ->
     monkeypatch.setattr(direct_seed_queries, "bounded_seed_read", lambda **_: nullcontext())
     from django.db import models
 
-    from apps.knowledge_graph.models import CanonicalEntityLink, CollectionEntity
+    from apps.knowledge_graph.models import (
+        CanonicalEntityLink,
+        CollectionEntity,
+        CollectionEntityDocumentLink,
+    )
 
     ready = _ready()
-    query, automatic = MagicMock(), MagicMock()
-    for chain in (query, automatic):
+    query, automatic, witness = MagicMock(), MagicMock(), MagicMock()
+    for chain in (query, automatic, witness):
         chain.using.return_value = chain
         chain.filter.return_value = chain
         chain.annotate.return_value = chain
@@ -86,23 +90,32 @@ def test_alias_query_binds_scope_provenance_and_text_to_one_join(monkeypatch) ->
         chain.order_by.return_value = chain
         chain.values.return_value = chain
     automatic.__getitem__.return_value = automatic
-    required = {"document_links__manifest_input__document_id__in", "document_links__document_entity__mention_links__mention__normalized_text"}
+    required = {
+        "manifest_input__document_id__in",
+        "document_entity__mention_links__mention__normalized_text",
+        "document_entity__mention_links__resolver_version",
+        "manifest_input__artifact_id",
+        "manifest_input__collection_id",
+    }
     slices = []
     def candidate_rows(result_slice):
         slices.append(result_slice.stop)
         row = {"id": 7, "artifact_id": 11, "entity_type": "paper", "automatic_canonical_entity_id": None, "similarity": 1.0}
-        return [row] * 5 if any(required <= set(call.kwargs) for call in query.filter.call_args_list) else []
+        return [row] * 5
     query.__getitem__.side_effect = candidate_rows
     monkeypatch.setattr(CanonicalEntityLink, "objects", automatic)
     monkeypatch.setattr(CollectionEntity, "objects", query)
+    monkeypatch.setattr(CollectionEntityDocumentLink, "objects", witness)
     monkeypatch.setattr(models, "Subquery", lambda value: value)
+    monkeypatch.setattr(models, "Exists", lambda value: value)
 
     with pytest.raises(ValueError, match="candidate"):
         direct_seed_repository._load_candidate_rows(tier=DirectResolutionTier.ALIAS, lookup="doi:10.1234/x", lookup_field="document_links__document_entity__mention_links__mention__normalized_text", embedding=None, model_signature="", ontology_type="paper", membership_states=_membership_state(ready), automatic_only=True, scope=_scope(ready), using="default", limit=4)
 
     assert slices == [5]
     assert automatic.values.call_args.args == ("canonical_entity_id",)
-    assert any(required <= set(call.kwargs) for call in query.filter.call_args_list)
+    assert any(required <= set(call.kwargs) for call in witness.filter.call_args_list)
+    assert all(not any(key.startswith("document_links__") for key in call.kwargs) for call in query.filter.call_args_list)
 
 
 
@@ -168,7 +181,8 @@ def test_stale_current_membership_rejects_mapping_before_candidate_query(
 
 
 def test_repository_deduplicates_entities_before_applying_the_result_cap() -> None:
-    source = inspect.getsource(direct_seed_repository._load_candidate_rows)
+    from apps.knowledge_graph.retrieval.direct_seed_queryset import _candidate_queryset
+    source = inspect.getsource(_candidate_queryset)
     assert source.index(".distinct()") < source.index('[: int(options["limit"]) + 1]')
 
 

@@ -137,3 +137,86 @@ def test_runtime_rejects_shadow_in_production(monkeypatch):
             settings=settings,
             deadline=f.deadline,
         )
+
+
+@pytest.mark.parametrize(
+    "failure,expected",
+    [
+        ("physical", "frontier_budget"),
+        ("uncertain", "frontier_budget"),
+        ("completed_response", "frontier_budget"),
+        ("completed_window", "frontier_budget"),
+        ("deadline", "deadline"),
+        ("timeout_subclass", "deadline"),
+        ("unknown", None),
+        ("cancelled", None),
+    ],
+)
+def test_hydration_failure_keeps_budget_and_deadline_reasons_distinct(
+    monkeypatch, failure, expected
+):
+    from asyncio import CancelledError
+
+    from apps.knowledge_graph.retrieval.topology.frontier_gateway_contracts_v2 import (
+        FrontierCompletedBudgetFailureV2,
+    )
+    from apps.knowledge_graph.retrieval.topology.frontier_window_contracts_v2 import (
+        CompletedWindowBudgetFailure,
+    )
+
+    class OtherTimeout(TimeoutError):
+        pass
+
+    m, f, runtime, settings, driver, _ = setup_runtime(monkeypatch)
+    now, frontiers = [runtime.clock()], []
+    runtime.clock = lambda: now[0]
+    factory = m.FrontierBudgetV2
+
+    def frontier(**kwargs):
+        value = factory(**kwargs)
+        frontiers.append(value)
+        return value
+
+    def hydrate(**kwargs):
+        value = frontiers[0]
+        assert value.source_rows > 0
+        if failure == "physical":
+            value.reserve_read(value.max_source_rows)
+        if failure == "uncertain":
+            value.stop_uncertain()
+            value.check_active()
+        if failure == "deadline":
+            now[0] = value.deadline
+            value.check_active()
+        raise {
+            "completed_response": FrontierCompletedBudgetFailureV2(1),
+            "completed_window": CompletedWindowBudgetFailure("a" * 64, 1, 1),
+            "timeout_subclass": OtherTimeout("other timeout"),
+            "unknown": RuntimeError("unknown failure"),
+            "cancelled": CancelledError(),
+        }[failure]
+
+    monkeypatch.setattr(m, "FrontierBudgetV2", frontier)
+    monkeypatch.setattr(
+        "apps.knowledge_graph.retrieval.graph_runtime_execution_v2.load_selection_inputs_v2",
+        hydrate,
+    )
+
+    def execute():
+        return m.run_graph_v2(
+            query="query", runtime=runtime, authorization=runtime.authorization,
+            representation_snapshot=f.selection.representation_snapshot,
+            budget=TurnBudget(TurnLimits(), clock=runtime.clock), settings=settings,
+            deadline=f.deadline,
+        )
+
+    if expected is None:
+        with pytest.raises(CancelledError if failure == "cancelled" else RuntimeError):
+            execute()
+    else:
+        result = execute()
+        assert result.handoff.candidates == ()
+        assert expected in result.handoff.coverage.reasons
+        if expected == "frontier_budget":
+            assert "deadline" not in result.handoff.coverage.reasons
+    assert frontiers[0].queries == len(driver.calls) <= 64

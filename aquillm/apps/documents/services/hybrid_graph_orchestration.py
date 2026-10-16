@@ -97,6 +97,10 @@ def hybrid_graph_candidate_pool(
     if not isfinite(deadline):
         return baseline, diagnostics("error")
     try:
+        from .hybrid_graph_deadline import captured_graph_bound, graph_rerank_reserve_ms
+        bound = captured_graph_bound()
+        if handle is not None and getattr(handle, "caller_bound", None) is not bound:
+            raise ValueError("graph caller operation identity changed")
         outcome = (
             handle.finish(baseline=snapshot, deadline=deadline)
             if handle is not None
@@ -107,6 +111,8 @@ def hybrid_graph_candidate_pool(
                 authorization=authorization,
                 settings=settings,
                 deadline=deadline,
+                caller_bound=bound,
+                downstream_reserve_ms=graph_rerank_reserve_ms() if bound is not None else 0,
             )
         )
     except Exception:

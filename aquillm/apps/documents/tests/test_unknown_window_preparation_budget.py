@@ -170,12 +170,12 @@ def test_lost_counter_discards_unscorable_prior_windows_but_keeps_original_sourc
         budget.close("mid_plan_loss_test_finished")
 
 
-def test_image_plan_stays_unknown_without_estimated_windows():
+def test_unknown_caption_counter_never_estimates_image_or_text_windows():
     budget = TurnBudget(TurnLimits())
     chunk = rows()[0]
     chunk.modality = "image"
     scorer = WindowSelectionScorer(
-        Scorer(), budget=budget, pair_counter=lambda q, d: len(q) + len(d) + 8
+        Scorer(), budget=budget, pair_counter=unknown_pair_count
     )
     try:
         plan = scorer.plan("q", chunk)

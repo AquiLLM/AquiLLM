@@ -5,6 +5,28 @@ from apps.documents.models import DocumentRepresentationGeneration, DocumentRepr
 from .representation_contracts import RepresentationSelectionV1, SourceScopeUnavailable
 
 
+def _sql_document_subset(selections, *, document_id=None, document_ids=None):
+    """Narrow SQL I/O only; the original full snapshot remains authoritative."""
+    from uuid import UUID
+
+    if document_id is not None:
+        if type(document_id) is not UUID:
+            raise SourceScopeUnavailable("source_scope_unavailable")
+        selections = tuple(s for s in selections if s.document.id == document_id)
+        if len(selections) != 1:
+            raise SourceScopeUnavailable("source_scope_unavailable")
+    if document_ids is not None:
+        if (
+            document_id is not None
+            or type(document_ids) is not frozenset
+            or any(type(value) is not UUID for value in document_ids)
+            or not document_ids <= {s.document.id for s in selections}
+        ):
+            raise SourceScopeUnavailable("source_scope_unavailable")
+        selections = tuple(s for s in selections if s.document.id in document_ids)
+    return selections
+
+
 def _states(ref, using):
     return DocumentRepresentationState.objects.using(using).filter(
         model_label=ref.model_label, document_pkid=ref.pkid, document_id=ref.id,

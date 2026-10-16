@@ -6,16 +6,13 @@ import hashlib
 import structlog
 import uuid
 from contextlib import nullcontext
-from typing import TYPE_CHECKING, List, Optional, Any
+from typing import List, Optional, Any
 
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.contenttypes.fields import GenericRelation
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import models, router, transaction
-
-if TYPE_CHECKING:
-    from .chunks import TextChunk
 
 logger = structlog.stdlib.get_logger(__name__)
 
@@ -37,6 +34,9 @@ def _get_document_types():
         MediaUploadDocument,
         DocumentFigure,
     ]
+
+
+_NATIVE_DOCUMENT_TYPES = _get_document_types
 
 
 # Type alias for any document subclass

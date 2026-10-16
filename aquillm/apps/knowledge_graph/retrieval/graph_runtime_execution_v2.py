@@ -2,6 +2,7 @@
 
 from apps.knowledge_graph.projection.frontier_snapshot_v2 import frontier_config
 
+from .frontier_ranking_validation_v2 import CONSUMED_POLICY, POLICY, frontier_tags
 from .graph_evidence_repository_v2 import load_selection_inputs_v2
 from .graph_evidence_selection_v2 import (
     GraphEvidenceSelectionEnvelopeV2,
@@ -42,6 +43,43 @@ def execute_graph_v2(
         representation_snapshot=representation_snapshot,
         requested_document_ids=requested_document_ids,
     )
+    return _execute_captured_graph_v2(
+        query=query,
+        runtime=runtime,
+        authorization=authorization,
+        representation_snapshot=representation_snapshot,
+        budget=budget,
+        settings=settings,
+        deadline=deadline,
+        baseline=baseline,
+        requested_document_ids=requested_document_ids,
+        caps=caps,
+        frontier=frontier,
+        selected=selected,
+        hydrate=load_selection_inputs_v2,
+    )
+
+
+def _execute_captured_graph_v2(
+    *,
+    query,
+    runtime,
+    authorization,
+    representation_snapshot,
+    budget,
+    settings,
+    deadline,
+    baseline,
+    requested_document_ids,
+    caps,
+    frontier,
+    selected,
+    hydrate,
+    seed_validation=None,
+    acquisition_policy=None,
+):
+    """Private eager core; native owner or public caller captures before entry."""
+    frontier.check_active()
     if (
         selected.representation_snapshot != representation_snapshot
         or selected.authorization_context_signature
@@ -49,12 +87,22 @@ def execute_graph_v2(
     ):
         raise ValueError("ready selector replaced original authority")
     requests = []
+    from .graph_runtime_seeds_v2 import _group_request_native
+    native = seed_validation is not None and seed_validation._native_metadata is not None
+    if native and seed_validation._native_metadata.selected is not selected:
+        raise ValueError("native metadata original selection changed")
+    expected_policy = CONSUMED_POLICY if native else POLICY
+    acquisition_policy = expected_policy if acquisition_policy is None else acquisition_policy
+    frontier_tags(acquisition_policy)
+    if acquisition_policy != expected_policy:
+        raise ValueError("frontier acquisition policy differs from native owner")
     for g in selected.groups:
         frontier.check_active()
         requests.append(
             GraphGroupRelationRequestV2(
                 g.group_checksum,
-                group_request(
+                (_group_request_native if native else group_request)(
+                    **({"owner": seed_validation} if native else {}),
                     query=query,
                     group=g,
                     authorization=authorization,
@@ -76,19 +124,24 @@ def execute_graph_v2(
         caps=caps,
         budget=frontier,
         configs=configs,
+        acquisition_policy=acquisition_policy,
     )
     loader = (
         create_canonical_frontier_loader_v2(
             selection=selected,
             codec=runtime.codec,
             gateway_client=runtime.topology_loader.driver,
+            acquisition_policy=acquisition_policy,
         )
         if selected.groups
         else None
     )
     references, scores, reasons = [], {}, set(selected.coverage.reasons)
     try:
-        allocations, seed_reasons = allocate_group_seeds_v2(
+        from .graph_seed_allocation_v2 import _allocate_closed_group_seeds_v2
+
+        allocate = allocate_group_seeds_v2 if seed_validation is None else _allocate_closed_group_seeds_v2
+        allocations, seed_reasons = allocate(
             groups=selected.groups,
             runtime=runtime,
             query=query,
@@ -98,6 +151,7 @@ def execute_graph_v2(
             caps=caps,
             deadline=deadline,
             frontier=frontier,
+            **({"seed_validation": seed_validation} if seed_validation is not None else {}),
         )
     except (FrontierBudgetExceeded, TimeoutError) as exc:
         reason = (
@@ -182,7 +236,7 @@ def execute_graph_v2(
             from .graph_evidence_selection_v2 import partial_coverage
 
             coverage = partial_coverage(coverage)
-        inputs = load_selection_inputs_v2(
+        inputs = hydrate(
             selected=selected,
             references=admitted,
             authorization=authorization,
@@ -221,7 +275,9 @@ def execute_graph_v2(
             (),
             partial_coverage(
                 coverage,
-                "deadline" if isinstance(exc, TimeoutError) else "frontier_budget",
+                "frontier_budget"
+                if isinstance(exc, FrontierBudgetExceeded)
+                else "deadline",
             ),
             signature,
         )

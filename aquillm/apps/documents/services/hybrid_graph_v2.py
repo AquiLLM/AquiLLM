@@ -58,18 +58,42 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
             ),
         }
 
-    def fallback():
+    def fallback(*, admit_deferred=True):
         try:
-            rows, _ = reauthorized_baseline(snapshot.baseline_candidates, authorization)
+            from .graph_admission_adapter import fallback_baseline
+
+            if getattr(snapshot, "source_admission", None) is not None:
+                validate_requested_authorization(scope.runtime, authorization, snapshot.documents)
+            rows, _ = reauthorized_baseline(
+                fallback_baseline(snapshot, admit_deferred=admit_deferred), authorization
+            )
             if scope is not None:
                 rows = tuple(
                     r
                     for r in validate_rows(rows, scope=scope)
                     if r.doc_id in scope.requested_document_ids
                 )
-            return bounded_pool_v2(rows, rows), diagnostics("error")
+            observation = diagnostics("error")
+            if getattr(snapshot, "source_admission", None) is not None:
+                observation["source_admission"] = snapshot.source_admission.diagnostics()
+            return bounded_pool_v2(rows, rows), observation
         except Exception:
             return (), diagnostics("error")
+
+    from apps.knowledge_graph.retrieval.graph_candidate_operation_v2 import (
+        _try_closed_graph_pool,
+    )
+
+    closed = _try_closed_graph_pool(
+        snapshot,
+        query,
+        authorization,
+        dependencies,
+        diagnostics=diagnostics,
+        fallback=fallback,
+    )
+    if closed is not None:
+        return closed
 
     try:
         if getattr(settings, "graph_remediation_mode", None) != "v2":
@@ -78,7 +102,7 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
             raise ValueError("V2 requires the original frozen retrieval scope")
         budget = scope.runtime.budget
         timeout = settings.graph_overall_timeout_ms
-        if type(timeout) is not int or not 1 <= timeout <= 5000:
+        if type(timeout) is not int or not 1 <= timeout <= 20_000:
             raise ValueError("graph timeout is invalid")
         deadline = min(started + timeout / 1000, started + budget.remaining_ms() / 1000)
         with source_preparation_scope(deadline, perf_counter, budget), scope.database():
