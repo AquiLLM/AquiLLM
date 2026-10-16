@@ -74,6 +74,7 @@ def provenance_for_chunk(*, authority, chunk, codec, using):
         entity_ids=entity_ids,
         chunks={chunk.pk: (chunk.doc_id, chunk.chunk_number)},
         batch_size=1000,
+        document_filtered=True,
     )
     for mention in mentions:
         result[key(f"entity-mention:{mention['mention_id']}:chunk:{chunk.pk}")] = None

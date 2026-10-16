@@ -790,5 +790,5 @@ def test_effective_report_records_explicit_acquisition_schedule(monkeypatch):
         SimpleNamespace(vector_top_k=15, trigram_top_k=15),
     )
     assert report["acquisition_schedule"] == "native_closure"
-    assert report["acquisition_schedule_version"] == "native-closure-v1"
+    assert report["acquisition_schedule_version"] == "native-closure-v2"
     assert report["native_closure_reserve_ms"] == 1250

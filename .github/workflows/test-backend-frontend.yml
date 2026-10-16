@@ -249,6 +249,7 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_graph_runtime_authority_v2.py
           aquillm/apps/knowledge_graph/tests/test_graph_handoff_authority_v2.py
           aquillm/apps/knowledge_graph/tests/test_ready_materialization_v2.py
+          aquillm/apps/knowledge_graph/tests/test_ready_provenance_document_reads.py
           aquillm/apps/knowledge_graph/tests/test_ready_authority_work_v2.py
           aquillm/apps/knowledge_graph/tests/test_membership_source_query_work.py
           aquillm/apps/knowledge_graph/tests/test_projection_memberships.py

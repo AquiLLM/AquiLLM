@@ -5,7 +5,7 @@ from os import getenv
 from django.core.exceptions import ImproperlyConfigured
 
 NATIVE_CLOSURE_RESERVE_MS = 1250
-NATIVE_CLOSURE_SCHEDULE_VERSION = "native-closure-v1"
+NATIVE_CLOSURE_SCHEDULE_VERSION = "native-closure-v2"
 
 
 def acquisition_schedule():

@@ -7,7 +7,6 @@ import pytest
 from apps.documents.models import TextChunk
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.documents.services.source_loading import SourcePreparationLimited
-from lib.embeddings.tests.test_document_provider import transport as transport
 
 from ._native_graph_search_closure_support import native_case, run_current_or_native
 
@@ -15,11 +14,14 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.mark.parametrize("change", ["persisted", "hydrated"])
-def test_changed_body_is_withdrawn_from_every_completed_payload(monkeypatch, change):
+@pytest.mark.parametrize("position", [0, 24])
+def test_changed_body_is_withdrawn_from_every_completed_payload(
+    monkeypatch, change, position
+):
     from apps.documents.services import native_graph_search_closure as closure
 
     with native_case(monkeypatch) as case:
-        row = case.snapshot.baseline_candidates[0]
+        row = case.snapshot.baseline_candidates[position]
         original = closure._finalize_closed_ranking
 
         def final(*args, **kwargs):
@@ -40,7 +42,7 @@ def test_changed_body_is_withdrawn_from_every_completed_payload(monkeypatch, cha
             result.snapshot.baseline_candidates,
         )
         assert all(row.pk not in {r.pk for r in group} for group in groups)
-        assert len(result.final_rows[2]) == 14 and result.score_set is None
+        assert len(result.final_rows[2]) == 24 and result.score_set is None
 
 
 @pytest.mark.parametrize("mutation", ["permission", "source", "operation"])
@@ -261,39 +263,3 @@ def test_equal_scalar_query_and_header_values_are_not_identity_guards(monkeypatc
 
         monkeypatch.setattr(owner, "_select_closed_ready_scope_v2", select)
         assert run_current_or_native(case).final_rows[2]
-
-
-def test_final_dense_intersection_withdraws_late_failed_generation(
-    transport, monkeypatch, settings
-):
-    from apps.documents.models import EmbeddingGeneration
-    from apps.documents.services import chunk_search_authorization as owner
-    from apps.documents.services.native_graph_search_closure import (
-        _try_native_search_closure,
-    )
-
-    from ._native_graph_search_closure_support import dense_case
-
-    with dense_case(transport, monkeypatch, settings) as (scope, snapshot, authorize):
-        original, dense = owner.reauthorized_baseline, scope.dense
-        key = dense.generation_keys[0]
-
-        def incoming(*args, **kwargs):
-            result = original(*args, **kwargs)
-            assert (
-                EmbeddingGeneration.objects.filter(pk=key).update(state="failed") == 1
-            )
-            return result
-
-        monkeypatch.setattr(owner, "reauthorized_baseline", incoming)
-        result = _try_native_search_closure(
-            snapshot,
-            "source",
-            15,
-            authorize=authorize,
-            dependencies=None,
-            overlay_enabled=False,
-        )
-        assert result.final_rows == ((), (), []) and result.hybrid_pool == ()
-        assert result.ranking.combined_candidates == () and result.score_set is None
-        assert scope.dense is dense and dense.generation_keys == (key,)

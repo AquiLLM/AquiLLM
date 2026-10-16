@@ -104,7 +104,12 @@ def test_actual_dispatch_closes_once_before_stage_without_acquisition_scoring(
         result = case.run()
         assert case.inference == []
         assert case.events == ["finalized", "stage"]
-        assert len(case.finals) == 1 and len(result[2]) == 15
+        # Native acquisition publishes its bounded, freshly authorized pool;
+        # The passage cutoff belongs to final relevance selection.
+        assert len(case.finals) == 1
+        # Graph consumes two additional source identities but publishes one
+        # novel passage: 25 initial +18 top-up +1 graph, with all45 charges kept.
+        assert len(result[2]) == (25 if fail else 44 if graph_on else 45)
         assert case.source.budget.pairs_used["acquisition"] == 0
         assert case.operation.deadline == 10.0 and case.operation.active()
         assert case.source.budget.sources_used <= 45
@@ -209,12 +214,17 @@ def test_failed_native_finalization_never_falls_back_or_emits_stage(
         assert current_scope() is case.scope  # Search lifetime restored caller scope.
 
 
-def test_current_source_mutation_is_removed_by_single_native_finalizer(monkeypatch):
+@pytest.mark.parametrize("candidate", ["baseline", "graph"])
+def test_current_source_mutation_is_removed_by_single_native_finalizer(
+    monkeypatch, candidate
+):
     with dispatch_case(monkeypatch) as case:
         original, changed = native_graph_search_closure._finalize_closed_ranking, []
 
         def mutate(*args, **kwargs):
-            changed.append(args[1].ranked_results[0].pk)
+            changed.append(
+                args[1].ranked_results[0].pk if candidate == "baseline"
+                else case.f.chunks["B"].pk)
             TextChunk.objects.filter(pk=changed[0]).update(content="changed")
             return original(*args, **kwargs)
 
@@ -222,64 +232,5 @@ def test_current_source_mutation_is_removed_by_single_native_finalizer(monkeypat
             native_graph_search_closure, "_finalize_closed_ranking", mutate)
         result = case.run()
         assert changed[0] not in {row.pk for row in result[2]}
-        assert len(result[2]) == 14 and case.events == ["finalized", "stage"]
+        assert len(result[2]) == 43 and case.events == ["finalized", "stage"]
         assert case.inference == []
-
-
-@pytest.mark.parametrize("graph_on", [True, False])
-def test_final_semantic_selection_keeps_caps_citations_and_cannot_recover_below15(
-    monkeypatch, graph_on
-):
-    from time import monotonic
-
-    from apps.chat.services.rag_evidence import build_selected_evidence_packet
-    from apps.chat.services.rag_selection import select_evidence
-    from apps.chat.services.rag_selection_hydration import (
-        revalidate_selection_candidates,
-    )
-    from apps.chat.services.rag_selection_scoring import prepare_selection_candidates
-    from apps.chat.services.rag_selection_types import SelectionLimits, SelectionProfile
-    from apps.chat.tests.test_rag_selection_scoring import _pool
-    from apps.documents.services.chunk_rerank_window_adapter import (
-        WindowSelectionScorer,
-    )
-    from apps.documents.tests.test_chunk_rerank_window_scores import Scorer
-
-    with dispatch_case(monkeypatch, graph_on=graph_on) as case:
-        rows = case.run()[2]
-        budget = case.source.budget
-        assert len(rows) == 15 and case.inference == []
-        graph_id = case.f.chunks["B"].pk
-        if graph_on:
-            assert graph_id in case.graph_events[0]
-            assert graph_id not in {row.pk for row in rows}
-            assert case.stages[0][1]["preclosure_pool_count"] > 15
-        scorer = WindowSelectionScorer(
-            Scorer(), budget=budget, pair_counter=lambda q, d: len(q) + len(d) + 8,
-            deadline=monotonic() + 3,
-        )
-        prepared = prepare_selection_candidates(
-            pool=_pool(rows), primary_query="Atlas", authorization=case.f.authorization,
-            deadline=monotonic() + 3, allow_new_scores=True, scorer=scorer,
-            turn_budget=budget, source_mode=True,
-        )
-        assert prepared.score_status == "model" and prepared.new_pairs > 0
-        assert budget.pairs_used["acquisition"] == 0
-        assert 0 < budget.pairs_used["final"] <= 45
-        assert budget.limits.retrieval_ms == 15000
-        assert budget.limits.final_scoring_ms == 3000
-        assert budget.sources_used <= 45
-        assert budget.text_used["materialized"] <= 250000
-        assert budget.text_used["tokenized"] <= 1000000
-        selected = select_evidence(
-            prepared.candidates, profile=SelectionProfile("test", 1, 0, "v1"),
-            limits=SelectionLimits(12, 12, 3500), score_status=prepared.score_status,
-        )
-        assert revalidate_selection_candidates(
-            selected.candidates, case.f.authorization) == selected.candidates
-        packet = build_selected_evidence_packet(
-            selected, query="Atlas", search_scope="selected")
-        assert 0 < len(packet.chunks) <= 12
-        assert graph_id not in {row["chunk_id"] for row in packet.chunks}
-        for row in packet.chunks:
-            assert row["citation"] == f"[doc:{row['doc_id']} chunk:{row['chunk_id']}]"

@@ -282,7 +282,7 @@ def test_effective_config_reports_requested_schedule_version_and_reserve(monkeyp
 
     for mode, version, reserve in (
         ("scored", None, None),
-        ("native_closure", "native-closure-v1", 1250),
+        ("native_closure", "native-closure-v2", 1250),
     ):
         monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", mode)
         report = replay_controls.effective_schedule_config()

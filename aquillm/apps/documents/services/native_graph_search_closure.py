@@ -1,4 +1,4 @@
-"""Private zero-inference route; exactly one unchanged native finalizer owns rows."""
+"""Native acquisition hands its bounded candidate pool to final relevance scoring."""
 
 from __future__ import annotations
 
@@ -53,7 +53,8 @@ def _try_native_search_closure(
     """Only initial ineligibility returns None; captured failures never switch routes.
 
     The optional diagnostics dictionary records effective scored fallback without
-    carrying authority. This private entry has no production dispatch yet.
+    carrying authority. Explicit native dispatch returns the full hydrated pool
+    (at most 45 rows); the final relevance selector owns the passage cutoff.
     """
     if observation is not None:
         observation["acquisition_schedule"] = "scored"
@@ -131,7 +132,11 @@ def _try_native_search_closure(
     ranking = CandidateRankingResult(
         combined_candidates=combined,
         graph_candidates=(),
-        ranked_results=combined[:top_k],
+        # Acquisition has no semantic scores. A prefix here would discard novel
+        # graph evidence before the final scorer could compare it with baseline
+        # candidates. The captured pool is already hydrated and bounded to 45;
+        # the unchanged finalizer freshly validates all rows before handoff.
+        ranked_results=combined,
         inaccessible_candidate_count=0,
         materialization_ms=0.0,
         rerank_ms=0.0,

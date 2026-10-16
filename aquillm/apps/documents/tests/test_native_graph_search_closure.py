@@ -35,7 +35,7 @@ def test_failed_graph_never_enters_acquisition_adapter(monkeypatch):
 
 
 @pytest.mark.parametrize("expired", [False, True])
-def test_failure_keeps_only_initial_prefix_and_finalized_replay_rows(
+def test_failure_hands_off_whole_initial_pool_without_top_up(
     monkeypatch, expired
 ):
     with native_case(monkeypatch, expired=expired) as case:
@@ -44,7 +44,9 @@ def test_failure_keeps_only_initial_prefix_and_finalized_replay_rows(
         result = run_current_or_native(case)
         assert case.source.budget.sources_used == 25
         assert case.source.budget.text_used == before and case.fetched == []
-        assert tuple(result.final_rows[2]) == baseline[:15]
+        # A failed graph retains every already hydrated baseline candidate for
+        # final relevance scoring, without spending the reserved body capacity.
+        assert tuple(result.final_rows[2]) == baseline
         assert result.ranking.combined_candidates == tuple(result.final_rows[2])
         assert result.hybrid_pool == tuple(result.final_rows[2])
         assert result.preclosure_pool_count == 25
@@ -205,8 +207,8 @@ def test_rrf_keeps_exact_captured_order_without_manufactured_scores(
     monkeypatch, graph_on
 ):
     with native_case(monkeypatch, graph_on=graph_on, rrf=True) as case:
-        # Existing captured fusion independently specifies the protected/RRF prefix.
-        expected = tuple(c.chunk_id for c in case.scope.fusion_v2.candidates)[:15]
+        # Existing fusion specifies order, never an early semantic cutoff.
+        expected = tuple(c.chunk_id for c in case.scope.fusion_v2.candidates)
         result = run_current_or_native(case)
         assert tuple(row.pk for row in result.final_rows[2]) == expected
         assert result.ranking.score_set is None and result.score_set is None
