@@ -48,7 +48,13 @@ def test_native_limit_retains_only_real_finalized_baseline(
         )
         result = run_current_or_native(case)
         assert len(finalized) == 1
-        assert tuple(result.final_rows[2]) == case.snapshot.baseline_candidates[:15]
+        # Acquisition preserves the hydrated pool for final relevance selection,
+        # including when graph work hits a limit. It does not own the top-k cut.
+        baseline = case.snapshot.baseline_candidates
+        assert tuple(result.final_rows[2]) == baseline
+        assert result.ranking.combined_candidates == baseline
+        assert result.hybrid_pool == baseline
+        assert result.preclosure_pool_count == len(baseline) == 25
         assert result.graph_diagnostics["graph_status"] == "error"
         assert result.graph_diagnostics["graph_failure_reason"] == (
             "deadline" if expired_owner else reason
