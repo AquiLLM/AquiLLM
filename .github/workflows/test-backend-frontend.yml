@@ -299,6 +299,7 @@ jobs:
           aquillm/apps/documents/tests/test_source_metadata_closed_operation.py
           aquillm/apps/documents/tests/test_source_row_exact_document.py
           aquillm/apps/documents/tests/test_issue4_retrieval_observation.py
+          aquillm/apps/documents/tests/test_issue4_graph_coverage_observation.py
           tests/test_replay_retrieval.py
           --ds=aquillm.settings_projection_test -q --tb=short
       - name: Projected PPR restart contracts
