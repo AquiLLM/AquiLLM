@@ -294,3 +294,18 @@ Task23 owns graph_source_admission.py, graph_admission_read.py and focused tests
 
 - [ ] Reuse the bounded private observer on immutable7bafd8cb to capture allowlisted scalar selection status and window-preparation failure counts. Do not expose query/source text or alter inference, limits, or production selection. Distinguish preparation failure, unknown coverage, deadline, and pair-budget exhaustion from evidence; zero submitted pairs alone does not identify the cause.
 - [ ] Fix the established cause with a genuine regression and preserve truthful score coverage, source authority and all existing budgets. Review and test the concrete correction before another normal-budget candidate replay.
+
+### Task26: remove duplicate code-identity scans within each check
+
+- [x] Profile the genuine large native metadata owner and prove a redundant method scan before implementation. One local check performs432 method-set scans;175 concrete fields are scanned twice, with no SQL or ledger debit. This is CPU evidence only, not live timing acceptance.
+- [x] Reuse only the method tuples observed and checked inside that same unchanged() invocation when assembling its full model-layout comparison. Keep every live supported() call and every resolver, model, field, manager, lookup, authorization, source and generation check. No cached validation success crosses calls. Prove one scan per field per check through the real native owner, plus unchanged rejection of mutated resolvers and layouts.
+- [x] Independently review the narrow change. Preserve late field-list mutation refusal both after method guards and during manager access; both controls failed before correction. Final affected selection:93 passed,3 existing warnings; Ruff, compilation, byte identity and diff checks passed. Review finding resolved.
+- [ ] Measure a new immutable candidate. No deadline or capacity increase, no claimed performance gain from local fixture timing alone.
+
+Task25r2 completed the native replay with source/data/runtime fences intact, but its selection observer failed because preservation mode does not publish the legacy rag_metrics event. Retained observations show45 plans,1 image override,1 unknown counter and0 submitted pairs; exact score status was not captured. The existing adapter forces image captions to unknown counts, and dispatch refuses a pool containing any incomplete plan. A corrected scalar capture and mixed-pool regression must distinguish that cause from cache reuse or deadline fallback.
+
+### Task27: score exact caption text without claiming image coverage
+
+- [ ] Reproduce mixed text/image-caption evidence disabling all final model scoring; design the smallest explicit text-input capability change with truthful coverage and cache identity.
+- [ ] Keep unsupported counters and lost proof unavailable, preserve whole-pool score comparability, exact caption/source identity, image publication authority,45-pair capacity and3-second scoring allowance. Test through final selection, including graph candidates beyond the old prefix.
+- [ ] Independently review, run affected regression checks and verify the corrected immutable candidate before any serving rollout.

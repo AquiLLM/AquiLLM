@@ -168,23 +168,31 @@ def layout(model):
     """Expected code/data identities only; never a database authority result."""
     manager = model.objects
     fields = tuple(
-        (
-            f,
-            type(f),
-            f.name,
-            f.attname,
-            f.column,
-            _relation(f),
-            _methods(f, _FIELDS),
-            f.max_length,
-            f.null,
-            f.primary_key,
-            f.concrete,
-            getattr(f, "db_collation", None),
-            _proof_lookup(f),
-        )
+        _field_layout(f, _methods(f, _FIELDS))
         for f in model._meta.local_concrete_fields
     )
+    return _model_layout(model, manager, fields)
+
+
+def _field_layout(field, methods):
+    return (
+        field,
+        type(field),
+        field.name,
+        field.attname,
+        field.column,
+        _relation(field),
+        methods,
+        field.max_length,
+        field.null,
+        field.primary_key,
+        field.concrete,
+        getattr(field, "db_collation", None),
+        _proof_lookup(field),
+    )
+
+
+def _model_layout(model, manager, fields):
     return (
         model,
         model._meta,
@@ -217,13 +225,27 @@ def unchanged(expected):
         return False
     current, captured = tuple(model._meta.local_concrete_fields), expected[7]
     # Do not invoke a replaced resolver while deciding whether it is native.
-    if len(current) != len(captured) or any(
-        field is not row[0]
-        or type(field) is not row[1]
-        or _methods(field, _FIELDS) != row[6]
-        for field, row in zip(current, captured, strict=True)
+    if len(current) != len(captured):
+        return False
+    methods = []
+    for field, row in zip(current, captured, strict=True):
+        if field is not row[0] or type(field) is not row[1]:
+            return False
+        header = _methods(field, _FIELDS)
+        if header != row[6]:
+            return False
+        methods.append(header)
+    manager = model.objects
+    reread = tuple(model._meta.local_concrete_fields)
+    if len(reread) != len(current) or any(
+        field is not original for field, original in zip(reread, current, strict=True)
     ):
         return False
-    return layout(model) == expected and all(
+    # Reuse only headers checked in this invocation, after every resolver guard.
+    fields = tuple(
+        _field_layout(field, header)
+        for field, header in zip(current, methods, strict=True)
+    )
+    return _model_layout(model, manager, fields) == expected and all(
         name not in expected[3].__dict__ for name in _READS
     )
