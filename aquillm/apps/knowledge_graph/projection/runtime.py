@@ -20,6 +20,7 @@ from .state_repository import FunctionProjectionStateRepository
 _PROJECTION_SETTING_NAMES = frozenset(
     (
         "KG_GRAPH_OVERALL_TIMEOUT_MS",
+        "KG_GRAPH_REMEDIATION_MODE",
         "KG_MEMGRAPH_DATABASE",
         "KG_MEMGRAPH_PROJECTION_ENABLED",
         "KG_MEMBERSHIP_CERTIFICATE_ENABLED",

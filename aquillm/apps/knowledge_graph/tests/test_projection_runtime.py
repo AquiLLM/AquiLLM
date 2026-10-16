@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from apps.knowledge_graph.projection import runtime
+from lib.knowledge_graph.retrieval_config import HybridRetrievalConfigError
 
 
 def _projection_environment() -> dict[str, str]:
@@ -43,14 +44,21 @@ def _projection_hook_environment() -> dict[str, str]:
     }
 
 
-def test_runtime_consumes_only_frozen_projection_configuration_names() -> None:
+@pytest.mark.parametrize("mode", [None, "legacy", "shadow", "v2"])
+def test_runtime_consumes_only_frozen_projection_configuration_names(monkeypatch, mode):
     source = {
         **_projection_environment(),
         "KG_BUILD_ENABLED": "1",
         "KG_PROJECTION_TIMEOUT_MS": "12000",
+        "KG_PROJECTION_JOB_TIMEOUT_MS": "234567" if mode == "v2" else "300000",
+        "KG_GRAPH_OVERALL_TIMEOUT_MS": "20000" if mode == "v2" else "300",
+        "KG_GRAPH_DIRECT_TIMEOUT_MS": "20000",
+        "KG_GRAPH_EXTENDED_TIMEOUT_MS": "20000",
     }
-
-    settings = runtime.load_projection_runtime_settings(source)
+    if mode is not None:
+        source["KG_GRAPH_REMEDIATION_MODE"] = mode
+    monkeypatch.setattr(runtime.os, "environ", source)
+    settings = runtime.load_projection_runtime_settings()
 
     assert settings.projection_schema_version == "collection-graph-v1"
     assert settings.projection_format_version == "projection-v1"
@@ -59,7 +67,17 @@ def test_runtime_consumes_only_frozen_projection_configuration_names() -> None:
     assert settings.projection_lease_seconds == 41
     assert settings.projection_queue == "projection-control"
     assert settings.projection_timeout_ms == 12000
-    assert settings.graph_overall_timeout_ms == 300
+    assert settings.graph_remediation_mode == (mode or "legacy")
+    assert settings.graph_overall_timeout_ms == (20000 if mode == "v2" else 300)
+    assert settings.projection_job_timeout_ms == (234567 if mode == "v2" else 300000)
+
+
+@pytest.mark.parametrize("mode", ["legacy", "shadow"])
+def test_projection_runtime_rejects_long_graph_time_outside_v2(mode):
+    source = dict(_projection_environment(), KG_GRAPH_REMEDIATION_MODE=mode,
+                  KG_GRAPH_OVERALL_TIMEOUT_MS="20000")
+    with pytest.raises(HybridRetrievalConfigError, match="KG_GRAPH_OVERALL_TIMEOUT_MS"):
+        runtime.load_projection_runtime_settings(source)
 
 
 def test_memgraph_factory_uses_projection_credentials_and_fixed_database(
@@ -132,11 +150,7 @@ def test_postgres_factory_rejects_nonexact_state_repository_before_io(
     def forbidden_source(*_args, **_kwargs):
         pytest.fail("source constructed before authority check")
 
-    monkeypatch.setattr(
-        runtime,
-        "DjangoProjectionRowSource",
-        forbidden_source,
-    )
+    monkeypatch.setattr(runtime, "DjangoProjectionRowSource", forbidden_source)
 
     with pytest.raises(TypeError, match="exact function state repository"):
         runtime.postgres_projection_repository(settings, state_repository=object())
