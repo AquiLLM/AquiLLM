@@ -5,6 +5,9 @@ from dataclasses import replace
 import pytest
 
 from apps.knowledge_graph.projection.frontier_adapter_v2 import FrontierSessionV2
+from apps.knowledge_graph.retrieval.topology.frontier_loader_v2 import (
+    FrontierUnavailableV2,
+)
 from apps.knowledge_graph.tests.frontier_fixture_support import FrontierFixture
 from apps.knowledge_graph.tests.frontier_index_fixture_driver import (
     FrontierIndexFixtureDriver,
@@ -112,3 +115,54 @@ def test_insufficient_terminal_budget_is_partial_and_never_resets(monkeypatch):
     assert budget.deadline == deadline and budget.turn_budget is turn
     assert budget.source_rows <= 5000
     assert budget.deadline == fixture.deadline
+
+
+@pytest.mark.parametrize("failure", ["uncertain", "deadline", "unknown", "cancelled"])
+def test_terminal_snapshot_check_preserves_failure_kind(monkeypatch, failure):
+    from asyncio import CancelledError
+
+    from apps.knowledge_graph.projection.frontier_snapshot_v2 import FrontierAssemblyV2
+    from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
+        FrontierBudgetV2,
+    )
+    from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+
+    fixture = FrontierFixture()
+    driver = FrontierIndexFixtureDriver(fixture.bundles)
+    now = [fixture.deadline - 1.0]
+    budget = FrontierBudgetV2(
+        turn_budget=TurnBudget(TurnLimits(), clock=lambda: now[0]),
+        deadline=fixture.deadline, clock=lambda: now[0], max_identities=200,
+        max_edges=1000, max_source_rows=5000, max_queries=64, max_wire_bytes=1048576,
+    )
+    build, snapshots = FrontierAssemblyV2.build, []
+
+    def terminal_check(assembly, request):
+        result = build(assembly, request)
+        snapshots.append(result)
+        if failure == "uncertain":
+            budget.stop_uncertain()
+        elif failure == "deadline":
+            now[0] = budget.deadline
+        else:
+            def reject():
+                if failure == "cancelled":
+                    raise CancelledError()
+                raise RuntimeError("unknown failure")
+
+            monkeypatch.setattr(budget, "check_active", reject)
+        return result
+
+    monkeypatch.setattr(FrontierAssemblyV2, "build", terminal_check)
+    if failure in {"uncertain", "deadline"}:
+        with pytest.raises(FrontierUnavailableV2) as caught:
+            run(fixture, driver, budget)
+        assert caught.value.coverage.reasons == (
+            "frontier_budget" if failure == "uncertain" else "deadline",
+        )
+        assert caught.value.coverage.ready_documents == 0
+    else:
+        with pytest.raises(CancelledError if failure == "cancelled" else RuntimeError):
+            run(fixture, driver, budget)
+    assert snapshots and snapshots[0][1]
+    assert budget.queries == len(driver.calls) <= 64
