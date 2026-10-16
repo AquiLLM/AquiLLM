@@ -1,5 +1,7 @@
 """Exact captured-generation materialization; failed fences return no stale body."""
 
+from types import MethodType
+
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
@@ -198,15 +200,31 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _sou
             def load_chunk_objects(
                 self, *, chunk_predicates, authorized_document_ids, database_alias
             ):
-                return body_reader(
-                    (_active_chunk_predicates if _source_stage is not None else active_chunk_scope)(
-                        TextChunk.objects.using(database_alias).filter(
-                            pk__in=tuple(row[0] for row in chunk_predicates),
-                            doc_id__in=authorized_document_ids,
-                        ),
-                        snapshot=selected.representation_snapshot,
-                    ).order_by("pk"),
-                )
+                # The private-map contract supplies exact (pk, UUID, number)
+                # tuples; post-read _chunk_objects still checks each full tuple.
+                document_ids = frozenset(row[1] for row in chunk_predicates)
+                query = (
+                    _active_chunk_predicates
+                    if _source_stage is not None else active_chunk_scope
+                )(
+                    TextChunk.objects.using(database_alias).filter(
+                        pk__in=tuple(row[0] for row in chunk_predicates),
+                        doc_id__in=authorized_document_ids,
+                    ),
+                    snapshot=selected.representation_snapshot,
+                    **(
+                        {"document_ids": document_ids}
+                        if _source_stage is not None else {}
+                    ),
+                ).order_by("pk")
+                if _source_stage is not None:
+                    from .graph_candidate_stage_v2 import _NATIVE_GRAPH_SOURCE_READ
+
+                    if (type(body_reader) is MethodType
+                            and body_reader.__self__ is _source_stage
+                            and body_reader.__func__ is _NATIVE_GRAPH_SOURCE_READ):
+                        return _source_stage._read(query, document_ids=document_ids)
+                return body_reader(query)
 
         result = {}
         repository = ActiveRepository(source_using=authorization.database_alias)

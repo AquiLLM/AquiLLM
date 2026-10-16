@@ -203,6 +203,8 @@ def _hydrate_selection_rows(
                 pk__in=pks, doc_id__in=requested
             ),
             snapshot=selected.representation_snapshot,
+            **({"document_ids": frozenset(row[4][1] for row in mapped)}
+               if _source_stage is not None else {}),
         ).order_by(order)
         bodies = body_reader(query)
     return _selection_rows(mapped, bodies, selected, codec, document_codec,

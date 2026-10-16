@@ -247,6 +247,7 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_graph_candidate_operation_contexts.py
           aquillm/apps/knowledge_graph/tests/test_graph_seed_allocation_v2.py
           aquillm/apps/knowledge_graph/tests/test_graph_hydration_operation.py
+          aquillm/apps/knowledge_graph/tests/test_graph_mapped_owner_sql.py
           aquillm/apps/knowledge_graph/tests/test_graph_runtime_authority_v2.py
           aquillm/apps/knowledge_graph/tests/test_graph_handoff_authority_v2.py
           aquillm/apps/knowledge_graph/tests/test_ready_materialization_v2.py

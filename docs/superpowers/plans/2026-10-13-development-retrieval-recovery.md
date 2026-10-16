@@ -286,7 +286,8 @@ Parallel ownership: task21 owns provenance loader/caller and focused graph tests
 
 - [x] Task23: native graph admission and top-up already hold exact captured source references but call the generic stage body reader, which constructs a full-scope owner query. Route only the exact native bound reader to its existing captured-reference reader. Preserve fresh full-scope authority and source validation, exact owner/scope/method identity, custom or wrapped callback behavior, source accounting and all caps. SQL narrowing, authority races and callback compatibility passed63 adjacent and21 final focused database tests after2 expected preimplementation failures. Independent static review found no important findings. Seed reads already use captured references and remain unchanged. Runtime performance is still unmeasured.
 - [x] Task24: private phase-attribution replay from immutable7bafd8cb completed with all source/data/runtime and observer checks passing; owned temporary container removed. Turn20.623s, graph12.797s; six entity-mention reads2.375s versus4.192s in the earlier funnel replay. All45 candidates reached handoff, including3 graph candidates and2 novel finalizations, but final model scoring submitted0 pairs and final evidence contained0 graph candidates. Diagnostic completion is not normal-limit acceptance; final-scoring rejection remains to diagnose explicitly.
-- [ ] Root: independently review, integrate, and verify Task23 on this branch. Run the unchanged normal-budget full-scope gate before matched comparisons, persisted ASGI citations, current-head CI and deployment. Keep every failed observation and the existing rollback artifacts.
+- [x] Root: independently review, integrate, and verify Task23 on this branch.
+- [ ] Run the unchanged normal-budget full-scope gate before matched comparisons, persisted ASGI citations, current-head CI and deployment. Keep every failed observation and the existing rollback artifacts.
 
 Task23 owns graph_source_admission.py, graph_admission_read.py and focused tests, plus only an original-read identity anchor in graph_candidate_stage_v2.py. Task24 owns private diagnostic files only. Root owns shared plan/PR, SSH and integration; local PostgreSQL is exclusive to Task23 during its tests.
 
@@ -313,6 +314,7 @@ Task25r2 retained native completion but could not capture selection status becau
 
 ### Task28: narrow known graph-owner SQL during hydration and materialization
 
-- [ ] Use exact owner IDs already present in mapped chunk predicates to narrow native SQL construction. Retain full-scope authority/source/generation checks, immutable source tuples, original limits and publication fences.
-- [ ] In native materialization, use the existing scoped read core only for the exact original bound reader. Preserve custom/class-wrapper invocation, current instance-wrapper rejection, and public legacy behavior.
-- [ ] Prove actual530-owner native queries avoid unrelated-owner SQL work; verify late permission, lifetime and unrelated-source changes still reject publication. Review before integration and server measurement.
+- [x] Use exact owner IDs already present in mapped chunk predicates to narrow native SQL construction. Retain full-scope authority/source/generation checks, immutable source tuples, original limits and publication fences.
+- [x] In native materialization, use the existing scoped read core only for the exact original bound reader. Preserve custom/class-wrapper invocation, current instance-wrapper rejection, and public legacy behavior.
+- [x] Run actual530-owner native reads and verify both predicate boundaries restrict their owner sets to mapped documents; late permission, lifetime and unrelated-source changes still reject publication. Two preimplementation failures,11 focused and65 adjacent passing tests; independent static review found no important findings.
+- [ ] Integrate and measure on the next immutable server candidate. Local predicate tests establish SQL narrowing, not a live latency gain.
