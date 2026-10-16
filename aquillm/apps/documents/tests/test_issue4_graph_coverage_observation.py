@@ -1,13 +1,16 @@
 """Private graph coverage survives observed and compact replay boundaries."""
 
 import json
+from itertools import product
 from types import SimpleNamespace
 
 import pytest
 
 from apps.chat.evals.replay_observations import summarize
 from apps.documents.tests.test_chunk_search_graph_overlay import _DOC_A, _snapshot
+from apps.knowledge_graph.retrieval.graph_handoff import GraphCoverageV2
 from lib.evidence_observation import observe
+from lib.replay_coverage import coverage_reasons
 from lib.replay_observation import retrieval_stages
 
 
@@ -145,6 +148,14 @@ class _CoverageDict(dict):
         raise AssertionError("non-exact coverage inspected")
 
 
+class _CoverageTuple(tuple):
+    pass
+
+
+class _CoverageString(str):
+    pass
+
+
 @pytest.mark.parametrize(
     "coverage",
     [
@@ -157,10 +168,29 @@ class _CoverageDict(dict):
         _unavailable_coverage(("unknown private reason",)),
         _unavailable_coverage((_UntrustedCoverage(),)),
         _unavailable_coverage(("not_ready",) * 6),
+        _unavailable_coverage(("not_ready", "not_ready")),
+        _unavailable_coverage(("not_ready", "frontier_budget")),
+        _unavailable_coverage(_CoverageTuple(("not_ready",))),
+        _unavailable_coverage((_CoverageString("not_ready"),)),
         {**_unavailable_coverage(("not_ready",)), "selected_documents": True},
+        {**_unavailable_coverage(("not_ready",)), "selected_documents": -1},
+        {**_unavailable_coverage(("not_ready",)), "selected_documents": 10001},
+        {**_unavailable_coverage(("not_ready",)), "selected_documents": "530"},
         {**_unavailable_coverage(("not_ready",)), "ready_documents": 531},
+        {**_unavailable_coverage(("not_ready",)), "ready_documents": True},
+        {**_unavailable_coverage(("not_ready",)), "ready_documents": -1},
+        {**_unavailable_coverage(("not_ready",)), "ready_documents": 1},
         {**_unavailable_coverage(("not_ready",)), "status": _UntrustedCoverage()},
+        {**_unavailable_coverage(("not_ready",)), "status": "unknown"},
+        {
+            **_unavailable_coverage(("not_ready",)),
+            "status": _CoverageString("unavailable"),
+        },
+        {**_unavailable_coverage(("not_ready",)), "status": "complete"},
+        {**_unavailable_coverage(("not_ready",)), "status": "partial"},
+        {**_unavailable_coverage(()), "ready_documents": 1, "status": "partial"},
         {**_unavailable_coverage(("not_ready",)), "exhaustive": True},
+        {**_unavailable_coverage(("not_ready",)), "exhaustive": 0},
         {**_unavailable_coverage(("not_ready",)), "extra": _UntrustedCoverage()},
     ],
 )
@@ -175,6 +205,50 @@ def test_malformed_coverage_is_ignored_without_copying_or_stringifying(coverage)
     compact = json.loads(json.dumps(summarize(events, [], [])))["stages"][0]["graph"]
     assert compact["reasons"] == ["deadline"]
     assert compact["failure_reason"] == "deadline"
+
+
+def test_valid_partial_coverage_retains_its_reason_at_document_count_limit():
+    events, state = _native_graph_observation(
+        {
+            "graph_coverage_v2": {
+                **_unavailable_coverage(("not_ready",)),
+                "selected_documents": 10000,
+                "ready_documents": 1,
+                "status": "partial",
+            }
+        }
+    )
+    assert not state.failed.is_set()
+    assert events[0][1]["graph"]["reasons"] == ["not_ready"]
+    assert summarize(events, [], [])["stages"][0]["graph"]["reasons"] == ["not_ready"]
+
+
+def test_primitive_coverage_validation_matches_unchanged_application_contract():
+    for selected, ready, status, reasons, exhaustive in product(
+        (0, 1, 10000, 10001, True),
+        (0, 1, 10001, True),
+        ("complete", "partial", "unavailable", "unknown"),
+        (
+            (),
+            ("not_ready",),
+            ("frontier_budget", "not_ready"),
+            ("not_ready", "frontier_budget"),
+            ("not_ready", "not_ready"),
+        ),
+        (False, True, 0),
+    ):
+        coverage = dict(
+            selected_documents=selected,
+            ready_documents=ready,
+            status=status,
+            reasons=reasons,
+            exhaustive=exhaustive,
+        )
+        try:
+            expected = GraphCoverageV2(**coverage).reasons
+        except (TypeError, ValueError):
+            expected = ()
+        assert coverage_reasons(coverage) == expected, coverage
 
 
 @pytest.mark.parametrize("failure_reason", [None, "not_ready", 1, _UntrustedCoverage()])

@@ -1,6 +1,7 @@
 """Best-effort private replay events; never a retrieval or logging path."""
 
 from lib.evidence_observation import active, mark_failed, publish
+from lib.replay_coverage import coverage_reasons as _coverage_reasons
 
 
 def _emit(event, make_data):
@@ -72,29 +73,6 @@ def final_selection(packet, max_passages, token_budget):
             "limits": {"max_passages": max_passages, "token_budget": token_budget()},
         },
     )
-
-
-def _coverage_reasons(coverage):
-    from apps.knowledge_graph.retrieval.graph_handoff import GraphCoverageV2
-
-    fields = {
-        "selected_documents",
-        "ready_documents",
-        "status",
-        "reasons",
-        "exhaustive",
-    }
-    if (
-        type(coverage) is not dict
-        or len(coverage) != len(fields)
-        or any(type(key) is not str for key in coverage)
-        or coverage.keys() != fields
-    ):
-        return ()
-    try:
-        return GraphCoverageV2(**coverage).reasons
-    except (TypeError, ValueError):
-        return ()
 
 
 def retrieval_stages(
