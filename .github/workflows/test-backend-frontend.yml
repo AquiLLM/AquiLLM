@@ -171,6 +171,9 @@ jobs:
           python -m pytest
           aquillm/apps/knowledge_graph/tests/test_topology_manifest_batch.py
           aquillm/apps/knowledge_graph/tests/test_frontier_generation_batch_v2.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_packed_directory_v3.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_packed_store_v3.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_packed_paths_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_window_feasibility_v2.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_complete_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_protocol_v3.py
@@ -583,6 +586,7 @@ jobs:
           aquillm/tests/integration/test_projection_database_fetch_deadline.py
           aquillm/tests/integration/test_projection_representation_publication_races.py
           aquillm/tests/integration/test_projection_representation_state_boundary.py
+          aquillm/apps/knowledge_graph/tests/test_frontier_packed_store_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_bounds_v3.py
           aquillm/apps/knowledge_graph/tests/test_consumed_source_physical_v3.py

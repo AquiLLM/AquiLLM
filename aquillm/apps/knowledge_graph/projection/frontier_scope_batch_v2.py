@@ -2,6 +2,7 @@
 
 from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import _key
 
+from .frontier_directory_proof_v2 import directory_step
 from .frontier_reads_v2 import KINDS, schema_error
 from .frontier_scope_preparation_v2 import ScopePreparation  # noqa: F401
 
@@ -21,30 +22,15 @@ def _heads(reads, generation, names):
         records = reads.indices(generation, keys)
         following = {}
         for name, (key, seen, low, high) in pending.items():
-            kind, node = records[key]
-            if (
-                kind != "directory"
-                or type(node) is not dict
-                or set(node) != {"name", "head", "left", "right"}
-            ):
-                raise schema_error()
-            current = node["name"]
-            if type(current) is not str or not low < current < high:
-                raise schema_error()
-            if current == name:
-                if node["head"] is None:
+            found, child, low, high = directory_step(records[key], name, low, high)
+            if found:
+                if child is None:
                     raise schema_error()
-                heads[name] = node["head"]
+                heads[name] = child
                 continue
-            child = node["left"] if name < current else node["right"]
             if child is None:
                 raise schema_error()
-            following[name] = (
-                child,
-                seen,
-                low if name < current else current,
-                current if name < current else high,
-            )
+            following[name] = child, seen, low, high
         pending = following
     return heads
 

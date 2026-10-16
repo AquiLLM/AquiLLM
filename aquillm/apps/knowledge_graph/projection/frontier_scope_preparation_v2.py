@@ -1,5 +1,6 @@
 """Finite breadth-wave scope preparation; whole-scope publication stays outside."""
 
+from .frontier_directory_proof_v2 import directory_step
 from .frontier_preparation_reads_v2 import PreparationReads
 from .frontier_reads_v2 import schema_error
 
@@ -40,31 +41,17 @@ class ScopePreparation(PreparationReads):
                     return effect
                 following = {}
                 for (g, name), (key, seen, low, high, prior) in self.pending.items():
-                    kind, node = self.reads._index_records[g, key]
-                    if (
-                        kind != "directory"
-                        or type(node) is not dict
-                        or set(node) != {"name", "head", "left", "right"}
-                    ):
-                        raise schema_error()
-                    current = node["name"]
-                    if type(current) is not str or not low < current < high:
-                        raise schema_error()
-                    if current == name:
-                        if node["head"] is None:
+                    found, child, low, high = directory_step(
+                        self.reads._index_records[g, key], name, low, high
+                    )
+                    if found:
+                        if child is None:
                             raise schema_error()
-                        self.heads[g, name] = node["head"]
+                        self.heads[g, name] = child
                         continue
-                    child = node["left"] if name < current else node["right"]
                     if child is None:
                         raise schema_error()
-                    following[g, name] = (
-                        child,
-                        seen,
-                        low if name < current else current,
-                        current if name < current else high,
-                        prior,
-                    )
+                    following[g, name] = child, seen, low, high, prior
                 self.pending = following
             elif self.stage == "scope_entries":
                 effect = self.index_wave(

@@ -5,6 +5,13 @@ def directory_step(record, name, low, high):
     from .frontier_reads_v2 import schema_error
 
     kind, node = record
+    if kind == "directory" and type(node) is dict and "layout" in node:
+        from .frontier_packed_directory_v3 import packed_step
+
+        try:
+            return packed_step(node, name, low, high)
+        except ValueError as error:
+            raise schema_error() from error
     if (
         kind != "directory"
         or type(node) is not dict
