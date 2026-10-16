@@ -275,7 +275,9 @@ def _execute_captured_graph_v2(
             (),
             partial_coverage(
                 coverage,
-                "deadline" if isinstance(exc, TimeoutError) else "frontier_budget",
+                "frontier_budget"
+                if isinstance(exc, FrontierBudgetExceeded)
+                else "deadline",
             ),
             signature,
         )

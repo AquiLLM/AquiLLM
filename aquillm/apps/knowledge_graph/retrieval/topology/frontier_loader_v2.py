@@ -158,8 +158,13 @@ class CanonicalFrontierLoaderV2:
             if budget.clock() >= deadline:
                 raise TimeoutError
         except TimeoutError as exc:
+            reason = (
+                "frontier_budget"
+                if isinstance(exc, FrontierBudgetExceeded)
+                else "deadline"
+            )
             raise FrontierUnavailableV2(
-                GraphCoverageV2(count, 0, "unavailable", ("deadline",), False), budget
+                GraphCoverageV2(count, 0, "unavailable", (reason,), False), budget
             ) from exc
         self._contexts[snapshot.algorithm.algorithm_signature] = context
         return result
