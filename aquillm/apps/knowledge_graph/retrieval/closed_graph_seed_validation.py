@@ -72,7 +72,8 @@ class _ClosedSeedValidation:
         self.views.append((view, deepcopy(view)))
         return view
 
-    def rows(self, view, *, authorization=None, settings=None):
+    def _checked_view(self, view, *, authorization=None, settings=None):
+        """Check composition inputs; only rows() establishes live seed freshness."""
         self.check()
         if (type(view) is not _ClosedSeedView
                 or not any(view is original and view == value for original, value in self.views)
@@ -84,8 +85,12 @@ class _ClosedSeedValidation:
                 or any(admitted.get(r.pk) is not r for r in view.seed_references)
                 or tuple(r.pk for r in view.seed_references) != tuple(s.chunk_id for s in view.graph_seeds)):
             raise SourceScopeUnavailable("source_admission_seed_unavailable")
-        keys = self.keys & _dense_seed_keys(self.plan, view.seed_references)
-        refs = _live_seed_references(self.plan, view.seed_references, dense_keys=keys)
+        return view.seed_references
+
+    def rows(self, view, *, authorization=None, settings=None):
+        refs = self._checked_view(view, authorization=authorization, settings=settings)
+        keys = self.keys & _dense_seed_keys(self.plan, refs)
+        refs = _live_seed_references(self.plan, refs, dense_keys=keys)
         self.check()
         return refs
 
@@ -110,7 +115,8 @@ class _ClosedSeedValidation:
         return view, ({"frontier_budget"} if len(seeds) < len(self.seeds) else set())
 
     def group(self, view, group):
-        self.rows(view)
+        # Only the selected native prefix shares its unpublished entry validation.
+        (self._checked_view if self._native_metadata is not None else self.rows)(view)
         ids = group.scope.selected_document_ids
         selected = {r.pk for r in view.seed_references if r.doc_id in ids}
         grouped = self._issue(replace(view,
@@ -125,7 +131,9 @@ class _ClosedSeedValidation:
         self.check()
         if runtime is not self.execution_runtime:
             raise SourceScopeUnavailable("source_admission_seed_unavailable")
-        refs = self.rows(view, authorization=authorization, settings=settings)
+        validate = (self._checked_view if self._native_metadata is not None
+                    else self.rows)
+        refs = validate(view, authorization=authorization, settings=settings)
         self.projections = tuple(p for group in groups for p in group.scope.projections)
         requests = tuple((p, tuple((r.pk, r.doc_id) for r in refs if r.doc_id in dict(p.documents)))
                          for p in self.projections)
@@ -156,4 +164,4 @@ class _ClosedSeedValidation:
 
 
 _NATIVE_METADATA_OWNER_METHODS = tuple((n, getattr(_ClosedSeedValidation, n)) for n in (
-    "check", "rows", "prepare_projections", "identities"))
+    "check", "_checked_view", "rows", "prepare_projections", "identities"))

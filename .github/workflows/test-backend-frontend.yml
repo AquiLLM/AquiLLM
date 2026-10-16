@@ -226,6 +226,8 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_closed_graph_limits_v2.py
           aquillm/apps/knowledge_graph/tests/test_closed_graph_limit_validation.py
           aquillm/apps/knowledge_graph/tests/test_closed_seed_projection_batch.py
+          aquillm/apps/knowledge_graph/tests/test_task16_seed_prefix.py
+          aquillm/apps/knowledge_graph/tests/test_task16_seed_channels.py
           aquillm/apps/collections/tests/test_native_closed_seed_policy_proof.py
           aquillm/apps/collections/tests/test_native_closed_seed_policy_scope.py
           aquillm/apps/collections/tests/test_native_closed_seed_policy_compatibility.py
