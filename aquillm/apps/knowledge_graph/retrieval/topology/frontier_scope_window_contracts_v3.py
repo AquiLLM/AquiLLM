@@ -16,7 +16,7 @@ from .gateway_json import load_gateway_json
 PATH = "/v3/topology/frontier/scope-window"
 VERSION = "topology-frontier-scope-window-v3"
 CHECKSUM = sha256(
-    b"scope-complete-window-v3:mode-window-or-single:ready-operation-checkpoint-grant-sequence:scope-only:KGFS0001:sha256:index160-limit2:raw128-limit10-total320-reject320:raw-reserve320:frames8:raw4:rows320:expanded1048576:wire1048576:request4194304:owner-replay:single-predispatch-checkpoint-only"
+    b"scope-complete-window-v3:mode-window-or-single:ready-operation-checkpoint-grant-sequence:scope-only:KGFS0001:sha256:index160-limit2:raw128-limit10-total320-reject320:raw-reserve320:frames8:raw4:rows320:expanded1048576:wire1048576:request4194304:owner-replay:single-predispatch-checkpoint-only:captured-directory-recipes:stage-byte-bounds"
 ).hexdigest()
 
 

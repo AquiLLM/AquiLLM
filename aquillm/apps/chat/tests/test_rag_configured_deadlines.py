@@ -18,9 +18,7 @@ from lib.retrieval.turn_budget import TurnBudget, TurnLimits
     [
         (None, 15000),
         ("30000", 30000),
-        ("999999", 30000),
-        ("bad", 15000),
-        ("-1", 3000),
+        ("3000", 3000),
     ],
 )
 def test_configured_retrieval_time_is_bounded(monkeypatch, configured, expected):
@@ -28,6 +26,15 @@ def test_configured_retrieval_time_is_bounded(monkeypatch, configured, expected)
     if configured is not None:
         monkeypatch.setenv("RAG_RETRIEVAL_TIMEOUT_MS", configured)
     assert rag_config.retrieval_timeout_ms() == expected
+
+
+@pytest.mark.parametrize("configured", ["999999", "bad", "-1", "", "3000.5"])
+def test_invalid_retrieval_allowance_is_rejected(monkeypatch, configured):
+    from django.core.exceptions import ImproperlyConfigured
+
+    monkeypatch.setenv("RAG_RETRIEVAL_TIMEOUT_MS", configured)
+    with pytest.raises(ImproperlyConfigured, match="RAG_RETRIEVAL_TIMEOUT_MS"):
+        rag_config.retrieval_timeout_ms()
 
 
 def test_longer_turn_still_expires_and_retains_work_caps(monkeypatch):

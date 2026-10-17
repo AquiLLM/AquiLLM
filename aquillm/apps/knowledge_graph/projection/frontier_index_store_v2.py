@@ -1,9 +1,12 @@
 """Opt-in staging and independent attestation of the derived access structure."""
 
+from os import environ
+
 from .frontier_index_build_v2 import build_frontier_index
 from .frontier_index_contracts_v2 import (
     MARKER_FIELDS,
     PACKED_VERSION,
+    VERSION,
     decode_record,
     marker_present,
 )
@@ -12,8 +15,16 @@ from .memgraph_records import FAMILIES, _dto, _properties
 from .memgraph_streaming import _BUNDLE_FIELDS, _COUNT_FIELDS, stream_family_records
 from .records import CollectionGraphProjectionBundleV1, ProjectionGenerationMarkerV1
 
-# Deploy this writer only after compatible readers; existing markers keep their recipe.
+# Activate only after compatible readers are deployed. Existing markers retain
+# their recipe even while new packed writes are disabled during rollback.
 _NEW_INDEX_VERSION = PACKED_VERSION
+
+
+def _new_index_version():
+    enabled = environ.get("KG_FRONTIER_PACKED_WRITES_ENABLED", "0")
+    if enabled not in {"0", "1"}:
+        raise ValueError("KG_FRONTIER_PACKED_WRITES_ENABLED must be exactly 0 or 1")
+    return _NEW_INDEX_VERSION if enabled == "1" else VERSION
 
 
 def _stored_version(marker):
@@ -53,7 +64,7 @@ def write_frontier_index(driver, bundle, *, batch_size, timeout):
         raise ValueError("frontier population requires a staging generation")
     existing = _stored_version(marker)
     index = build_frontier_index(
-        bundle, directory_version=existing or _NEW_INDEX_VERSION
+        bundle, directory_version=existing or _new_index_version()
     )
     if existing and any(
         marker[name] != value

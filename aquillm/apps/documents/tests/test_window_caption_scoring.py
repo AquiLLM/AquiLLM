@@ -155,7 +155,9 @@ def test_caption_policy_and_revision_have_exact_score_and_cache_identity():
         budget.close("caption_identity_test")
 
 
-@pytest.mark.parametrize("text", ["", "caption " * 10000])
+@pytest.mark.parametrize(
+    "text", ["", "caption " * 10000], ids=["empty", "over_allowance"]
+)
 def test_empty_or_over_allowance_caption_never_claims_complete_score(text):
     budget, provider = TurnBudget(TurnLimits()), TextProvider()
     scorer = WindowSelectionScorer(

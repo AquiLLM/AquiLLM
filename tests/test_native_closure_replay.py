@@ -104,6 +104,9 @@ def test_native_stage_omits_materialized_union_and_keeps_actual_schedule():
     assert stage["pool_count"] is None
     assert stage["acquisition_schedule_observed"] == "native_closure"
     assert stage["acquisition_score_status"] == "not_requested"
+    assert stage["rerank_count"] is None
+    assert stage["rerank_status"] == "not_requested"
+    assert result["targets"][0]["rerank_ranks"] is None
     assert stage["graph"]["unique_count"] is None
     assert stage["graph"]["finalized_count"] == 1
     assert stage["graph"]["candidate_provenance"] == "finalized_novel"
@@ -124,6 +127,18 @@ def test_fallback_schedule_is_distinct_from_requested_intent():
     assert stage["acquisition_schedule_observed"] == "scored"
     assert stage["acquisition_initial_ineligibility_reason"] == "native_ineligible"
     assert result["acquisition_schedule"]["matches_requested"] is False
+
+
+@pytest.mark.parametrize("stage", [
+    {},
+    {"acquisition_schedule_observed": "scored",
+     "acquisition_score_status": "unavailable", "post_rerank": [{"chunk_id": 99}]},
+])
+def test_missing_or_failed_reranking_does_not_claim_observed_ranks(stage):
+    result = summarize([("retrieval_stages", stage)], [], [TARGET])
+    assert result["stages"][0]["rerank_status"] == "unavailable"
+    assert result["stages"][0]["rerank_count"] is None
+    assert result["targets"][0]["rerank_ranks"] is None
 
 
 def test_novel_final_excludes_full_captured_baseline_and_requires_finalization():

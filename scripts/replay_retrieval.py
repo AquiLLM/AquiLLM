@@ -148,6 +148,7 @@ def effective_config(settings, config):
         rerank_pair_token_limit,
         rerank_text_mode,
     )
+    from lib.llm.turn_context import configured_tool_timeout
     from lib.retrieval.turn_budget import TurnLimits
 
     return {
@@ -162,6 +163,11 @@ def effective_config(settings, config):
         ),
         "graph_direct": getattr(settings, "KG_GRAPH_DIRECT_ENABLED", False),
         "graph_extended": getattr(settings, "KG_GRAPH_EXTENDED_ENABLED", False),
+        "graph_timeouts_ms": {
+            name: getattr(settings, f"KG_GRAPH_{name.upper()}_TIMEOUT_MS", None)
+            for name in ("overall", "direct", "extended")
+        },
+        "retrieval_tool_timeout_seconds": configured_tool_timeout(retrieval=True),
         "rerank_character_cap": rerank_doc_char_limit(),
         "rerank_pair_token_cap": rerank_pair_token_limit(),
         "rerank_text_mode": rerank_text_mode(),

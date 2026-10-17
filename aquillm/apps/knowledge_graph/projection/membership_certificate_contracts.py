@@ -12,7 +12,15 @@ from hmac import new as hmac_new
 from . import identifiers as ids
 from . import membership_checksum as checksums
 from . import membership_identifiers as encoders
-from . import membership_source_query, memberships, records, serialization
+from . import (
+    membership_source_query,
+    memberships,
+    records,
+    serialization,
+)
+from .membership_derivation_source import (
+    NATIVE_SOURCE_REVISION as _NATIVE_SOURCE_REVISION,
+)
 
 CERTIFICATE_FORMAT = "membership-certificate-v1"
 SOURCE_FORMAT = "kg-membership-source-sql-v1"
@@ -127,6 +135,8 @@ def _same_binding(current, native):
 
 def _capture(codec):
     try:
+        if _NATIVE_SOURCE_REVISION is None:
+            return None
         for module, bindings in _DEFINING_BINDINGS:
             for path, native in bindings.items():
                 current = module
@@ -168,6 +178,7 @@ def _identity(fields):
     body = [
         "membership-derivation-record-checksum-v1",
         "canonical-json-utf8-v1",
+        _NATIVE_SOURCE_REVISION,
         _DEFINING_BINDINGS[0][1]["MEMBERSHIP_REGISTRY_GENERATION"],
         fields[1],
         fields[2],
@@ -226,9 +237,10 @@ def sign_membership_certificate(payload: dict, codec) -> str:
     return signature
 
 
-def verify_membership_certificate(
-    *, payload: dict, signature: str, codec, projection, fingerprint
+def verify_membership_certificate_binding(
+    *, payload: dict, signature: str, codec, projection
 ) -> bool:
+    """Authenticate an occurrence before spending a fresh source fingerprint."""
     fields = _capture(codec)
     if fields is None:
         return False
@@ -252,6 +264,24 @@ def verify_membership_certificate(
                 value = str(value)
             if type(value) is not type(payload[name]) or value != payload[name]:
                 return False
+        return _capture(codec) == fields
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def verify_membership_certificate(
+    *, payload: dict, signature: str, codec, projection, fingerprint
+) -> bool:
+    fields = _capture(codec)
+    if fields is None:
+        return False
+    try:
+        if type(payload) is dict:
+            payload = payload.copy()
+        if not verify_membership_certificate_binding(
+            payload=payload, signature=signature, codec=codec, projection=projection
+        ):
+            return False
         if (
             fingerprint.duplicate_links is not False
             or type(fingerprint.collection_id) is not int

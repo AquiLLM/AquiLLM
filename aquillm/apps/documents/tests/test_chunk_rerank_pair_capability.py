@@ -92,3 +92,36 @@ def test_warm_validation_requires_token_ids_usage_and_recognized_overflow(
     assert (result is not None) is expected
     assert budget.pairs_used["acquisition"] == (3 if valid_score else 1)
     assert (registered_pair_counter(provider) is not None) is expected
+
+
+@pytest.mark.parametrize("invalidated", ["other", "same", "all"])
+@pytest.mark.parametrize("previously_registered", [False, True])
+def test_pending_counter_publication_only_fences_invalidated_provider(
+    monkeypatch, invalidated, previously_registered
+):
+    from dataclasses import replace
+    from time import monotonic
+
+    from apps.documents.services import chunk_rerank_pair_capability as capability
+
+    monkeypatch.setattr(capability, "_registered", {})
+    provider = SimpleNamespace(scorer_fingerprint="pending-provider")
+    other = SimpleNamespace(scorer_fingerprint="unrelated-provider")
+    candidate = capability.VerifiedPairCounter(
+        Tokenizer(), "template", "identity", "tokenizer", "template-id",
+        monotonic() + 60,
+    )
+    if previously_registered:
+        capability._registered[provider.scorer_fingerprint] = candidate
+    expected = capability._pair_snapshot(provider)
+    capability.invalidate_pair_capability(
+        {"other": other, "same": provider, "all": None}[invalidated]
+    )
+    result = capability._publish_pair_candidate(
+        provider, replace(candidate), expected=expected,
+        budget=TurnBudget(TurnLimits()),
+    )
+    assert (result is not None) is (invalidated == "other")
+    assert (capability.registered_pair_counter(provider) is not None) is (
+        invalidated == "other"
+    )

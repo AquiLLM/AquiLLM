@@ -1,6 +1,5 @@
 # ruff: noqa: E501
 """Fail-closed contracts for hybrid graph retrieval configuration."""
-
 from __future__ import annotations
 
 import dataclasses
@@ -17,6 +16,7 @@ from lib.knowledge_graph import retrieval_config as config
 DEFAULTS: dict[str, object] = {
     "memgraph_projection_enabled": False,
     "membership_certificate_enabled": False,
+    "membership_certificate_issuance_enabled": False,
     "memgraph_traversal_enabled": False,
     "graph_direct_enabled": False,
     "graph_extended_enabled": False,

@@ -1,4 +1,4 @@
-"""Build one authorized pool with comparable model scores or whole-pool RRF."""
+"""Build one authorized pool with comparable model or explicitly ranked relevance."""
 
 from __future__ import annotations
 
@@ -10,14 +10,11 @@ from time import monotonic
 from apps.chat.services.rag_retrieval import FusedRetrievalPool
 from apps.chat.services.rag_selection_hydration import hydrate_pool_rows
 from apps.chat.services.rag_selection_inputs import prepare_final_input
-from apps.chat.services.rag_selection_policy import (
-    normalize_relevance_scores as _normalize,
-)
-from apps.chat.services.rag_selection_reuse import _reused_scores, retained_scores_match
+from apps.chat.services.rag_selection_relevance import selection_relevance
+from apps.chat.services.rag_selection_reuse import _reused_scores
 from apps.chat.services.rag_selection_types import PreparedSelection, SelectionCandidate
 from apps.chat.services.rag_selection_window_admission import (
     admit_window_sources,
-    complete_admitted_rows,
 )
 from apps.collections.services.retrieval_authorization import (
     RetrievalAuthorizationContext,
@@ -234,28 +231,13 @@ def prepare_selection_candidates(
         if initial_by_id.get(item.chunk.pk) == (item.source_fingerprint, item.excerpt)
     )
     scores = {**reused, **new_scores}
-    model_rows = complete_admitted_rows(retained, admitted, scores)
-    model_complete = (
-        bool(model_rows)
-        and used_scorer is not None
-        and used_scorer.scoring_kind in {"pointwise", "listwise"}
-        and retained_scores_match(model_rows, scores, final_inputs)
-        and clock() < deadline
-        and (turn_budget is None or turn_budget.can_publish())
+    relevance, status, fallback_reason, published_scores = selection_relevance(
+        pool=pool, retained=retained, admitted=admitted, scores=scores,
+        final_inputs=final_inputs, scorer=used_scorer,
+        live=clock() < deadline and (turn_budget is None or turn_budget.can_publish()),
+        allow_partial=len(admitted) < len(first), fallback_reason=fallback_reason,
     )
-    if model_complete:
-        retained = model_rows
-        relevance = _normalize(tuple(scores[item.chunk.pk].value for item in retained))
-        status = "model"
-    else:
-        by_citation = dict(pool.fused_scores)
-        relevance = _normalize(
-            tuple(
-                by_citation.get(str(item.row.get("citation", item.row.get("ref"))), 0.0)
-                for item in retained
-            )
-        )
-        status = "rank_fallback"
+    if status == "rank_fallback":
         fallback_reason = fallback_reason or (
             "deadline" if clock() >= deadline else "incomplete_scores"
         )
@@ -277,10 +259,13 @@ def prepare_selection_candidates(
             item.row,
             getattr(item, "prepared_evidence", None),
             source_candidate_cost(item, turn_budget) if source_mode else None,
-            scores[item.chunk.pk].value if model_complete else None,
-            used_scorer.scorer_fingerprint if used_scorer else None,
-            used_scorer.scoring_kind if model_complete else "rank_only",
-            "uncalibrated" if model_complete else "unavailable",
+            published_scores[item.chunk.pk].value
+            if item.chunk.pk in published_scores else None,
+            used_scorer.scorer_fingerprint
+            if item.chunk.pk in published_scores else None,
+            used_scorer.scoring_kind
+            if item.chunk.pk in published_scores else "rank_only",
+            "uncalibrated" if item.chunk.pk in published_scores else "unavailable",
         )
         for item, value in zip(retained, relevance)
     )

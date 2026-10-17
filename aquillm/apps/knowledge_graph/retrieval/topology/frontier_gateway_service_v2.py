@@ -33,7 +33,9 @@ async def respond(send, status, payload, *, version=VERSION, checksum=CHECKSUM):
     )
 
 
-def read_payload(driver, request, deadline, maximum, *, binary=False):
+def read_payload(
+    driver, request, deadline, maximum, *, binary=False, expanded_maximum=None
+):
     remaining = deadline - v1.monotonic()
     if remaining <= 0:
         raise TimeoutError
@@ -69,7 +71,8 @@ def read_payload(driver, request, deadline, maximum, *, binary=False):
     if batch:
         from .frontier_gateway_codec_v2 import MAX_EXPANDED_BYTES, encode_batch_response
 
-        if len(payload) > min(maximum, MAX_EXPANDED_BYTES):
+        expanded_limit = maximum if expanded_maximum is None else expanded_maximum
+        if len(payload) > min(expanded_limit, MAX_EXPANDED_BYTES):
             raise FrontierCompletedBudgetFailureV2(len(rows))
         if v1.monotonic() >= deadline:
             raise TimeoutError

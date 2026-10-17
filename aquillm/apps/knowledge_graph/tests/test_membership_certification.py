@@ -92,9 +92,12 @@ def test_snapshot_rejects_raw_preexisting_transaction(monkeypatch):
             pytest.fail("raw transaction accepted")
 
 
-def test_dispatch_explicitly_connects_with_no_broker_retries(monkeypatch):
+@pytest.mark.parametrize("flag", [
+    "membership_certificate_enabled", "membership_certificate_issuance_enabled",
+])
+def test_dispatch_explicitly_connects_with_no_broker_retries(monkeypatch, flag):
     monkeypatch.setattr(jobs, "load_projection_runtime_settings", lambda: SimpleNamespace(
-        membership_certificate_enabled=True, projection_queue="certificate-test"))
+        **{flag: True}, projection_queue="certificate-test"))
     connection = Mock(transport_options={})
     connection.transport.driver_type = "redis"
     connection.__enter__ = Mock(return_value=connection)

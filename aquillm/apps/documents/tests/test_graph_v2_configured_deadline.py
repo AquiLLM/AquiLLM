@@ -8,14 +8,16 @@ import pytest
 from apps.documents.services import hybrid_graph_v2 as graph_pool
 from apps.knowledge_graph.retrieval import graph_candidate_operation_v2 as owner
 from lib.retrieval import TurnBudget, TurnLimits
+from lib.retrieval.operation import operation_scope
 
 
 @pytest.mark.parametrize("timeout,elapsed,remaining", [
     (20000, 0, 20), (20000, 23, 7), (5000, 0, 5),
     (20001, 0, None), (True, 0, None), (0, 0, None),
 ])
+@pytest.mark.parametrize("action_ms", [None, 3000])
 def test_non_native_v2_deadline_accepts_configured_time_and_clamps_turn(
-    monkeypatch, timeout, elapsed, remaining,
+    monkeypatch, timeout, elapsed, remaining, action_ms,
 ):
     now = [100.0]
     budget = TurnBudget(TurnLimits(retrieval_ms=30000), clock=lambda: now[0])
@@ -51,9 +53,10 @@ def test_non_native_v2_deadline_accepts_configured_time_and_clamps_turn(
     assert owner._capture_closed_graph_attempt(
         snapshot, "q", authorization, dependencies, diagnostics=lambda *_: {},
     ) is None
-    rows, _ = graph_pool.hybrid_graph_candidate_pool_v2(
-        snapshot, "q", authorization, dependencies,
-    )
+    with operation_scope(budget, timeout_ms=action_ms):
+        rows, _ = graph_pool.hybrid_graph_candidate_pool_v2(
+            snapshot, "q", authorization, dependencies,
+        )
     assert rows == ()
     if remaining is None:
         assert seen == []
@@ -61,4 +64,5 @@ def test_non_native_v2_deadline_accepts_configured_time_and_clamps_turn(
         assert len(seen) == 1
         assert seen[0]["budget"] is budget
         assert seen[0]["authorization"] is authorization
-        assert seen[0]["deadline"] == now[0] + remaining
+        expected = min(remaining, action_ms / 1000) if action_ms else remaining
+        assert seen[0]["deadline"] == now[0] + expected

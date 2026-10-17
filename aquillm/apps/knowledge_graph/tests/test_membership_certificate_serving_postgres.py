@@ -103,11 +103,12 @@ def test_final_boundary_rejects_changed_current_authority(monkeypatch, mutation)
         )
 
 
-@pytest.mark.parametrize("mode", ["off", "missing", "bad-signature"])
+@pytest.mark.parametrize("mode", ["off", "issuance-only", "missing", "bad-signature"])
 def test_legacy_or_certificate_miss_retains_full_derivation(monkeypatch, mode):
     f, _, settings, _ = certified_fixture(monkeypatch)
-    if mode == "off":
+    if mode in {"off", "issuance-only"}:
         settings.membership_certificate_enabled = False
+        settings.membership_certificate_issuance_enabled = mode == "issuance-only"
     elif mode == "missing":
         CollectionGraphMembershipCertificate.objects.all().delete()
     else:
@@ -119,7 +120,7 @@ def test_legacy_or_certificate_miss_retains_full_derivation(monkeypatch, mode):
             representation_snapshot=f.snapshot,
         )
     assert len(selected.groups) == 2
-    assert len(fingerprint_queries(queries)) == (0 if mode == "off" else 1)
+    assert not fingerprint_queries(queries)
     assert len(full_membership_queries(queries)) == 2
 
 

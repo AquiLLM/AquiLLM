@@ -23,6 +23,7 @@ from apps.knowledge_graph.tests.test_frontier_copy_feasibility_v2 import Gateway
 
 @pytest.fixture
 def live_scope(request, monkeypatch):
+    monkeypatch.setenv("KG_FRONTIER_PACKED_WRITES_ENABLED", "1")
     monkeypatch.setattr(frontier_index_store_v2, "_NEW_INDEX_VERSION", request.param)
     yield from _live_scope.__wrapped__()
 

@@ -242,3 +242,28 @@ def test_owner_takeover_after_final_renewal_preserves_ready_cas_rejection(
 
     assert not outcome.ready and outcome.failure_code == "lease_lost"
     assert fixture.state.failed == 0
+
+
+@pytest.mark.parametrize("published", [False, True])
+def test_cleanup_deadline_preserves_completed_publication_outcome(
+    run_projection, monkeypatch, published
+):
+    from contextlib import contextmanager
+
+    original_operation = worker.projection_operation
+
+    @contextmanager
+    def expiring_cleanup(*args, **kwargs):
+        with original_operation(*args, **kwargs):
+            yield
+        raise TimeoutError("cleanup deadline")
+
+    monkeypatch.setattr(worker, "projection_operation", expiring_cleanup)
+    if not published:
+        run_projection.state.ready = lambda **kw: SimpleNamespace(
+            published=False, failure_code="lease_lost"
+        )
+    outcome = run_projection.run()
+    assert outcome.ready is published
+    assert outcome.failure_code == (None if published else "lease_lost")
+    assert run_projection.state.failed == 0

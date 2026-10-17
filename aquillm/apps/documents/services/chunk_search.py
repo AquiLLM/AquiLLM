@@ -36,7 +36,7 @@ from apps.documents.services.chunk_search_candidates import (
 )
 from apps.documents.services.chunk_search_logging import (
     completed_search_diagnostics,
-    log_search_failure,
+    log_search_failure, log_schedule_fallback,
 )
 from apps.documents.services.chunk_search_validation import (
     candidate_identifier as _candidate_identifier,
@@ -347,6 +347,7 @@ def text_chunk_search(
                 native.hybrid_pool, native.graph_diagnostics
             )
         else:
+            log_schedule_fallback(logger, requested_schedule)
             snapshot, ranking, final_rows, score_set, hybrid_pool, graph_diagnostics = (
                 _scored_search(
                     snapshot, query, top_k, model_cls=model_cls,
@@ -360,7 +361,6 @@ def text_chunk_search(
                 )
             )
         reranked_results = final_rows[2]
-
         total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
         diagnostics = completed_search_diagnostics(
             logger,

@@ -7,6 +7,13 @@
 **Tech Stack:** Django, PostgreSQL/pgvector, Celery/Redis, Python asyncio, vLLM, Docker Compose.
 **Spec:** docs/superpowers/specs/2026-10-13-development-retrieval-recovery.md
 
+**Evidence references:** Historical operator filenames below identify private
+execution records, not files required to review or build this repository. The
+current requirements are the checked-in spec, implementation, regression tests,
+and remaining acceptance gates. Private corpus snapshots and credentials remain
+outside Git. Historical directions to read those operator records apply only to
+the original execution session.
+
 ## Global Constraints
 
 - Initial recovery base b76f2ef7afa257436e1310d55e38e585f878f4e4; that release merged through PR245. Remaining graph work uses the existing isolated worktree, codex/graph-development-repair and PR246 against development720d6c12fdf1b8999edf98a3beb1def9881f9164. The merged rag-remediation and development-retrieval-recovery branches were removed on October15; retain their commits and evidence. Do not create another integration branch for this work.
@@ -113,7 +120,7 @@
 
 **Status:** Authorized after the private complete-scope batching feasibility gate; no graph efficacy or latency acceptance is implied.
 **Base:** e4c6a841d10bbb0ffe93209aad34156602a1400e, existing codex/graph-development-repair worktree. Root alone commits/pushes/SSH/deploys. No child agents. Prefix every shell command with rtk. Do not print credentials, source bodies, SQL parameters or raw retrieval inputs. Preserve private evidence files.
-**Requirements supplement:** Read `.superpowers/sdd/2026-10-13-development-retrieval-recovery/resume-native-exact-scope-proof-design.md` in full. Its exact proof, eligibility guards, accounting and negative cases are requirements, subject to the explicit rulings here. Do not read other historical plans/reports unless required to understand an interface.
+**Requirements supplement:** Read `operator-local evidence archive/resume-native-exact-scope-proof-design.md` in full. Its exact proof, eligibility guards, accounting and negative cases are requirements, subject to the explicit rulings here. Do not read other historical plans/reports unless required to understand an interface.
 **Files:** One focused private native proof helper under apps/collections/services, minimal shared immutable-context validation extraction in retrieval_authorization.py if necessary, graph_seed_reads_v2.py for exactly-one-statement metering reuse, and narrow closed_graph_seed_validation.py/closed_seed_projection_batch.py/extended_seed_repository.py integration. Add focused tests and their existing CI selector. No frontier/protocol/copy/ready/body/public policy behavior changes. Do not remove duplicated direct transaction controls in this task.
 
 - [ ] Reproduce current real Django policy cost at both batch boundaries on PostgreSQL with31 selected collections/530 selected documents:4 data statements/1122 returned rows. Compare against required2 statements/2 proof rows. RED must identify missing optimized behavior, not only a nonexistent symbol.
@@ -127,7 +134,7 @@
 
 ### Task 12: Integrate the proven native metadata reductions
 
-**Working root:** C:/Users/jackj/.codex/worktrees/rag-remediation/AquiLLM. **Base:** f15f2d7fa2f98e559c72ec14e3eb7a9628a02e19. **Branch:** codex/graph-development-repair, existing PR246. No new branch/worktree/PR. **Q:** .superpowers/sdd/2026-10-13-development-retrieval-recovery.
+**Working root:** the existing repository checkout. **Base:** f15f2d7fa2f98e559c72ec14e3eb7a9628a02e19. **Branch:** codex/graph-development-repair, existing PR246. No new branch/worktree/PR. **Q:** operator-local evidence archive.
 
 **Binding design:** Q/resume-native-metadata-product-design.md, all sections after its historical entry-gate discussion. Read Q/resume-metadata-product-entry-ruling.md first; it supersedes that draft's pending status and obsolete counts. Q/resume-native-metadata-spike-report.md and its private scripts are differential evidence, not production code to copy wholesale. All entry gates for this metadata implementation are now met; final native/protocol/rollout gates remain unmet.
 
@@ -147,7 +154,7 @@
 
 **Entry gate satisfied:** Task12 is independently accepted at daf4b2b48d921c12697e2c536b44fb8e3f4004b1 (task-12-independent-review.md and task-12-fix1-review.md; measured SQL and exact coverage boundaries in task-12-report.md). Root authorizes Task13 product implementation and the sole local source/PostgreSQL/Memgraph slot. The measured local native fixture is18queries/19rows; remote15/294 remains projected and requires closing native replay. Use the existing codex/graph-development-repair worktree and PR246; no new branch, worktree or PR.
 
-**Binding design:** Read Q/resume-complete-raw-scope-product-design.md in full. Its exact constants, two strict request schemas, fixed query, scope state, original-ledger accounting, failure ordering, allowed file boundaries and nine acceptance steps are requirements. Q is .superpowers/sdd/2026-10-13-development-retrieval-recovery. The design's synthetic15/294 prefix is projected remote arithmetic, not an observed integrated native result. Consume Task12's truthful local fixture counts without reshaping its fixtures.
+**Binding design:** Read Q/resume-complete-raw-scope-product-design.md in full. Its exact constants, two strict request schemas, fixed query, scope state, original-ledger accounting, failure ordering, allowed file boundaries and nine acceptance steps are requirements. Q is operator-local evidence archive. The design's synthetic15/294 prefix is projected remote arithmetic, not an observed integrated native result. Consume Task12's truthful local fixture counts without reshaping its fixtures.
 
 **Ownership:** one fresh implementer owns only the design's scope planner, fixed route/codec and narrow existing frontier integrations, cohesive tests and CI selectors. Reuse existing transport, deadline, worker occupancy, checkpoint and ledger helpers; do not build a parallel generic framework. New modules require a real responsibility/line-ratchet boundary. Each new file remains at most300lines; no ratchet growth or exemption. Task11/12 metadata, shared meter/budget semantics, copy traversal, graph builders and schema are outside this task. Root alone commits, pushes and operates SSH254. No child agents or unrelated service changes.
 
@@ -162,7 +169,7 @@
 
 **Entry and scope:** Root authorizes the bounded metadata repair from Task12's reviewed native implementation and measured939 diagnostic. Task13 is frozen at97ec19f87fe68f82ab0ae8f7059d67f6a5eabc7a and its source/database slot is released. Its independent read-only review may proceed concurrently; Task14 must not edit its runtime modules or claim it accepted. Use the same codex/graph-development-repair branch/worktree/PR246. Root alone commits, pushes, operates SSH and integrates review findings. No child agents, new branches or worktrees.
 
-**Binding design:** Read Q/task-14-metadata-check-cost-design.md in full; Q is .superpowers/sdd/2026-10-13-development-retrieval-recovery. Root approves its exact six original-definition entrypoint pins, closed typed selected/direct data comparison, retained SQL/provenance/lifetime boundaries and bounded local performance experiment. The design's pending authorization text is superseded by this task. Data-drift equivalence assumes fixed original validator semantics; the six pins cover entrypoint replacement, not arbitrary Python global mutation. No transitive dependency scanner is authorized.
+**Binding design:** Read Q/task-14-metadata-check-cost-design.md in full; Q is operator-local evidence archive. Root approves its exact six original-definition entrypoint pins, closed typed selected/direct data comparison, retained SQL/provenance/lifetime boundaries and bounded local performance experiment. The design's pending authorization text is superseded by this task. Data-drift equivalence assumes fixed original validator semantics; the six pins cover entrypoint replacement, not arbitrary Python global mutation. No transitive dependency scanner is authorized.
 
 **Files:** Create aquillm/apps/knowledge_graph/retrieval/native_seed_metadata_values.py for closed typed expected values and comparison, plus aquillm/apps/knowledge_graph/tests/test_native_metadata_value_binding.py for cohesive regressions. Modify only retrieval/native_seed_metadata_owner.py, retrieval/native_direct_seed_repository.py, retrieval/native_seed_metadata_eligibility.py, and definition-only constants in retrieval/ready_scope_v2.py, retrieval/topology/contracts.py, documents/services/representation_store.py, all under aquillm/apps. Add the new test selector to the existing native CI group in .github/workflows/test-backend-frontend.yml. Reuse existing native fixture helpers. Each new file <=300lines, existing ratchets unchanged, no exemptions. Report a necessary ownership expansion before making it.
 
@@ -179,7 +186,7 @@
 
 **Entry:** Tasks12-14 and the final effective-predicate correction are reviewed and accepted at23a1c0aeca09e6bd8f5fa75a8e908f0206251544. The source-validation diagnostic is complete. Root authorizes implementation now; no additional attribution experiment is required. Use the existing codex/graph-development-repair worktree and PR246. Root alone commits, pushes, uses SSH or deploys. No child agents, new branches, worktrees or PRs.
 
-**Binding design:** Read Q/task15-closed-source-repair-design.md in full (SHA256950493c55df8d426ed9746c9341fd9217f2fa2f7bf92b84c153371dfb92809d7). Q is .superpowers/sdd/2026-10-13-development-retrieval-recovery. Its A/B/C file boundaries, retained checks, failure behavior and five focused test groups are requirements. The design is source-grounded; its approximately963ms serialized pregraph savings envelope is not an observed wall-time improvement or acceptance. Q/task15-dense-boundary-map.md supplies supplementary call-site context if needed.
+**Binding design:** Read Q/task15-closed-source-repair-design.md in full (SHA256950493c55df8d426ed9746c9341fd9217f2fa2f7bf92b84c153371dfb92809d7). Q is operator-local evidence archive. Its A/B/C file boundaries, retained checks, failure behavior and five focused test groups are requirements. The design is source-grounded; its approximately963ms serialized pregraph savings envelope is not an observed wall-time improvement or acceptance. Q/task15-dense-boundary-map.md supplies supplementary call-site context if needed.
 
 **Ownership:** one implementer owns only the named existing source, dense, native metadata/admission and graph owner modules, cohesive regression tests/fixtures and their existing CI selectors. Reuse existing owners, stage, bounded database contexts and body readers; no new operation subsystem, public bypass flag, reusable proof/token/cache, schema change or microbenchmark. Keep new files at most300lines and existing ratchets unchanged. Report necessary ownership expansion before editing. Preserve public and standalone contracts. Root grants the sole local source/PostgreSQL slot; no other test stack, server or shared service is authorized.
 
@@ -194,7 +201,7 @@
 
 ### Task 16: Compose the closed seed prefix without duplicate source sweeps
 
-**Working root:** C:/Users/jackj/.codex/worktrees/rag-remediation/AquiLLM. **Base:** 33d6943e82185f7d8737674203968b0023141faa. **Branch:** codex/graph-development-repair, existing PR246. **Q:** .superpowers/sdd/2026-10-13-development-retrieval-recovery. Root alone commits, pushes, reviews, operates SSH and deploys. No new branch/worktree/PR or child agents. Prefix shell commands with rtk. Preserve private evidence and avoid credentials, environment dumps, source bodies, raw questions or SQL parameters in output.
+**Working root:** the existing repository checkout. **Base:** 33d6943e82185f7d8737674203968b0023141faa. **Branch:** codex/graph-development-repair, existing PR246. **Q:** operator-local evidence archive. Root alone commits, pushes, reviews, operates SSH and deploys. No new branch/worktree/PR or child agents. Prefix shell commands with rtk. Preserve private evidence and avoid credentials, environment dumps, source bodies, raw questions or SQL parameters in output.
 
 **Evidence and scope:** The exact33d6 native replay still times out before frontier initialization. Its passive trace has1374.099ms of allocation work before direct preparation; historical real rows() calls at the two redundant boundaries cost282-318ms combined. This task is a bounded correction, not a claim of sufficient latency or completed graph repair. Binding supplemental design: Q/task16-seed-prefix-design.md. Do not read unrelated old reports or re-run prior whole-branch reviews.
 
@@ -211,7 +218,7 @@
 
 ### Task 17: Remove the duplicate native candidate database boundary
 
-**Working root:** C:/Users/jackj/.codex/worktrees/rag-remediation/AquiLLM, branch codex/graph-development-repair, existing PR246. **Q:** .superpowers/sdd/2026-10-13-development-retrieval-recovery. Root will give the exact reviewed integration base on dispatch. Root alone commits/pushes/reviews/SSH/deploys. No new branch/worktree/PR, child agents or destructive resets; prefix shell commands with rtk and preserve private evidence.
+**Working root:** the existing repository checkout, branch codex/graph-development-repair, existing PR246. **Q:** operator-local evidence archive. Root will give the exact reviewed integration base on dispatch. Root alone commits/pushes/reviews/SSH/deploys. No new branch/worktree/PR, child agents or destructive resets; prefix shell commands with rtk and preserve private evidence.
 
 **Binding design:** Q/task17-native-single-bound-design.md, SHA256 a178c23c88c8e141ba52f70d555e0e1ab50bc8fff49f3e48ad641f8f0bdc3a07. Read it in full. It specifies exact interfaces/order/negative tests. Actual33d6 direct work completes five candidate statements, with two nested bounded_seed_read contexts per statement. Control-SQL duration is not separately measured; do not promise a latency reduction or graph acceptance. Queryset rewrites, pure layout tuple reuse, broader check removal and scheduling changes are not selected.
 
@@ -228,7 +235,7 @@
 
 ### Task 18: Keep query-admission capture regressions attached to the real capture boundary
 
-**Working root:** C:/Users/jackj/.codex/worktrees/rag-remediation/AquiLLM, same branch and PR246. **Q:** .superpowers/sdd/2026-10-13-development-retrieval-recovery. Root alone integrates, commits, pushes and operates SSH. Prefix shell commands with rtk. No new branches, child agents, product changes or broad test repeats.
+**Working root:** the existing repository checkout, same branch and PR246. **Q:** operator-local evidence archive. Root alone integrates, commits, pushes and operates SSH. Prefix shell commands with rtk. No new branches, child agents, product changes or broad test repeats.
 
 **Evidence:** exact33d6943 backend CI run38823914407/job116726769285 passes all graph/seed stages, then fails test_query_binding_admission.py::test_uncaptured_original_query_admission_captures_once_and_searches[False]: returned passages are nonempty, but the spy on chunk_search_scope.freeze_active_representations observes zero calls. Task15 changed initial tool_scope capture to chunk_search_scope._capture_tool_scope, which calls private _capture_active_representations. The original test's intended invariant remains one real initial capture and identity retention. Preserve raw failure at Q/ci33d6-backend-raw.log. The source=True case was not reached after pytest maxfail; verify both cases.
 
@@ -241,7 +248,7 @@
 
 ### Task 19: Prove consumed graph sources without eagerly loading unused document provenance
 
-**Working root:** C:/Users/jackj/.codex/worktrees/rag-remediation/AquiLLM. **Base:** b09e13e59fe7e1e84d69fac71190d857c7a88344. **Branch/PR:** existing codex/graph-development-repair /246. **Q:** .superpowers/sdd/2026-10-13-development-retrieval-recovery. Root owns integration, commits, pushes, SSH and deployment. No new branch/worktree/PR, child agents, destructive resets or private corpus/credential/environment output. All shell commands start rtk.
+**Working root:** the existing repository checkout. **Base:** b09e13e59fe7e1e84d69fac71190d857c7a88344. **Branch/PR:** existing codex/graph-development-repair /246. **Q:** operator-local evidence archive. Root owns integration, commits, pushes, SSH and deployment. No new branch/worktree/PR, child agents, destructive resets or private corpus/credential/environment output. All shell commands start rtk.
 
 **Binding design:** Q/task19-consumed-source-closure-design.md, SHA256 3dea29d0297b84162036618db329a8e498e0fd8d5f86f806e403a23063e80860. Read this after the task brief; it is the concrete source-proof design and evidence boundary. Root adopts its exact Task8 revision under the standing authorization to repair graph retrieval: unused graph-record completeness moves out of the query path for this version, while consumed proof, full requested authority, fresh generations/source/body and final publication remain mandatory. This does not authorize skipping any proof of used evidence, reducing selected scope or increasing budgets. Performance is unproven.
 
@@ -260,7 +267,7 @@
 
 ### Task 20: Preserve the actual graph readiness failure in replay evidence
 
-**Working root:** C:/Users/jackj/.codex/worktrees/rag-remediation/AquiLLM. **Base:** bc99cf8dac43c10b2d7df3cb2bb9c52417267a38. Same branch/PR246; Q=.superpowers/sdd/2026-10-13-development-retrieval-recovery. Root alone commits, integrates, pushes, operates SSH and deploys. No subagents, new branches/worktrees/PRs, operational changes or source bodies/credentials in output. All shell commands start rtk. Root's plan edit is intentional and outside implementer ownership.
+**Working root:** the existing repository checkout. **Base:** bc99cf8dac43c10b2d7df3cb2bb9c52417267a38. Same branch/PR246; Q=operator-local evidence archive. Root alone commits, integrates, pushes, operates SSH and deploys. No subagents, new branches/worktrees/PRs, operational changes or source bodies/credentials in output. All shell commands start rtk. Root's plan edit is intentional and outside implementer ownership.
 
 **Confirmed defect:** original-budget full31/530 native254 replay `readiness-bc99-r1` (sidecar SHA d1963ba15acdcc68b82873243e3bc571b3f9633cadc07c006b194d1d47d93bd7) has8 indexed generations and23 without frontier markers. Canonical loader raises exact FrontierUnavailableV2 with coverage unavailable/not_ready/530selected/0ready. The eventual compact graph observation reports only frontier_budget because an earlier nonexception seed-limit reason is selected by the empty-handoff path. Q/bc99-frontier-budget-diagnosis-followup.md documents the source chain. Root is repairing index readiness separately through the existing background lifecycle. This task changes private diagnostics only; it does not fix readiness or prove functional retrieval.
 
@@ -356,3 +363,27 @@ CI at a1d6ea4b passes549 backend tests and fails4 old limit-closure assertions e
 - [x] Verify packed-compatible rollback audits for all31 current generations. Fresh read-only inspection finds zero pending/building generations while the old binary-only worker remains stopped; retain the exact metadata receipt and worker hold. This does not authorize resuming that old worker.
 - [ ] Integrate reviewed fixes on the existing branch/PR246, complete current-head tests and build source-verified immutable images. Measure this declared development profile on the full31 scope; require successful model scoring and report graph-selected and genuinely novel final evidence separately.
 - [ ] Complete real ASGI checks and matched old/new graph-quality comparisons with explicit budgets and identical scope/questions. Do not infer usefulness from latency or candidate counts alone. Deploy only the verified candidate, with packed-compatible rollback readers and recorded pending-work disposition.
+
+### Task34: verify the declared development profile
+
+- [x] Fix projection runtime filtering of `KG_GRAPH_REMEDIATION_MODE`, which rejected the declared V2 timeout before hydration. Focused and independent checks each pass16 tests.
+- [x] Build and source-verify private candidate `afe1ba95`; the serving development stack remains unchanged. Under the declared30s retrieval/20s graph profile, ordinary full31-collection retrieval completes in20.346s, graph retrieval publishes6 novel candidates, and final selection produces9 passages with0 graph passages. All scope/runtime/data checks pass. This proves execution, not graph quality improvement.
+- [x] Finish the matched Q431 scored-off/native-off/native-both group with3 valid receipts. Comparative analysis and the known-question study remain required; Q431 does not require a graph passage.
+- [ ] Complete fresh candidate quality comparisons, persisted ASGI answers/citations, current-head CI and compatible deployment. The Task35 repairs supersede `afe1ba95`; its receipts remain historical and cannot certify the repaired source.
+
+### Task35: address the external adversarial PR audit
+
+Source: [audit of PR246 at afe1ba95](https://github.com/AquiLLM/AquiLLM/pull/246#issuecomment-6243022638). Keep the existing branch and PR. The audit's concrete regressions are separate from its proposed architecture experiments.
+
+- [x] Reproduce and repair final admission deleting unscored sources, inaccurate cached-pair costs, and cross-provider invalidation. All authorized candidates remain eligible. Partial model results reorder only scored positions in the fused ranking and are labeled `partial_model_ranked`; unknown scores are not compared with model magnitudes. No final graph quota or larger pair allowance. The isolated scoring suite passes180 tests, including all8 suffix-evidence cases.
+- [x] Clamp non-closed V2 graph work to the action deadline as well as the turn deadline. Reject invalid retrieval timeouts explicitly. Report actual configured graph and retrieval-tool timeouts, and mark native/unavailable rerank metrics unavailable. The focused replay regression run passes64 tests;7 database cases are reserved for integration verification.
+- [x] Read/authenticate certificate candidates before fresh H; preserve fresh-source and final-signature checks. Preserve committed ready outcomes across cleanup timeouts, add keyset maintenance pagination and explicit disabled/miss counts, separate certificate issuance from serving, and bind certificate identity to trusted derivation source. The isolated membership/native-guard suite passes256 tests. Existing certificates need background recertification before shortcut acceptance; no ready graph rewriting is required.
+- [x] Implement byte-bounded packed preparation and remaining-window admission while preserving completed-query accounting, the original binary physical-cost gates, and all row/query/wire limits. Bind captured directory recipes in both finite-window protocol fingerprints. New packed writes require explicit default-off activation; existing stored recipes remain authoritative. Bound gateway driver connection and pool waits. Required actual-service tests pass30 cases with0 skips; affected frontier/gateway regressions pass357 cases with0 skips. Source hashes match before and after both runs.
+- [x] Add acquisition fallback logging and environment documentation. Remove workstation paths from this plan and explain historical private evidence references. CI now discovers graph tests absent from explicit selectors, has an explicit backend time limit, runs past the first failure, and fails required-service skips/xfails.
+- [x] Propagate issuance, certificate-serving and packed-write controls independently through all five explicit projection-worker Compose maps, defaulting off. Rendered Compose regressions pass51 tests. Independent review finds no remaining source defect in packed/membership changes; it also identified and verified the repaired replay-unavailable and required-service-xfail regressions.
+- [x] Finish the combined replay/deadline/native-dispatch integration pass:220 tests pass with0 skips against PostgreSQL/Python3.12, including the7 database replay cases. All2,547 synchronized Python/config files match before and after the run. Existing SDK/startup warnings remain.
+- [ ] Commit/push the repaired source and require current-head CI.
+- [ ] Build one immutable repaired caller/gateway pair, recertify the captured31 ready occurrences using restricted background roles, and run fresh ordinary retrieval, matched comparisons and persisted ASGI checks. Capture effective limits and graph marginal recall/final evidence; do not reuse pre-audit receipts as acceptance.
+- [ ] Update PR246 with audit disposition and measured results, merge the reviewed source to development, pull over SSH on254, and deploy matching readers/gateway before explicitly enabling packed background writes. Retain a matched packed-compatible rollback pair and verify live health/chat.
+
+Audit dispositions that do not require a speculative rewrite: the native ready-generation witness already checks every typed generation field and identity (covered by the real native guard tests); acquisition schedule values are already validated and repeated reads detect drift; the one-slot metadata overlap has a serial fallback and is not evidence of a correctness defect; no import cycle was reproduced. Exact physical-count tests enforce operational budgets and remain where they express that contract. A larger held-out benchmark, domain ontology/identity changes, different PPR weighting and alternative storage architectures remain research proposals, not proven fixes or claims of this recovery. The10 known questions plus Q431 are a regression study, not a held-out quality benchmark. A zero-graph final answer is valid when baseline evidence is better. Mixed finite-window protocol versions fail before a physical query; deployment uses matched peers instead of an automatic retry after an uncertain request.

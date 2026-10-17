@@ -66,6 +66,7 @@ class Trace:
         self.final = {}
         self.timings = {}
         self.rank_fallback = None
+        self.selection_score_status = None
         self.coverage = None
         self.upstream = []
         self.window_scores = []
@@ -114,9 +115,12 @@ class Trace:
                     key = (str(prepared.source.document_id), prepared.source.chunk_id)
                     hints[key] = [(s.start, s.end) for s in prepared.spans]
                 self.rank_fallback = (
-                    packet.selection.score_status == "rank_fallback"
+                    packet.selection.score_status != "model"
                     if packet.selection
                     else None
+                )
+                self.selection_score_status = (
+                    packet.selection.score_status if packet.selection else None
                 )
                 self.coverage = packet.retrieval_status
             self.delivered, self.unknown = map_payload(
@@ -194,6 +198,7 @@ class Trace:
                 "rerank_http": http,
                 "cache_operations": cache,
                 "rank_fallback": self.rank_fallback,
+                "selection_score_status": self.selection_score_status,
                 "window_scores": self.window_scores,
                 "coverage": self.coverage,
                 **{k: v for k, v in self.final.items() if k != "at"},

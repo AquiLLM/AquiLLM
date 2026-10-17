@@ -53,6 +53,11 @@ def snapshot(state):
         )
     checkpoint = {
         "stage": state.stage,
+        "directory_versions": [
+            [slots[g], marker["frontier_version"]]
+            for g, marker in reads.manifests.items()
+            if "frontier_version" in marker
+        ],
         "guard": [
             [slots[g], k]
             for g, k in sorted(set(reads._index_records) | set(state.staged))
@@ -122,6 +127,8 @@ def restore(reads, operation, checkpoint, *, complete_scope=False):
     generations = [g.generation_key for g in reads.ready.selected_generations]
     roots = {generations[i]: key for i, key in operation["roots"]}
     reads.manifests = {g: {"frontier_root_key": key} for g, key in roots.items()}
+    for slot, version in checkpoint.get("directory_versions", ()):
+        reads.manifests[generations[slot]]["frontier_version"] = version
     copying = operation["kind"] == "copy"
 
     def target(slot, name):

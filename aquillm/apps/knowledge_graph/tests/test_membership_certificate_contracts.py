@@ -10,6 +10,7 @@ from apps.knowledge_graph.projection import identifiers as ids
 from apps.knowledge_graph.projection import (
     membership_certificate_contracts as contracts,
 )
+from apps.knowledge_graph.projection import membership_derivation_source as derivation
 
 
 def evidence():
@@ -79,6 +80,47 @@ def test_valid_certificate_and_wrong_actual_key():
     assert verify(codec, payload, projection, fingerprint, signature)
     wrong = ids.HmacSha256ProjectionIdentifierCodec(b"rotated", key_version="key-v1")
     assert not verify(wrong, payload, projection, fingerprint, signature)
+
+
+def test_changed_derivation_source_rejects_previously_signed_certificate(
+    tmp_path, monkeypatch
+):
+    source = tmp_path / "derivation.py"
+    source.write_bytes(b"def derive(value):\n    return value\n")
+    module = SimpleNamespace(__name__="derivation", __file__=str(source))
+    first = derivation.source_revision((module,))
+    monkeypatch.setattr(contracts, "_NATIVE_SOURCE_REVISION", first)
+    codec, payload, projection, fingerprint = evidence()
+    signature = contracts.sign_membership_certificate(payload, codec)
+    assert verify(codec, payload, projection, fingerprint, signature)
+    source.write_bytes(b"def derive(value):\n    return value + 1\n")
+    monkeypatch.setattr(
+        contracts, "_NATIVE_SOURCE_REVISION", derivation.source_revision((module,))
+    )
+    assert not verify(codec, payload, projection, fingerprint, signature)
+
+
+def test_derivation_source_revision_ignores_platform_newlines(tmp_path):
+    source = tmp_path / "derivation.py"
+    module = SimpleNamespace(__name__="derivation", __file__=str(source))
+    source.write_bytes(b"def derive(value):\n    return value\n")
+    first = derivation.source_revision((module,))
+    source.write_bytes(b"def derive(value):\r\n    return value\r\n")
+    assert derivation.source_revision((module,)) == first
+
+
+@pytest.mark.parametrize("filename", ["missing.py", "bytecode.pyc"])
+def test_unavailable_derivation_source_disables_certificates(
+    tmp_path, monkeypatch, filename
+):
+    if filename.endswith(".pyc"):
+        (tmp_path / filename).write_bytes(b"bytecode-only deployment")
+    module = SimpleNamespace(__name__="derivation", __file__=str(tmp_path / filename))
+    revision = derivation.source_revision((module,))
+    assert revision is None
+    monkeypatch.setattr(contracts, "_NATIVE_SOURCE_REVISION", revision)
+    codec = ids.HmacSha256ProjectionIdentifierCodec(b"test", key_version="key-v1")
+    assert contracts.native_membership_identity(codec) is None
 
 
 def test_valid_shape_payload_tampering_breaks_signature():

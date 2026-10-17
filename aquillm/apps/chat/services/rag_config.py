@@ -45,7 +45,17 @@ def direct_rag_max_queries() -> int:
 
 def retrieval_timeout_ms() -> int:
     """Opt-in time allowance; source, query and scoring work caps stay fixed."""
-    return min(30_000, _env_int("RAG_RETRIEVAL_TIMEOUT_MS", 15_000, minimum=3_000))
+    from django.core.exceptions import ImproperlyConfigured
+
+    try:
+        value = int(getenv("RAG_RETRIEVAL_TIMEOUT_MS", "15000"))
+        if not 3000 <= value <= 30000:
+            raise ValueError
+    except (TypeError, ValueError):
+        raise ImproperlyConfigured(
+            "RAG_RETRIEVAL_TIMEOUT_MS must be an integer from 3000 through 30000"
+        ) from None
+    return value
 
 
 def evidence_token_budget() -> int:

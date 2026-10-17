@@ -67,19 +67,22 @@ class Scenario:
             )
 
 
-def test_45_sources_with_46_windows_select_complete_model_subset():
+def test_45_sources_with_46_windows_keep_all_candidates_with_partial_model_order():
     case = Scenario()
     plans = tuple(case.scorer.plan("q", chunk) for chunk in case.chunks)
     assert sum(len(plan.windows) for plan in plans) == 46
     result = case.prepare()
-    assert result.score_status == "model" and result.fallback_reason is None
-    assert [item.chunk_id for item in result.candidates] == list(range(1, 45))
+    assert result.score_status == "partial_model_ranked"
+    assert result.fallback_reason == "incomplete_scores"
+    assert [item.chunk_id for item in result.candidates] == list(range(1, 46))
     assert result.new_pairs == len(case.calls) == case.budget.pairs_used["final"] == 45
     assert case.budget.limits.final_pairs == 45
     assert case.budget.limits.final_scoring_ms == 3000
     assert case.budget.pairs_used["acquisition"] == 0
-    assert all(item.scoring_kind == "pointwise" for item in result.candidates)
-    assert all(item.raw_score is not None for item in result.candidates)
+    assert all(item.scoring_kind == "pointwise" for item in result.candidates[:-1])
+    assert all(item.raw_score is not None for item in result.candidates[:-1])
+    assert result.candidates[-1].scoring_kind == "rank_only"
+    assert result.candidates[-1].raw_score is None
     assert all(("q", window.text) in case.calls for window in plans[42].windows)
     selection = select_evidence(
         result.candidates, profile=SelectionProfile("test", 1, 0, "v1"),
@@ -97,8 +100,8 @@ def test_45_sources_with_46_windows_select_complete_model_subset():
 def test_oversized_plan_does_not_block_later_source_that_fits():
     case = Scenario(count=3, long_at=2, final_pairs=2)
     result = case.prepare()
-    assert result.score_status == "model"
-    assert [item.chunk_id for item in result.candidates] == [1, 3]
+    assert result.score_status == "partial_model_ranked"
+    assert [item.chunk_id for item in result.candidates] == [1, 2, 3]
     assert case.calls == [("q", "source 1"), ("q", "source 3")]
     assert result.new_pairs == case.budget.pairs_used["final"] == 2
 
@@ -121,8 +124,8 @@ def test_admitted_model_scores_revalidate_current_source_and_permission(failure)
     if failure == "revoke":
         assert not result.candidates
     else:
-        assert result.score_status == "model"
-        assert len(result.candidates) == 43
+        assert result.score_status == "partial_model_ranked"
+        assert len(result.candidates) == 44
 
 
 def test_exact_complete_reused_score_consumes_no_new_pair_allowance():
@@ -157,8 +160,8 @@ def test_admission_subtracts_already_used_final_pairs():
     case = Scenario(count=3, long_at=2, final_pairs=3)
     assert case.budget.reserve_pairs(1, phase="final")
     result = case.prepare()
-    assert result.score_status == "model"
-    assert [item.chunk_id for item in result.candidates] == [1, 3]
+    assert result.score_status == "partial_model_ranked"
+    assert [item.chunk_id for item in result.candidates] == [1, 2, 3]
     assert result.new_pairs == 2 and case.budget.pairs_used["final"] == 3
 
 
@@ -185,6 +188,37 @@ def test_zero_remaining_pairs_preserves_original_ranked_pool():
     result = case.prepare()
     assert result.score_status == "rank_fallback" and len(result.candidates) == 3
     assert result.new_pairs == 0 and case.calls == []
+
+
+def test_partial_model_order_uses_scored_slots_without_demoting_unscored_sources():
+    case = Scenario(count=4, long_at=2, final_pairs=2)
+    result = case.prepare()
+    assert result.score_status == "partial_model_ranked"
+    assert [candidate.relevance for candidate in result.candidates] == [
+        1 / 3, 2 / 3, 1.0, 0.0,
+    ]
+    assert [candidate.raw_score for candidate in result.candidates] == [
+        0.0, None, 10.0, None,
+    ]
+    selection = select_evidence(
+        result.candidates, profile=SelectionProfile("test", 1, 0, "v1"),
+        limits=SelectionLimits(4, 4, 7000), score_status=result.score_status,
+    )
+    assert [candidate.chunk_id for candidate in selection.candidates] == [3, 2, 1, 4]
+    assert [candidate.score_interpretation for candidate in result.candidates] == [
+        "uncalibrated", "unavailable", "uncalibrated", "unavailable",
+    ]
+
+
+def test_zero_remaining_pairs_with_reused_subset_preserves_every_source():
+    case = Scenario(count=3, long_at=2, final_pairs=0)
+    reused = case.scorer.score_windows("q", case.chunks[:1], phase="acquisition")
+    case.calls.clear()
+    result = case.prepare(score_sets=(reused,))
+    assert result.score_status == "partial_model_ranked"
+    assert [candidate.chunk_id for candidate in result.candidates] == [1, 2, 3]
+    assert result.reused_pairs == 1 and result.new_pairs == 0
+    assert case.calls == []
 
 
 @pytest.mark.parametrize("final_pairs", [2, 3])

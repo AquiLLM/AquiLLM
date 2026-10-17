@@ -18,7 +18,8 @@ def admit_window_sources(items, *, scorer, query, reused):
         plan = scorer.plan(query, item.chunk)
         if plan.preparation_coverage != "complete" or not plan.required_window_ids:
             return items
-        costs.append(0 if item.chunk.pk in reused else len(plan.required_window_ids))
+        cached = item.chunk.pk in reused or scorer.cached_score(query, item.chunk)
+        costs.append(0 if cached else len(plan.required_window_ids))
     remaining = max(
         0, scorer.budget.limits.final_pairs - scorer.budget.pairs_used["final"]
     )
@@ -35,11 +36,3 @@ def admit_window_sources(items, *, scorer, query, reused):
             "remaining_final_pairs": remaining,
         })
     return tuple(admitted)
-
-
-def complete_admitted_rows(retained, admitted, scores):
-    """A failed admitted batch must leave the original pool available for fallback."""
-    if any(item.chunk.pk not in scores for item in admitted):
-        return retained
-    ids = {item.chunk.pk for item in admitted}
-    return tuple(item for item in retained if item.chunk.pk in ids)

@@ -90,13 +90,36 @@ class StoreDriver:
         store.write_frontier_index(self, self.bundle, batch_size=32, timeout=5.0)
 
 
-def test_new_unmarked_staging_uses_packed_recipe():
+def test_new_unmarked_staging_uses_packed_recipe_after_explicit_activation(monkeypatch):
+    monkeypatch.setenv("KG_FRONTIER_PACKED_WRITES_ENABLED", "1")
     driver = StoreDriver()
     driver.write()
     assert driver.marker["frontier_version"] == PACKED
 
 
+@pytest.mark.parametrize("setting", [None, "0"])
+def test_unmarked_staging_keeps_compatible_recipe_until_activation(
+    monkeypatch, setting
+):
+    monkeypatch.delenv("KG_FRONTIER_PACKED_WRITES_ENABLED", raising=False)
+    if setting is not None:
+        monkeypatch.setenv("KG_FRONTIER_PACKED_WRITES_ENABLED", setting)
+    driver = StoreDriver()
+    driver.write()
+    assert driver.marker["frontier_version"] == VERSION
+
+
+@pytest.mark.parametrize("setting", ["true", "false", "", " 1", "2"])
+def test_invalid_packed_activation_refuses_before_writes(monkeypatch, setting):
+    monkeypatch.setenv("KG_FRONTIER_PACKED_WRITES_ENABLED", setting)
+    driver = StoreDriver()
+    with pytest.raises(ValueError, match="KG_FRONTIER_PACKED_WRITES_ENABLED"):
+        driver.write()
+    assert not driver.writes
+
+
 def test_private_writer_rollback_only_selects_unmarked_staging(monkeypatch):
+    monkeypatch.setenv("KG_FRONTIER_PACKED_WRITES_ENABLED", "1")
     monkeypatch.setattr(store, "_NEW_INDEX_VERSION", VERSION)
     driver = StoreDriver()
     driver.write()
@@ -202,6 +225,7 @@ def test_owned_memgraph_staging_validation_and_ready_audit_keep_recipe(
         )
 
         monkeypatch.setattr(store, "_NEW_INDEX_VERSION", version)
+        monkeypatch.setenv("KG_FRONTIER_PACKED_WRITES_ENABLED", "1")
         driver = Neo4jMemgraphDriver(
             target["uri"],
             "",

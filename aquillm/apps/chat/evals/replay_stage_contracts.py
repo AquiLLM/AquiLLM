@@ -49,6 +49,18 @@ def materialized_pool(stage):
     return None
 
 
+def reranked_pool(stage):
+    # Native closure publishes an unscored handoff in the historical post_rerank
+    # field. It is still useful for source provenance, never for rerank metrics.
+    if (
+        stage.get("acquisition_schedule_observed") == "native_closure"
+        or stage.get("acquisition_score_status") in ("unavailable", "not_requested")
+    ):
+        return None
+    rows = stage.get("post_rerank")
+    return rows if type(rows) in (list, tuple) else None
+
+
 def _valid_ids(values):
     return type(values) in (list, tuple) and all(
         type(pk) is int and 0 < pk <= 9_223_372_036_854_775_807 for pk in values

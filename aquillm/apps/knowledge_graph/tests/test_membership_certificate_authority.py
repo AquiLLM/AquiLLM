@@ -60,6 +60,7 @@ def test_hit_reads_fresh_sql_each_boundary(proof):
 def test_invalid_certificate_is_miss(proof, field, value):
     setattr(proof.certificate, field, value)
     assert proof.load() == {}
+    assert not proof.calls
 
 
 def test_source_change_is_miss(proof):
@@ -67,15 +68,30 @@ def test_source_change_is_miss(proof):
     assert proof.load() == {}
 
 
+def test_certificate_is_reauthenticated_after_fresh_source_read(proof):
+    original_cursor = proof.database.cursor
+
+    class Cursor(original_cursor):
+        def execute(self, sql, params):
+            super().execute(sql, params)
+            proof.certificate.signature = "0" * 64
+
+    proof.database.cursor = Cursor
+    assert proof.load() == {}
+    assert len(proof.calls) == 1
+
+
 @pytest.mark.parametrize("state", ["pending", "building"])
 def test_nonready_is_not_certified(proof, state):
     proof.projection.state = state
     assert proof.load() == {}
+    assert not proof.calls
 
 
 def test_no_certificate_is_miss(proof, monkeypatch):
     monkeypatch.setattr(authority, "_certificate_rows", lambda **kw: ())
     assert proof.load() == {}
+    assert not proof.calls
 
 
 def test_nonpostgres_is_miss(proof):
@@ -128,11 +144,26 @@ def test_partial_fingerprint_result_rejects(proof):
         proof.load()
 
 
-def test_duplicate_links_reject_even_without_certificate(proof, monkeypatch):
-    monkeypatch.setattr(authority, "_certificate_rows", lambda **kw: ())
+def test_duplicate_links_reject_when_certificate_starts_source_proof(proof):
     _replace_rows(proof, [(3, 2, 3, True, "b" * 64, "read committed")])
     with pytest.raises(ValueError, match="duplicate"):
         proof.load()
+
+
+def test_source_scan_covers_only_authenticated_projection_candidates(proof):
+    from copy import copy
+    from uuid import UUID
+
+    missing = copy(proof.projection)
+    missing.id, missing.collection_id = UUID(int=99), 99
+    result = authority.certified_membership_checksums(
+        projections=(proof.projection, missing),
+        using="default",
+        codec=proof.codec,
+        check=lambda: None,
+    )
+    assert result == {proof.projection.id: "a" * 64}
+    assert proof.calls[0][1] == [[3], [3]]
 
 
 def test_wrong_isolation_rejects(proof):

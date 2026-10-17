@@ -2,6 +2,9 @@
 
 from math import isfinite
 
+from apps.knowledge_graph.projection.frontier_index_contracts_v2 import (
+    DIRECTORY_VERSIONS,
+)
 from apps.knowledge_graph.projection.frontier_reads_v2 import KINDS
 
 from .frontier_contracts_v2 import _count, _key
@@ -137,7 +140,21 @@ def validate_checkpoint(ready, operation, checkpoint):
     stage = checkpoint["stage"]
     if not stage.startswith(operation["kind"] + "_"):
         raise ValueError("frontier operation stage mismatch")
-    exact(checkpoint, {"stage", "guard", "wave"} | STAGES[stage])
+    version_fields = (
+        {"directory_versions"} if "directory_versions" in checkpoint else set()
+    )
+    exact(checkpoint, {"stage", "guard", "wave"} | STAGES[stage] | version_fields)
+    version_slots = set()
+    for i, version in array(checkpoint.get("directory_versions", []), 128, 2):
+        slot(i)
+        if (
+            i in version_slots
+            or i not in {r[0] for r in roots}
+            or type(version) is not str
+            or version not in DIRECTORY_VERSIONS
+        ):
+            raise ValueError("frontier captured directory recipe invalid")
+        version_slots.add(i)
     if type(checkpoint["wave"]) is not bool or (
         stage.endswith("raw") and checkpoint["wave"]
     ):

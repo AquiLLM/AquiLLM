@@ -178,7 +178,10 @@ async def test_incomplete_windows_use_declared_uncalibrated_fallback(
     fake_answer(monkeypatch, binding)
     with mode_environment("combined"), transport_observation([]):
         result = await run_case(case, manifest, mode="combined", cache_state="cold")
-    assert observed.scores
+    if failure == "final_reserve":
+        assert observed.scores == []  # Admission rejects all new scoring at zero cap.
+    else:
+        assert observed.scores
     assert all(item[3].status == "unavailable" for item in observed.scores)
     assert all(
         item[3].scoring_kind == "rank_only" and not item[3].scores

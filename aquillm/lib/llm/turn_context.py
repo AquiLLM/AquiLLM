@@ -76,11 +76,16 @@ def is_retrieval_tool(name):
     }
 
 
+def configured_tool_timeout(*, retrieval=False):
+    """Configured cap, independent of a particular turn's remaining allowance."""
+    maximum = 30.0 if retrieval else 10.0
+    return min(maximum, max(0.001, float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))))
+
+
 def tool_timeout(name=None, *, retrieval=False):
     state = current_turn()
     bounded_retrieval = state is not None and (retrieval or is_retrieval_tool(name))
-    maximum = 30.0 if bounded_retrieval else 10.0
-    seconds = min(maximum, max(0.001, float(getenv("TOOL_CALL_TIMEOUT_SECONDS", "10"))))
+    seconds = configured_tool_timeout(retrieval=bounded_retrieval)
     return (
         min(seconds, state.budget.remaining_ms() / 1000)
         if bounded_retrieval

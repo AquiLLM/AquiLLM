@@ -8,7 +8,12 @@ from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
 )
 
 from .frontier_generation_batch_v2 import keyed_rows
-from .frontier_index_contracts_v2 import decode_record
+from .frontier_index_contracts_v2 import PACKED_VERSION, VERSION, decode_record
+from .frontier_preparation_bytes_v2 import (
+    ENVELOPE_BYTES,
+    MAX_EXPANDED_BYTES,
+    index_row_bytes,
+)
 from .frontier_reads_v2 import KINDS, schema_error
 
 
@@ -45,6 +50,14 @@ class PreparationReads:
             self.reads.budget.available_read_rows() if allowance is None else allowance
         )
         count = min(limit, available // factor)
+        if kind == "index_batch_multi":
+            expanded, admitted = ENVELOPE_BYTES, 0
+            for generation, _ in pending[:count]:
+                expanded += index_row_bytes(self, generation)
+                if expanded > MAX_EXPANDED_BYTES:
+                    break
+                admitted += 1
+            count = admitted
         if count < 1:
             raise FrontierBudgetExceeded("frontier physical work exhausted")
         self.effect = PreparationRead(kind, tuple(pending[:count]))
@@ -116,6 +129,13 @@ class PreparationReads:
                     )
                     if value[0] not in {"directory", "entry"}:
                         raise ValueError
+                    version = self.reads.manifests.get(generation, {}).get(
+                        "frontier_version"
+                    )
+                    if value[0] == "directory" and version in {VERSION, PACKED_VERSION}:
+                        packed = type(value[1]) is dict and "layout" in value[1]
+                        if packed != (version == PACKED_VERSION):
+                            raise ValueError("directory differs from captured recipe")
                 except (KeyError, TypeError, ValueError):
                     raise schema_error() from None
                 decoded[generation, key] = value

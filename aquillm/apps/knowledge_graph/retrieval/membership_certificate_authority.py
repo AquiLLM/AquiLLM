@@ -53,7 +53,6 @@ def certified_membership_checksums(*, projections: tuple, using: str, codec, che
         return {}
     if type(projections) is not tuple or len(projections) > 128:
         raise ValueError("membership certificate authority is unbounded")
-    collection_ids = tuple(sorted({row.collection_id for row in projections}))
 
     def proof_check():
         check()
@@ -64,17 +63,6 @@ def certified_membership_checksums(*, projections: tuple, using: str, codec, che
             raise ValueError("membership certificate native identity changed")
 
     proof_check()
-    fingerprints = _SOURCE_READER(
-        collection_ids=collection_ids,
-        using=using,
-        check=proof_check,
-        require_fresh=True,
-    )
-    proof_check()
-    if set(fingerprints) != set(collection_ids):
-        raise ValueError("membership fingerprint collection coverage invalid")
-    if any(row.duplicate_links is not False for row in fingerprints.values()):
-        raise ValueError("membership fingerprint duplicate links")
     certificates = _certificate_rows(
         projection_ids=tuple(row.id for row in projections),
         using=using,
@@ -86,8 +74,34 @@ def certified_membership_checksums(*, projections: tuple, using: str, codec, che
         if row.projection_id in by_projection:
             raise ValueError("membership certificate projection duplicated")
         by_projection[row.projection_id] = row
-    result = {}
+    candidates = []
     for projection in projections:
+        proof_check()
+        certificate = by_projection.get(projection.id)
+        if certificate is not None and contracts.verify_membership_certificate_binding(
+            payload=certificate.payload,
+            signature=certificate.signature,
+            codec=codec,
+            projection=projection,
+        ):
+            candidates.append(projection)
+        proof_check()
+    if not candidates:
+        return {}
+    collection_ids = tuple(sorted({row.collection_id for row in candidates}))
+    fingerprints = _SOURCE_READER(
+        collection_ids=collection_ids,
+        using=using,
+        check=proof_check,
+        require_fresh=True,
+    )
+    proof_check()
+    if set(fingerprints) != set(collection_ids):
+        raise ValueError("membership fingerprint collection coverage invalid")
+    if any(row.duplicate_links is not False for row in fingerprints.values()):
+        raise ValueError("membership fingerprint duplicate links")
+    result = {}
+    for projection in candidates:
         proof_check()
         certificate = by_projection.get(projection.id)
         if certificate is not None and contracts.verify_membership_certificate(

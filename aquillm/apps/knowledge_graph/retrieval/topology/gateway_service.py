@@ -85,9 +85,9 @@ def _get_runtime(
             settings.query_username,
             settings.query_password.get_secret_value(),
             database=settings.memgraph_database,
-            # Retrying a managed read would reuse a stale per-transaction
-            # timeout beyond the caller's absolute branch deadline.
             max_transaction_retry_time=0.0,
+            connection_timeout=settings.timeout_ms / 1000.0,
+            connection_acquisition_timeout=settings.timeout_ms / 1000.0,
         )
         _runtime = TopologyGatewayRuntime(
             settings, driver, Neo4jProjectedTopologyQueryAdapter(driver)

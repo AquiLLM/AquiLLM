@@ -17,7 +17,11 @@ from .chunk_search_legacy_graph import graph_diagnostics
 from .chunk_search_scope import current_scope, validate_requested_authorization
 from .chunk_search_scoped_rows import validate_rows
 from .hybrid_graph_authorization import reauthorized_baseline
-from .source_deadline import check_source_deadline, source_preparation_scope
+from .source_deadline import (
+    check_source_deadline,
+    source_preparation_scope,
+    source_remaining_ms,
+)
 
 
 def bounded_pool_v2(ordered, baseline):
@@ -63,9 +67,12 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
             from .graph_admission_adapter import fallback_baseline
 
             if getattr(snapshot, "source_admission", None) is not None:
-                validate_requested_authorization(scope.runtime, authorization, snapshot.documents)
+                validate_requested_authorization(
+                    scope.runtime, authorization, snapshot.documents
+                )
             rows, _ = reauthorized_baseline(
-                fallback_baseline(snapshot, admit_deferred=admit_deferred), authorization
+                fallback_baseline(snapshot, admit_deferred=admit_deferred),
+                authorization,
             )
             if scope is not None:
                 rows = tuple(
@@ -75,7 +82,9 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
                 )
             observation = diagnostics("error")
             if getattr(snapshot, "source_admission", None) is not None:
-                observation["source_admission"] = snapshot.source_admission.diagnostics()
+                observation["source_admission"] = (
+                    snapshot.source_admission.diagnostics()
+                )
             return bounded_pool_v2(rows, rows), observation
         except Exception:
             return (), diagnostics("error")
@@ -104,7 +113,10 @@ def hybrid_graph_candidate_pool_v2(snapshot, query, authorization, dependencies)
         timeout = settings.graph_overall_timeout_ms
         if type(timeout) is not int or not 1 <= timeout <= 20_000:
             raise ValueError("graph timeout is invalid")
-        deadline = min(started + timeout / 1000, started + budget.remaining_ms() / 1000)
+        deadline = min(
+            started + timeout / 1000,
+            started + source_remaining_ms(budget.remaining_ms()) / 1000,
+        )
         with source_preparation_scope(deadline, perf_counter, budget), scope.database():
             validate_requested_authorization(
                 scope.runtime, authorization, snapshot.documents

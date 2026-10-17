@@ -25,7 +25,7 @@ _LOGGER_FACTORIES = frozenset({"getLogger", "get_logger", "LoggerAdapter"})
 _FIELDS = frozenset({"reason", "count", "elapsed_ms"})
 _VALUE_ASSIGNMENTS = (ast.AnnAssign, ast.NamedExpr)
 # fmt: off
-_REASONS = frozenset({"completed", "invalid_request", "authentication_failed", "payload_too_large", "upstream_unavailable", "provenance_mismatch", "mixed_ontology", "embedding_unavailable", "no_seeds", "ambiguous", "internal_failure", "readiness_collection_coverage", "readiness_document_coverage", "readiness_identifier_key", "readiness_membership_missing", "readiness_artifact_missing", "readiness_membership_stale", "readiness_artifact_binding", "readiness_artifact_collection", "readiness_manifest"})
+_REASONS = frozenset({"completed", "invalid_request", "authentication_failed", "payload_too_large", "upstream_unavailable", "provenance_mismatch", "mixed_ontology", "embedding_unavailable", "no_seeds", "ambiguous", "internal_failure", "native_ineligible", "readiness_collection_coverage", "readiness_document_coverage", "readiness_identifier_key", "readiness_membership_missing", "readiness_artifact_missing", "readiness_membership_stale", "readiness_artifact_binding", "readiness_artifact_collection", "readiness_manifest"})
 # fmt: on
 
 

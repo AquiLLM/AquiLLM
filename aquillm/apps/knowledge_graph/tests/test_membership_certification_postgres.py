@@ -111,6 +111,15 @@ def test_full_checksum_mismatch_publishes_nothing(ready):
     assert not CollectionGraphMembershipCertificate.objects.exists()
 
 
+def test_background_issuance_does_not_require_serving(ready):
+    ready[3].membership_certificate_enabled = False
+    ready[3].membership_certificate_issuance_enabled = True
+    assert certify(ready)
+    assert CollectionGraphMembershipCertificate.objects.filter(
+        projection=ready[2]
+    ).exists()
+
+
 def test_rebuilt_occurrence_fences_state_CAS(ready, monkeypatch):
     original = cert.publish_membership_certificate
     def publish(**kwargs):

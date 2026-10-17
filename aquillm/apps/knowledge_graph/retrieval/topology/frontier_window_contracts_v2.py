@@ -17,7 +17,7 @@ from .gateway_contracts import MAX_REQUEST_BYTES, _canonical, _load
 PATH = "/v2/topology/frontier/window"
 VERSION = "topology-frontier-window-v2"
 CHECKSUM = sha256(
-    b"finite-scope-copy-v2:ready-checkpoint-grant-sequence:pair-mask25600:KGFW0001:sha256:frames8:raw4:rows320:expanded1048576:wire1048576:request4194304:owner-replay"
+    b"finite-scope-copy-v2:ready-checkpoint-grant-sequence:pair-mask25600:KGFW0001:sha256:frames8:raw4:rows320:expanded1048576:wire1048576:request4194304:owner-replay:captured-directory-recipes:stage-byte-bounds"
 ).hexdigest()
 
 

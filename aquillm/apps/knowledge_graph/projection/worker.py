@@ -135,9 +135,7 @@ def project_generation(
             raise
         # A completed ready CAS (or handled ambiguous transition) must never
         # become a staging retry merely because context cleanup crossed the end.
-        return ProjectionRunOutcomeV1(
-            outcome.projection_id, False, outcome.failure_code or "lease_lost"
-        )
+        return outcome
 
 
 def _project_generation(*, projection_id, lease_owner, settings):

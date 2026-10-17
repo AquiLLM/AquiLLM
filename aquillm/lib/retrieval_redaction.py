@@ -23,6 +23,7 @@ class RetrievalLogReason(StrEnum):
     NO_SEEDS = "no_seeds"
     AMBIGUOUS = "ambiguous"
     INTERNAL_FAILURE = "internal_failure"
+    NATIVE_INELIGIBLE = "native_ineligible"
     READINESS_COLLECTION_COVERAGE = "readiness_collection_coverage"
     READINESS_DOCUMENT_COVERAGE = "readiness_document_coverage"
     READINESS_IDENTIFIER_KEY = "readiness_identifier_key"

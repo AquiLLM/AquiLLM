@@ -3,6 +3,28 @@
 import pytest
 
 
+@pytest.mark.parametrize("status", ["model", "rank_fallback", "partial_model_ranked"])
+def test_live_trace_does_not_count_partial_model_order_as_full_model(
+    monkeypatch, status
+):
+    from types import SimpleNamespace
+
+    from apps.chat.evals.evidence_quality_trace import Trace
+    from apps.chat.tests.test_rag_answer_publication import setup_publication
+
+    _, _, packet, _, _ = setup_publication()
+    packet.selection = SimpleNamespace(score_status=status, candidates=())
+    runtime = SimpleNamespace(observation={"delivered_packet": packet})
+    monkeypatch.setattr(
+        "apps.documents.services.source_loading.current_source_runtime",
+        lambda: runtime,
+    )
+    trace = Trace({})
+    trace.sink("sdk_start", {"payload": {}, "provider": "fake", "kind": "answer"})
+    assert trace.rank_fallback is (status != "model")
+    assert trace.result("")["selection_score_status"] == status
+
+
 def test_refresh_snapshots_do_not_duplicate_stream_text():
     from apps.chat.evals.evidence_support_capture import PublicationCapture
 

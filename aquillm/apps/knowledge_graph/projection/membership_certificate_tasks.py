@@ -90,7 +90,8 @@ def _publish_certificate(*, app, settings, projection_id, cancelled):
 def dispatch_membership_certificate(projection_id):
     try:
         settings = load_projection_runtime_settings()
-        if not getattr(settings, "membership_certificate_enabled", False):
+        if not (getattr(settings, "membership_certificate_enabled", False)
+                or getattr(settings, "membership_certificate_issuance_enabled", False)):
             return False
         # Resolve Celery's thread-local proxy on the calling worker thread.
         app = current_app._get_current_object() if isinstance(current_app, Proxy) else current_app

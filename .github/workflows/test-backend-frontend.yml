@@ -8,6 +8,7 @@ on:
 jobs:
   backend-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 180
     services:
       postgres:
         image: pgvector/pgvector:pg16
@@ -558,6 +559,7 @@ jobs:
           aquillm/tests/integration/test_vllm_lmcache_plumbing.py
           aquillm/tests/integration/test_compose_multimodal_services.py
           aquillm/tests/integration/test_compose_render_test_support.py
+          aquillm/tests/integration/test_projection_certificate_compose.py
           aquillm/tests/integration/test_sidecar_revision_compose.py
           tests/asr
           deploy/vllm_plugins/nemotron_asr/tests
@@ -567,7 +569,11 @@ jobs:
           tests/test_replay_retrieval.py
           tests/test_replay_target_preflight.py
           tests/test_native_closure_replay.py
-          --ds=aquillm.settings_projection_test -x -vv --tb=short --durations=20
+          tests/test_replay_timeout_controls.py
+          tests/test_ci_graph_selection.py
+          --ds=aquillm.settings_projection_test -q --tb=short --durations=20
+      - name: Remaining graph regressions
+        run: python scripts/run_unlisted_graph_tests.py
       - name: Logging and file-size guardrails
         run: |
           python scripts/check_logging_conventions.py
@@ -596,7 +602,7 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_bounds_v3.py
           aquillm/apps/knowledge_graph/tests/test_consumed_source_physical_v3.py
-          -q --tb=short
+          -p scripts.pytest_required_services -q --tb=short
       - name: Clean up the owned test stack
         if: always()
         run: >-

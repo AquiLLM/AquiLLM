@@ -1,5 +1,9 @@
 """One occupied worker runs a bounded physical prefix of a finite preparation."""
 
+from apps.knowledge_graph.projection.frontier_preparation_bytes_v2 import (
+    binary_bound,
+    expanded_bound,
+)
 from apps.knowledge_graph.projection.frontier_preparation_reads_v2 import OwnerBoundary
 from apps.knowledge_graph.projection.frontier_reads_v2 import FrontierReadsV2
 
@@ -85,16 +89,35 @@ def read_window(driver, request, deadline, maximum, *, complete_scope=False):
             or scanned + ordinary_rows > 320
         ):
             break
+        remaining_expanded = 1048576 - expanded
+        remaining_wire = min(maximum, grant.wire) - wire - 5
+        bound = None if state is None else expanded_bound(state, effect)
+        # A valid completed prefix is returned before a subsequent known-size
+        # index read can exhaust this container. Replay chooses the same pairs;
+        # the next original-owner window continues the unmodified effect.
+        if frames and (
+            remaining_wire <= 0
+            or (
+                bound is not None
+                and (bound > remaining_expanded or binary_bound(bound) > remaining_wire)
+            )
+        ):
+            break
         physical_request = (
             ScopeRawRequest(effect.pairs, request.ready)
             if effect.kind == "scope_raw_complete_batch"
             else FrontierGatewayBatchRequestV2(
-                effect.kind, effect.pairs, request.ready, 1048576
+                effect.kind, effect.pairs, request.ready, max(1, remaining_wire)
             )
         )
         try:
             frame = read_payload(
-                driver, physical_request, deadline, 1048576, binary=True
+                driver,
+                physical_request,
+                deadline,
+                max(0, remaining_wire),
+                binary=True,
+                expanded_maximum=remaining_expanded,
             )
         except FrontierCompletedBudgetFailureV2 as exc:
             raise CompletedWindowBudgetFailure(

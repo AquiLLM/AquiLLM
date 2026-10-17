@@ -6,6 +6,7 @@ from typing import get_args
 from .replay_stage_contracts import (
     materialized_pool,
     novel_final_provenance,
+    reranked_pool,
     schedule_fields,
     schedule_summary,
 )
@@ -129,6 +130,7 @@ def summarize(events, packet, targets):
         }:
             failure_reason = None
         pool = materialized_pool(stage)
+        reranked = reranked_pool(stage)
         result["stages"].append(
             {
                 "effective_limits": stage.get("effective_limits"),
@@ -137,7 +139,12 @@ def summarize(events, packet, targets):
                     "observed" if pool is not None else "unavailable"
                 ),
                 "pool_count": len(pool) if pool is not None else None,
-                "rerank_count": len(stage.get("post_rerank", [])),
+                "rerank_count": len(reranked) if reranked is not None else None,
+                "rerank_status": (
+                    "not_requested"
+                    if stage.get("acquisition_schedule_observed") == "native_closure"
+                    else "observed" if reranked is not None else "unavailable"
+                ),
                 "baseline_branch_counts": {
                     key: len(rows)
                     for key, rows in stage.get("baseline_branches", {}).items()
@@ -163,6 +170,10 @@ def summarize(events, packet, targets):
         identities = set(target["chunk_ids"])
 
         def ranks(key):
+            if key == "post_rerank" and (
+                not stages or any(reranked_pool(stage) is None for stage in stages)
+            ):
+                return None
             if key == "materialized_union" and (
                 not stages or any(materialized_pool(stage) is None for stage in stages)
             ):

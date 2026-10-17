@@ -20,6 +20,7 @@ from .chunk_rerank_results import fingerprint_text
 _registered = {}
 _lock = RLock()
 _epoch = 0
+_provider_epochs = {}
 
 
 @dataclass(frozen=True)
@@ -76,8 +77,14 @@ def invalidate_pair_capability(provider=None):
     """Revoke even counters held by an already-created request scorer."""
     global _epoch
     with _lock:
-        _epoch += 1
-        keys = [provider.scorer_fingerprint] if provider else list(_registered)
+        if provider is None:
+            _epoch += 1
+            _provider_epochs.clear()
+            keys = list(_registered)
+        else:
+            key = provider.scorer_fingerprint
+            _provider_epochs[key] = _provider_epochs.get(key, 0) + 1
+            keys = [key]
         for key in keys:
             counter = _registered.pop(key, None)
             if counter is not None:
@@ -131,7 +138,9 @@ def verify_pair_capability(
 
 def _pair_snapshot(provider):
     with _lock:
-        return registered_pair_counter(provider), _epoch
+        return registered_pair_counter(provider), (
+            _epoch, _provider_epochs.get(provider.scorer_fingerprint, 0)
+        )
 
 
 def _publish_pair_candidate(provider, counter, *, expected, budget):
@@ -142,7 +151,7 @@ def _publish_pair_candidate(provider, counter, *, expected, budget):
     def publish():
         with _lock:
             if (
-                epoch != _epoch
+                epoch != (_epoch, _provider_epochs.get(provider.scorer_fingerprint, 0))
                 or _registered.get(provider.scorer_fingerprint) is not expected
                 or (expected is not None and expected.revoked.is_set())
                 or (expected is not None and expected.identity != counter.identity)

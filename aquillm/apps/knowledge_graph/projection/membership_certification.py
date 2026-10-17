@@ -45,7 +45,8 @@ def certify_ready_membership(*, projection_id: UUID, settings=None,
     if type(projection_id) is not UUID:
         raise TypeError("projection_id must be an exact UUID")
     settings = load_projection_runtime_settings() if settings is None else settings
-    if not getattr(settings, "membership_certificate_enabled", False):
+    if not (getattr(settings, "membership_certificate_enabled", False)
+            or getattr(settings, "membership_certificate_issuance_enabled", False)):
         return False
     if source_using == state_using:
         raise ValueError("membership certificate aliases must be distinct")

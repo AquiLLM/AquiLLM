@@ -1,6 +1,5 @@
 # ruff: noqa: E501,E701,E702
 """Pure, provider-neutral configuration for hybrid graph retrieval."""
-
 from __future__ import annotations
 
 import re
@@ -75,9 +74,10 @@ class HybridRetrievalSettings:
     graph_extended_max_candidates: int; graph_fusion_rrf_k: int; direct_embedding_enabled: bool; direct_min_similarity: float
     direct_winner_margin: float; graph_eval_parity_backend: str; ppr_restart_mode: str; graph_remediation_mode: str
     membership_certificate_enabled: bool = False
+    membership_certificate_issuance_enabled: bool = False
 _BOOL_DEFAULTS = dict.fromkeys((
     "KG_MEMGRAPH_PROJECTION_ENABLED", "KG_MEMGRAPH_TRAVERSAL_ENABLED",
-    "KG_GRAPH_DIRECT_ENABLED", "KG_GRAPH_EXTENDED_ENABLED", "KG_DIRECT_EMBEDDING_ENABLED", "KG_MEMBERSHIP_CERTIFICATE_ENABLED",
+    "KG_GRAPH_DIRECT_ENABLED", "KG_GRAPH_EXTENDED_ENABLED", "KG_DIRECT_EMBEDDING_ENABLED", "KG_MEMBERSHIP_CERTIFICATE_ENABLED", "KG_MEMBERSHIP_CERTIFICATE_ISSUANCE_ENABLED",
 ), "0")
 _INT_RULES = {
     "KG_PROJECTION_JOB_TIMEOUT_MS": ("300000", 100, 300000),
