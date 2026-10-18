@@ -37,6 +37,7 @@ def test_retrieval_log_reason_is_a_closed_fixed_enum() -> None:
         "mixed_ontology",
         "embedding_unavailable",
         "no_seeds",
+        "native_ineligible",
         "ambiguous",
         "internal_failure",
         "readiness_collection_coverage",
