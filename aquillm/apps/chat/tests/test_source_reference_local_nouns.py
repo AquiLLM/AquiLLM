@@ -27,6 +27,32 @@ LOCAL_QUESTIONS = (
     "describe in their assessment?",
     "What uncertainties do the investigators of Harbor Water Quality "
     "identify in their estimates?",
+    "Which criterion is used for a sensor to qualify as a reference unit, "
+    "and how is its gain measured?",
+    "Which criterion is used for a sample to count as an accepted control "
+    "in the trial, and how is its concentration measured?",
+)
+COMPETING_LOCAL_QUESTIONS = (
+    "What happens when a sensor is calibrated and a detector vibrates, "
+    "and what is its output?",
+    "What happens when an actuator was tested but a valve leaks, "
+    "and what is its output?",
+    "What happens when a sensor is calibrated while a detector vibrates, "
+    "and what is its output?",
+    "What happens when a detector vibrates while a sensor is calibrated, "
+    "and what is its output?",
+    "What happens when a sensor is mounted on a detector, "
+    "and what is its output?",
+    "What happens when a sensor is calibrated as a detector vibrates, "
+    "and what is its output?",
+    "Which criterion is used for a sensor to qualify with an actuator nearby, "
+    "and how is its response measured?",
+    "What is required for a sensor and a detector to qualify, "
+    "and what is its gain?",
+    "What is required for a sensor or a detector to qualify, "
+    "and what is its gain?",
+    "What happens when a sensor is calibrated and a detector is positioned, "
+    "and what is its output?",
 )
 
 
@@ -97,10 +123,6 @@ def test_same_clause_source_reference_is_a_local_barrier(introduction, cue, barr
     ("What is required for a report to qualify, and what is its conclusion?", "its"),
     ("What happens when a document is selected, and what is its conclusion?", "its"),
     ("What happens when a source is selected, and what is its conclusion?", "its"),
-    ("What is required for a sensor and a detector to qualify, "
-     "and what is its gain?", "its"),
-    ("What is required for a sensor or a detector to qualify, "
-     "and what is its gain?", "its"),
     ("What do the authors of the second paper identify in their comparison?", "their"),
     ("What do the authors of that report identify in their comparison?", "their"),
     ("What do the authors identify in their comparison?", "their"),
@@ -109,6 +131,32 @@ def test_same_clause_source_reference_is_a_local_barrier(introduction, cue, barr
 def test_ambiguous_or_source_introduction_does_not_disable_reference(question, cue):
     anchors = resolve_source_anchors(question, history_with_count(0))
     assert cue in anchors.unresolved_references
+
+
+@pytest.mark.parametrize("question", COMPETING_LOCAL_QUESTIONS)
+@pytest.mark.parametrize("count", [0, 1, 2])
+def test_competing_local_nouns_do_not_create_historical_source_scope(question, count):
+    anchors = resolve_source_anchors(question, history_with_count(count))
+    assert anchors.document_ids == ()
+    assert anchors.chunk_identities == ()
+    assert anchors.unresolved_references == ()
+    assert anchors.source_constraints == ()
+
+
+@pytest.mark.parametrize("barrier", [
+    "a report summarizes results", "the second paper is discussed",
+    'we review "Known title"', 'we review "an unfamiliar phrase"',
+    "we review [doc:paper-z chunk:7]",
+    "we review 6d54e8f0-45a1-4c00-a050-164df5703fb1", "we review it",
+])
+def test_multiple_local_nouns_do_not_erase_intervening_source_reference(barrier):
+    question = (
+        "What happens when a sensor is calibrated and a detector vibrates while "
+        f"{barrier}, and what is its output?")
+    events = _reference_events(question, {"known title"})
+    assert any(event[3] == "its" for event in events)
+    anchors = resolve_source_anchors(question, history_with_count(0))
+    assert "its" in anchors.unresolved_references
 
 
 @pytest.mark.parametrize("question,cue", [
@@ -141,7 +189,9 @@ def test_local_reference_does_not_erase_independent_unresolved_reference(questio
 @pytest.mark.parametrize("count", [0, 1, 2])
 @pytest.mark.parametrize("question,clarify", [
     (LOCAL_QUESTIONS[0], False), (LOCAL_QUESTIONS[4], False),
+    (COMPETING_LOCAL_QUESTIONS[0], False),
     (LOCAL_QUESTIONS[0] + " Compare the third paper.", True),
+    (COMPETING_LOCAL_QUESTIONS[0] + " Compare the third paper.", True),
 ])
 async def test_actual_turn_keeps_original_query_for_local_entities(
     question, clarify, count, followup, monkeypatch, close_direct_worker,

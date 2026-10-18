@@ -39,7 +39,7 @@ _NAMED_AUTHORS = re.compile(
 
 
 def _local_noun_possessive(question, start, references, quotes):
-    """An indefinite entity with a predicate can head a coordinated question."""
+    """Bound a local noun clause without choosing the pronoun's referent."""
     before = question[:start]
     continuation = _COORDINATED_POSSESSIVE.search(before)
     if continuation is None:
@@ -48,14 +48,13 @@ def _local_noun_possessive(question, start, references, quotes):
         (match.end() for match in re.finditer(r"[.!?\n]", before)), default=0)
     introductions = tuple(_NOUN_INTRODUCTION.finditer(
         question, max(boundary, start - _LOCAL_WINDOW), continuation.start()))
-    if len(introductions) != 1:
+    if not introductions:
         return False
+    # This is a locality boundary, not the selected semantic antecedent. Multiple
+    # ordinary nouns stay in the original query for retrieval and model reasoning.
     introduction = introductions[0]
-    words = set(re.findall(_WORD, introduction.group("subject").casefold()))
     return not (
-        words.intersection({"and", "or", "of", "in", "from", "with", "to"})
-        or re.search(r"\b(?:and|or)\s+$", question[:introduction.start()], re.I)
-        or _SOURCE_WORD.search(question, introduction.start(), start)
+        _SOURCE_WORD.search(question, introduction.start(), start)
         or _overlap(introduction.start(), start, quotes)
         or any(introduction.start() <= left < start for left, _, _, _ in references)
     )
