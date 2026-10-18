@@ -27,13 +27,17 @@ def support_grounding(packet):
     )
     # No fingerprints, raw score metadata or policy identifiers enter prompts
     # or persisted tool results. Memory cannot fill unresolved document aspects.
+    assessed = support.assessment_basis == "deterministic"
     payload = {
         "state": support.state,
         "requested_aspects": support.requested_aspects,
         "supported_aspects": support.supported_aspects,
-        "unresolved_aspects": support.unresolved_aspects,
+        "assessment_status": "assessed_selected_sources" if assessed else "unassessed",
+        "unresolved_aspects": support.unresolved_aspects if assessed else (),
+        "unassessed_aspects": () if assessed else support.unresolved_aspects,
         "assessment_basis": support.assessment_basis,
         "exhaustive": False,
+        "selected_evidence_exhaustive": False,
     }
     return (
         "\n\nBounded answer_support: "
@@ -45,7 +49,11 @@ def support_grounding(packet):
         "from your inferences and identify gaps you cannot resolve from the evidence. "
         "Unknown support means semantic coverage has not been independently validated; "
         "it does not require a quotation-only response or establish that the evidence "
-        "cannot answer the question. Assessment hints are not evidence. "
+        "cannot answer the question. Unassessed aspects are not established missing "
+        "facts. Planner gaps are earlier, unvalidated search hints, not evidence "
+        "or a veto: newly delivered evidence may resolve them. Even assessed "
+        "selected-source coverage does not establish that every relevant source "
+        "in the collection was retrieved. "
         "Do not claim exhaustive coverage or universal absence. If the selected evidence "
         "does not support an answer, give a scoped limitation; quote useful passages "
         "only when they help explain it. "

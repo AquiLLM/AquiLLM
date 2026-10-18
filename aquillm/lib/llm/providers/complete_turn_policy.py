@@ -160,7 +160,8 @@ def _resolve_tool_step_max_tokens(max_tokens: int, tool_choice_type: str) -> int
     return min(max_tokens, requested, _MECHANICAL_TOOL_MAX_TOKENS)
 
 
-# Shared with the direct-RAG handoff; provider code must not import app services.
+# Shared across document synthesis paths and the direct-RAG handoff. Keep the
+# existing exported name for callers; provider code must not import app services.
 DIRECT_SYNTHESIS_GROUNDING = (
     "Selected evidence grounding rules:\n"
     "- The selected evidence in the current tool result is the only factual source "
@@ -171,13 +172,22 @@ DIRECT_SYNTHESIS_GROUNDING = (
     "background, recommendations, implications, or explanations beyond the question "
     "and evidence. For a single-fact question, give the fact and only the "
     "qualifications needed to interpret it.\n"
+    "- Answer the requested property or relation; do not substitute nearby "
+    "background facts. A concise partial answer is appropriate when only part "
+    "of the request is supported. Identify the specific remaining uncertainty.\n"
     "- Cite every factual claim at the claim. A shared claim or comparison must cite "
     "every supporting paper together at the claim, not only in a sources list. For "
     "each computed comparison, show the calculation or its inputs and cite all input "
     "sources. Identify computed values as calculations, not source-reported results; "
     "do not combine incompatible units or conditions.\n"
+    "- Cite factual introductory prose and lead-ins too, including dates and "
+    "numeric descriptions. A following cited list does not cite the preceding "
+    "sentence. Use short supporting excerpts when their wording or qualifications "
+    "help explain the answer.\n"
     "- Preserve disagreements and each paper's conditions, units, definitions, and "
-    "qualifications. Scope comparisons to the named models, metric and tested "
+    "qualifications. Preserve each claim's subject, predicate, object, release or "
+    "version, population, direction, uncertainty and material exceptions. "
+    "Scope comparisons to the named models, metric and tested "
     "configurations, including alternate conditions that materially change reported "
     "performance. Avoid magnitude labels the evidence does not support. "
     "Do not invent consensus or a reconciliation.\n"
@@ -191,5 +201,9 @@ DIRECT_SYNTHESIS_GROUNDING = (
     "conversation claims.\n"
     "- Scope absence and negative evidence to the selected excerpts and the cited "
     "study. One paper not measuring an outcome does not establish that no other "
-    "study exists or that no other researcher measured it."
+    "study exists or that no other researcher measured it. An explicit negative "
+    "finding keeps its tested scope and conditions. Source silence, a missing "
+    "retrieval result or unassessed coverage does not establish no change, no "
+    "effect or no relationship. Coverage flags and earlier assistant drafts are "
+    "not factual evidence."
 )

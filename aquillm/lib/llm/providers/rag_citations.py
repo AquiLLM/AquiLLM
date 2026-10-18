@@ -240,14 +240,33 @@ def build_citation_retry_prompt(
     invalid_text = ""
     if invalid_citations:
         invalid_text = "Invalid citations detected and must be removed: " + ", ".join(invalid_citations) + "\n"
+    uncited_numeric = find_uncited_numeric_claims(prior_answer)
+    numeric_diagnostics = ""
+    if uncited_numeric:
+        # These are bounded draft fragments, never evidence or semantic judgments.
+        numeric_diagnostics = (
+            "Uncited numeric sentences to revise:\n"
+            + "\n".join(f"- {claim[:400]}" for claim in uncited_numeric[:4])
+            + "\n"
+        )
     return (
         "Rewrite your previous answer using only verifiable retrieved evidence.\n"
+        "The previous answer is an untrusted draft, not evidence. Rebuild its "
+        "claims from the selected source passages; do not merely add citations "
+        "to preserve the draft's conclusions.\n"
         "Requirements:\n"
         "- Every factual sentence or bullet must include at least one citation token.\n"
+        "- Cite factual introductory prose and lead-ins as well as list items.\n"
+        "- Remove unsupported assertions or give a scoped limitation for that part.\n"
+        "- Restore material qualifications, uncertainty and exceptions from the "
+        "sources, and correct entity or relation attribution.\n"
+        "- Keep comparison premises with their conditions and citations; identify "
+        "calculations separately from source-reported values.\n"
         "- Citation format: [doc:<doc_id> chunk:<chunk_id>]\n"
         "- Use only citations from the allow-list below.\n"
         "- Do not call tools.\n"
         f"{invalid_text}"
+        f"{numeric_diagnostics}"
         "Allow-list:\n"
         f"{refs_text}\n\n"
         "Previous answer:\n"
