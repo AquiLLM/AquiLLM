@@ -144,7 +144,7 @@ assert "400-900" not in recovery_instruction
 - **Local anaphora:** completed general same-question noun/pronoun handling with explicit-source and ambiguity barriers. Regression checks passed and the frozen held-out questions remained unchanged; routing repair alone does not establish answer correctness.
 - **Returned source order:** committed `d15430ab`, preserving retrieval-provenance order among the same verified, deduplicated sources instead of cache insertion order. Revision filtering, planner latest-source priority and caps remain unchanged. The 32-test source-order/context/acquisition suite and independent review passed; this does not establish Q3/Q4 success.
 - **Lexical settings wiring:** committed `888203a6`, exposing the three existing full-text, RRF and protected-exact controls through `env_bool` with independent false defaults. Protected exact remains effective only with RRF. The 24-test settings/control suite and independent review passed; the settings file allowance ratcheted from 485 to 480 lines. This repairs operability without activation or a recall claim.
-- **Optional rewrite budget:** committed `409f9ef4`, the verified repair reserves capacity for the original search and gives an admitted vocabulary expansion precedence over a rewrite. Normal handoff explicitly identifies an already completed initial acquisition. After RED (5 failures / 6 passes), the seven-file GREEN suite passed 151 tests with three existing warnings in 391.99 seconds; independent review, file-length and diff checks passed. Query rewriting remains disabled in the frozen evaluation profile; r11 has not been staged.
+- **Optional rewrite budget:** committed `409f9ef4`, the verified repair reserves capacity for the original search and gives an admitted vocabulary expansion precedence over a rewrite. Normal handoff explicitly identifies an already completed initial acquisition. After RED (5 failures / 6 passes), the seven-file GREEN suite passed 151 tests with three existing warnings in 391.99 seconds; independent review, file-length and diff checks passed. Query rewriting remains disabled in the frozen r11 evaluation profile.
 
 Root continues to serialize shared tests, model calls and commits. Remaining
 experiments and acceptance review are separate from the completed implementation.
@@ -209,3 +209,57 @@ the r10 findings or production caps.
 The serving development stack remains unchanged; neither operational completion
 nor regression tests authorize quality acceptance, merge, deployment or a graph
 rebuild.
+
+## r11 verification and next confirmed defect
+
+The isolated r11 candidate at `29ff6e01ebc210fd1a253c91c20da104a334e741`
+completed all 26 frozen conversations. All answers persisted, the original chat
+remained unchanged, and no runtime, observer or acquisition failure was recorded.
+Whole-turn latency was 31.59–103.00 seconds (median 46.56); this includes model
+synthesis and repair, not just retrieval. All 78 per-cell trace/result/summary
+artifacts agree with the batch and the seven independent quality reviews.
+
+Quality acceptance still fails. Q1/Q2 remain partial; Q3/Q4's known reference
+passages remain absent before final selection. Q4 removes the earlier unsupported
+no-change conclusion but still does not answer the catalog comparison. Q5–Q10
+retain all 12 core answers, with incidental qualification/citation defects graded
+separately. Held-outs score 17 fully correct / 4 partial / 0 missing required
+claims, versus r10's 18 / 3 / 0 and the original baseline's 8 / 1 / 12. Six of
+seven evidence targets remain acquired and delivered. Strict full-answer semantic
+success improves from two to three cases; losing one explicit simulation
+qualification lowers the required-claim score. Contextual sensitivities are
+reported separately, not used to replace the strict result. Single stochastic
+outputs and a final-scoring readiness difference prevent ordering-only causal
+claims. Neither source-order preservation nor valid citations establish recall.
+
+Publication fixture repair `1a8bf59b` retains the real model-answer SQL barrier,
+the configured optional-action timeout and late-result fence, and exact source
+delivery through scoring, sealing and SDK payloads. RED reproduced nine failures;
+the combined follow-up passed 37 with one remaining two-sentence citation fixture
+failure. Correcting that fixture passed all 11 suffix tests. Independent reviews,
+file-length and diff checks passed. This test-only commit is outside r11; full
+GitHub CI remains separate from these focused results.
+
+The read-only source inventory confirms 30 PDFs, 499 figure-image documents and
+one raw-text document, with 3,200 chunks and the same frozen representation digest.
+All 560 stored references are present by stat/HEAD; this does not prove content
+integrity or original-file provenance. No document has an exact new output ledger
+or extraction revision; all active representations are legacy and all structured
+sections remain absent. Existing reindexing cannot directly rebuild the PDFs or
+figures. Unchanged native PDF parsing produces page paragraphs and would not
+recover semantic headings or publication titles. No reparse, backfill, migration,
+activation or serving change followed from this inventory.
+
+The separately frozen existing query-rewrite viability check timed out on its
+first question after 5.011 seconds without a provider response. The remaining
+15 questions were unattempted, not failures. The request inherited thinking and
+had no strict output schema; code inspection also found that truncated responses
+could be admitted. The shared model was verified idle afterward. A narrow repair
+now has RED evidence (25 failed / 4 passed): reuse the planner's supported
+structured/non-thinking request contract, reject incomplete responses with safe
+failure categories, preserve the exact original query and existing filters/caps,
+and version the bound policy. The implementation uses policy v3 and passed
+212 focused regressions across 12 files in 413.47 seconds, with three existing
+warnings. Independent code review passed; the separate isolated live treatment
+check is pending. Rewriting stays disabled; successful proposal generation alone
+cannot establish retrieval benefit or full CI success.

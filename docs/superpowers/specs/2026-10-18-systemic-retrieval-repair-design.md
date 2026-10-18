@@ -130,7 +130,8 @@ original search, preserves vocabulary precedence, and forwards actual prior init
 acquisition explicitly. After RED (5 failures / 6 passes), GREEN passed 151 tests
 across seven files with three existing warnings in 391.99 seconds; independent
 review, file-length and diff checks passed. Query rewriting stays disabled in the
-frozen profile. This later repair establishes no r10 quality gain; r11 is unstaged.
+frozen profile. This later repair establishes no r10 quality gain; the separately
+evaluated r11 checkpoint is recorded below.
 
 The frozen neighbor policy is rejected: it reaches zero missing targets and
 removes observed acquisition paths for five final-selected sources. This is a
@@ -167,3 +168,36 @@ large legacy source snapshot. A new reversible migration now preserves canonical
 bytes and immutable identity/hash checks with bounded work. ASCII, Unicode,
 controls, escaping and realistic large-source equivalence/integration checks
 passed without shrinking the fixture or bypassing the trigger.
+
+## Subsequent r11 checkpoint
+
+Immutable r11 (`29ff6e01ebc210fd1a253c91c20da104a334e741`) completed all 26
+matched conversations operationally, with persisted model answers and unchanged
+original chat. Quality acceptance remains open: Q1/Q2 are partial, Q3/Q4 still
+miss their required evidence before final selection, and Q5–Q10 retain all 12
+core answers with remaining incidental citation/qualification defects. The old
+Q4 no-change inference is gone, but the requested catalog comparison is missing.
+Held-out claims score 17 fully correct / 4 partial / 0 missing; six of seven
+evidence targets are delivered. Strict whole-answer semantic success is three
+of six. Compared with r10, one simulation qualifier regresses while a citation
+defect improves. Contextual sensitivities remain separate. These single outputs
+do not isolate the effects of ordering or prove graph causality.
+
+Read-only metadata inventory confirms legacy representations throughout the
+30-PDF, 499-figure and one-raw-text collection, without exact new output ledgers
+or extraction revisions. Stored references exist, but integrity, provenance and
+rebuild eligibility remain unverified. An unchanged PDF reparse would still
+produce page paragraphs without semantic headings. A structural preprocessing
+repair requires a separately designed source-preserving migration; it is not
+achieved by toggling FTS or running the current reindex command.
+
+The existing optional query rewriter's first frozen live viability request timed
+out at its unchanged five-second limit; the other 15 questions were unattempted.
+Its request lacked the supported structured-output/non-thinking contract, and
+unit RED evidence confirms missing finish-reason and response-shape checks.
+The narrow repair reuses existing provider capability handling and safe planner
+failure categories, retains original-first fallback, protected constraints and
+all shared allowances, and versions the policy used by cache/publication
+bindings. No prompt strategy, semantic-equivalence claim, feature activation or
+larger allowance follows. Proposal viability and end-to-end retrieval quality
+are separate acceptance steps; serving development remains unchanged.
