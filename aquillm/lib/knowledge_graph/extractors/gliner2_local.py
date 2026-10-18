@@ -15,7 +15,6 @@ from ..config import ExtractionSettings
 from ..extraction_identity import (
     GLINER2_VERSION,
     effective_inference_options,
-    resolve_schema_compiler_version,
 )
 from ..type_names import TypeNameValidationError, validate_type_name
 from ..types import (
@@ -33,7 +32,6 @@ from .gliner2_endpoints import (
     _valid_confidence,
     _valid_span,
 )
-from .gliner2_schema import compile_schema
 
 _ModelKey = tuple[str, str, str, str, bool]
 _MODEL_CACHE: dict[_ModelKey, Any] = {}
@@ -52,6 +50,18 @@ def _validate_ontology_type_names(ontology: OntologyDefinition) -> None:
             validate_type_name(name, "ontology relation type name")
     except TypeNameValidationError as exc:
         raise ExtractionBackendError(str(exc)) from exc
+
+
+def _schema_definitions(definitions: Mapping[str, object]) -> dict[str, str]:
+    descriptions = {}
+    for name, definition in definitions.items():
+        description = _definition_value(definition, "description")
+        descriptions[name] = (
+            description
+            if isinstance(description, str) and description.strip()
+            else name
+        )
+    return descriptions
 
 
 def _model_key(settings: ExtractionSettings) -> _ModelKey:
@@ -422,18 +432,8 @@ def _require_batch_results(
 class GLiNER2LocalBackend:
     """Provider-neutral extraction backed by a pinned local GLiNER2 model."""
 
-    def __init__(
-        self,
-        *,
-        settings: ExtractionSettings,
-        schema_compiler_version: str | None = None,
-    ) -> None:
+    def __init__(self, *, settings: ExtractionSettings) -> None:
         self._settings = settings
-        # Explicit injection supports isolated offline experiments. The factory
-        # keeps the legacy default until matched quality evidence permits rollout.
-        self._schema_compiler_version = resolve_schema_compiler_version(
-            schema_compiler_version
-        )
 
     def extract_batch(
         self,
@@ -466,12 +466,11 @@ class GLiNER2LocalBackend:
         model = _load_model(self._settings)
         inference_options = effective_inference_options(self._settings)
         try:
-            schema = compile_schema(
-                model.create_schema(),
-                ontology,
-                schema_compiler_version=self._schema_compiler_version,
-                include_relations=include_relations,
+            schema = model.create_schema().entities(
+                _schema_definitions(ontology.entity_types)
             )
+            if include_relations:
+                schema.relations(_schema_definitions(ontology.relations))
             raw_results = model.batch_extract(list(texts), schema, **inference_options)
         except Exception as exc:
             raise ExtractionBackendError("GLiNER2 inference failed") from exc

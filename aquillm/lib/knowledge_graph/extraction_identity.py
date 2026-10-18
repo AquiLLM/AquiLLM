@@ -15,19 +15,7 @@ from hashlib import sha256
 GLINER2_VERSION = "1.3.2"
 ADAPTER_CONTRACT_VERSION = "gliner2-adapter-v1"
 NORMALIZER_CONTRACT_VERSION = "exact-typed-spans-v1"
-LEGACY_SCHEMA_COMPILER_VERSION = "gliner2-relations-v1"
-CANDIDATE_SCHEMA_COMPILER_VERSION = "gliner2-structures-v1"
-DEFAULT_SCHEMA_COMPILER_VERSION = LEGACY_SCHEMA_COMPILER_VERSION
-
-
-def resolve_schema_compiler_version(version: str | None = None) -> str:
-    version = DEFAULT_SCHEMA_COMPILER_VERSION if version is None else version
-    if version not in (
-        LEGACY_SCHEMA_COMPILER_VERSION,
-        CANDIDATE_SCHEMA_COMPILER_VERSION,
-    ):
-        raise ValueError("unsupported extraction schema compiler version")
-    return version
+DEFAULT_SCHEMA_COMPILER_VERSION = "gliner2-relations-v1"
 
 
 def _text(settings: object, name: str) -> str:
@@ -81,15 +69,10 @@ class ExtractionContract:
         return manifest
 
 
-def extraction_contract(
-    settings: object,
-    *,
-    schema_compiler_version: str | None = None,
-) -> ExtractionContract:
-    """Capture whitelisted semantics, including explicit offline compiler choice."""
+def extraction_contract(settings: object) -> ExtractionContract:
+    """Capture whitelisted semantics of the supported extraction behavior."""
     provider = _text(settings, "provider")
     revision = _text(settings, "model_revision")
-    compiler = resolve_schema_compiler_version(schema_compiler_version)
     if (
         provider == "gliner2_local"
         and re.fullmatch(r"[0-9a-fA-F]{40}", revision) is None
@@ -105,7 +88,7 @@ def extraction_contract(
         if provider == "gliner2_local"
         else None,
         adapter_contract_version=ADAPTER_CONTRACT_VERSION,
-        schema_compiler_version=compiler,
+        schema_compiler_version=DEFAULT_SCHEMA_COMPILER_VERSION,
         normalizer_contract_version=NORMALIZER_CONTRACT_VERSION,
         device=_text(settings, "device"),
         max_batch_characters=_positive_integer(settings, "max_batch_characters"),
@@ -113,14 +96,8 @@ def extraction_contract(
     )
 
 
-def extraction_identity(
-    settings: object,
-    *,
-    schema_compiler_version: str | None = None,
-) -> str:
-    contract = extraction_contract(
-        settings, schema_compiler_version=schema_compiler_version
-    )
+def extraction_identity(settings: object) -> str:
+    contract = extraction_contract(settings)
     encoded = json.dumps(
         contract.to_dict(),
         sort_keys=True,

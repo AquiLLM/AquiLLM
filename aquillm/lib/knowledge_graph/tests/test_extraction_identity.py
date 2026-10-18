@@ -58,10 +58,11 @@ def test_identity_changes_with_effective_settings(change):
     [
         "GLINER2_VERSION",
         "ADAPTER_CONTRACT_VERSION",
+        "DEFAULT_SCHEMA_COMPILER_VERSION",
         "NORMALIZER_CONTRACT_VERSION",
     ],
 )
-def test_identity_binds_runtime_adapter_and_normalizer(monkeypatch, name):
+def test_identity_binds_runtime_adapter_compiler_and_normalizer(monkeypatch, name):
     import lib.knowledge_graph.extraction_identity as identity_module
 
     settings = load_extraction_settings({})
@@ -70,18 +71,16 @@ def test_identity_binds_runtime_adapter_and_normalizer(monkeypatch, name):
     assert before != identity_module.extraction_identity(settings)
 
 
-def test_candidate_compiler_has_distinct_manifest_and_identity():
+def test_default_contract_and_identity_remain_unchanged():
     from lib.knowledge_graph.extraction_identity import (
         extraction_contract,
         extraction_identity,
     )
 
     settings = load_extraction_settings({})
-    candidate = extraction_contract(
-        settings, schema_compiler_version="gliner2-structures-v1"
-    )
-    assert candidate.schema_compiler_version == "gliner2-structures-v1"
-    assert dict(candidate.inference_options) == {
+    contract = extraction_contract(settings)
+    assert contract.schema_compiler_version == "gliner2-relations-v1"
+    assert dict(contract.inference_options) == {
         "batch_size": 8,
         "format_results": False,
         "include_confidence": True,
@@ -90,9 +89,20 @@ def test_candidate_compiler_has_distinct_manifest_and_identity():
         "num_workers": 0,
         "max_len": None,
     }
-    assert extraction_identity(settings) != extraction_identity(
-        settings, schema_compiler_version="gliner2-structures-v1"
+    assert extraction_identity(settings) == (
+        "extract-v2:6ed747b66e5e80d8459c29642044def93d0d070483fba24cc721cdc7c22042a5"
     )
+
+
+@pytest.mark.parametrize("name", ["extraction_contract", "extraction_identity"])
+def test_contract_has_no_experimental_compiler_override(name):
+    import lib.knowledge_graph.extraction_identity as identity_module
+
+    with pytest.raises(TypeError, match="schema_compiler_version"):
+        getattr(identity_module, name)(
+            load_extraction_settings({}),
+            schema_compiler_version="gliner2-structures-v1",
+        )
 
 
 @pytest.mark.parametrize(
