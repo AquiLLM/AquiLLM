@@ -144,6 +144,7 @@ assert "400-900" not in recovery_instruction
 - **Local anaphora:** completed general same-question noun/pronoun handling with explicit-source and ambiguity barriers. Regression checks passed and the frozen held-out questions remained unchanged; routing repair alone does not establish answer correctness.
 - **Returned source order:** committed `d15430ab`, preserving retrieval-provenance order among the same verified, deduplicated sources instead of cache insertion order. Revision filtering, planner latest-source priority and caps remain unchanged. The 32-test source-order/context/acquisition suite and independent review passed; this does not establish Q3/Q4 success.
 - **Lexical settings wiring:** committed `888203a6`, exposing the three existing full-text, RRF and protected-exact controls through `env_bool` with independent false defaults. Protected exact remains effective only with RRF. The 24-test settings/control suite and independent review passed; the settings file allowance ratcheted from 485 to 480 lines. This repairs operability without activation or a recall claim.
+- **Optional rewrite budget:** committed `409f9ef4`, the verified repair reserves capacity for the original search and gives an admitted vocabulary expansion precedence over a rewrite. Normal handoff explicitly identifies an already completed initial acquisition. After RED (5 failures / 6 passes), the seven-file GREEN suite passed 151 tests with three existing warnings in 391.99 seconds; independent review, file-length and diff checks passed. Query rewriting remains disabled in the frozen evaluation profile; r11 has not been staged.
 
 Root continues to serialize shared tests, model calls and commits. Remaining
 experiments and acceptance review are separate from the completed implementation.
@@ -157,9 +158,15 @@ observed acquisition paths for five final-selected sources. The 16 text-only
 FTS probes completed without errors: 12 returned zero matches and none of the
 11 frozen targets matched anywhere. Reject this literal English plain-query
 treatment as a remedy for the recorded misses, not FTS generally. Inputs were
-unchanged unresolved-context questions, not production-routed queries. One
-separate all-lexeme OR contrast is being prepared; no adoption, activation or
-projection backfill follows from this result.
+unchanged unresolved-context questions, not production-routed queries.
+
+The separate all-lexeme OR SQL contrast completed all 44 arm observations and
+passed mechanical checks. It gains 4/11 frozen targets in the first eight versus
+plain FTS, but all four were already acquired and delivered in r10; Q3/Q4 remain
+0/4 at that cutoff. All three generic controls lose their useful source from
+the returned eight. Reject unconditional OR replacement, integration and
+projection backfill. This computed lexical counterfactual does not exercise
+production admission, final evidence or answers; it establishes no r11 result.
 
 ## Verification checkpoint after r10 live evaluation
 
@@ -188,8 +195,8 @@ delivered, versus four at baseline. Core coverage, incidental assertions and
 citation precision remain separate scores; one negative-scope judgment is
 explicitly borderline. No acquired target is lost during final selection.
 
-The 171-test fixture repair, 32-test source-order repair and 24-test settings
-repair are recorded separately from immutable r10. Completed P1/P2 reviews reject
+The 171-test fixture repair, 32-test source-order repair, 24-test settings repair
+and 151-test rewrite-budget repair are separate from immutable r10. P1/P2 reviews reject
 the navigation contract and 32k increase; P3 supplies no 16k routing benefit.
 P4 is complete: reject balanced
 packing, the combined treatment and promotion of the pointer-only strategy.

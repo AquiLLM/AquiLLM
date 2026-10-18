@@ -125,15 +125,26 @@ chunks, zero current FTS projections and zero structured sections; all three
 flags remain false. The mixed-modality FTS gate is intentional, and changing it
 or the native-to-scored fallback requires a separate decision.
 
+The verified optional rewrite-budget repair `409f9ef4` reserves capacity for a still-pending
+original search, preserves vocabulary precedence, and forwards actual prior initial
+acquisition explicitly. After RED (5 failures / 6 passes), GREEN passed 151 tests
+across seven files with three existing warnings in 391.99 seconds; independent
+review, file-length and diff checks passed. Query rewriting stays disabled in the
+frozen profile. This later repair establishes no r10 quality gain; r11 is unstaged.
+
 The frozen neighbor policy is rejected: it reaches zero missing targets and
 removes observed acquisition paths for five final-selected sources. This is a
 coordinate counterfactual, not a replayed answer outcome. The 16 text-only FTS
 probes completed without errors; 12 returned zero matches and none of the 11
 frozen targets matched anywhere. Reject this literal English plain-query treatment
 as a remedy for the recorded misses, not FTS generally: inputs were unchanged
-unresolved-context questions, not production-routed queries. One separate
-all-lexeme OR contrast is being prepared; no adoption, activation or projection
-backfill follows from this result.
+unresolved-context questions, not production-routed queries. The separate all-lexeme
+OR contrast completed 44 arm observations and passed mechanical checks. It gains
+4/11 targets within eight over plain FTS, but all four were already acquired and
+delivered in r10; Q3/Q4 remain 0/4 at that cutoff. Each of the three generic controls
+loses its useful source from the returned eight. Reject unconditional OR replacement,
+integration and backfill. These SQL counterfactuals do not exercise production
+admission, final evidence or answers and establish no r11 result.
 
 Offline inspection confirmed that the pinned GLiNER2 relation builder discards
 descriptions. Both versioned structure/field compiler variants retained those
