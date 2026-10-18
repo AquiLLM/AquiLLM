@@ -256,10 +256,56 @@ first question after 5.011 seconds without a provider response. The remaining
 had no strict output schema; code inspection also found that truncated responses
 could be admitted. The shared model was verified idle afterward. A narrow repair
 now has RED evidence (25 failed / 4 passed): reuse the planner's supported
-structured/non-thinking request contract, reject incomplete responses with safe
-failure categories, preserve the exact original query and existing filters/caps,
+structured/non-thinking request contract, reject reported truncated/nonterminal
+or malformed responses with safe failure categories, preserve the exact original
+query and existing filters/caps,
 and version the bound policy. The implementation uses policy v3 and passed
 212 focused regressions across 12 files in 413.47 seconds, with three existing
-warnings. Independent code review passed; the separate isolated live treatment
-check is pending. Rewriting stays disabled; successful proposal generation alone
-cannot establish retrieval benefit or full CI success.
+warnings. Independent code review passed. The isolated r12 treatment at
+`1c2b839b4a536f0934751e846b4864d462e0fe99` verified all 1,183 runtime file
+hashes and completed all 16 original questions on the configured local vLLM
+stack under the unchanged five-second limit: 0.18–0.39 seconds each (median 0.26),
+with valid terminal structured responses and one recorded SDK call per question.
+Existing filters accepted four
+proposals, rejected eleven exact duplicates and rejected one source-name match.
+The latter is a conservative heuristic triggered by a punctuation change; it
+was not relaxed. Independent request, budget, result and artifact review passed.
+
+This repairs proposal generation, not missing-evidence acquisition. Q3's output
+is unchanged, and Q4's only removes question framing. No search, source admission,
+reranking or answer generation was performed in this proposal-only check.
+The baseline stopped after its first timeout, so there is no paired baseline
+latency for the other 15 questions. Rewriting stays disabled. Serving 254, its
+model settings and its stored source representations remain unchanged; full CI
+and end-to-end retrieval benefit are separate requirements.
+
+## Bounded lexical ranking result
+
+The separately frozen BM25 diagnostic completed 38 valid rank observations:
+sixteen unchanged literal questions and three generic cases, each with BM25 and
+an identical IDF=1 ablation. Normalization and exact returned-source identity
+checks passed. BM25 reaches seven of eleven frozen reference targets within
+eight candidates, versus four for the earlier OR contrast and zero for plain
+FTS. One is new to the recorded acquisition histories: a held-out
+report-date passage, at rank six. All three generic useful sources remain, and
+no earlier plain/OR target is lost. This meets the predeclared candidate-stage
+criterion. Q3/Q4 still reach zero of their four targets within eight.
+
+IDF=1 also reaches seven targets, including the new date passage at rank five;
+the corpus-target gain cannot be attributed specifically to IDF. BM25 retains
+the version-specific generic control that IDF=1 loses (three of three controls
+versus two). Do not choose a different treatment or increase the cutoff after
+seeing these results. Two earlier harness failures are retained: an incorrect
+Django app label stopped startup, and a JSONB decoding error prevented recording
+the executed SQL's rankings. The final repair changed neither inputs, SQL,
+scoring nor grading criteria.
+
+The corpus batch took 12.48 seconds for all sixteen questions, both ranking
+arms, corpus statistics and identity checks. This is neither per-query latency
+nor a production serving implementation; request-time corpus tokenization is
+not proposed. The diagnostic used the authorized active text scope and returned
+no source bodies. Serving and source representations remained unchanged.
+The next evidence needed is source admission, displacement, final ranking and
+actual supported answers under the existing 30/45 source ceilings and shared
+work limits. Candidate-stage success does not authorize BM25 activation,
+projection backfill, merge or deployment.

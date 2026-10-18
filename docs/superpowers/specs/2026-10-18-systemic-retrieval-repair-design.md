@@ -196,8 +196,38 @@ out at its unchanged five-second limit; the other 15 questions were unattempted.
 Its request lacked the supported structured-output/non-thinking contract, and
 unit RED evidence confirms missing finish-reason and response-shape checks.
 The narrow repair reuses existing provider capability handling and safe planner
-failure categories, retains original-first fallback, protected constraints and
-all shared allowances, and versions the policy used by cache/publication
+failure categories for reported incomplete or malformed responses, retains
+original-first fallback, protected constraints and all shared allowances,
+and versions the policy used by cache/publication
 bindings. No prompt strategy, semantic-equivalence claim, feature activation or
 larger allowance follows. Proposal viability and end-to-end retrieval quality
 are separate acceptance steps; serving development remains unchanged.
+
+The implemented policy-v3 contract passed 212 focused regressions and independent
+review. Isolated r12 using the configured local vLLM stack then returned valid
+structured proposals for all sixteen frozen questions in 0.18–0.39 seconds under
+the unchanged five-second limit.
+Existing filters admitted four, rejected eleven duplicates and rejected one
+source-name heuristic match; none of those checks was weakened. Q3 remains
+identical and Q4 only loses question framing. This establishes bounded generation
+viability, without establishing semantic equivalence or improved acquisition.
+The feature remains disabled; this check performed no retrieval or synthesis,
+and the serving deployment and representations remain unchanged.
+
+The frozen BM25 counterfactual meets its candidate-stage criterion: seven of
+eleven reference targets appear within eight, including one previously
+unacquired held-out date passage; all three useful generic controls remain and
+no saved plain/OR target is lost. Q3/Q4 remain zero of four. An IDF=1 ablation
+also reaches the same seven targets, so their gain is not specifically an IDF
+effect, but it loses a version-specific generic control retained by BM25.
+Exact returned document/body identities and normalization passed. Earlier
+startup and JSONB decoding failures are preserved as harness failures; the
+final run changed no queries, scoring policy or acceptance criteria.
+
+The 12.48-second shared corpus batch is an offline diagnostic cost, not serving
+latency. Do not tokenize the whole corpus during requests or enable BM25 from
+this result. An admission experiment must preserve real query/context bindings,
+current authorization, source ceilings and downstream scoring limits, measure
+displaced evidence, and keep quality-only counterfactuals separate from live
+performance claims. No production integration, backfill or activation follows
+from this candidate-stage result alone.
