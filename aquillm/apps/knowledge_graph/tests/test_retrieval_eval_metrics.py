@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import inspect
 from hashlib import sha256
 from types import SimpleNamespace
@@ -116,12 +117,24 @@ def test_comparison_signature_changes_when_only_fallback_mention_identity_change
 
 
 def test_eval_runner_reuses_shipping_search_and_ranking_without_duplication():
-    production_source = inspect.getsource(chunk_search.text_chunk_search)
+    def called_names(function):
+        return [
+            node.func.id if isinstance(node.func, ast.Name) else node.func.attr
+            for node in ast.walk(ast.parse(inspect.getsource(function)))
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, (ast.Name, ast.Attribute))
+        ]
+
+    production_calls = called_names(chunk_search.text_chunk_search)
     live_source = inspect.getsource(run_kg_eval._live_comparison_bundle)
     comparison_source = inspect.getsource(run_kg_eval.run_one_snapshot_comparison)
 
-    assert production_source.count("collect_hybrid_candidate_snapshot(") == 1
-    assert "materialize_and_rerank_candidates(" in production_source
+    assert production_calls.count("collect_hybrid_candidate_snapshot") == 1
+    # Scored acquisition delegates; native closure need not request reranking.
+    assert chunk_search._scored_search.__name__ in production_calls
+    assert chunk_search.materialize_and_rerank_candidates.__name__ in called_names(
+        chunk_search._scored_search
+    )
     assert "collect_hybrid_candidate_snapshot" in live_source
     assert "load_authorized_graph_snapshot" in live_source
     assert "rank_authorized_graph_snapshot" in live_source

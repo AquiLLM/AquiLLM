@@ -2,6 +2,8 @@
 
 from types import SimpleNamespace
 
+import pytest
+
 from apps.chat.services import rag_metrics, rag_selection_coordinator
 from apps.chat.services.rag_config import (
     EvidenceSelectionConfig,
@@ -53,7 +55,8 @@ def test_invalid_config_emits_only_fixed_closed_diagnostic(monkeypatch):
     assert "selection_config_error" not in rejected
 
 
-def test_shadow_proposal_is_separate_from_served_counts(monkeypatch):
+@pytest.mark.parametrize("score_status", ["rank_fallback", "partial_model_ranked"])
+def test_shadow_proposal_is_separate_from_served_counts(monkeypatch, score_status):
     candidate = SelectionCandidate(
         7,
         "private-document-id",
@@ -66,9 +69,9 @@ def test_shadow_proposal_is_separate_from_served_counts(monkeypatch):
     )
     profile = SelectionProfile("breadth", 0.8, 0.15, "adaptive-evidence-v1-minmax-1e-9")
     turn = rag_selection_coordinator.SelectionTurn(
-        EvidenceSelection((candidate,), 4, profile, "rank_fallback"),
+        EvidenceSelection((candidate,), 4, profile, score_status),
         object(),
-        PreparedSelection((candidate,), "rank_fallback", 0, 0, 0, None),
+        PreparedSelection((candidate,), score_status, 0, 0, 0, None),
         1.0,
         3,
     )
@@ -95,7 +98,7 @@ def test_shadow_proposal_is_separate_from_served_counts(monkeypatch):
         fields["proposed_estimated_tokens"],
         fields["proposed_profile_name"],
         fields["proposed_score_status"],
-    ) == (1, 1, 4, "breadth", "rank_fallback")
+    ) == (1, 1, 4, "breadth", score_status)
     assert "private-document-id" not in repr(fields)
     assert "private passage" not in repr(fields)
     rejected = _emit(

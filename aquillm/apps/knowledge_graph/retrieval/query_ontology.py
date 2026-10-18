@@ -114,6 +114,11 @@ def load_query_ontology(
     if len(identities) != 1:
         return _mixed(count)
     version, checksum = next(iter(identities))
+    return _complete_query_ontology(version=version, checksum=checksum, count=count, using=using, read_budget=read_budget)
+
+
+def _complete_query_ontology(*, version, checksum, count, using, read_budget=None):
+    optional = {} if read_budget is None else {"read_budget": read_budget}
     active = _load_active_ontology_row(
         using=using, version=version, checksum=checksum, **optional
     )
@@ -136,3 +141,5 @@ def load_query_ontology(
 
 
 __all__ = ["QueryOntologyOutcomeV1", "load_query_ontology"]
+
+_NATIVE_ONTOLOGY_METHODS = (load_query_ontology, _load_selected_artifact_rows, _load_active_ontology_row, _complete_query_ontology, load_ontology_yaml)

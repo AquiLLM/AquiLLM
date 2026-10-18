@@ -1,5 +1,6 @@
 # ruff: noqa: E501
 from __future__ import annotations
+from apps.knowledge_graph.retrieval.native_seed_metadata_layout import layout as _metadata_layout
 
 import re
 import uuid
@@ -32,18 +33,15 @@ _ACTIVE_IDENTITY_FIELDS = ("collection", "artifact", "schema_version", "projecti
 _NONNEGATIVE_COUNTS = Q(entity_count__gte=0) & Q(relation_semantics_count__gte=0) & Q(relation_count__gte=0) & Q(evidence_count__gte=0) & Q(entity_mention_count__gte=0) & Q(chunk_count__gte=0) & Q(attempt_count__gte=0)
 # fmt: on
 
-
 def _validate_checksum(errors: dict[str, str], name: str, value: object) -> None:
     if type(value) is not str or _CHECKSUM.fullmatch(value) is None:
         errors[name] = "Value must be a lowercase SHA-256 checksum."
-
 
 def _validate_token(errors: dict[str, str], name: str, value: object) -> None:
     # fmt: off
     if type(value) is not str or not value or value != value.strip() or any(ord(character) < 32 or ord(character) == 127 for character in value):
         errors[name] = "Value must be a bounded canonical token."
     # fmt: on
-
 
 class ProjectionAuthorityModel(models.Model):
     class Meta:
@@ -284,3 +282,5 @@ class GraphProjectionOutbox(ProjectionAuthorityModel):
             errors["last_failure_code"] = "Failure code must be a fixed safe token."
         if errors:
             raise ValidationError(errors)
+
+_NATIVE_METADATA_LAYOUTS = tuple(_metadata_layout(m) for m in (CollectionGraphMembershipState,))

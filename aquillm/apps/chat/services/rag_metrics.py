@@ -28,7 +28,7 @@ _FALLBACK_REASONS = frozenset(
 )
 _PROFILE_VERSIONS = frozenset({"adaptive-evidence-v1-minmax-1e-9"})
 _PROFILE_NAMES = frozenset({"focused", "balanced", "breadth"})
-_SCORE_STATUSES = frozenset({"model", "rank_fallback"})
+_SCORE_STATUSES = frozenset({"model", "rank_fallback", "partial_model_ranked"})
 _CONFIG_ERRORS = frozenset({"invalid_evidence_selection_configuration"})
 
 

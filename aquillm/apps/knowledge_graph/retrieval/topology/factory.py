@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from ..frontier_ranking_validation_v2 import POLICY, frontier_tags
 from .memgraph import MemgraphProjectedTopologyLoader
 from .postgres import PostgresParityCapability, PostgresProjectedTopologyLoader
 
 
-def create_canonical_frontier_loader_v2(*, selection, codec, gateway_client):
+def create_canonical_frontier_loader_v2(
+    *, selection, codec, gateway_client, acquisition_policy=POLICY
+):
     """Explicit private V2 entry point; legacy factory remains unchanged."""
     from apps.knowledge_graph.projection.frontier_adapter_v2 import (
         Neo4jCanonicalFrontierAdapterV2,
@@ -14,12 +17,14 @@ def create_canonical_frontier_loader_v2(*, selection, codec, gateway_client):
 
     from .frontier_gateway_client_v2 import FrontierGatewayClientV2
     from .frontier_loader_v2 import canonical_frontier_loader_v2
+    frontier_tags(acquisition_policy)
 
     return canonical_frontier_loader_v2(
         selection=selection,
         codec=codec,
+        acquisition_policy=acquisition_policy,
         adapter=Neo4jCanonicalFrontierAdapterV2(
-            FrontierGatewayClientV2(gateway_client)
+            FrontierGatewayClientV2(gateway_client), acquisition_policy=acquisition_policy
         ),
     )
 

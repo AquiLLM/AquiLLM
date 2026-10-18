@@ -5,6 +5,9 @@ from dataclasses import replace
 import pytest
 
 from apps.knowledge_graph.projection.frontier_adapter_v2 import FrontierSessionV2
+from apps.knowledge_graph.retrieval.topology.frontier_loader_v2 import (
+    FrontierUnavailableV2,
+)
 from apps.knowledge_graph.tests.frontier_fixture_support import FrontierFixture
 from apps.knowledge_graph.tests.frontier_index_fixture_driver import (
     FrontierIndexFixtureDriver,
@@ -23,17 +26,19 @@ def test_terminal_identity_acquires_own_or_other_generation_mention(
     fixture.caps = replace(fixture.caps, max_depth=depth)
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     copy_calls, relation_streams = [], []
-    copies, entries = FrontierSessionV2.copies, FrontierSessionV2.entries
+    prepare, entries = FrontierSessionV2.prepare_copies, FrontierSessionV2.entries
 
-    def record_copies(session, generation, identity):
-        copy_calls.append((generation, identity))
-        yield from copies(session, generation, identity)
+    def record_copies(session, pairs, *, relation_heads):
+        copy_calls.extend(pairs)
+        if any(identity == terminal for _, identity in pairs):
+            assert not relation_heads
+        return prepare(session, pairs, relation_heads=relation_heads)
 
     def record_entries(session, generation, head, stream):
         relation_streams.append(stream)
         yield from entries(session, generation, head, stream)
 
-    monkeypatch.setattr(FrontierSessionV2, "copies", record_copies)
+    monkeypatch.setattr(FrontierSessionV2, "prepare_copies", record_copies)
     monkeypatch.setattr(FrontierSessionV2, "entries", record_entries)
     result, budget = run(fixture, driver)
     assert chunk in {r.chunk_key for r in result.evidence_candidates}
@@ -62,14 +67,18 @@ def test_insufficient_terminal_budget_is_partial_and_never_resets(monkeypatch):
     fixture = FrontierFixture(bundles)
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     budget = fixture.budget(max_queries=52)
-    from apps.knowledge_graph.projection.frontier_cypher_v2 import MANIFEST_LOOKUP
+    from apps.knowledge_graph.projection.frontier_cypher_v2 import MANIFEST_BATCH_LOOKUP
 
     mention = FrontierSessionV2.mention
     reservations, terminal_calls = [], []
-    limits = {name: value for name, value in vars(budget).items() if name.startswith('max_')}
+    limits = {
+        name: value for name, value in vars(budget).items() if name.startswith("max_")
+    }
     deadline, turn = budget.deadline, budget.turn_budget
     terminal_entities = {
-        m.entity_key for bundle in fixture.bundles for m in bundle.automatic_memberships
+        m.entity_key
+        for bundle in fixture.bundles
+        for m in bundle.automatic_memberships
         if (m.automatic_membership_key or m.entity_key) == terminal
     }
 
@@ -79,12 +88,13 @@ def test_insufficient_terminal_budget_is_partial_and_never_resets(monkeypatch):
             terminal_calls.append((len(driver.calls), budget.queries))
             # Other admitted work consumes the original shared ledger. Reserve
             # only the remaining non-manifest work, preserving final authority reads.
-            while budget.queries + len(session.selected) < budget.max_queries:
-                assert budget.reserve_query()
+            while budget.reserve_query():
                 reservations.append(True)
         yield from mention(session, generation, head, entity, rows)
 
-    monkeypatch.setattr(FrontierSessionV2, 'mention', spend_shared_budget_before_terminal)
+    monkeypatch.setattr(
+        FrontierSessionV2, "mention", spend_shared_budget_before_terminal
+    )
     result, returned_budget = run(fixture, driver, budget)
     assert returned_budget is budget and len(terminal_calls) == 1
     assert reservations
@@ -93,13 +103,66 @@ def test_insufficient_terminal_budget_is_partial_and_never_resets(monkeypatch):
     assert result.coverage.status == "partial"
     assert result.coverage.reasons == ("frontier_budget",)
     assert budget.queries == len(driver.calls) + len(reservations) == 52
-    final_reads = driver.calls[terminal_calls[0][0]:]
-    assert len(final_reads) == len(fixture.bundles)
-    assert all(query == MANIFEST_LOOKUP for query, _ in final_reads)
-    assert {params['generation_key'] for _, params in final_reads} == {
-        bundle.generation.generation_key for bundle in fixture.bundles
-    }
+    final_reads = driver.calls[terminal_calls[0][0] :]
+    assert len(final_reads) == 1
+    assert all(query == MANIFEST_BATCH_LOOKUP for query, _ in final_reads)
+    assert {
+        pair.split(":")[0]
+        for _, params in final_reads
+        for pair in params["lookups_csv"].split(",")
+    } == {bundle.generation.generation_key for bundle in fixture.bundles}
     assert {name: getattr(budget, name) for name in limits} == limits
     assert budget.deadline == deadline and budget.turn_budget is turn
     assert budget.source_rows <= 5000
     assert budget.deadline == fixture.deadline
+
+
+@pytest.mark.parametrize("failure", ["uncertain", "deadline", "unknown", "cancelled"])
+def test_terminal_snapshot_check_preserves_failure_kind(monkeypatch, failure):
+    from asyncio import CancelledError
+
+    from apps.knowledge_graph.projection.frontier_snapshot_v2 import FrontierAssemblyV2
+    from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import (
+        FrontierBudgetV2,
+    )
+    from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+
+    fixture = FrontierFixture()
+    driver = FrontierIndexFixtureDriver(fixture.bundles)
+    now = [fixture.deadline - 1.0]
+    budget = FrontierBudgetV2(
+        turn_budget=TurnBudget(TurnLimits(), clock=lambda: now[0]),
+        deadline=fixture.deadline, clock=lambda: now[0], max_identities=200,
+        max_edges=1000, max_source_rows=5000, max_queries=64, max_wire_bytes=1048576,
+    )
+    build, snapshots = FrontierAssemblyV2.build, []
+
+    def terminal_check(assembly, request):
+        result = build(assembly, request)
+        snapshots.append(result)
+        if failure == "uncertain":
+            budget.stop_uncertain()
+        elif failure == "deadline":
+            now[0] = budget.deadline
+        else:
+            def reject():
+                if failure == "cancelled":
+                    raise CancelledError()
+                raise RuntimeError("unknown failure")
+
+            monkeypatch.setattr(budget, "check_active", reject)
+        return result
+
+    monkeypatch.setattr(FrontierAssemblyV2, "build", terminal_check)
+    if failure in {"uncertain", "deadline"}:
+        with pytest.raises(FrontierUnavailableV2) as caught:
+            run(fixture, driver, budget)
+        assert caught.value.coverage.reasons == (
+            "frontier_budget" if failure == "uncertain" else "deadline",
+        )
+        assert caught.value.coverage.ready_documents == 0
+    else:
+        with pytest.raises(CancelledError if failure == "cancelled" else RuntimeError):
+            run(fixture, driver, budget)
+    assert snapshots and snapshots[0][1]
+    assert budget.queries == len(driver.calls) <= 64

@@ -8,7 +8,7 @@ assets leaves the worker unknown. Reinitialize on runtime replacement.
 
 import json
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from threading import Event, RLock
 from time import monotonic
 
@@ -19,6 +19,8 @@ from .chunk_rerank_results import fingerprint_text
 
 _registered = {}
 _lock = RLock()
+_epoch = 0
+_provider_epochs = {}
 
 
 @dataclass(frozen=True)
@@ -73,8 +75,16 @@ def registered_pair_counter(provider):
 
 def invalidate_pair_capability(provider=None):
     """Revoke even counters held by an already-created request scorer."""
+    global _epoch
     with _lock:
-        keys = [provider.scorer_fingerprint] if provider else list(_registered)
+        if provider is None:
+            _epoch += 1
+            _provider_epochs.clear()
+            keys = list(_registered)
+        else:
+            key = provider.scorer_fingerprint
+            _provider_epochs[key] = _provider_epochs.get(key, 0) + 1
+            keys = [key]
         for key in keys:
             counter = _registered.pop(key, None)
             if counter is not None:
@@ -112,8 +122,59 @@ def verify_pair_capability(
     if budget is None or not budget.can_publish():
         return None
     invalidate_pair_capability(provider)
+    expected = _pair_snapshot(provider)
+    counter = _probe_pair_capability(
+        provider,
+        tokenizer=tokenizer,
+        template=template,
+        identity=identity,
+        budget=budget,
+        post=post,
+    )
+    if counter is None:
+        return None
+    return _publish_pair_candidate(provider, counter, expected=expected, budget=budget)
+
+
+def _pair_snapshot(provider):
+    with _lock:
+        return registered_pair_counter(provider), (
+            _epoch, _provider_epochs.get(provider.scorer_fingerprint, 0)
+        )
+
+
+def _publish_pair_candidate(provider, counter, *, expected, budget):
+    """CAS publication; retained same-identity references share revocation."""
+    expected, epoch = expected
+    result = []
+
+    def publish():
+        with _lock:
+            if (
+                epoch != (_epoch, _provider_epochs.get(provider.scorer_fingerprint, 0))
+                or _registered.get(provider.scorer_fingerprint) is not expected
+                or (expected is not None and expected.revoked.is_set())
+                or (expected is not None and expected.identity != counter.identity)
+                or counter.revoked.is_set()
+                or monotonic() >= counter.expires
+            ):
+                return
+            current = (
+                replace(counter, revoked=expected.revoked) if expected else counter
+            )
+            _registered[provider.scorer_fingerprint] = current
+            result.append(current)
+
+    budget.publish(publish)
+    return result[0] if result else None
+
+
+def _probe_pair_capability(
+    provider, *, tokenizer, template, identity, budget, post=requests.post
+):
     if (
         budget is None
+        or not budget.can_publish()
         or provider.shape != "score_single_text_pair"
         or not _valid_identity(identity, template)
     ):
@@ -208,11 +269,7 @@ def verify_pair_capability(
                 # Apply the same finite-score contract as the window scorer.
                 parse_single_score(body)
 
-        def register():
-            with _lock:
-                _registered[provider.scorer_fingerprint] = counter
-
-        return counter if budget.publish(register) else None
+        return counter if budget.can_publish() else None
     except (requests.RequestException, ValueError, TypeError, AttributeError):
         return None
 
@@ -225,23 +282,19 @@ def initialize_worker_pair_capability(
     A separate management process cannot initialize serving workers. Local cache
     only; a missing pinned tokenizer keeps coverage unknown without downloading.
     """
-    if not _valid_identity(identity, template):
-        return None
-    try:
-        from transformers import AutoTokenizer
+    from .pair_worker_refresh import initialize_pair_candidate
 
-        tokenizer = AutoTokenizer.from_pretrained(
-            tokenizer_name,
-            revision=identity["tokenizer_revision"],
-            local_files_only=True,
-            trust_remote_code=False,
-        )
-    except (ImportError, OSError, ValueError):
-        return None
-    return verify_pair_capability(
+    return initialize_pair_candidate(
         provider,
-        tokenizer=tokenizer,
+        tokenizer_name=tokenizer_name,
         template=template,
         identity=identity,
         budget=budget,
+        verify=verify_pair_capability,
     )
+
+
+def _prepare_worker_pair_capability(**kwargs):
+    from .pair_worker_refresh import initialize_pair_candidate
+
+    return initialize_pair_candidate(**kwargs, verify=_probe_pair_capability)

@@ -33,7 +33,7 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
     runtime = service.TopologyGatewayRuntime(settings, driver, object())
     monkeypatch.setattr(service, "load_topology_gateway_settings", lambda _: settings)
     monkeypatch.setattr(service, "_get_runtime", lambda *_: runtime)
-    body_sizes, timeouts = [], []
+    body_sizes, timeouts, physical_counts = [], [], []
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args):
@@ -67,6 +67,7 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
             self.end_headers()
             body = sent[1]["body"]
             body_sizes.append(len(body))
+            physical_counts.append(body[40] if body.startswith(b"KGFW0001") else 1)
             self.wfile.write(body)
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -79,6 +80,8 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
         loader = create_canonical_frontier_loader_v2(
             selection=fixture.selection, codec=fixture.codec, gateway_client=gateway
         )
+        # This compatibility fixture implements the unchanged legacy query family.
+        loader.adapter.driver.complete_scope_windows = False
         budget = fixture.budget(max_wire_bytes=wire_cap)
         deadline = budget.deadline
         if wire_cap == 256:
@@ -94,7 +97,8 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
             assert caught.value.coverage.reasons == ("frontier_budget",)
             assert caught.value.reserved_source_rows == 0
             assert caught.value.work_uncertain is False
-            assert budget.queries == budget.source_rows == len(driver.calls) == 1
+            assert budget.source_rows == 2
+            assert budget.queries == len(driver.calls) == 1
             assert budget.wire_bytes == sum(body_sizes) <= wire_cap
             print(
                 "FRONTIER_HTTP_COMPLETED_BUDGET",
@@ -113,7 +117,8 @@ def test_real_http_bridge_counts_actual_raw_bodies_and_preserves_original_deadli
         )
         assert fixture.answer_identity in result.snapshot.identity_keys
         assert budget.wire_bytes == sum(body_sizes) > 0
-        assert budget.queries == len(body_sizes) == len(driver.calls) <= 64
+        assert budget.queries == sum(physical_counts) == len(driver.calls) <= 64
+        assert len(body_sizes) < budget.queries
         assert budget.wire_bytes <= 1048576 and budget.deadline == deadline
         assert all(0 < value <= 5000 for value in timeouts)
         print(

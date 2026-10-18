@@ -125,8 +125,8 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
 
     from apps.chat.services import rag_preservation_turn
     from apps.chat.services.rag_turn import preservation_turn
+    from apps.chat.services.tool_wiring import documents
     from apps.chat.services.tool_wiring.documents import vector_search_tool
-    from apps.documents.models import TextChunk
     from apps.documents.services.source_loading import current_source_runtime
 
     configure(monkeypatch)
@@ -163,13 +163,13 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
             )
         )
 
-    def blocked_search(*args, **kwargs):
+    def blocked_metadata(*args, **kwargs):
         runtime = current_source_runtime()
         started.set()
         release.wait()
         runtime.budget.publish(lambda: late.append(True))
         finished.set()
-        return None, None, [], {}
+        return []
 
     async def complete(request, *args, **kwargs):
         requests.append(request)
@@ -190,7 +190,9 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
         raw = await database_sync_to_async(vector_search_tool(user, consumer.col_ref))(
             search_string="initial", top_k=5
         )
-        monkeypatch.setattr(TextChunk, "text_chunk_search", blocked_search)
+        # Block the first dependency after real action admission. Metadata and
+        # authorization can exhaust the 50 ms deadline before search starts.
+        monkeypatch.setattr(documents, "selected_document_metadata", blocked_metadata)
         working = convo + [
             ToolMessage(
                 tool_name="vector_search",
@@ -212,7 +214,7 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
         try:
             assert await asyncio.to_thread(started.wait, 1)
             # The tool deadline bounds acquisition, not the subsequent real DB
-            # selection and synthesis. Both must advance without this provider.
+            # selection and synthesis. Both must advance without this worker.
             await asyncio.wait_for(acquisition_finished.wait(), timeout=0.6)
             assert not release.is_set() and not finished.is_set()
             await task

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from apps.knowledge_graph.projection.memgraph_driver import MemgraphDriverError
@@ -45,3 +47,25 @@ def test_gateway_factory_does_not_retry_failed_managed_reads(monkeypatch):
         runtime.driver.execute_read("RETURN 1", {}, timeout_seconds=0.1, max_records=1)
     assert len(attempts) == 1
     assert elapsed[0] == 0.1
+
+
+@pytest.mark.parametrize("timeout_ms", [10, 1300, 5000])
+def test_gateway_bounds_connection_and_pool_wait_by_service_timeout(
+    monkeypatch, timeout_ms
+):
+    from neo4j import GraphDatabase
+
+    options = {}
+
+    def connect(_uri, **kwargs):
+        options.update(kwargs)
+        raise TimeoutError("connection timed out")
+
+    monkeypatch.setattr(GraphDatabase, "driver", connect)
+    monkeypatch.setattr(service, "_runtime", None)
+    runtime = service._get_runtime(replace(_settings(), timeout_ms=timeout_ms))
+    with pytest.raises(MemgraphDriverError):
+        runtime.driver.execute_read("RETURN 1", {}, timeout_seconds=0.1, max_records=1)
+    assert options.get("connection_timeout") == timeout_ms / 1000
+    assert options.get("connection_acquisition_timeout") == timeout_ms / 1000
+    assert options["max_transaction_retry_time"] == 0.0

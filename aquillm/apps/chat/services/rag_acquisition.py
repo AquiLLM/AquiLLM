@@ -63,7 +63,7 @@ async def acquire_evidence(
             timeout = min(timeout, ACTION_TIMEOUT_MS)
         if timeout <= 0:
             raise TimeoutError("acquisition reserve")
-        with operation_scope(budget):
+        with operation_scope(budget, timeout_ms=timeout):
             from .retrieval_query_runtime import action_observation
 
             observation = action_observation(action, proposal, budget)

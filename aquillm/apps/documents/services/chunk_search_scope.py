@@ -21,20 +21,35 @@ from .source_loading import bounded_source_database, current_source_runtime
 
 _SCOPE = ContextVar("chunk_search_scope", default=None)
 
-
 def current_scope():
     return _SCOPE.get()
 
-
 def freeze_dense_generations(*args, **kwargs):
     from .embedding_index_query import freeze_dense_generations as freeze
-
     return freeze(*args, **kwargs)
+
+def _capture_tool_scope(runtime, *, using):
+    from .embedding_index_query import _capture_dense_generations
+    from .representation_store import _capture_active_representations
+    from .representation_tool_scope import original_document_metadata
+    with bounded_source_database(runtime, using):
+        validate_requested_authorization(runtime, runtime.authorization, ())
+        documents = original_document_metadata(runtime, using=using)
+        refs = tuple(DocumentRefV1(d._meta.label_lower, d.pkid, d.id,
+            d.collection_id, d.full_text_hash) for d in documents)
+        representation = _capture_active_representations(refs, using=using)
+        try:
+            space = resolve_query_space(using)
+        except Exception:
+            space = None
+        dense = (_capture_dense_generations(representation, space_key=space.space_key,
+            using=using) if space else None)
+        return FrozenRetrievalScope(representation, dense, space, runtime.authorization,
+            using, runtime, requested_document_ids=frozenset(d.id for d in documents))
 
 
 def resolve_query_space(using):
     from .embedding_index_store import load_embedding_space
-
     key = getattr(settings, "DOCUMENT_EMBEDDING_SPACE_KEY", None)
     if not key:
         return None
@@ -81,21 +96,17 @@ class FrozenRetrievalScope:
             from apps.chat.services.retrieval_query_runtime import validate_bound_before_current_scope
 
             validate_bound_before_current_scope(self.proposal_binding, self)
-        from apps.collections.services.retrieval_authorization import (
-            revalidate_retrieval_authorization_context,
-        )
-
+        from apps.collections.services.retrieval_authorization import revalidate_retrieval_authorization_context
         from .embedding_index_query import validate_dense_snapshot
 
         if self.runtime and not self.runtime.budget.can_publish():
             raise SourceScopeUnavailable("source_scope_unavailable")
         if is_exact_authorization_context(self.authorization):
-            current = revalidate_retrieval_authorization_context(
-                context=self.authorization
-            )
+            current = revalidate_retrieval_authorization_context(context=self.authorization)
+            docs, cols = map(frozenset, (current.document_ids, current.collection_ids))
             if any(
-                s.document.id not in current.document_ids
-                or s.document.collection_id not in current.collection_ids
+                s.document.id not in docs
+                or s.document.collection_id not in cols
                 for s in self.representation.selections
             ):
                 raise SourceScopeUnavailable("source_scope_unavailable")
@@ -166,10 +177,7 @@ class FrozenRetrievalScope:
 
 
 def validate_requested_authorization(runtime, incoming, documents):
-    from apps.collections.services.retrieval_authorization import (
-        revalidate_retrieval_authorization_context,
-    )
-
+    from apps.collections.services.retrieval_authorization import revalidate_retrieval_authorization_context
     original = runtime.authorization
     if not is_exact_authorization_context(incoming):
         raise SourceScopeUnavailable("source_scope_unavailable")
@@ -269,15 +277,8 @@ def _freeze_search_scope(documents, *, using, authorization=None, runtime=None):
             if space
             else None
         )
-        scope = FrozenRetrievalScope(
-            representation,
-            dense,
-            space,
-            authorization,
-            using,
-            runtime,
-            requested_document_ids=ids,
-        )
+        scope = FrozenRetrievalScope(representation, dense, space, authorization,
+            using, runtime, requested_document_ids=ids)
         scope.validate()
     if holder is not None:
         holder._frozen_retrieval_scope = replace(scope, requested_document_ids=frozenset(

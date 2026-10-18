@@ -7,6 +7,16 @@ from apps.documents.services.chunk_rerank_score_transport import serialize_score
 from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 
 
+def log_schedule_fallback(logger, requested_schedule):
+    if requested_schedule == "native_closure":
+        logger.info(
+            "obs.rag.acquisition_schedule_fallback",
+            **retrieval_log_fields(
+                reason=RetrievalLogReason.NATIVE_INELIGIBLE, count=0, elapsed_ms=0.0,
+            ),
+        )
+
+
 def completed_search_diagnostics(
     logger,
     model_cls,

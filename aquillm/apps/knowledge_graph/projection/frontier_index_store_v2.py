@@ -1,11 +1,47 @@
 """Opt-in staging and independent attestation of the derived access structure."""
 
+from os import environ
+
 from .frontier_index_build_v2 import build_frontier_index
-from .frontier_index_contracts_v2 import MARKER_FIELDS, decode_record, marker_present
+from .frontier_index_contracts_v2 import (
+    MARKER_FIELDS,
+    PACKED_VERSION,
+    VERSION,
+    decode_record,
+    marker_present,
+)
 from .memgraph_edges import write_parameterized_batches
 from .memgraph_records import FAMILIES, _dto, _properties
 from .memgraph_streaming import _BUNDLE_FIELDS, _COUNT_FIELDS, stream_family_records
 from .records import CollectionGraphProjectionBundleV1, ProjectionGenerationMarkerV1
+
+# Activate only after compatible readers are deployed. Existing markers retain
+# their recipe even while new packed writes are disabled during rollback.
+_NEW_INDEX_VERSION = PACKED_VERSION
+
+
+def _new_index_version():
+    enabled = environ.get("KG_FRONTIER_PACKED_WRITES_ENABLED", "0")
+    if enabled not in {"0", "1"}:
+        raise ValueError("KG_FRONTIER_PACKED_WRITES_ENABLED must be exactly 0 or 1")
+    return _NEW_INDEX_VERSION if enabled == "1" else VERSION
+
+
+def _stored_version(marker):
+    present = {name for name in MARKER_FIELDS if name in marker}
+    if not present:
+        return None
+    if present != set(MARKER_FIELDS):
+        raise ValueError("partial frontier marker cannot be reconstructed")
+    if marker["validated_frontier_checksum"] not in (
+        "0" * 64,
+        marker["frontier_checksum"],
+    ):
+        raise ValueError("invalid staging frontier attestation")
+    marker_present(
+        {**marker, "validated_frontier_checksum": marker["frontier_checksum"]}
+    )
+    return marker["frontier_version"]
 
 
 def read_marker(driver, generation, timeout, *, alias="record"):
@@ -22,11 +58,20 @@ def read_marker(driver, generation, timeout, *, alias="record"):
 
 
 def write_frontier_index(driver, bundle, *, batch_size, timeout):
-    index = build_frontier_index(bundle)
     # This is staging-only. There is no in-place ready-generation backfill.
     marker = read_marker(driver, bundle.generation.generation_key, timeout)
     if marker.get("state") not in {"staging", "building"}:
         raise ValueError("frontier population requires a staging generation")
+    existing = _stored_version(marker)
+    index = build_frontier_index(
+        bundle, directory_version=existing or _new_index_version()
+    )
+    if existing and any(
+        marker[name] != value
+        for name, value in index.marker.items()
+        if name != "validated_frontier_checksum"
+    ):
+        raise ValueError("frontier marker is not derived from this projection")
     assignments = ", ".join(
         "n." + field + "=row." + field
         for field in index.records[0]
@@ -54,11 +99,9 @@ def write_frontier_index(driver, bundle, *, batch_size, timeout):
 def validate_frontier_if_present(driver, expected, *, timeout, marker):
     """Compare stored index to a reconstruction from independently read source."""
     generation = expected.generation_key
-    present = {name for name in MARKER_FIELDS if name in marker}
-    if not present:
+    version = _stored_version(marker)
+    if version is None:
         return
-    if present != set(MARKER_FIELDS):
-        raise ValueError("partial frontier marker cannot be validated")
     families = {}
     field_by_label = {
         label: name for name, label in _BUNDLE_FIELDS if label is not None
@@ -78,7 +121,7 @@ def validate_frontier_if_present(driver, expected, *, timeout, marker):
         counts=expected.counts,
         **families,
     )
-    index = build_frontier_index(bundle)
+    index = build_frontier_index(bundle, directory_version=version)
     if any(
         marker[name] != value
         for name, value in index.marker.items()

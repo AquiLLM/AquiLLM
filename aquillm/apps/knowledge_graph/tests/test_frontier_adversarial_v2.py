@@ -8,7 +8,7 @@ from apps.knowledge_graph.projection.frontier_adapter_v2 import (
     Neo4jCanonicalFrontierAdapterV2,
 )
 from apps.knowledge_graph.projection.frontier_cypher_v2 import (
-    MANIFEST_LOOKUP,
+    MANIFEST_BATCH_LOOKUP,
     RAW_LOOKUP,
 )
 from apps.knowledge_graph.retrieval.topology.failures import TopologyLoadError
@@ -74,7 +74,7 @@ def test_query_budget_before_provenance_returns_typed_unavailable():
     with pytest.raises(FrontierUnavailableV2) as caught:
         run(fixture, driver, budget)
     assert caught.value.coverage.reasons == ("frontier_budget",)
-    assert caught.value.accounting[3] == budget.queries == len(driver.calls) == 1
+    assert caught.value.accounting[3] == budget.queries == len(driver.calls) == 0
 
 
 def test_missing_index_is_unavailable_but_partial_attestation_is_corruption():
@@ -129,11 +129,12 @@ def test_authority_swap_on_late_manifest_discards_every_candidate():
 
     def read(query, parameters, **kwargs):
         rows = original(query, parameters, **kwargs)
-        if query == MANIFEST_LOOKUP:
-            generation = parameters["generation_key"]
-            counts[generation] = counts.get(generation, 0) + 1
-            if counts[generation] > 1:
-                return ({"record": {**rows[0]["record"], "graph_checksum": "f" * 64}},)
+        if query == MANIFEST_BATCH_LOOKUP:
+            for row in rows:
+                generation = row["generation_key"]
+                counts[generation] = counts.get(generation, 0) + 1
+                if counts[generation] > 1:
+                    row["record"]["graph_checksum"] = "f" * 64
         return rows
 
     driver.execute_read = read
@@ -164,16 +165,23 @@ def test_second_round_cannot_reset_any_original_budget():
         return rows
 
     driver.execute_read = observed_read
-    limits = {name: value for name, value in vars(budget).items()
-              if name.startswith("max_")}
+    limits = {
+        name: value for name, value in vars(budget).items() if name.startswith("max_")
+    }
     deadline, turn, clock = budget.deadline, budget.turn_budget, budget.clock
     assert limits["max_queries"] == 64
     previous_queries = previous_rows = previous_calls = previous_manifests = 0
     for _round in range(2):
         run(fixture, driver, budget)
-        assert budget.queries - previous_queries == len(driver.calls) - previous_calls > 0
+        assert (
+            budget.queries - previous_queries == len(driver.calls) - previous_calls > 0
+        )
         assert budget.source_rows == sum(physical_rows) > previous_rows
-        manifests = sum(query == MANIFEST_LOOKUP for query, *_ in driver.calls)
+        manifests = sum(
+            len(params["lookups_csv"].split(","))
+            for query, params in driver.calls
+            if query == MANIFEST_BATCH_LOOKUP
+        )
         assert manifests - previous_manifests >= 2 * len(fixture.bundles)
         previous_queries, previous_rows = budget.queries, budget.source_rows
         previous_calls, previous_manifests = len(driver.calls), manifests
@@ -221,7 +229,8 @@ def test_late_manifest_is_charged_and_never_continues():
     with pytest.raises(FrontierUnavailableV2) as caught:
         run(fixture, driver, budget)
     assert caught.value.coverage.reasons == ("deadline",)
-    assert budget.source_rows == budget.queries == len(driver.calls) == 1
+    assert budget.source_rows == 2
+    assert budget.queries == len(driver.calls) == 1
 
 
 def test_original_turn_cancellation_fences_loader_without_dispatch():
@@ -240,11 +249,14 @@ def test_distinct_hub_endpoints_cannot_share_one_provenance_association():
     bundles, _ = hub_bundles()
     first, second = bundles
     original = first.evidence[0].provenance_key
-    first = replace(first, evidence=tuple(
-        replace(row, provenance_key=original) for row in first.evidence
-    ))
+    first = replace(
+        first,
+        evidence=tuple(replace(row, provenance_key=original) for row in first.evidence),
+    )
     fixture = FrontierFixture((first, second))
     with pytest.raises(TopologyLoadError) as caught:
         run(fixture, FrontierIndexFixtureDriver(fixture.bundles))
     assert isinstance(caught.value.__cause__, ValueError)
     assert str(caught.value.__cause__) == "conflicting provenance association"
+
+

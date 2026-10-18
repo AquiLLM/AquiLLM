@@ -1,21 +1,21 @@
 """Graph-independent, metadata-first authorized source body materialization."""
 
+from collections import ChainMap
 from contextlib import contextmanager
 from contextvars import ContextVar
-from copy import copy
 from dataclasses import dataclass, field
 from threading import RLock
-from uuid import UUID
 
 from django.db import connections, transaction
 from django.db.models.functions import MD5, Length
 
 from apps.collections.services.retrieval_authorization import (
+    RetrievalAuthorizationContext,
     revalidate_retrieval_authorization_context,
 )
 from lib.retrieval.turn_budget import TurnBudget
 
-from .source_deadline import check_source_deadline, source_remaining_ms
+from .source_deadline import source_remaining_ms
 
 
 class SourcePreparationLimited(ValueError):
@@ -112,29 +112,150 @@ def source_query_rows(queryset, *, runtime=None, refresh=False, require_existing
         if source_mode_enabled():
             raise SourcePreparationLimited("source mode requires shared turn budget")
         return tuple(queryset)
-    with runtime.lock, bounded_source_database(runtime, queryset.db):
-        from .representation_tool_scope import tool_scope
+    return _public_source_rows(queryset, runtime, refresh, require_existing)
 
-        frozen = tool_scope(
-            runtime, using=queryset.db, require_existing=require_existing
+
+def _public_source_rows(queryset, runtime, refresh, require_existing):
+    from lib.retrieval.operation import _OPERATION
+
+    from .representation_contracts import SourceScopeUnavailable
+    from .representation_tool_scope import tool_scope
+    from .source_deadline import _DEADLINE, check_source_deadline
+
+    budget, cache, lock, authority = (
+        runtime.budget,
+        runtime.cache,
+        runtime.lock,
+        runtime.authorization,
+    )
+    context, operation, deadline = (
+        current_source_runtime(),
+        _OPERATION.get(),
+        _DEADLINE.get(),
+    )
+    using = queryset.db
+    original = getattr(runtime, "_frozen_retrieval_scope", None)
+    original_bound = original is not None
+    frozen = None
+    frozen_header = None
+
+    def scope_header(scope):
+        return (
+            scope.runtime,
+            scope.authorization,
+            scope.representation,
+            scope.dense,
+            scope.space,
+            scope.proposal_binding,
+            scope.using,
+            scope.requested_document_ids,
+            scope.query_digest,
+            scope.query_compatibility,
+            scope.vocabulary_digest,
+            scope.graph_enabled,
         )
-        # This eager locked operation owns fresh entry and final scope checks.
-        # Keep the lazy predicates; no query or validation permit leaves it.
-        queryset = _prepare_source_queryset(queryset, frozen)
-        scope = revalidate_retrieval_authorization_context(
-            context=runtime.authorization
+
+    original_header = scope_header(original) if original is not None else None
+
+    def same_scope(scope, captured):
+        current = scope_header(scope)
+        return (
+            all(a is b for a, b in zip(current[:6], captured[:6], strict=True))
+            and current[6:] == captured[6:]
         )
-        allowed = frozenset(scope.document_ids)
-        if not allowed or not runtime.budget.can_publish():
-            return ()
-        rows = _source_body_rows(
-            queryset, frozen, runtime.budget, allowed, runtime.cache, refresh=refresh
-        )
-        frozen.validate()
+
+    def check():
+        check_source_deadline()
+        if operation is not None and not operation.active():
+            raise SourceScopeUnavailable("source_scope_unavailable")
+        if (
+            not budget.can_publish()
+            or runtime.budget is not budget
+            or runtime.cache is not cache
+            or runtime.lock is not lock
+            or runtime.authorization is not authority
+            or current_source_runtime() is not context
+            or _OPERATION.get() is not operation
+            or _DEADLINE.get() is not deadline
+            or queryset.db != using
+            or (
+                original_bound
+                and getattr(runtime, "_frozen_retrieval_scope", None) is not original
+            )
+            or (original is not None and not same_scope(original, original_header))
+            or (frozen is not None and not same_scope(frozen, frozen_header))
+        ):
+            raise SourceScopeUnavailable("source_scope_unavailable")
+
+    if budget.remaining_ms() <= 0:
+        raise SourcePreparationLimited("source deadline")
+    check()
+    pending = {}
+    with lock:
+        if not original_bound:
+            # Another first reader may install the original while we wait.
+            # Bind absence only under the original lock; existing entry pins
+            # retain their captured identity/header throughout this call.
+            original = getattr(runtime, "_frozen_retrieval_scope", None)
+            original_header = scope_header(original) if original is not None else None
+            original_bound = True
+        check()
+        with bounded_source_database(runtime, using):
+            check()
+            frozen = tool_scope(runtime, using=using, require_existing=require_existing)
+            if original is None:
+                # Only the authorized initial scope capture may create a holder.
+                original = getattr(runtime, "_frozen_retrieval_scope", None)
+                original_header = scope_header(original)
+            frozen_header = scope_header(frozen)
+            check()
+            if frozen.runtime is not runtime or not _same_public_authority(
+                frozen.authorization, authority
+            ):
+                raise SourceScopeUnavailable("source_scope_unavailable")
+            prepared = _prepare_source_queryset(queryset, frozen)
+            allowed = frozenset(
+                revalidate_retrieval_authorization_context(
+                    context=authority
+                ).document_ids
+            )
+            rows = (
+                _source_body_rows(
+                    prepared,
+                    frozen,
+                    budget,
+                    allowed,
+                    ChainMap(pending, cache),
+                    refresh=refresh,
+                )
+                if allowed
+                else ()
+            )
+            frozen.validate()
+            check()
+        # SQL cleanup and every original lifetime gate precede real cache mutation.
+        check()
+
+        def publish():
+            check()
+            cache.update(pending)
+
+        if not budget.publish(publish):
+            raise SourceScopeUnavailable("source_scope_unavailable")
         return rows
 
 
-def _prepare_source_queryset(queryset, frozen):
+def _same_public_authority(original, incoming):
+    """Equal pre-entry contexts may share the same original live capability."""
+    return original is incoming or (
+        type(original) is RetrievalAuthorizationContext
+        and type(incoming) is RetrievalAuthorizationContext
+        and original.reauthorization_capability is incoming.reauthorization_capability
+        and original == incoming
+    )
+
+
+def _prepare_source_queryset(queryset, frozen, *, document_ids=None):
     """Private SQL construction, consumed eagerly by a fresh-boundary caller."""
     from .representation_contracts import SourceScopeUnavailable
     from .representation_store import _active_chunk_predicates
@@ -147,6 +268,7 @@ def _prepare_source_queryset(queryset, frozen):
     queryset = _active_chunk_predicates(
         queryset.filter(doc_id__in=frozen.requested_document_ids),
         snapshot=frozen.representation,
+        **({} if document_ids is None else {"document_ids": document_ids}),
     )
     queryset.query.set_limits(low, high)
     return queryset
@@ -155,8 +277,10 @@ def _prepare_source_queryset(queryset, frozen):
 def _source_body_rows(queryset, frozen, budget, allowed, cache, *, refresh=False):
     """Eager body I/O; only closed callers own validation and cache publication."""
     from .representation_contracts import SourceScopeUnavailable
-    from .representation_store import _active_chunk_predicates
 
+    if queryset.db != frozen.using:
+        raise SourceScopeUnavailable("source_scope_unavailable")
+    queryset = queryset.using(frozen.using)
     metadata = tuple(
         queryset.annotate(
             _source_length=Length("content"), _source_revision=MD5("content")
@@ -169,56 +293,8 @@ def _source_body_rows(queryset, frozen, budget, allowed, cache, *, refresh=False
             "_source_revision",
         )[:45]
     )
-    rows = []
-    for meta in metadata:
-        check_source_deadline()
-        if meta["doc_id"] not in allowed or not budget.can_publish():
-            continue
-        identity = (meta["pk"], meta["_source_revision"])
-        cache_key = (
-            queryset.db,
-            *identity,
-            meta["doc_id"],
-            meta["chunk_number"],
-            meta["representation_generation"],
-        )
-        cached = cache.get(cache_key)
-        if cached is not None and not refresh:
-            rows.append(copy(cached))
-            continue
-        size = meta["_source_length"]
-        if not budget.admit_source(identity):
-            continue
-        if size and not budget.reserve_text(size, kind="materialized"):
-            continue
-        if not budget.can_publish():
-            break
-        if (
-            type(meta["doc_id"]) is not UUID
-            or meta["doc_id"] not in frozen.requested_document_ids
-        ):
-            raise SourceScopeUnavailable("source_scope_unavailable")
-        loaded = (
-            _active_chunk_predicates(
-                queryset.model.objects.using(queryset.db).filter(doc_id=meta["doc_id"]),
-                snapshot=frozen.representation,
-                document_id=meta["doc_id"],
-            )
-            .annotate(_source_length=Length("content"), _source_revision=MD5("content"))
-            .filter(
-                pk=meta["pk"],
-                doc_id=meta["doc_id"],
-                chunk_number=meta["chunk_number"],
-                representation_generation=meta["representation_generation"],
-                _source_length=size,
-                _source_revision=meta["_source_revision"],
-            )
-            .defer("embedding", "metadata")
-            .first()
-        )
-        if loaded is None:
-            continue
-        # A staged caller supplies a private overlay; no positive state escapes.
-        if budget.publish(lambda: cache.__setitem__(cache_key, copy(loaded))):
-            rows.append(loaded)
-    return tuple(rows)
+    from .source_body_batch import _materialize_body_batch
+
+    return _materialize_body_batch(
+        queryset, frozen, budget, allowed, cache, metadata, refresh=refresh
+    )

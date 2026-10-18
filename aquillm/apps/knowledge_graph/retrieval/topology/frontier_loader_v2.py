@@ -3,7 +3,7 @@
 from apps.knowledge_graph.projection.frontier_reads_v2 import schema_error
 from apps.knowledge_graph.projection.frontier_snapshot_v2 import FrontierAssemblyV2
 from apps.knowledge_graph.retrieval.frontier_ranking_validation_v2 import (
-    FrontierRankingContextV2,
+    CONSUMED_POLICY, POLICY, FrontierRankingContextV2, frontier_tags,
 )
 from apps.knowledge_graph.retrieval.graph_handoff import GraphCoverageV2
 from apps.knowledge_graph.retrieval.graph_query_contracts import (
@@ -34,15 +34,19 @@ class FrontierUnavailableV2(Exception):
         super().__init__(",".join(coverage.reasons))
 
 
-def canonical_frontier_loader_v2(*, selection, codec, adapter):
-    return CanonicalFrontierLoaderV2(adapter, FrontierSelectionV2(selection, codec))
+def canonical_frontier_loader_v2(*, selection, codec, adapter, acquisition_policy=POLICY):
+    return CanonicalFrontierLoaderV2(
+        adapter, FrontierSelectionV2(selection, codec), acquisition_policy
+    )
 
 
 class CanonicalFrontierLoaderV2:
-    def __init__(self, adapter, binding):
+    def __init__(self, adapter, binding, acquisition_policy=POLICY):
         if type(binding) is not FrontierSelectionV2:
             raise TypeError("use the captured-selection frontier factory")
         self.adapter, self.binding, self._contexts = adapter, binding, {}
+        frontier_tags(acquisition_policy)
+        self.acquisition_policy = acquisition_policy
 
     def ranking_context(self, result):
         if type(result) is not BoundedGraphTopologyV2:
@@ -73,10 +77,13 @@ class CanonicalFrontierLoaderV2:
             budget.max_source_rows,
             budget.max_queries,
             budget.max_wire_bytes,
+            self.acquisition_policy,
         )
         session = self.adapter.open(
             group=group, request=request, budget=budget, deadline=deadline
         )
+        if session.acquisition_policy != context.acquisition_policy:
+            raise ValueError("frontier session/context acquisition policy differs")
         assembly = FrontierAssemblyV2(session, self.binding, caps, context)
         reason = None
         count = len(group.scope.selected_document_ids)
@@ -103,7 +110,18 @@ class CanonicalFrontierLoaderV2:
             sum(label == "ArtifactProvenance" for label, _ in rows)
             for rows in session.scope_rows.values()
         )
-        if actual_scopes != expected_scopes or reason == "deadline":
+        closed = actual_scopes == expected_scopes
+        if self.acquisition_policy == CONSUMED_POLICY:
+            closed = set(session.scope_rows) == set(session.selected) and all(
+                {(r.scope_type, r.scope_key, r.collection_key, r.artifact_key)
+                 for (label, _), r in session.scope_rows[g].items()
+                 if label == "ArtifactProvenance"} == {
+                    ("collection", selected.collection_key, selected.collection_key,
+                     selected.active_artifact_key)
+                }
+                for g, selected in session.selected.items()
+            )
+        if not closed or reason == "deadline":
             raise FrontierUnavailableV2(
                 GraphCoverageV2(
                     count, 0, "unavailable", (reason or "not_ready",), False
@@ -140,8 +158,13 @@ class CanonicalFrontierLoaderV2:
             if budget.clock() >= deadline:
                 raise TimeoutError
         except TimeoutError as exc:
+            reason = (
+                "frontier_budget"
+                if isinstance(exc, FrontierBudgetExceeded)
+                else "deadline"
+            )
             raise FrontierUnavailableV2(
-                GraphCoverageV2(count, 0, "unavailable", ("deadline",), False), budget
+                GraphCoverageV2(count, 0, "unavailable", (reason,), False), budget
             ) from exc
         self._contexts[snapshot.algorithm.algorithm_signature] = context
         return result

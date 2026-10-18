@@ -6,6 +6,13 @@ from math import isfinite
 from threading import Lock
 from typing import Any
 
+from .driver_lifecycle import close_owned_client
+from .memgraph_transport_deadline import (
+    ensure_schema,
+    execute_managed,
+    transaction_function,
+)
+
 type ProjectionScalar = str | int | float | bool | None
 
 _COUNTERS = (
@@ -136,12 +143,9 @@ def _read_failure_code(error: Exception) -> str:
     return "memgraph_read_failed"
 
 
-from .driver_lifecycle import close_owned_client
-from .memgraph_transport_deadline import execute_managed, ensure_schema, transaction_function
-
-
 class Neo4jMemgraphDriver:
     close = close_owned_client
+
     def __init__(
         self,
         uri: str,
@@ -151,6 +155,8 @@ class Neo4jMemgraphDriver:
         database: str,
         driver: Any | None = None,
         max_transaction_retry_time: float | None = None,
+        connection_timeout: float | None = None,
+        connection_acquisition_timeout: float | None = None,
     ) -> None:
         for name, value in (
             ("uri", uri),
@@ -175,6 +181,14 @@ class Neo4jMemgraphDriver:
         self._password = password
         self._database = database
         self._max_transaction_retry_time = max_transaction_retry_time
+        self._connection_options = {
+            key: _timeout(value)
+            for key, value in (
+                ("connection_timeout", connection_timeout),
+                ("connection_acquisition_timeout", connection_acquisition_timeout),
+            )
+            if value is not None
+        }
         self._client = driver
         self._owns_client = driver is None
         self._closed = False
@@ -199,7 +213,9 @@ class Neo4jMemgraphDriver:
                         "max_transaction_retry_time": self._max_transaction_retry_time
                     }
                 )
-                self._client = GraphDatabase.driver(self._uri, auth=auth, **options)
+                self._client = GraphDatabase.driver(
+                    self._uri, auth=auth, **options, **self._connection_options
+                )
             return self._client
 
     _transaction_function = transaction_function

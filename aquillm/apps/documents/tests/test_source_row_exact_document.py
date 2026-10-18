@@ -40,21 +40,21 @@ def test_single_body_sql_excludes_unrelated_owner_but_keeps_original_snapshot(pa
 
 
 def test_real_source_body_reader_uses_exact_metadata_document_hint(pair, monkeypatch):
-    from apps.documents.services import representation_store
+    from apps.documents.services import representation_store, source_body_batch
     _, b, _, _, chunk, runtime = pair
     original = representation_store._active_chunk_predicates
     calls = []
     def observe(queryset, **kwargs):
         result = original(queryset, **kwargs)
-        calls.append((kwargs.get('document_id'), kwargs['snapshot']))
+        calls.append((kwargs.get('document_ids'), kwargs['snapshot']))
         return result
-    monkeypatch.setattr(representation_store, '_active_chunk_predicates', observe)
+    monkeypatch.setattr(source_body_batch, '_active_chunk_predicates', observe)
     with source_runtime_scope(runtime):
         scope, _ = captured(pair)
         rows = source_query_rows(TextChunk.objects.filter(pk=chunk.pk))
         assert [row.pk for row in rows] == [chunk.pk]
         assert rows[0].content == b.full_text
-        assert any(hint == b.id for hint, _ in calls)
+        assert any(hint == frozenset({b.id}) for hint, _ in calls)
         assert all(snapshot is scope.representation for _, snapshot in calls)
         assert scope.runtime is runtime
 

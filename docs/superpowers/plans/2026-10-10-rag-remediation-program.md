@@ -14,6 +14,27 @@
 
 **Execution update:** The follow-up user request authorizes implementation and a review PR. Apply the [execution decisions](../../runbooks/rag-remediation-execution-decisions.md), which settle preflight contract gaps; task completion still requires recorded evidence.
 
+## Execution status — 2026-10-15
+
+The original program contains **21 feature tasks and four coordination/acceptance tasks**. All 21 feature tasks have mapped implementation and independent source-review evidence in the [release manifest](../../audits/rag-remediation-implementation/release-manifest.json). That candidate is an ancestor of current development and was integrated through [PR244](https://github.com/AquiLLM/AquiLLM/pull/244). This establishes implementation coverage; it does not close every task's live data, quality or activation requirements.
+
+| Original tasks | Count | Implementation and current acceptance |
+| --- | --- | --- |
+| I1–I6: source, ingestion, indexing and retained citations | 6 | Implemented and merged, with populated migration/rollback tests. A bounded development text-embedding rebuild was performed during recovery; broader affected-data rebuild/coverage and semantic graph version cutover are not established by that work. |
+| R1–R5: retrieval, ranking, references and evidence delivery | 5 | Implemented and merged. Basic development chat was restored through PR245. Optional treatment-specific quality/activation gates remain open. |
+| G1–G6: graph identity, relations, evidence, traversal, readiness and gates | 6 | Implemented and merged with deterministic regression evidence. Live graph retrieval still fails its acceptance test; development serves with graph disabled. Runtime repairs continue in PR246. |
+| A1–A4: answer publication, support and memory | 4 | Implemented and merged. Independent human assessment/calibration and optional semantic-support activation remain pending. |
+| P0: contracts and isolated environment | 1 | Completed for the original implementation. |
+| P1: integrated adversarial regression checks | 1 | Original candidate checks and their warnings/skips were recorded and reviewed. New recovery changes require their own verification. |
+| P2: measured quality and operational acceptance | 1 | Incomplete. Evaluation/gating tools exist; current comparisons and the specified independent holdout/human review do not yet establish the required improvements. |
+| P3: release and rollback | 1 | Original release and recovery were merged/deployed through PR244/245, with retained rollback evidence. The remaining graph release, its final acceptance and rollout are pending. |
+
+The [October13 recovery plan](2026-10-13-development-retrieval-recovery.md) is follow-up work against runtime blockers found after the original implementation, not another count of completed original tasks. As of this update, native metadata integration and complete bounded graph-read batching are the two identified implementation blockers before live graph verification. The latest isolated graph candidate still reports a deadline and zero finalized graph candidates; a successful private fixture does not close that failure.
+
+The remaining 73 development comparison cells are a diagnostic comparison, **not a substitute for P2's larger independent quality and human-review requirements below**. Original F05 graph rebuild/identity evidence, F19 meaningful holdout and treatment-specific activation requirements remain explicit. No overall completion percentage is assigned from code volume or test count.
+
+The release/closure JSON files are historical candidate evidence and retain their original pre-deployment status fields. Use this dated status and the merged [PR245](https://github.com/AquiLLM/AquiLLM/pull/245) / active [PR246](https://github.com/AquiLLM/AquiLLM/pull/246) for subsequent runtime state. The original task checklists below remain the acceptance specification; this status does not silently mark unmet requirements complete.
+
 ## Read this program with the four lane plans
 
 | Lane | Plan | Responsibility |

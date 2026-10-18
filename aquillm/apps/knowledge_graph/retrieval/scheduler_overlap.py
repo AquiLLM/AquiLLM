@@ -22,15 +22,34 @@ from .topology.contracts import HybridBranchKind
 from .topology.failures import TopologyLoadError
 
 
+def caller_expired(bound):
+    return bound is not None and bound.remaining_ms() <= 0
+
+
+def check_caller(bound):
+    if caller_expired(bound):
+        raise SharedSchedulerFailure(SharedBranchFailureReason.OVERALL_DEADLINE)
+
+
 class OverlappingBranches:
     """Own a single request's futures; never wait on the pool from a worker."""
 
-    def __init__(self, scheduler, query, authorization, settings, deadline):
+    def __init__(self, scheduler, query, authorization, settings, deadline, *,
+                 caller_bound=None, downstream_reserve_ms=0):
         self.scheduler = scheduler
         self.started = scheduler._clock()
         if type(query) is not str:
             raise TypeError("query must be an exact string")
         self._validate_deadline(deadline, self.started)
+        from lib.retrieval.operation import Operation
+        if caller_bound is not None and type(caller_bound) is not Operation:
+            raise TypeError("caller bound must be the exact captured operation")
+        self.caller_bound = caller_bound
+        self.downstream_reserve_ms = downstream_reserve_ms
+        if caller_bound is not None:
+            deadline = min(deadline, caller_bound.deadline_for(
+                scheduler._clock, reserve_ms=downstream_reserve_ms))
+        self.graph_deadline = deadline
         self.budgets = scheduler._budgets(settings)
         self.enabled = scheduler._enabled(settings)
         self.query, self.authorization, self.settings = query, authorization, settings
@@ -42,7 +61,10 @@ class OverlappingBranches:
         self._closed = Event()
         self._finished = False
         self._extended = None
-        self._early = BRANCH_WORKERS.submit(self._prepare_and_direct)
+        self._early = (
+            BRANCH_WORKERS.submit(self._prepare_and_direct)
+            if deadline > self.started else None
+        )
 
     @staticmethod
     def _validate_deadline(deadline, now):
@@ -51,8 +73,10 @@ class OverlappingBranches:
 
     def _prepare_and_direct(self):
         try:
+            if self.caller_bound is not None and self.caller_bound.remaining_ms() <= 0:
+                raise SharedSchedulerFailure(SharedBranchFailureReason.OVERALL_DEADLINE)
             shared = self.scheduler._shared(
-                self.authorization, self.settings, self.readiness_deadline
+                self.authorization, self.settings, self.readiness_deadline, self.caller_bound
             )
             if self.scheduler._clock() >= self.readiness_deadline:
                 raise SharedSchedulerFailure(SharedBranchFailureReason.OVERALL_DEADLINE)
@@ -60,7 +84,8 @@ class OverlappingBranches:
             self._ready.set_exception(error)
             raise
         self._ready.set_result(shared)
-        if self._closed.is_set() or not self.enabled[HybridBranchKind.DIRECT]:
+        if (self._closed.is_set() or not self.enabled[HybridBranchKind.DIRECT]
+            or (self.caller_bound is not None and self.caller_bound.remaining_ms() <= 0)):
             return None
         if self.scheduler._clock() >= self.direct_deadline:
             return CompletedBranch(
@@ -72,7 +97,7 @@ class OverlappingBranches:
                 self.scheduler._clock(),
             )
         return self.scheduler._direct(
-            self.query, shared, self.authorization, self.settings, self.direct_deadline
+            self.query, shared, self.authorization, self.settings, self.direct_deadline, self.caller_bound
         )
 
     def __enter__(self):
@@ -93,14 +118,26 @@ class OverlappingBranches:
         self._finished = True
         now = self.scheduler._clock()
         try:
-            self._validate_deadline(deadline, now)
+            if self.caller_bound is None:
+                self._validate_deadline(deadline, now)
+            else:
+                if type(deadline) is not float or not isfinite(deadline):
+                    raise ValueError("deadline must be finite")
+                if self.caller_bound.remaining_ms() <= 0:
+                    return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE)
+                # An expired graph cutoff may still drain a timely direct result.
+                deadline = min(deadline, self.graph_deadline,
+                    self.caller_bound.deadline_for(self.scheduler._clock,
+                        reserve_ms=self.downstream_reserve_ms))
             return self._finish(baseline, deadline, now)
         finally:
             self.close()
 
     def _finish(self, baseline, deadline, started):
         if self._early is None:
-            return shared_outcome(SharedBranchFailureReason.BACKEND_UNAVAILABLE)
+            return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE
+                if self.caller_bound is not None and deadline <= started
+                else SharedBranchFailureReason.BACKEND_UNAVAILABLE)
         try:
             shared = self._ready.result(
                 timeout=max(
@@ -119,6 +156,8 @@ class OverlappingBranches:
             return shared_outcome(reason)
         except Exception:
             return shared_outcome(SharedBranchFailureReason.BACKEND_UNAVAILABLE)
+        if caller_expired(self.caller_bound):
+            return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE)
         deadlines = {
             HybridBranchKind.DIRECT: self.direct_deadline,
             HybridBranchKind.EXTENDED: min(
@@ -146,6 +185,8 @@ class OverlappingBranches:
                     elapsed_ms=self.budgets[HybridBranchKind.EXTENDED],
                 )
             else:
+                if caller_expired(self.caller_bound):
+                    return shared_outcome(SharedBranchFailureReason.OVERALL_DEADLINE)
                 self._extended = BRANCH_WORKERS.submit(
                     self.scheduler._extended,
                     self.query,
@@ -154,6 +195,7 @@ class OverlappingBranches:
                     self.authorization,
                     self.settings,
                     deadlines[HybridBranchKind.EXTENDED],
+                    self.caller_bound,
                 )
                 if self._extended is None:
                     return shared_outcome(SharedBranchFailureReason.BACKEND_UNAVAILABLE)
@@ -165,4 +207,5 @@ class OverlappingBranches:
             baseline=baseline,
             overall_deadline=deadline,
             results=results,
+            caller_bound=self.caller_bound,
         )

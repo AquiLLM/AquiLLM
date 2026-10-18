@@ -52,6 +52,7 @@ def additional_controls():
 
     from apps.chat.consumers import chat, chat_receive, utils
     from apps.chat.services import rag_config
+    from apps.chat.services.retrieval_query_runtime import configured_proposal_controls
     from apps.documents.services import chunk_rerank_config as rerank
     from apps.documents.services import rag_cache
     from apps.knowledge_graph.evals.graph_effective_controls import (
@@ -66,10 +67,9 @@ def additional_controls():
     )
     from lib.llm.providers.openai_tokens import context_reserve_tokens, env_int
     from lib.llm.providers.tool_budget import ToolBudgetConfig
-    from lib.llm.turn_context import tool_timeout
+    from lib.llm.turn_context import configured_tool_timeout
     from lib.llm.utils import prompt_budget
     from lib.llm.utils.context_packer import load_context_packer_config
-    from apps.chat.services.retrieval_query_runtime import configured_proposal_controls
 
     endpoint = urlsplit(rerank.rerank_base_url())
     rerank_names = (
@@ -140,7 +140,8 @@ def additional_controls():
             for name, module in (("connect", chat), ("receive", chat_receive))
         },
         "tools": {
-            "timeout_seconds": tool_timeout(),
+            "timeout_seconds": configured_tool_timeout(),
+            "retrieval_timeout_seconds": configured_tool_timeout(retrieval=True),
             "default_top_k": rag_config.tool_default_top_k(),
             "attach_selected": rag_config.attach_tools_when_collections_selected(),
             "max_figures": rag_config.max_figures_per_turn(),

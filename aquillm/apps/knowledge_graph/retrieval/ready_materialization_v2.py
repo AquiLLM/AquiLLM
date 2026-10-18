@@ -1,9 +1,11 @@
 """Exact captured-generation materialization; failed fences return no stale body."""
 
+from types import MethodType
+
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
 
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
-from apps.documents.services.representation_store import active_chunk_scope
+from apps.documents.services.representation_store import active_chunk_scope, _active_chunk_predicates
 from apps.knowledge_graph.projection.identifiers import (
     OpaqueProjectionKey,
     ProjectionIdentifierDomain,
@@ -13,6 +15,7 @@ from apps.knowledge_graph.projection.runtime import (
     projection_identifier_codec,
 )
 
+from . import ready_provenance_v2 as _provenance
 from .graph_handoff import GraphCandidateRefV2
 from .ready_provenance_v2 import provenance_for_chunk
 from .ready_scope_repository_v2 import load_authorities_v2, validate_original_scope
@@ -24,6 +27,17 @@ def validate_captured_selection(*, selected, authorization, settings, codec):
         authorization=authorization,
         representation_snapshot=selected.representation_snapshot,
     )
+    _validate_captured_authorities(selected=selected, authorization=authorization, settings=settings, codec=codec)
+
+
+def _validate_closed_captured_selection(*, selected, authorization, settings, codec):
+    from .ready_scope_repository_v2 import _validate_original_scope_header
+    _validate_original_scope_header(authorization=authorization,
+        representation_snapshot=selected.representation_snapshot)
+    _validate_captured_authorities(selected=selected, authorization=authorization, settings=settings, codec=codec)
+
+
+def _validate_captured_authorities(*, selected, authorization, settings, codec):
     if (
         selected.authorization_context_signature
         != authorization.authorization_context_signature
@@ -49,12 +63,12 @@ def validate_captured_selection(*, selected, authorization, settings, codec):
 
 
 def materialize_graph_candidates_v2(*, selected, refs, authorization):
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
     from apps.documents.services.source_deadline import check_source_deadline
     from apps.documents.services.source_loading import (
         bounded_source_database,
     )
 
-    from apps.documents.services.graph_source_runtime import graph_source_runtime
     runtime = graph_source_runtime()
     if runtime is None:
         return _materialize(selected=selected, refs=refs, authorization=authorization)
@@ -69,16 +83,7 @@ def materialize_graph_candidates_v2(*, selected, refs, authorization):
         return rows if runtime.budget.can_publish() else ()
 
 
-def _materialize(*, selected, refs, authorization):
-    from apps.documents.models import TextChunk
-    from apps.documents.services.graph_source_runtime import graph_source_runtime
-    from apps.knowledge_graph.models import ProjectionChunkReference
-
-    from .ready_materialization import (
-        DjangoPrivateChunkMapRepository,
-        materialize_selected_ready_chunks,
-    )
-
+def _materialize_inputs(selected, refs):
     if type(selected) is not SelectedGraphScopeV2:
         raise TypeError("selection must be exact")
     if (
@@ -91,6 +96,100 @@ def _materialize(*, selected, refs, authorization):
         )
     if len({r.chunk_key for r in refs}) != len(refs):
         raise ValueError("duplicate candidate keys")
+
+
+def _validated_rows(rows, refs, group, selections):
+    from apps.documents.models import TextChunk
+    for row, ref in zip(rows, refs, strict=True):
+        chunk = row.candidate_object
+        selection = selections.get(chunk.doc_id)
+        if (type(chunk) is not TextChunk or selection is None
+                or chunk.doc_id not in group.scope.selected_document_ids
+                or selection.generation_key != ref.representation_generation_key
+                or chunk.representation_generation_id
+                != ref.representation_generation_key):
+            raise ValueError("materialization source identity changed")
+        yield row, ref, group.scope.projection_for_generation(ref.graph_generation_key)
+
+
+def _materialize(*, selected, refs, authorization):
+    from apps.documents.services.graph_source_runtime import graph_source_runtime
+    from apps.documents.services.source_loading import source_query_rows
+    _materialize_inputs(selected, refs)
+    if not refs:
+        return ()
+    try:
+        settings = load_projection_runtime_settings()
+        codec = projection_identifier_codec(settings)
+        validate_captured_selection(
+            selected=selected,
+            authorization=authorization,
+            settings=settings,
+            codec=codec,
+        )
+
+        def read(query):
+            runtime = graph_source_runtime()
+            return source_query_rows(
+                query,
+                runtime=runtime,
+                require_existing=getattr(runtime, "_frozen_retrieval_scope", None)
+                is not None,
+            )
+
+        result = _materialize_rows(
+            selected=selected,
+            refs=refs,
+            authorization=authorization,
+            codec=codec,
+            body_reader=read,
+        )
+        validate_captured_selection(
+            selected=selected,
+            authorization=authorization,
+            settings=settings,
+            codec=codec,
+        )
+        return result
+    except (
+        SourceScopeUnavailable,
+        ValidationError,
+        ObjectDoesNotExist,
+        ValueError,
+        KeyError,
+    ):
+        return ()
+
+
+def _materialize_closed_rows(*, selected, refs, authorization, codec, stage):
+    from .graph_candidate_stage_v2 import _GraphSourceStage
+    if (type(stage) is not _GraphSourceStage or stage.scope.authorization is not authorization
+            or stage.scope.representation is not selected.representation_snapshot):
+        raise SourceScopeUnavailable("graph_original_scope_unavailable")
+    stage.check()
+    return _materialize_rows(selected=selected, refs=refs, authorization=authorization,
+        codec=codec, body_reader=stage.read, _source_stage=stage)
+
+
+def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _source_stage=None):
+    """Private exact eager reversal; owning callers retain fresh whole boundaries."""
+    from apps.documents.models import TextChunk
+    from apps.knowledge_graph.models import ProjectionChunkReference
+    if _source_stage is not None:
+        from .graph_candidate_stage_v2 import _GraphSourceStage
+        if (type(_source_stage) is not _GraphSourceStage
+                or _source_stage.scope.representation is not selected.representation_snapshot
+                or _source_stage.scope.authorization is not authorization
+                or getattr(body_reader, "__self__", None) is not _source_stage
+                or getattr(body_reader, "__func__", None) is not _GraphSourceStage.read):
+            raise SourceScopeUnavailable("graph_original_scope_unavailable")
+        _source_stage.check()
+
+    from .ready_materialization import (
+        DjangoPrivateChunkMapRepository,
+        materialize_selected_ready_chunks,
+    )
+    _materialize_inputs(selected, refs)
     if not refs:
         return ()
     groups = {g.group_checksum: g for g in selected.groups}
@@ -109,34 +208,35 @@ def _materialize(*, selected, refs, authorization):
                 s.generation_key for s in selections.values()
             }:
                 return ()
-        settings = load_projection_runtime_settings()
-        codec = projection_identifier_codec(settings)
-        validate_captured_selection(
-            selected=selected,
-            authorization=authorization,
-            settings=settings,
-            codec=codec,
-        )
 
         class ActiveRepository(DjangoPrivateChunkMapRepository):
             def load_chunk_objects(
                 self, *, chunk_predicates, authorized_document_ids, database_alias
             ):
-                from apps.documents.services.source_loading import source_query_rows
-
-                runtime = graph_source_runtime()
-                return source_query_rows(
-                    active_chunk_scope(
-                        TextChunk.objects.using(database_alias).filter(
-                            pk__in=tuple(row[0] for row in chunk_predicates),
-                            doc_id__in=authorized_document_ids,
-                        ),
-                        snapshot=selected.representation_snapshot,
-                    ).order_by("pk"),
-                    runtime=runtime,
-                    require_existing=getattr(runtime, "_frozen_retrieval_scope", None) is not None,
-                )
-
+                # The private-map contract supplies exact (pk, UUID, number)
+                # tuples; post-read _chunk_objects still checks each full tuple.
+                document_ids = frozenset(row[1] for row in chunk_predicates)
+                query = (
+                    _active_chunk_predicates
+                    if _source_stage is not None else active_chunk_scope
+                )(
+                    TextChunk.objects.using(database_alias).filter(
+                        pk__in=tuple(row[0] for row in chunk_predicates),
+                        doc_id__in=authorized_document_ids,
+                    ),
+                    snapshot=selected.representation_snapshot,
+                    **(
+                        {"document_ids": document_ids}
+                        if _source_stage is not None else {}
+                    ),
+                ).order_by("pk")
+                if _source_stage is not None:
+                    from .graph_candidate_stage_v2 import _NATIVE_GRAPH_SOURCE_READ
+                    if (type(body_reader) is MethodType
+                            and body_reader.__self__ is _source_stage
+                            and body_reader.__func__ is _NATIVE_GRAPH_SOURCE_READ):
+                        return _source_stage._read(query, document_ids=document_ids)
+                return body_reader(query)
         result = {}
         repository = ActiveRepository(source_using=authorization.database_alias)
         for group in selected.groups:
@@ -167,24 +267,17 @@ def _materialize(*, selected, refs, authorization):
                 authorization=authorization,
                 repository=repository,
             )
-            for row, ref in zip(rows, group_refs, strict=True):
+            validated = _validated_rows(rows, group_refs, group, selections)
+            reader = provenance_for_chunk
+            if (_source_stage is not None
+                    and _provenance._supports_phase_provenance(reader)):
+                validated = tuple(validated)
+                reader = _provenance._phase_provenance_reader(
+                    (owner, row.candidate_object) for row, _, owner in validated)
+            for row, ref, owner in validated:
                 chunk = row.candidate_object
-                selection = selections.get(chunk.doc_id)
-                if (
-                    type(chunk) is not TextChunk
-                    or selection is None
-                    or chunk.doc_id not in group.scope.selected_document_ids
-                    or selection.generation_key != ref.representation_generation_key
-                    or chunk.representation_generation_id
-                    != ref.representation_generation_key
-                ):
-                    return ()
-                provenance = provenance_for_chunk(
-                    authority=group.scope.projection_for_generation(
-                        ref.graph_generation_key
-                    ),
-                    chunk=chunk,
-                    codec=codec,
+                provenance = reader(
+                    authority=owner, chunk=chunk, codec=codec,
                     using=authorization.database_alias,
                 )
                 if not set(ref.evidence_provenance_keys) <= set(provenance):
@@ -196,12 +289,6 @@ def _materialize(*, selected, refs, authorization):
                 }:
                     return ()
                 result[ref.chunk_key] = chunk
-        validate_captured_selection(
-            selected=selected,
-            authorization=authorization,
-            settings=settings,
-            codec=codec,
-        )
         return tuple(result[r.chunk_key] for r in refs)
     except (
         SourceScopeUnavailable,

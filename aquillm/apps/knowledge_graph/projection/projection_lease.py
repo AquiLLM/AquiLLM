@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from threading import Event, Thread
 
 from django.db import (
@@ -12,6 +13,11 @@ from django.db import (
 )
 from django.utils import timezone
 
+from .database_deadline import (
+    ProjectionOperation,
+    current_operation,
+    projection_operation,
+)
 from .memgraph_driver import MemgraphDriverError
 
 
@@ -30,17 +36,46 @@ class _ProjectionLeaseHeartbeat:
         self._stop = Event()
         self._thread = None
         self._failure = None
+        self.operation = getattr(repository, "operation", None) or current_operation()
+        if (
+            self.operation is not None
+            and type(self.operation) is not ProjectionOperation
+        ):
+            raise TypeError("projection operation must be exact")
+        if (
+            current_operation() is not None
+            and self.operation is not current_operation()
+        ):
+            raise ValueError("projection operation was replaced")
+
+    def _revoke(self):
+        if self.operation is not None:
+            self.operation.close()
 
     def pulse(self):
+        if self.operation is not None:
+            self.operation.remaining_ms()
         previous = self.lease
         try:
-            lease = self.repository.renew(
-                projection_id=previous.projection_id,
-                owner=previous.owner,
-                now=timezone.now(),
-                lease_seconds=self.lease_seconds,
+            if (
+                getattr(self.repository, "operation", self.operation)
+                is not self.operation
+            ):
+                raise ValueError("projection operation was replaced")
+            scope = (
+                projection_operation(operation=self.operation)
+                if self.operation is not None
+                else nullcontext()
             )
+            with scope:
+                lease = self.repository.renew(
+                    projection_id=previous.projection_id,
+                    owner=previous.owner,
+                    now=timezone.now(),
+                    lease_seconds=self.lease_seconds,
+                )
         except Exception as exc:
+            self._revoke()
             if _backend_transient(exc):
                 raise TimeoutError("projection_backend_transient") from None
             raise _ProjectionLeaseLost(
@@ -52,14 +87,20 @@ class _ProjectionLeaseHeartbeat:
             or lease.attempt_count != previous.attempt_count
             or lease.expires_at <= timezone.now()
         ):
+            self._revoke()
             raise _ProjectionLeaseLost("projection lease renewal was rejected")
+        if self.operation is not None:
+            self.operation.remaining_ms()
         self.lease = lease
 
     def check(self):
         if self._failure is not None:
             raise self._failure
         if self.lease.expires_at <= timezone.now():
+            self._revoke()
             raise _ProjectionLeaseLost("projection lease expired")
+        if self.operation is not None:
+            self.operation.remaining_ms()
 
     def _run(self):
         close_old_connections()
@@ -68,6 +109,7 @@ class _ProjectionLeaseHeartbeat:
                 try:
                     self.pulse()
                 except BaseException as exc:
+                    self._revoke()
                     self._failure = exc
                     self._stop.set()
                     return
@@ -90,6 +132,7 @@ class _ProjectionLeaseHeartbeat:
         self._stop.set()
         self._thread.join(timeout=min(5.0, self.interval))
         if self._thread.is_alive():
+            self._revoke()
             # An unavailable state backend must not hang publication indefinitely.
             # The daemon still closes its own connection when the call returns.
             raise _ProjectionLeaseLost("projection lease renewal did not finish")

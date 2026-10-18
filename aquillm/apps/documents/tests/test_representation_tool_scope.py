@@ -1,5 +1,8 @@
 """One original representation lifetime across partial searches and source tools."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from dataclasses import replace
+from threading import Event, local
 from unittest.mock import patch
 
 import pytest
@@ -64,6 +67,153 @@ def test_concurrent_tools_share_original_snapshot(pair):
         left, right = list(pool.map(read, (a.id, b.id)))
     assert left[0] == [old.pk] and right[0] == [chunk.pk]
     assert left[1] is right[1]
+
+
+@pytest.mark.parametrize("pause", ["before_check", "before_lock"])
+def test_first_public_read_adopts_concurrent_original_only_under_lock(pair, monkeypatch, pause):
+    """A real first installation can happen on either side of the entry check."""
+    from apps.documents.services import representation_store, source_deadline
+
+    a, b, _, old, chunk, runtime = pair
+    waiting, resume, worker = Event(), Event(), local()
+    original_lock = runtime.lock
+
+    def gate():
+        if getattr(worker, "pause", False):
+            worker.pause = False
+            waiting.set()
+            assert resume.wait(5), "installer did not release waiting source reader"
+
+    class GatedLock:
+        def __enter__(self):
+            if pause == "before_lock":
+                gate()
+            return original_lock.__enter__()
+
+        def __exit__(self, *args):
+            return original_lock.__exit__(*args)
+
+    runtime.lock = GatedLock()
+    real_deadline = source_deadline.check_source_deadline
+
+    def deadline():
+        if pause == "before_check":
+            gate()
+        return real_deadline()
+
+    monkeypatch.setattr(source_deadline, "check_source_deadline", deadline)
+
+    def read_waiter():
+        close_old_connections()
+        worker.pause = True
+        try:
+            with source_runtime_scope(runtime):
+                return source_query_rows(TextChunk.objects.filter(doc_id=b.id))
+        finally:
+            close_old_connections()
+
+    with patch.object(representation_store, "_capture_active_representations",
+                      wraps=representation_store._capture_active_representations) as freeze:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            pending = pool.submit(read_waiter)
+            try:
+                assert waiting.wait(5), "source reader did not reach controlled boundary"
+                assert getattr(runtime, "_frozen_retrieval_scope", None) is None
+                with source_runtime_scope(runtime):
+                    assert [r.pk for r in source_query_rows(TextChunk.objects.filter(doc_id=a.id))] == [old.pk]
+                original = runtime._frozen_retrieval_scope
+            finally:
+                resume.set()
+            assert [r.pk for r in pending.result(timeout=5)] == [chunk.pk]
+        assert freeze.call_count == 1
+    assert runtime._frozen_retrieval_scope is original
+    assert {s.document.id for s in original.representation.selections} == {a.id, b.id}
+    assert runtime.budget.sources_used == 2
+
+
+@pytest.mark.parametrize("change", ["replacement", "header", "cancel"])
+def test_public_original_captured_before_entry_check_cannot_change(pair, monkeypatch, change):
+    from apps.documents.services import source_deadline, source_loading
+
+    a, _, _, old, _, runtime = pair
+    with source_runtime_scope(runtime):
+        assert [r.pk for r in source_query_rows(TextChunk.objects.filter(doc_id=a.id))] == [old.pk]
+        cache = runtime.cache.copy()
+        original = runtime._frozen_retrieval_scope
+        real_deadline = source_deadline.check_source_deadline
+        changed = []
+
+        def deadline():
+            if not changed:
+                changed.append(True)
+                if change == "replacement":
+                    runtime._frozen_retrieval_scope = replace(original)
+                elif change == "header":
+                    original.query_digest = "mutated"
+                else:
+                    runtime.budget.close("cancelled")
+            return real_deadline()
+
+        monkeypatch.setattr(source_deadline, "check_source_deadline", deadline)
+        with patch.object(source_loading, "_source_body_rows", wraps=source_loading._source_body_rows) as read:
+            with pytest.raises(SourceScopeUnavailable):
+                source_query_rows(TextChunk.objects.filter(doc_id=a.id))
+            assert read.call_count == 0
+        assert runtime.cache == cache
+        assert runtime.budget.sources_used == 1
+
+
+@pytest.mark.parametrize("change", ["replacement", "header", "cancel"])
+def test_first_public_initialization_rejects_late_cleanup_changes(pair, monkeypatch, change):
+    from apps.documents.services import source_loading
+
+    a, _, _, _, _, runtime = pair
+    database = source_loading.bounded_source_database
+    changed = []
+
+    @contextmanager
+    def cleanup(*args):
+        with database(*args):
+            yield
+        if runtime.budget.sources_used == 1 and not changed:
+            changed.append(True)
+            original = runtime._frozen_retrieval_scope
+            if change == "replacement":
+                runtime._frozen_retrieval_scope = replace(original)
+            elif change == "header":
+                original.query_digest = "mutated"
+            else:
+                runtime.budget.close("cancelled")
+
+    monkeypatch.setattr(source_loading, "bounded_source_database", cleanup)
+    with source_runtime_scope(runtime):
+        with pytest.raises(SourceScopeUnavailable):
+            source_query_rows(TextChunk.objects.filter(doc_id=a.id))
+    assert changed == [True]
+    assert runtime.cache == {}
+    assert runtime.budget.sources_used == 1
+
+
+def test_initially_absent_public_holder_requires_tool_scope_validation(pair, monkeypatch):
+    from apps.documents.services import source_deadline, source_loading
+
+    a, _, _, _, _, runtime = pair
+    foreign = SourceRuntime(TurnBudget(TurnLimits()), runtime.authorization)
+    with source_runtime_scope(foreign):
+        freeze_search_scope((a,), using="default")
+    real_deadline = source_deadline.check_source_deadline
+
+    def deadline():
+        runtime._frozen_retrieval_scope = foreign._frozen_retrieval_scope
+        return real_deadline()
+
+    monkeypatch.setattr(source_deadline, "check_source_deadline", deadline)
+    with source_runtime_scope(runtime):
+        with patch.object(source_loading, "_source_body_rows", wraps=source_loading._source_body_rows) as read:
+            with pytest.raises(SourceScopeUnavailable):
+                source_query_rows(TextChunk.objects.filter(doc_id=a.id))
+            assert read.call_count == 0
+    assert runtime.cache == {} and runtime.budget.sources_used == 0
 
 
 def test_current_source_reader_never_returns_retired_pk(retained):

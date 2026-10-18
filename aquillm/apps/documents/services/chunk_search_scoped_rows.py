@@ -121,7 +121,7 @@ def dense_rows(model_cls, observation, scope, limit):
         )
 
 
-def _current_row_queryset(scope, ids):
+def _current_row_queryset(scope, ids, *, document_ids=None):
     """Private metadata query; never returned from the closed row operation."""
     from apps.documents.models import TextChunk
 
@@ -131,10 +131,11 @@ def _current_row_queryset(scope, ids):
             doc_id__in=scope.requested_document_ids,
         ),
         snapshot=scope.representation,
+        **({} if document_ids is None else {"document_ids": document_ids}),
     )
 
 
-def _current_rows(rows, scope, valid_dense, *, dense_only=False):
+def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=None):
     """Eager metadata pass private to a caller-owned full-scope boundary."""
     if not rows:
         return (), set()
@@ -142,7 +143,9 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False):
 
     fts_ids = tuple(row.pk for row in rows if row.pk in scope.fts_rows)
     valid_fts = (
-        _matching_full_text_ids(scope, _current_row_queryset(scope, fts_ids))
+        _matching_full_text_ids(scope, _current_row_queryset(
+            scope, fts_ids, document_ids=document_ids
+        ))
         if fts_ids
         else set()
     )
@@ -150,7 +153,9 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False):
 
     withdraw_full_text(scope, rows, valid_fts)
     metadata = (
-        _current_row_queryset(scope, tuple(row.pk for row in rows))
+        _current_row_queryset(
+            scope, tuple(row.pk for row in rows), document_ids=document_ids
+        )
         .annotate(_revision=MD5("content"))
         .values_list(
             "pk",

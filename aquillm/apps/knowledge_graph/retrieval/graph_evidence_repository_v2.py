@@ -17,8 +17,8 @@ from lib.retrieval.turn_budget import TurnBudget
 
 from .graph_evidence_selection_v2 import GraphEvidenceSelectionInputV2
 from .graph_handoff import GraphCandidateRefV2
-from .graph_query_contracts import GraphEvidenceRefV2
 from .graph_hydration_operation_v2 import hydrate_selection_operation
+from .graph_query_contracts import GraphEvidenceRefV2
 from .ready_scope_v2 import SelectedGraphScopeV2
 
 
@@ -37,6 +37,28 @@ def load_selection_inputs_v2(
     max_rows: int,
     deadline: float,
 ) -> tuple[GraphEvidenceSelectionInputV2, ...]:
+    return _load_selection_inputs_v2(
+        selected=selected,
+        references=references,
+        authorization=authorization,
+        budget=budget,
+        max_rows=max_rows,
+        deadline=deadline,
+        hydrate=hydrate_selection_operation,
+    )
+
+
+def _load_selection_inputs_v2(
+    *,
+    selected,
+    references,
+    authorization,
+    budget,
+    max_rows,
+    deadline,
+    hydrate,
+):
+    """Private pairing/SQL core; public and owned callers retain their boundaries."""
     if type(selected) is not SelectedGraphScopeV2 or type(budget) is not TurnBudget:
         raise TypeError("exact captured selection and original budget required")
     if (
@@ -48,6 +70,7 @@ def load_selection_inputs_v2(
     if type(max_rows) is not int or not 1 <= max_rows <= 45:
         raise ValueError("hydration row allowance must be within 45")
     from apps.documents.services.graph_source_runtime import graph_source_runtime
+
     runtime = graph_source_runtime()
     if (
         runtime is None
@@ -115,5 +138,10 @@ def load_selection_inputs_v2(
             for ref, source in zip(refs[:max_rows], references[:max_rows], strict=True)
             if ref.chunk_key in allowed
         ]
-    return hydrate_selection_operation(selected=selected, pairs=tuple(pairs),
-        runtime=runtime, document_codec=codec, deadline=deadline)
+    return hydrate(
+        selected=selected,
+        pairs=tuple(pairs),
+        runtime=runtime,
+        document_codec=codec,
+        deadline=deadline,
+    )

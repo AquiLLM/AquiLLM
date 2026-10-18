@@ -60,6 +60,11 @@ def full_text_queryset(queryset, query, *, limit):
 def full_text_candidates(model_cls, query, scope, *, limit):
     from .chunk_search_scoped_rows import scoped_rows
 
+    return _full_text_candidates(model_cls, query, scope, limit=limit, reader=scoped_rows)
+
+
+def _full_text_candidates(model_cls, query, scope, *, limit, reader):
+
     if scope is None:
         return (), FullTextCoverage("scope_unavailable")
     with scope.database():
@@ -79,7 +84,7 @@ def full_text_candidates(model_cls, query, scope, *, limit):
             return (), FullTextCoverage(
                 "incomplete", text_count=count, indexed_count=indexed
             )
-        result = scoped_rows(
+        result = reader(
             full_text_queryset(eligible, query, limit=limit), scope, lexical="full_text"
         )
         scope.validate()

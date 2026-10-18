@@ -4,9 +4,13 @@ from dataclasses import asdict
 
 from apps.knowledge_graph.projection.frontier_cypher_v2 import (
     INDEX_BATCH_LOOKUP,
+    INDEX_BATCH_MULTI_LOOKUP,
     INDEX_LOOKUP,
+    MANIFEST_BATCH_LOOKUP,
     MANIFEST_LOOKUP,
+    RAW_BATCH_MULTI_LOOKUP,
     RAW_LOOKUP,
+    SCOPE_RAW_COMPLETE_BATCH_LOOKUP,
 )
 from apps.knowledge_graph.projection.frontier_index_build_v2 import build_frontier_index
 from apps.knowledge_graph.projection.serialization import projection_checksum
@@ -43,6 +47,28 @@ class FrontierIndexFixtureDriver:
 
     def execute_read(self, query, parameters, *, timeout_seconds, max_records):
         self.calls.append((query, parameters.copy()))
+        if query in {
+            MANIFEST_BATCH_LOOKUP,
+            INDEX_BATCH_MULTI_LOOKUP,
+            RAW_BATCH_MULTI_LOOKUP,
+            SCOPE_RAW_COMPLETE_BATCH_LOOKUP,
+        }:
+            rows = []
+            for pair in parameters["lookups_csv"].split(","):
+                generation, key = pair.split(":")
+                identity = {"generation_key": generation, "lookup_key": key}
+                if query == MANIFEST_BATCH_LOOKUP and generation in self.markers:
+                    rows.append({**identity, "record": self.markers[generation].copy()})
+                elif query == INDEX_BATCH_MULTI_LOOKUP and key in self.index:
+                    rows.append({**identity, "record": self.index[key]})
+                elif query in {RAW_BATCH_MULTI_LOOKUP, SCOPE_RAW_COMPLETE_BATCH_LOOKUP}:
+                    rows.extend(
+                        {**row, **identity}
+                        for row in self.raw.get((generation, key), ())[:10]
+                    )
+            if query == SCOPE_RAW_COMPLETE_BATCH_LOOKUP:
+                rows = rows[:320]
+            return tuple(rows)
         if query == MANIFEST_LOOKUP:
             return ({"record": self.markers[parameters["generation_key"]].copy()},)
         if query == INDEX_LOOKUP:

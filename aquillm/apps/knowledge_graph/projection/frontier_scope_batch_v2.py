@@ -2,7 +2,9 @@
 
 from apps.knowledge_graph.retrieval.topology.frontier_contracts_v2 import _key
 
+from .frontier_directory_proof_v2 import directory_step
 from .frontier_reads_v2 import KINDS, schema_error
+from .frontier_scope_preparation_v2 import ScopePreparation  # noqa: F401
 
 
 def _heads(reads, generation, names):
@@ -20,33 +22,25 @@ def _heads(reads, generation, names):
         records = reads.indices(generation, keys)
         following = {}
         for name, (key, seen, low, high) in pending.items():
-            kind, node = records[key]
-            if (kind != "directory" or type(node) is not dict
-                    or set(node) != {"name", "head", "left", "right"}):
-                raise schema_error()
-            current = node["name"]
-            if type(current) is not str or not low < current < high:
-                raise schema_error()
-            if current == name:
-                if node["head"] is None:
+            found, child, low, high = directory_step(records[key], name, low, high)
+            if found:
+                if child is None:
                     raise schema_error()
-                heads[name] = node["head"]
+                heads[name] = child
                 continue
-            child = node["left"] if name < current else node["right"]
             if child is None:
                 raise schema_error()
-            following[name] = (
-                child, seen, low if name < current else current,
-                current if name < current else high,
-            )
+            following[name] = child, seen, low, high
         pending = following
     return heads
 
 
 def scope_rows(reads, generation, sources):
+    if getattr(reads, "complete_scope_windows", False):
+        return scope_rows_all(reads, {generation: sources})[generation]
     expected = {}
     for offset in range(0, len(sources), 32):
-        names = tuple("scope/" + source for source in sources[offset:offset + 32])
+        names = tuple("scope/" + source for source in sources[offset : offset + 32])
         heads = _heads(reads, generation, names)
         reads.indices(generation, tuple(sorted(set(heads.values()))))
         for stream in names:
@@ -67,8 +61,24 @@ def scope_rows(reads, generation, sources):
     keys = tuple(sorted({key for _, key in expected}))
     rows = {}
     for offset in range(0, len(keys), 32):
-        batch = set(keys[offset:offset + 32])
-        refs = [[label, key, checksum] for (label, key), checksum in expected.items()
-                if key in batch]
+        batch = set(keys[offset : offset + 32])
+        refs = [
+            [label, key, checksum]
+            for (label, key), checksum in expected.items()
+            if key in batch
+        ]
         rows.update(reads.hydrate(generation, refs))
     return rows
+
+
+def scope_rows_all(reads, sources):
+    """Advance all selected streams together, retaining independent tree bounds."""
+    from apps.knowledge_graph.retrieval.topology.frontier_window_owner_v2 import (
+        run_preparation,
+    )
+
+    from .frontier_scope_complete_v3 import ScopeCompletePreparation
+
+    complete = getattr(reads, "complete_scope_windows", False)
+    state = (ScopeCompletePreparation if complete else ScopePreparation)(reads, sources)
+    return run_preparation(state)

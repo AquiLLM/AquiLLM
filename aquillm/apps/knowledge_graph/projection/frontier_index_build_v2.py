@@ -7,7 +7,9 @@ from apps.knowledge_graph.retrieval.ppr import RetrievalDirection, raw_edge_weig
 
 from .bundle_validation import validate_bundle
 from .frontier_index_contracts_v2 import (
+    DIRECTORY_VERSIONS,
     MAX_INDEX_RECORDS,
+    PACKED_VERSION,
     VERSION,
     FrontierIndexBuildV2,
     digest,
@@ -22,7 +24,9 @@ def quality_key(value):
     return bytes(255 - byte for byte in pack(">d", 0.0 if value == 0 else value)).hex()
 
 
-def build_frontier_index(bundle):
+def build_frontier_index(bundle, *, directory_version=VERSION):
+    if directory_version not in DIRECTORY_VERSIONS:
+        raise ValueError("unsupported frontier directory recipe")
     validate_bundle(bundle)
     generation = bundle.generation.generation_key
     records, directories = [], {}
@@ -207,11 +211,16 @@ def build_frontier_index(bundle):
             },
         )
 
-    root = directory(ordered)
+    if directory_version == PACKED_VERSION:
+        from .frontier_packed_directory_v3 import packed_directory
+
+        root = packed_directory(ordered, put)
+    else:
+        root = directory(ordered)
     rows = tuple(sorted(records, key=lambda r: r["index_key"]))
     checksum = digest(
         {
-            "version": VERSION,
+            "version": directory_version,
             "graph_checksum": projection_checksum(bundle),
             "records": rows,
             "root": root,
@@ -220,7 +229,7 @@ def build_frontier_index(bundle):
     return FrontierIndexBuildV2(
         rows,
         {
-            "frontier_version": VERSION,
+            "frontier_version": directory_version,
             "frontier_root_key": root,
             "frontier_root_checksum": root,
             "frontier_record_count": len(rows),

@@ -28,7 +28,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/collections/views/api.py": 308,
     "aquillm/apps/documents/models/document.py": 344,
     "aquillm/apps/documents/models/document_types/figure.py": 390,
-    "aquillm/apps/documents/services/chunk_search.py": 462,
+    "aquillm/apps/documents/services/chunk_search.py": 416,
     "aquillm/apps/documents/services/rag_cache.py": 337,
     "aquillm/apps/documents/tasks/chunking.py": 337,
     "aquillm/apps/documents/tests/test_chunk_search_candidates.py": 337,

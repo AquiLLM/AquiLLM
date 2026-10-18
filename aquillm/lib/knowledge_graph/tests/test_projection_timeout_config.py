@@ -14,6 +14,14 @@ def test_projection_timeout_changes_without_changing_retrieval_budget() -> None:
     assert settings.graph_overall_timeout_ms == 300
 
 
+@pytest.mark.parametrize("value", ["100", "300000"])
+def test_background_job_edges_do_not_change_individual_or_serving_limits(value):
+    settings = load_hybrid_retrieval_settings({"KG_PROJECTION_JOB_TIMEOUT_MS": value})
+    assert settings.projection_job_timeout_ms == int(value)
+    assert settings.projection_timeout_ms == 5000
+    assert settings.graph_overall_timeout_ms == 300
+
+
 @pytest.mark.parametrize("value", ("100", "60000"))
 def test_projection_timeout_accepts_supported_edges(value: str) -> None:
     settings = load_hybrid_retrieval_settings({"KG_PROJECTION_TIMEOUT_MS": value})

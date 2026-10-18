@@ -8,7 +8,11 @@ from uuid import UUID
 
 from django.conf import settings
 from django.contrib.auth.models import User
+from django.db import models
 
+from .native_closed_seed_policy_predicates import (
+    _POLICY_PREDICATE_DEFINITIONS as _POLICY_PREDICATE_DEFINITIONS,
+)
 from .retrieval_authorization import (
     OpaquePrincipalReference,
     RetrievalAuthorizationContext,
@@ -120,9 +124,7 @@ class DjangoCollectionRetrievalPermissionPolicy:
     ):
         from apps.collections.models import CollectionPermission
         from apps.documents.models.document import _get_document_types
-        from apps.documents.services.representation_tuple_predicate import (
-            ExactTupleMembership,
-        )
+        from apps.documents.services._uuid_membership import uuid_membership
         from apps.knowledge_graph.retrieval.graph_seed_reads_v2 import seed_query_rows
 
         principal_id = self._principal_id(principal)
@@ -143,8 +145,11 @@ class DjangoCollectionRetrievalPermissionPolicy:
         )
         if not authorized:
             return ()
-        membership = ExactTupleMembership(
-            ("id",), tuple((value,) for value in selected_document_ids)
+        models = tuple(_get_document_types())
+        membership = uuid_membership(
+            ("id",), tuple((value,) for value in selected_document_ids),
+            using=database_alias,
+            fields=tuple(model._meta.get_field("id") for model in models),
         )
         queries = tuple(
             model._base_manager.using(database_alias)
@@ -154,7 +159,7 @@ class DjangoCollectionRetrievalPermissionPolicy:
             )
             .order_by()
             .values_list("collection_id", "id")
-            for model in _get_document_types()
+            for model in models
         )
         combined = queries[0].union(*queries[1:], all=True)
         rows = seed_query_rows(
@@ -163,6 +168,26 @@ class DjangoCollectionRetrievalPermissionPolicy:
             budget=read_budget,
         )
         return tuple(sorted(rows, key=lambda row: (row[0], row[1].int)))
+
+
+# Captured beside the definition: a class override before the private helper is
+# imported must never become that helper's definition of the builtin policy.
+_NATIVE_POLICY_METHODS = (
+    ("_principal_id", DjangoCollectionRetrievalPermissionPolicy._principal_id),
+    ("opaque_principal_reference", DjangoCollectionRetrievalPermissionPolicy.opaque_principal_reference),
+    ("current_authorized_document_scope", DjangoCollectionRetrievalPermissionPolicy.current_authorized_document_scope),
+    ("current_authorized_selected_document_scope", DjangoCollectionRetrievalPermissionPolicy.current_authorized_selected_document_scope),
+)
+_NATIVE_PRINCIPAL_TYPE = User
+_NATIVE_MANAGER_METHODS = tuple((name, getattr(models.Manager, name))
+                               for name in ("get_queryset", "using"))
+_NATIVE_QUERYSET_METHODS = tuple((name, getattr(models.QuerySet, name))
+                                for name in ("using", "filter", "order_by", "values_list", "union",
+                                             "__getitem__", "_filter_or_exclude", "_chain", "_clone", "_fetch_all"))
+_NATIVE_FIELD_METHODS = tuple((kind, tuple((name, getattr(kind, name, None)) for name in (
+    "get_prep_value", "get_db_prep_value", "get_db_prep_save", "get_db_converters", "from_db_value", "to_python",
+))) for kind in (models.UUIDField, models.ForeignKey, models.AutoField, models.BigAutoField,
+                 models.BooleanField, models.CharField))
 
 
 def _hybrid_enabled() -> bool:

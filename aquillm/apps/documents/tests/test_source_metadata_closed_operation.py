@@ -3,19 +3,29 @@ from dataclasses import replace
 
 import pytest
 from django.db import connection
-from django.db.models.query import QuerySet
 from django.test.utils import CaptureQueriesContext
 
 from apps.collections.models import CollectionPermission
-from apps.collections.services.django_retrieval_authorization import build_selected_scope_authorization_context
+from apps.collections.services.django_retrieval_authorization import (
+    build_selected_scope_authorization_context,
+)
 from apps.documents.models import EmbeddingGeneration, TextChunk
-from apps.documents.services.chunk_search_scope import FrozenRetrievalScope, freeze_search_scope
+from apps.documents.services.chunk_search_scope import (
+    FrozenRetrievalScope,
+    freeze_search_scope,
+)
 from apps.documents.services.chunk_search_scoped_rows import scoped_rows
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
-from apps.documents.services.source_loading import SourceRuntime, source_query_rows, source_runtime_scope
-from apps.documents.tests.dense_sweep_support import corpus, build
+from apps.documents.services.source_loading import (
+    SourceRuntime,
+    source_query_rows,
+    source_runtime_scope,
+)
+from apps.documents.tests.dense_sweep_support import build, corpus
 from lib.embeddings.tests.test_document_provider import transport as transport
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+
+from .source_body_test_hooks import install_body_hook
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -83,10 +93,9 @@ def test_late_dense_withdrawal_is_seen_without_discarding_valid_source_or_adopti
     _, scope, query, expected = captured(1, "ready", transport, monkeypatch, settings)
     runtime, original_dense = scope.runtime, scope.dense
     key = original_dense.generation_keys[0]
-    real_first, real_validate = QuerySet.first, FrozenRetrievalScope.validate
+    real_validate = FrozenRetrievalScope.validate
     fetched, keys = [], []
-    def first(queryset):
-        row = real_first(queryset)
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None and not fetched:
             fetched.append((row.pk, row.content))
             # Ordered mutation after a real body fetch; not an independent-connection race.
@@ -96,7 +105,7 @@ def test_late_dense_withdrawal_is_seen_without_discarding_valid_source_or_adopti
         result = real_validate(current)
         keys.append(result)
         return result
-    monkeypatch.setattr(QuerySet, "first", first)
+    install_body_hook(monkeypatch, first)
     monkeypatch.setattr(FrozenRetrievalScope, "validate", validate)
     try:
         with source_runtime_scope(runtime):
@@ -118,17 +127,19 @@ def test_late_dense_withdrawal_is_seen_without_discarding_valid_source_or_adopti
 
 def test_late_vocabulary_detachment_blocks_bound_scope_handoff_after_real_body(transport, monkeypatch, settings):
     from apps.chat.services.retrieval_query_binding import ensure_admission
-    from apps.chat.services.retrieval_query_runtime import BoundProposal, _frozen_vocabulary
-    from apps.collections.tests.test_vocabulary_scope import publish, service, entry
+    from apps.chat.services.retrieval_query_runtime import (
+        BoundProposal,
+        _frozen_vocabulary,
+    )
+    from apps.collections.tests.test_vocabulary_scope import entry, publish, service
     case, scope, query, expected = captured(1, "empty", transport, monkeypatch, settings)
     runtime = scope.runtime
     CollectionPermission.objects.create(user=case.owner, collection=case.collection, permission="MANAGE")
     _, version = publish(case.owner, case.collection, [entry("source", "instrument")])
     pin = service().attach_vocabulary(actor=case.owner, collection=case.collection,
         version=version, expected_revision=0)
-    real_first, fetched = QuerySet.first, []
-    def first(queryset):
-        row = real_first(queryset)
+    fetched = []
+    def first(queryset, row):
         if queryset.model is TextChunk and row is not None and not fetched:
             fetched.append((row.pk, row.content))
             pin.delete()
@@ -140,7 +151,7 @@ def test_late_vocabulary_detachment_blocks_bound_scope_handoff_after_real_body(t
             bound = BoundProposal(runtime, "source", "closed-body-control", vocabulary, None)
             scope = replace(witness.scope, proposal_binding=bound)
             query = scope.queryset(query)
-            monkeypatch.setattr(QuerySet, "first", first)
+            install_body_hook(monkeypatch, first)
             # Direct body loading has no vocabulary policy. Its existing bound
             # caller must revalidate the original pin before handing any rows out.
             with pytest.raises(ValueError, match="pins changed"):

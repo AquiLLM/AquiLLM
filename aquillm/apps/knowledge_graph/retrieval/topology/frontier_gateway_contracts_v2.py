@@ -16,6 +16,85 @@ VERSION = "topology-frontier-v2"
 CHECKSUM = sha256(
     b"frontier-v2:fixed-manifest-index-indexbatch32-raw:relative-timeout:raw-body:limit2:raw-limit10"
 ).hexdigest()
+BATCH_PATH = PATH + "/batch"
+BATCH_VERSION = "topology-frontier-batch-v2"
+BATCH_CHECKSUM = sha256(
+    b"frontier-batch-v2:generation-key-pairs:manifest160:index160:raw32:limit2:limit10:scalar-csv:relative-timeout:zlib1-base64-envelope:expanded1048576:strict-single-stream:canonical-row-order"
+).hexdigest()
+BINARY_PATH = PATH + "/batch-binary"
+BINARY_VERSION = "topology-frontier-batch-binary-v2"
+BINARY_CHECKSUM = sha256(
+    b"/v2/topology/frontier/batch-binary:topology-frontier-batch-binary-v2:KGFZ0001:expanded-u32be:zlib1:single-stream:manifest160:index160:raw32:limit2:limit10:rows320:expanded1048576:canonical-row-order:json-errors"
+).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class FrontierGatewayBatchRequestV2:
+    kind: str
+    lookups: tuple[tuple[str, str], ...]
+    ready: ReadyGenerationBundleV1
+    response_bytes: int
+
+    def __post_init__(self):
+        if self.kind not in {"manifest_batch", "index_batch_multi", "raw_batch_multi"}:
+            raise ValueError("unknown frontier batch operation")
+        if type(self.ready) is not ReadyGenerationBundleV1:
+            raise TypeError("frontier ready bundle must be exact")
+        cap = 32 if self.kind == "raw_batch_multi" else 160
+        if type(self.lookups) is not tuple or not 1 <= len(self.lookups) <= cap:
+            raise ValueError("frontier tuple batch exceeds bound")
+        generations = {s.generation_key for s in self.ready.selected_generations}
+        for pair in self.lookups:
+            if type(pair) is not tuple or len(pair) != 2:
+                raise ValueError("frontier lookup pair must be exact")
+            generation, key = pair
+            _key(generation)
+            _key(key)
+            if generation not in generations or (
+                self.kind == "manifest_batch" and generation != key
+            ):
+                raise ValueError("frontier tuple outside captured scope")
+        if self.lookups != tuple(sorted(set(self.lookups))):
+            raise ValueError("frontier tuples must be canonical and unique")
+        if (
+            type(self.response_bytes) is not int
+            or not 1 <= self.response_bytes <= 1048576
+        ):
+            raise ValueError("frontier response allowance invalid")
+
+    @property
+    def maximum(self):
+        return (10 if self.kind == "raw_batch_multi" else 2) * len(self.lookups)
+
+
+def decode_batch_request(body):
+    value = _load(body, maximum=MAX_REQUEST_BYTES)
+    if set(value) != {"kind", "lookups", "ready", "response_bytes"}:
+        raise ValueError("frontier batch request shape differs")
+    if type(value["lookups"]) is not list or any(
+        type(p) is not list for p in value["lookups"]
+    ):
+        raise ValueError("frontier wire lookups must be arrays")
+    # Share the strict existing ready decoder without widening the old route.
+    ready = value["ready"]
+    generation = ready["selected_generations"][0]["generation_key"]
+    decoded = decode_request(
+        _canonical(
+            {
+                "kind": "manifest",
+                "generation": generation,
+                "keys": [],
+                "ready": ready,
+                "response_bytes": value["response_bytes"],
+            }
+        )
+    )
+    return FrontierGatewayBatchRequestV2(
+        value["kind"],
+        tuple(tuple(p) for p in value["lookups"]),
+        decoded.ready,
+        value["response_bytes"],
+    )
 
 
 class FrontierCompletedBudgetFailureV2(FrontierBudgetExceeded):

@@ -4,14 +4,16 @@ from collections.abc import Mapping
 from math import isfinite
 from uuid import UUID
 
-from django.db.models import F
+from django.db import connections
+from django.db.models import Exists, F, Q
+from django.db.models.lookups import In, Lookup
 
 from apps.knowledge_graph.models import (
     CollectionEntityDocumentLink,
     OntologyVersion,
 )
 
-from .limits import MAX_DETAIL_ROWS
+from .limits import MAX_DETAIL_ROWS, MAX_ENTITY_ROWS
 from .limits import bounded_projection_rows as _bounded
 
 
@@ -137,13 +139,41 @@ def load_relation_directions(
     }
 
 
-def load_entity_mentions(
+class _ExactBigintMembership(Lookup):
+    lookup_name = "exact_bigint_membership"
+    prepare_rhs = False
+
+    def as_sql(self, compiler, connection):
+        if connection.vendor != "postgresql":
+            return In(self.lhs, self.rhs).as_sql(compiler, connection)
+        # Compile the expression so nested overflow queries retain their aliases.
+        lhs, params = self.process_lhs(compiler, connection)
+        return lhs + " = ANY(%s::bigint[])", (*params, list(self.rhs))
+
+
+def _entity_membership(using, entity_ids, document_filtered):
+    if (
+        document_filtered is True
+        and connections[using].vendor == "postgresql"
+        and type(entity_ids) is tuple
+        and 0 < len(entity_ids) <= MAX_ENTITY_ROWS
+        and all(
+            type(value) is int and 0 < value <= 9223372036854775807
+            for value in entity_ids
+        )
+    ):
+        return _ExactBigintMembership(F("collection_entity_id"), entity_ids)
+    return Q(collection_entity_id__in=entity_ids)
+
+
+def _load_entity_mention_rows(
     *,
     using: str,
     artifact_id: int,
     entity_ids: tuple[int, ...],
     chunks: Mapping[int, tuple[UUID, int]],
     batch_size: int,
+    document_filtered: bool = False,
 ) -> tuple[dict, ...]:
     fields = (
         "collection_entity_id",
@@ -153,32 +183,56 @@ def load_entity_mentions(
         "document_entity__mention_links__mention__extraction_confidence",
         "document_entity__mention_links__mention__metadata",
     )
-    raw = _bounded(
-        CollectionEntityDocumentLink.objects.using(using).filter(
-            artifact_id=artifact_id,
-            collection_entity_id__in=entity_ids,
-            status="active",
-            outcome="automatic",
-            resolver_version=F("artifact__resolver_version"),
-            manifest_input__artifact_id=artifact_id,
-            document_entity__status="active",
-            document_entity__artifact_id=F("manifest_input__document_artifact_id"),
-            document_entity__document_id=F("manifest_input__document_id"),
-            document_entity__mention_links__status="active",
-            document_entity__mention_links__resolver_version=F(
-                "document_entity__artifact__resolver_version"
-            ),
-            document_entity__mention_links__mention__artifact_id=F(
-                "document_entity__artifact_id"
-            ),
-            document_entity__mention_links__mention__document_id=F(
-                "manifest_input__document_id"
-            ),
+    query = CollectionEntityDocumentLink.objects.using(using).filter(
+        _entity_membership(using, entity_ids, document_filtered),
+        artifact_id=artifact_id,
+        status="active",
+        outcome="automatic",
+        resolver_version=F("artifact__resolver_version"),
+        manifest_input__artifact_id=artifact_id,
+        document_entity__status="active",
+        document_entity__artifact_id=F("manifest_input__document_artifact_id"),
+        document_entity__document_id=F("manifest_input__document_id"),
+        document_entity__mention_links__status="active",
+        document_entity__mention_links__resolver_version=F(
+            "document_entity__artifact__resolver_version"
         ),
-        fields,
+        document_entity__mention_links__mention__artifact_id=F(
+            "document_entity__artifact_id"
+        ),
+        document_entity__mention_links__mention__document_id=F(
+            "manifest_input__document_id"
+        ),
+    )
+    read_fields = fields
+    if document_filtered:
+        # Keep the complete raw joined-family cap, including repeated parent IDs,
+        # without transferring unrelated observation metadata. Database field
+        # types/nullability and kg_mention_confidence_range enforce the scalar
+        # checks in expand_entity_mentions even for rows outside these documents.
+        overflow = query.order_by()[MAX_DETAIL_ROWS : MAX_DETAIL_ROWS + 1]
+        # Filter documents, not representative chunks: observations may identify
+        # another chunk of the same document that is the only requested chunk.
+        query = query.annotate(_raw_family_overflow=Exists(overflow)).filter(
+            manifest_input__document_id__in={
+                document for document, _ in chunks.values()
+            }
+        )
+        read_fields = (*fields, "_raw_family_overflow")
+    raw = _bounded(
+        query,
+        read_fields,
         batch_size,
+        maximum=MAX_DETAIL_ROWS,
         order=("pk", "document_entity__mention_links__pk"),
     )
+    if document_filtered and (
+        any(row["_raw_family_overflow"] for row in raw)
+        or (not raw and overflow.exists())
+    ):
+        # Nonempty metadata and its global overflow sentinel share one SQL
+        # snapshot. Empty subsets still enforce the complete joined-family cap.
+        raise ValueError("projection row family exceeds its hard cap")
     aliases = (
         "entity_id",
         "mention_id",
@@ -188,10 +242,23 @@ def load_entity_mentions(
         "metadata",
     )
     normalized = tuple(
-        dict(zip(aliases, (row[field] for field in fields), strict=True))
-        for row in raw
+        dict(zip(aliases, (row[field] for field in fields), strict=True)) for row in raw
     )
-    return expand_entity_mentions(normalized, chunks)
+    return normalized
+
+
+def load_entity_mentions(
+    *, using: str, artifact_id: int, entity_ids: tuple[int, ...],
+    chunks: Mapping[int, tuple[UUID, int]], batch_size: int,
+    document_filtered: bool = False,
+) -> tuple[dict, ...]:
+    return expand_entity_mentions(_load_entity_mention_rows(
+        using=using, artifact_id=artifact_id, entity_ids=entity_ids, chunks=chunks,
+        batch_size=batch_size, document_filtered=document_filtered,
+    ), chunks)
+
+
+_NATIVE_LOAD_ENTITY_MENTIONS = load_entity_mentions
 
 
 def load_projection_topology(

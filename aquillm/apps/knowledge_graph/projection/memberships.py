@@ -16,7 +16,6 @@ from apps.knowledge_graph.models import (
 
 from .identifiers import ProjectionIdentifierCodec, ProjectionIdentifierDomain
 from .records import AutomaticCanonicalMembershipV1
-from .serialization import projection_checksum
 
 _MAX_BATCH = 5_000
 MEMBERSHIP_REGISTRY_GENERATION = "membership-registry-v1"
@@ -70,8 +69,10 @@ def null_membership_decision_checksum(
 
 
 def _load_membership_source_rows(
-    *, collection_ids: tuple[int, ...], using: str, batch_size: int
+    *, collection_ids: tuple[int, ...], using: str, batch_size: int, check=None
 ) -> tuple[tuple[int, str, str, int | None, str | None], ...]:
+    check = _membership_check(check)
+    check()
     entities = (
         CollectionEntity.objects.using(using)
         .filter(
@@ -88,12 +89,13 @@ def _load_membership_source_rows(
             "artifact__resolution_config_checksum",
         )
     )
-    entity_rows = tuple(entities.iterator(chunk_size=batch_size))
+    entity_rows = tuple(_checked_rows(entities.iterator(chunk_size=batch_size), check))
     entity_ids = tuple(row[0] for row in entity_rows)
+    from .membership_source_query import captured_entity_links
+
     links = (
-        CanonicalEntityLink.objects.using(using)
+        captured_entity_links(CanonicalEntityLink.objects.using(using).all(), entity_ids)
         .filter(
-            collection_entity_id__in=entity_ids,
             outcome="automatic",
             status="active",
             canonical_entity__status="active",
@@ -102,16 +104,35 @@ def _load_membership_source_rows(
         .values_list("collection_entity_id", "canonical_entity_id", "decision_checksum")
     )
     by_entity: dict[int, tuple[int, str]] = {}
-    for entity_id, canonical_id, decision_checksum in links.iterator(
-        chunk_size=batch_size
+    for entity_id, canonical_id, decision_checksum in _checked_rows(
+        links.iterator(chunk_size=batch_size), check,
     ):
         if entity_id in by_entity:
             raise ValueError("automatic membership is not unique")
         by_entity[entity_id] = (canonical_id, decision_checksum)
-    return tuple(
+    result = tuple(
         (entity_id, resolver, checksum, *by_entity.get(entity_id, (None, None)))
-        for entity_id, resolver, checksum in entity_rows
+        for entity_id, resolver, checksum in _checked_rows(entity_rows, check)
     )
+    check()
+    return result
+
+
+def _membership_check(check):
+    if check is not None:
+        return check
+    from apps.knowledge_graph.retrieval.ready_authority_reads_v2 import capture_authority_check
+
+    return capture_authority_check()
+
+
+def _checked_rows(rows, check):
+    check()
+    for index, row in enumerate(rows):
+        if index % 128 == 0:
+            check()
+        yield row
+    check()
 
 
 def load_automatic_membership_assignments(
@@ -121,6 +142,7 @@ def load_automatic_membership_assignments(
     batch_size: int,
     codec: ProjectionIdentifierCodec | None = None,
     generation: object = MEMBERSHIP_REGISTRY_GENERATION,
+    check=None,
 ) -> tuple[AutomaticCanonicalMembershipV1, ...]:
     ids = _collection_ids(collection_ids)
     size = _batch_size(batch_size)
@@ -128,7 +150,11 @@ def load_automatic_membership_assignments(
         raise ValueError("using must be a nonempty database alias")
     if codec is None:
         raise RuntimeError("projection identifier codec is not configured")
-    encoder = codec
+    from .membership_identifiers import MembershipKeyEncoder
+
+    check = _membership_check(check)
+    check()
+    encoder = MembershipKeyEncoder(codec, generation)
     assignments = []
     for (
         entity_id,
@@ -136,16 +162,17 @@ def load_automatic_membership_assignments(
         resolution_checksum,
         canonical_id,
         decision,
-    ) in _load_membership_source_rows(
+    ) in _checked_rows(_load_membership_source_rows(
         collection_ids=ids,
         using=using,
         batch_size=size,
-    ):
-        entity_key = _opaque_entity_key(encoder, generation, entity_id)
+        check=check,
+    ), check):
+        entity_key = encoder.entity(entity_id)
         membership_key = (
             None
             if canonical_id is None
-            else _opaque_membership_key(encoder, canonical_id)
+            else encoder.canonical(canonical_id)
         )
         assignments.append(
             AutomaticCanonicalMembershipV1(
@@ -162,21 +189,19 @@ def load_automatic_membership_assignments(
                 resolution_config_checksum=resolution_checksum,
             )
         )
-    return tuple(sorted(assignments, key=lambda row: row.entity_key))
+    check()
+    result = tuple(sorted(assignments, key=lambda row: row.entity_key))
+    check()
+    return result
 
 
 def membership_decision_checksum(
     assignments: Sequence[AutomaticCanonicalMembershipV1],
+    *, check=None,
 ) -> str:
-    if isinstance(assignments, (str, bytes)):
-        raise TypeError("assignments must be projection membership rows")
-    rows = tuple(assignments)
-    if any(type(row) is not AutomaticCanonicalMembershipV1 for row in rows):
-        raise TypeError("assignments must contain exact membership rows")
-    rows = tuple(sorted(rows, key=lambda row: row.entity_key))
-    if not rows:
-        return sha256(b"[]").hexdigest()
-    return projection_checksum(rows)
+    from .membership_checksum import membership_decision_checksum as checksum
+
+    return checksum(assignments, check=check)
 
 
 def advance_membership_state_locked(
@@ -250,3 +275,14 @@ def advance_membership_state_locked(
         state.resolution_config_checksum = config
         state.save(using=using)
     return state
+
+
+# Defining-module capture precedes any optional certificate import.
+_NATIVE_MEMBERSHIP_BINDING = {name: globals()[name] for name in (
+    "MEMBERSHIP_REGISTRY_GENERATION", "load_automatic_membership_assignments",
+    "null_membership_decision_checksum", "membership_decision_checksum",
+    "_opaque_entity_key", "_opaque_membership_key", "_checked_rows",
+    "_load_membership_source_rows", "_membership_check", "_batch_size",
+    "_collection_ids", "AutomaticCanonicalMembershipV1", "sha256",
+    "ProjectionIdentifierDomain", "_MAX_BATCH")}
+_NATIVE_MEMBERSHIP_BINDING["json.dumps"] = json.dumps

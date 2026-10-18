@@ -1,6 +1,5 @@
 # ruff: noqa: E501
 """Fail-closed contracts for hybrid graph retrieval configuration."""
-
 from __future__ import annotations
 
 import dataclasses
@@ -16,6 +15,8 @@ from lib.knowledge_graph import retrieval_config as config
 # fmt: off
 DEFAULTS: dict[str, object] = {
     "memgraph_projection_enabled": False,
+    "membership_certificate_enabled": False,
+    "membership_certificate_issuance_enabled": False,
     "memgraph_traversal_enabled": False,
     "graph_direct_enabled": False,
     "graph_extended_enabled": False,
@@ -39,6 +40,7 @@ DEFAULTS: dict[str, object] = {
     "projection_retention": 2,
     "projection_max_lag_seconds": 300,
     "projection_timeout_ms": 5000,
+    "projection_job_timeout_ms": 300000,
     "query_extractor_url": "",
     "query_extractor_bearer_token": "",
     "query_extractor_model": "fastino/gliner2-base-v1",
@@ -296,4 +298,3 @@ def test_projection_dsn_accepts_percent_encoded_reserved_passwords(password: str
 def test_projection_dsn_password_structure_and_controls_fail_closed(dsn: str) -> None:
     with pytest.raises(config.HybridRetrievalConfigError, match="KG_PROJECTION_POSTGRES_SOURCE_DSN"):
         config.load_hybrid_retrieval_settings({**_projection(), "KG_PROJECTION_POSTGRES_SOURCE_DSN": dsn})
-# fmt: on

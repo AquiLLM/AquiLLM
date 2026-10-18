@@ -5,6 +5,8 @@ from dataclasses import asdict, dataclass
 from hashlib import sha256
 
 VERSION = "canonical-frontier-index-v2"
+PACKED_VERSION = "canonical-frontier-index-v3-packed32"
+DIRECTORY_VERSIONS = (VERSION, PACKED_VERSION)
 MARKER_FIELDS = (
     "frontier_version",
     "frontier_root_key",
@@ -99,7 +101,7 @@ def marker_present(marker):
     if present != set(MARKER_FIELDS):
         raise ValueError("partially present frontier attestation")
     if (
-        marker["frontier_version"] != VERSION
+        marker["frontier_version"] not in DIRECTORY_VERSIONS
         or type(marker["frontier_record_count"]) is not int
         or not 1 <= marker["frontier_record_count"] <= MAX_INDEX_RECORDS
     ):

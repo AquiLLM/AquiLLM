@@ -1,6 +1,15 @@
 """Redacted replay reports from private in-memory retrieval events."""
 
 import hashlib
+from typing import get_args
+
+from .replay_stage_contracts import (
+    materialized_pool,
+    novel_final_provenance,
+    reranked_pool,
+    schedule_fields,
+    schedule_summary,
+)
 
 
 def fingerprint(text):
@@ -21,6 +30,7 @@ def _safe_graph_reasons(reasons):
         ExtendedBranchFailureReason,
         SharedBranchFailureReason,
     )
+    from apps.knowledge_graph.retrieval.graph_handoff import GraphCoverageReason
 
     if type(reasons) not in (list, tuple):
         return None
@@ -32,26 +42,80 @@ def _safe_graph_reasons(reasons):
             SharedBranchFailureReason,
         )
         for reason in enum
-    }
+    } | set(get_args(GraphCoverageReason))
     # Exact strings only: never stringify arbitrary diagnostics or exceptions.
     return [
         reason for reason in reasons if type(reason) is str and reason in allowed
     ] or None
 
 
+def _published_graph_sources(events):
+    seen, captured = set(), False
+    for name, data in events:
+        if name != "graph_selected_sources_v2":
+            continue
+        captured = True
+        values = data.get("chunk_ids")
+        if (
+            type(values) is not tuple
+            or len(values) > 45
+            or any(
+                type(pk) is not int or not 0 < pk <= 9_223_372_036_854_775_807
+                for pk in values
+            )
+            or len(set(values)) != len(values)
+        ):
+            return None, "invalid"
+        seen.update(values)
+        if len(seen) > 45:
+            return None, "invalid"
+    return (seen, "captured") if captured else (None, "unavailable")
+
+
+def _source_provenance(row, graph_sources):
+    # PK identities are meaningful only across reports with matching corpus fences.
+    pk = _identity(row)
+    valid = type(pk) is int and 0 < pk <= 9_223_372_036_854_775_807
+    return {
+        "source_identity_sha256": fingerprint(f"text-chunk:{pk}") if valid else None,
+        "graph_selected_source": (
+            pk in graph_sources if valid and graph_sources is not None else None
+        ),
+    }
+
+
 def summarize(events, packet, targets):
     stages = [data for name, data in events if name == "retrieval_stages"]
+    graph_sources, graph_provenance = _published_graph_sources(events)
     result = {
         "stages": [],
+        "acquisition_schedule": schedule_summary(stages),
+        "graph_novel_final_provenance": novel_final_provenance(
+            stages, packet, graph_sources, _identity
+        ),
         "targets": [],
         "packet": [
             {
                 "text_sha256": fingerprint(_text(row)),
                 "characters": len(_text(row)),
                 "rank": rank,
+                **_source_provenance(row, graph_sources),
             }
             for rank, row in enumerate(packet, 1)
         ],
+        "graph_source_provenance": {
+            "status": graph_provenance,
+            "selected_count": len(graph_sources) if graph_sources is not None else None,
+            "packet_count": (
+                sum(
+                    _source_provenance(row, graph_sources)["graph_selected_source"]
+                    is True
+                    for row in packet
+                )
+                if graph_sources is not None
+                else None
+            ),
+        },
         "graph_stage_timings": {"status": "unavailable"},
         "timings_ms": {},
         "budget": {"limits": None, "observed": None, "completion": None},
@@ -59,23 +123,44 @@ def summarize(events, packet, targets):
     }
     for stage in stages:
         graph = stage.get("graph", {})
+        failure_reason = graph.get("failure_reason")
+        if type(failure_reason) is not str or failure_reason not in {
+            "deadline",
+            "frontier_budget",
+        }:
+            failure_reason = None
+        pool = materialized_pool(stage)
+        reranked = reranked_pool(stage)
         result["stages"].append(
             {
                 "effective_limits": stage.get("effective_limits"),
-                "pool_count": len(stage.get("materialized_union", [])),
-                "rerank_count": len(stage.get("post_rerank", [])),
+                **schedule_fields(stage),
+                "materialized_union_status": (
+                    "observed" if pool is not None else "unavailable"
+                ),
+                "pool_count": len(pool) if pool is not None else None,
+                "rerank_count": len(reranked) if reranked is not None else None,
+                "rerank_status": (
+                    "not_requested"
+                    if stage.get("acquisition_schedule_observed") == "native_closure"
+                    else "observed" if reranked is not None else "unavailable"
+                ),
                 "baseline_branch_counts": {
                     key: len(rows)
                     for key, rows in stage.get("baseline_branches", {}).items()
                 },
                 "graph": {
                     "reasons": _safe_graph_reasons(graph.get("reasons")),
+                    "failure_reason": failure_reason,
                     "ready": graph.get("ready"),
                     "status": graph.get("status"),
                     "branch_statuses": graph.get("branch_statuses"),
                     "candidate_provenance": graph.get("candidate_provenance"),
                     "unique_count": len(graph["candidates"])
                     if graph.get("candidates") is not None
+                    else None,
+                    "finalized_count": len(graph["finalized_candidates"])
+                    if graph.get("finalized_candidates") is not None
                     else None,
                     "readiness_failure_count": stage.get("readiness_failure_count"),
                 },
@@ -85,6 +170,14 @@ def summarize(events, packet, targets):
         identities = set(target["chunk_ids"])
 
         def ranks(key):
+            if key == "post_rerank" and (
+                not stages or any(reranked_pool(stage) is None for stage in stages)
+            ):
+                return None
+            if key == "materialized_union" and (
+                not stages or any(materialized_pool(stage) is None for stage in stages)
+            ):
+                return None
             return [
                 row.get("rank", rank)
                 for stage in stages
@@ -108,6 +201,11 @@ def summarize(events, packet, targets):
             {
                 "source_sha256": target["source_sha256"],
                 "pool_ranks": ranks("materialized_union"),
+                "pool_status": (
+                    "observed"
+                    if ranks("materialized_union") is not None
+                    else "unavailable"
+                ),
                 "rerank_ranks": ranks("post_rerank"),
                 "packet_ranks": packet_ranks,
                 "answer_span_covered": coverage,

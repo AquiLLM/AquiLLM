@@ -1,13 +1,39 @@
 """Serving workers alone own bounded warm attempts and invalidate on failure."""
 
 import asyncio
+import hashlib
+import json
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from apps.documents.services import chunk_rerank_pair_capability as capability
 from apps.documents.services import pair_worker_lifecycle as worker
+
+
+def attested(provider=None):
+    return dict(
+        provider=provider
+        or SimpleNamespace(
+            scorer_fingerprint="lifecycle-test",
+            endpoint="http://test/score",
+            shape="score_single_text_pair",
+            model_name="m",
+            headers={},
+        ),
+        template="template",
+        tokenizer_name="synthetic",
+        identity={
+            "runtime_digest": "sha256:" + "a" * 64,
+            "model_revision": "b" * 40,
+            "tokenizer_revision": "c" * 40,
+            "code_revision": "d" * 40,
+            "template_sha256": hashlib.sha256(b"template").hexdigest(),
+        },
+        attestation_expires=time.time() + 90,
+    )
 
 
 @pytest.mark.asyncio
@@ -46,7 +72,7 @@ async def test_whole_tokenizer_attempt_timeout_fences_late_publication():
         kwargs["budget"].publish(lambda: registered.append(True))
 
     ctl = worker.PairCapabilityController(
-        load=lambda: {"provider": provider}, initialize=initialize, timeout=0.02
+        load=lambda: attested(provider), initialize=initialize, timeout=0.02
     )
     try:
         assert await ctl.attempt() is None
@@ -95,24 +121,34 @@ def test_canonical_verified_provider_needs_no_shared_cache(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_failed_renewal_revokes_held_counter_and_shutdown_stays_finite():
-    provider = SimpleNamespace(scorer_fingerprint="renewal-test")
+async def test_failed_renewal_revokes_held_counter_and_shutdown_stays_finite(
+    monkeypatch,
+):
+    from apps.documents.services import rag_cache
+
+    monkeypatch.setattr(rag_cache, "set_cached_rerank_capability", lambda *a: None)
+    monkeypatch.setattr(rag_cache, "get_cached_rerank_capability", lambda *a: None)
+    args = attested()
+    provider = args["provider"]
     available = [True]
 
     def load():
-        return {"provider": provider} if available[0] else None
+        return dict(args) if available[0] else None
 
     def initialize(**kwargs):
-        counter = capability.VerifiedPairCounter(None, "", "i", "t", "h", float("inf"))
-        kwargs["budget"].publish(
-            lambda: capability._registered.update(
-                {provider.scorer_fingerprint: counter}
-            )
+        identity = args["identity"]
+        return capability.VerifiedPairCounter(
+            None,
+            "template",
+            hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest(),
+            identity["tokenizer_revision"],
+            identity["template_sha256"],
+            float("inf"),
         )
-        return counter
 
     ctl = worker.PairCapabilityController(load=load, initialize=initialize)
     counter = await ctl.attempt()
+    assert counter is not None
     assert capability.registered_pair_counter(provider) is counter
     available[0] = False
     assert await ctl.attempt() is None
@@ -199,9 +235,7 @@ async def test_enabled_actual_lifespan_starts_worker_and_shutdown_revokes(monkey
         initialized.set()
         return None
 
-    ctl = worker.PairCapabilityController(
-        load=lambda: {"provider": None}, initialize=initialize
-    )
+    ctl = worker.PairCapabilityController(load=attested, initialize=initialize)
     monkeypatch.setattr(worker, "enabled", lambda: True)
     monkeypatch.setattr(worker, "PairCapabilityController", lambda: ctl)
     wrapper = worker.PairCapabilityLifespan(None)
@@ -238,7 +272,7 @@ async def test_attestation_expiring_during_warm_work_cannot_publish():
         kwargs["budget"].publish(lambda: published.append(True))
 
     ctl = worker.PairCapabilityController(
-        load=lambda: {"provider": None, "attestation_expires": time.time() + 0.01},
+        load=lambda: dict(attested(), attestation_expires=time.time() + 0.01),
         initialize=initialize,
         timeout=0.1,
     )

@@ -52,6 +52,9 @@ def graph_authority_group_checksum_v2(
     )
 
 
+_NATIVE_GRAPH_GROUP_CHECKSUM = graph_authority_group_checksum_v2
+
+
 def compatible_signature(authority):
     return tuple(
         getattr(authority, field)
@@ -162,6 +165,10 @@ class SelectedGraphScopeV2:
             or self.coverage.selected_documents != len(selected)
         ):
             raise ValueError("group membership or coverage mismatch")
+
+
+_NATIVE_GRAPH_GROUP_VALIDATOR = GraphAuthorityGroupV2.__post_init__
+_NATIVE_GRAPH_SELECTION_VALIDATOR = SelectedGraphScopeV2.__post_init__
 
 
 def graph_selection_digest_v2(selected: SelectedGraphScopeV2) -> str:

@@ -135,7 +135,7 @@ def parse_case(raw: dict) -> ReplayCase:
         raise ValueError("aspects must be a mapping")
     labels["aspects"] = {str(k): _ids(v) for k, v in aspects.items()}
     status = raw.get("score_status", "model")
-    if status not in ("model", "rank_fallback"):
+    if status not in ("model", "rank_fallback", "partial_model_ranked"):
         raise ValueError("invalid score status")
     observations = raw.get("scoring_observations", {})
     if not isinstance(observations, dict) or set(observations) - {

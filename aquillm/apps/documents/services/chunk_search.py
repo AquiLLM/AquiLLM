@@ -22,7 +22,7 @@ from apps.documents.services.chunk_rerank import (
 from apps.documents.services.chunk_rerank_results import RerankScoreSet
 from apps.documents.services.chunk_search_authorization import (
     authorized_search_rows,
-    finalize_ranking,
+    finalize_ranking,  # noqa: F401 - retained dynamic scored-flow patch point
 )
 from apps.documents.services.chunk_search_candidates import (
     _exact_term_query as _candidate_exact_term_query,
@@ -36,7 +36,7 @@ from apps.documents.services.chunk_search_candidates import (
 )
 from apps.documents.services.chunk_search_logging import (
     completed_search_diagnostics,
-    log_search_failure,
+    log_search_failure, log_schedule_fallback,
 )
 from apps.documents.services.chunk_search_validation import (
     candidate_identifier as _candidate_identifier,
@@ -60,7 +60,7 @@ from apps.documents.services.hybrid_graph_lifecycle import (
     start_graph,
 )
 from apps.documents.services.hybrid_graph_orchestration import (
-    hybrid_graph_candidate_pool,
+    hybrid_graph_candidate_pool,  # noqa: F401 - retained scored-flow patch point
 )
 from apps.documents.services.source_loading import (
     current_source_runtime,
@@ -72,7 +72,9 @@ from lib.retrieval_redaction import RetrievalLogReason, retrieval_log_fields
 from .chunk_search_lifetime import enter_search, graph_preflight
 from .chunk_search_revalidation import ranking_status, reconcile_candidate_order
 from .chunk_search_scoped_rows import ranked_rows
+from .chunk_search_scored import _scored_search
 from .closed_search_finalizer import _bind_search_authorizer
+from .native_search_schedule import acquisition_schedule
 
 if TYPE_CHECKING:
     from apps.documents.models.chunks import TextChunk
@@ -280,8 +282,7 @@ def text_chunk_search(
             hybrid_graph_dependencies,
             overlay_enabled and hybrid_requested and graph_preflight_status is None,
         )
-        initial_vector_error: str | None = None
-        query_embedding: object | None = None
+        initial_vector_error, query_embedding = None, None
         try:
             query_embedding = load_query_embedding(query)
             if getattr(query_embedding, "compatibility_key", None) is None:
@@ -311,118 +312,55 @@ def text_chunk_search(
                 if hybrid_requested and graph_preflight_status is None
                 else None
             ),
+            _graph_dependencies=(hybrid_graph_dependencies if overlay_enabled
+                and hybrid_requested and graph_preflight_status is None else None),
         )
-        graph_chunk_ids: tuple[int, ...] = ()
-        graph_diagnostics: dict[str, object] = {}
-        hybrid_pool: tuple[object, ...] | None = None
-        if overlay_enabled and hybrid_requested:
-            if (
-                graph_preflight_status is None
+        requested_schedule = acquisition_schedule()
+        native = None
+        if requested_schedule == "native_closure" and (
+            not overlay_enabled
+            or (
+                hybrid_requested
+                and graph_preflight_status is None
                 and type(hybrid_graph_dependencies) is HybridGraphRetrievalDependencies
+                and getattr(
+                    hybrid_graph_dependencies.settings, "graph_remediation_mode", None
+                ) == "v2"
                 and is_exact_authorization_context(authorization_context)
-            ):
-                hybrid_pool, graph_diagnostics = hybrid_graph_candidate_pool(
-                    snapshot,
-                    query,
-                    authorization_context,
-                    hybrid_graph_dependencies,
-                    handle=graph_handle,
-                )
-            else:
-                hybrid_pool = snapshot.baseline_candidates
-                graph_diagnostics = _graph_diagnostics(
-                    started_at=total_start,
-                    seed_count=len(snapshot.graph_seeds),
-                    candidate_count=0,
-                    status=graph_preflight_status or "error",
-                    algorithm_signature=getattr(
-                        graph_config, "algorithm_signature", None
-                    ),
-                    version_signature=None,
-                )
-        elif overlay_enabled:
-            graph_chunk_ids, graph_diagnostics = _apply_graph_overlay(
-                model_cls,
-                snapshot,
-                graph_scope,
-                graph_config,
-                preflight_status=graph_preflight_status,
             )
+        ):
+            from .native_graph_search_closure import _try_native_search_closure
 
-        authorized_rows = _bind_search_authorizer(
-            authorized_search_rows, authorization_context, hybrid_requested
-        )
-        if hybrid_pool is not None:
-            ranking = materialize_and_rerank_candidates(
-                model_cls,
-                query,
-                top_k,
-                authorized_rows(hybrid_pool),
-                authorized_scope=None,
-                force_complete_rerank=graph_diagnostics.get("graph_status") == "hit",
-                capture_scores=capture_scores,
+            authorized_rows = _bind_search_authorizer(
+                authorized_search_rows, authorization_context, hybrid_requested
+            )
+            native = _try_native_search_closure(
+                snapshot, query, top_k,
+                authorize=authorized_rows,
+                dependencies=hybrid_graph_dependencies,
+                overlay_enabled=overlay_enabled,
+            )
+        if native is not None:
+            snapshot, ranking = native.snapshot, native.ranking
+            final_rows, score_set = native.final_rows, native.score_set
+            hybrid_pool, graph_diagnostics = (
+                native.hybrid_pool, native.graph_diagnostics
             )
         else:
-            try:
-                ranking = materialize_and_rerank_candidates(
-                    model_cls,
-                    query,
-                    top_k,
-                    authorized_rows(snapshot.baseline_candidates),
-                    authorized_scope=graph_scope,
-                    graph_chunk_ids=graph_chunk_ids,
-                    max_graph_candidates=(
-                        int(getattr(graph_config, "max_candidates", 0))
-                        if graph_chunk_ids
-                        else 0
-                    ),
+            log_schedule_fallback(logger, requested_schedule)
+            snapshot, ranking, final_rows, score_set, hybrid_pool, graph_diagnostics = (
+                _scored_search(
+                    snapshot, query, top_k, model_cls=model_cls,
+                    authorization_context=authorization_context,
+                    hybrid_graph_dependencies=hybrid_graph_dependencies,
+                    hybrid_requested=hybrid_requested, overlay_enabled=overlay_enabled,
+                    graph_config=graph_config, graph_scope=graph_scope,
+                    graph_preflight_status=graph_preflight_status,
+                    graph_handle=graph_handle, total_start=total_start,
                     capture_scores=capture_scores,
                 )
-            except Exception:
-                ranking = materialize_and_rerank_candidates(
-                    model_cls,
-                    query,
-                    top_k,
-                    authorized_rows(snapshot.baseline_candidates),
-                    authorized_scope=None,
-                    capture_scores=capture_scores,
-                )
-                if overlay_enabled:
-                    graph_diagnostics = _graph_diagnostics(
-                        started_at=total_start,
-                        seed_count=len(snapshot.graph_seeds),
-                        candidate_count=0,
-                        status="error",
-                        algorithm_signature=getattr(
-                            graph_config,
-                            "algorithm_signature",
-                            None,
-                        ),
-                        version_signature=None,
-                    )
-        if overlay_enabled and ranking.inaccessible_candidate_count:
-            graph_diagnostics.update(
-                graph_status="error",
-                graph_candidate_count=0,
             )
-        if overlay_enabled:
-            graph_diagnostics["graph_ms"] = (
-                float(graph_diagnostics.get("graph_ms", 0.0))
-                + ranking.materialization_ms
-            )
-            if not hybrid_requested and graph_diagnostics.get("graph_status") == "hit":
-                graph_diagnostics["graph_candidate_count"] = len(
-                    ranking.graph_candidates
-                )
-        snapshot, final_rows, score_set = finalize_ranking(
-            snapshot,
-            ranking,
-            authorize=authorized_rows,
-            query=query,
-            top_k=top_k,
-        )
         reranked_results = final_rows[2]
-
         total_ms = min(300_000.0, max(0.0, (perf_counter() - total_start) * 1000))
         diagnostics = completed_search_diagnostics(
             logger,
@@ -447,6 +385,22 @@ def text_chunk_search(
             graph_seed_attempted=(
                 graph_config is not None and graph_preflight_status is None
             ),
+            acquisition_schedule_requested=requested_schedule,
+            acquisition_schedule_observed=(
+                native.acquisition_schedule if native else "scored"
+            ),
+            acquisition_initial_ineligibility_reason=(
+                "native_ineligible"
+                if requested_schedule == "native_closure" and native is None else None
+            ),
+            acquisition_score_status=(
+                "not_requested" if native else
+                "complete" if ranking.rerank_status == "complete" else "unavailable"
+            ),
+            materialized_union_status=(
+                native.materialized_union_status if native else "observed"
+            ),
+            preclosure_pool_count=(native.preclosure_pool_count if native else None),
         )
         return (*final_rows, diagnostics)
     except Exception as error:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from time import perf_counter
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -78,6 +78,7 @@ class HybridCandidateSnapshot:
     full_text_chunk_ids: tuple[int, ...] = ()
     full_text_coverage: object | None = None
     fusion_v2: object | None = None
+    source_admission: object | None = field(default=None, repr=False, compare=False)
 
 
 def freeze_authorized_document_scope(
@@ -132,6 +133,7 @@ def collect_hybrid_candidate_snapshot(
     initial_vector_error: str | None = None,
     app_config_getter: Callable[[str], object] | None = None,
     authorization_context: object | None = None,
+    _graph_dependencies: object | None = None,
 ) -> HybridCandidateSnapshot:
     """Acquire vector/trigram/exact rows once and prepare the pre-rerank pool."""
 
@@ -193,11 +195,15 @@ def collect_hybrid_candidate_snapshot(
         top_k,
         app_config_getter=app_config_getter or apps.get_app_config,
     )
-    vector_error = (
-        RetrievalLogReason.EMBEDDING_UNAVAILABLE.value
-        if initial_vector_error is not None
-        else None
+    vector_error = RetrievalLogReason.EMBEDDING_UNAVAILABLE.value if initial_vector_error is not None else None
+    from .graph_candidate_admission import try_native_snapshot
+
+    native = try_native_snapshot(
+        model_cls, query, documents_snapshot, scope, query_embedding, graph_config,
+        limits, vector_error, authorization_context, _graph_dependencies,
     )
+    if native is not None:
+        return native
     vector_started = perf_counter()
     if query_embedding is None:
         vector_rows: tuple[object, ...] = ()
@@ -216,16 +222,8 @@ def collect_hybrid_candidate_snapshot(
             )
             vector_rows = ()
     vector_ms = (perf_counter() - vector_started) * 1000
-
-    (
-        trigram_rows,
-        exact_rows,
-        full_text_rows,
-        exact_terms,
-        trigram_ms,
-        exact_ms,
-        coverage,
-    ) = _collect_production_lexical(
+    (trigram_rows, exact_rows, full_text_rows, exact_terms,
+     trigram_ms, exact_ms, coverage) = _collect_production_lexical(
         model_cls, documents_snapshot, candidates, scope, query, limits
     )
     all_rows = (*vector_rows, *trigram_rows, *exact_rows, *full_text_rows)

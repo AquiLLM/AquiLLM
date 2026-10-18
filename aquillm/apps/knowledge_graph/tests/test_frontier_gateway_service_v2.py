@@ -8,9 +8,13 @@ import pytest
 
 from apps.knowledge_graph.retrieval.topology import gateway_service as service
 from apps.knowledge_graph.retrieval.topology.frontier_gateway_contracts_v2 import (
+    BINARY_CHECKSUM,
+    BINARY_PATH,
+    BINARY_VERSION,
     CHECKSUM,
     PATH,
     VERSION,
+    FrontierGatewayBatchRequestV2,
     FrontierGatewayRequestV2,
     encode_request,
 )
@@ -21,7 +25,12 @@ from apps.knowledge_graph.tests.frontier_index_fixture_driver import (
 from apps.knowledge_graph.tests.test_topology_gateway_service import _call, _settings
 
 
-def request(fixture, timeout=b"100"):
+@pytest.fixture(params=[False, True], ids=["scalar", "binary"])
+def binary(request):
+    return request.param
+
+
+def request(fixture, timeout=b"100", *, binary=False):
     body = encode_request(
         FrontierGatewayRequestV2(
             "manifest",
@@ -31,18 +40,34 @@ def request(fixture, timeout=b"100"):
             1048576,
         )
     )
+    if binary:
+        generation = fixture.bundles[0].generation.generation_key
+        body = encode_request(
+            FrontierGatewayBatchRequestV2(
+                "manifest_batch",
+                ((generation, generation),),
+                fixture.group.scope.ready,
+                1048576,
+            )
+        )
     return body, [
         (b"authorization", b"Bearer private-gateway-token"),
         (b"content-type", b"application/json"),
         (b"content-length", str(len(body)).encode()),
-        (b"x-topology-schema-version", VERSION.encode()),
-        (b"x-topology-schema-checksum", CHECKSUM.encode()),
+        (
+            b"x-topology-schema-version",
+            (BINARY_VERSION if binary else VERSION).encode(),
+        ),
+        (
+            b"x-topology-schema-checksum",
+            (BINARY_CHECKSUM if binary else CHECKSUM).encode(),
+        ),
         (b"x-frontier-timeout-ms", timeout),
     ]
 
 
 @pytest.mark.asyncio
-async def test_relative_timeout_consumes_ingress_body_time(monkeypatch):
+async def test_relative_timeout_consumes_ingress_body_time(monkeypatch, binary):
     fixture = FrontierFixture()
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     runtime = service.TopologyGatewayRuntime(_settings(), driver, object())
@@ -52,7 +77,7 @@ async def test_relative_timeout_consumes_ingress_body_time(monkeypatch):
     monkeypatch.setattr(service, "_get_runtime", lambda *_: runtime)
     now = [10.0]
     monkeypatch.setattr(service, "monotonic", lambda: now[0])
-    body, headers = request(fixture)
+    body, headers = request(fixture, binary=binary)
 
     async def receive():
         now[0] += 0.2
@@ -64,7 +89,12 @@ async def test_relative_timeout_consumes_ingress_body_time(monkeypatch):
         sent.append(message)
 
     await service.app(
-        {"type": "http", "method": "POST", "path": PATH, "headers": headers},
+        {
+            "type": "http",
+            "method": "POST",
+            "path": BINARY_PATH if binary else PATH,
+            "headers": headers,
+        },
         receive,
         send,
     )
@@ -75,7 +105,7 @@ async def test_relative_timeout_consumes_ingress_body_time(monkeypatch):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("timeout", [b"0", b"010", b"60001", b"-1", b"NaN"])
 async def test_noncanonical_relative_timeout_rejected_before_runtime(
-    monkeypatch, timeout
+    monkeypatch, timeout, binary
 ):
     monkeypatch.setattr(
         service, "load_topology_gateway_settings", lambda _: _settings()
@@ -85,13 +115,15 @@ async def test_noncanonical_relative_timeout_rejected_before_runtime(
         "_get_runtime",
         lambda *_: pytest.fail("invalid ingress touched runtime"),
     )
-    body, headers = request(FrontierFixture(), timeout)
-    result = await _call(path=PATH, body=body, headers=headers)
+    body, headers = request(FrontierFixture(), timeout, binary=binary)
+    result = await _call(
+        path=BINARY_PATH if binary else PATH, body=body, headers=headers
+    )
     assert result[0]["status"] == 400
 
 
 @pytest.mark.asyncio
-async def test_relative_frontier_uses_existing_worker_capacity(monkeypatch):
+async def test_relative_frontier_uses_existing_worker_capacity(monkeypatch, binary):
     fixture = FrontierFixture()
     driver = FrontierIndexFixtureDriver(fixture.bundles)
     runtime = service.TopologyGatewayRuntime(
@@ -107,14 +139,18 @@ async def test_relative_frontier_uses_existing_worker_capacity(monkeypatch):
             raise RuntimeError("capacity exhausted")
 
     monkeypatch.setattr(service, "GATEWAY_WORKERS", FullPool())
-    body, headers = request(fixture)
-    result = await _call(path=PATH, body=body, headers=headers)
+    body, headers = request(fixture, binary=binary)
+    result = await _call(
+        path=BINARY_PATH if binary else PATH, body=body, headers=headers
+    )
     assert result[0]["status"] == 503
     assert driver.calls == []
 
 
 @pytest.mark.asyncio
-async def test_timed_out_frontier_workers_keep_slots_until_driver_finishes(monkeypatch):
+async def test_timed_out_frontier_workers_keep_slots_until_driver_finishes(
+    monkeypatch, binary
+):
     from apps.knowledge_graph.retrieval.topology.gateway_workers import (
         GatewayWorkerPool,
     )
@@ -136,21 +172,22 @@ async def test_timed_out_frontier_workers_keep_slots_until_driver_finishes(monke
     )
     monkeypatch.setattr(service, "_get_runtime", lambda *_: runtime)
     monkeypatch.setattr(service, "GATEWAY_WORKERS", pool)
-    body, headers = request(fixture, b"100")
+    body, headers = request(fixture, b"100", binary=binary)
+    path = BINARY_PATH if binary else PATH
     tasks = [
-        asyncio.create_task(_call(path=PATH, body=body, headers=headers))
+        asyncio.create_task(_call(path=path, body=body, headers=headers))
         for _ in range(4)
     ]
     try:
         results = await asyncio.gather(*tasks)
         assert len(entered) == 4
         assert all(r[0]["status"] == 504 for r in results)
-        rejected = await _call(path=PATH, body=body, headers=headers)
+        rejected = await _call(path=path, body=body, headers=headers)
         assert rejected[0]["status"] == 503
         assert len(entered) == 4
         release.set()
         for _ in range(200):
-            recovered = await _call(path=PATH, body=body, headers=headers)
+            recovered = await _call(path=path, body=body, headers=headers)
             if recovered[0]["status"] == 200:
                 break
             await asyncio.sleep(0.001)

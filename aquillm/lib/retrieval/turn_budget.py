@@ -31,7 +31,7 @@ _PILOT_MAX = {
     "planner_calls": 2,
     "planner_call_ms": 2_000,
     "planner_output_tokens": 512,
-    "retrieval_ms": 15_000,
+    "retrieval_ms": 30_000,
     "final_scoring_ms": 3_000,
 }
 

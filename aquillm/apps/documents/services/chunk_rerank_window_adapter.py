@@ -67,6 +67,8 @@ def compatible_window_score(scorer, score, query, chunk):
 
 
 class WindowSelectionScorer:
+    """Score stored text, including captions; coverage never includes pixels."""
+
     scoring_kind = "pointwise"
 
     def __init__(
@@ -93,7 +95,7 @@ class WindowSelectionScorer:
             else clock() + (budget.remaining_ms() / 1000 if budget is not None else 0)
         )
         self.scorer_fingerprint = fingerprint_text(
-            "window-max-v1:"
+            "window-max-v1:text-content-v1:"
             + (scorer_identity or getattr(provider, "scorer_fingerprint", "unknown"))
             + ":"
             + getattr(pair_counter, "identity", "unknown")
@@ -115,14 +117,11 @@ class WindowSelectionScorer:
         revision = getattr(chunk, "source_revision", "")
         key = (query, source, revision)
         if key not in self._plans:
-            counter = self.pair_counter
-            if getattr(chunk, "modality", "text") == "image":
-                counter = unknown_pair_count
             self._plans[key] = replace(
                 prepare_source_windows(
                     query,
                     source,
-                    pair_counter=counter,
+                    pair_counter=self.pair_counter,
                     budget=self.budget,
                     deadline=self.deadline,
                     clock=self.clock,
@@ -136,6 +135,39 @@ class WindowSelectionScorer:
             return False
         ledger_open = self.rerank_state is None or self.rerank_state.can_admit()
         return ledger_open and self.clock() < self.deadline
+
+    def cached_score(self, query, row):
+        """Pin a validated zero-transport hit for admission and later dispatch."""
+        plan = self.plan(query, row)
+        key = (plan.fingerprint, getattr(row, "source_revision", ""))
+        cached = self._scores.get(key)
+        if cached is None and self.cache_enabled:
+            hit = get_window_result(
+                window_cache_key(self.scorer_fingerprint, plan.fingerprint),
+                budget=self._cache_budget,
+            )
+            if hit is not None:
+                try:
+                    validate_score_set(
+                        hit,
+                        authorized_identities=(score_identity_for_chunk(
+                            row, effective_pair_fingerprint=plan.fingerprint,
+                        ),),
+                        expected_query_fingerprint=fingerprint_text(query),
+                        expected_scorer_fingerprint=self.scorer_fingerprint,
+                    )
+                    if (
+                        hit.status == "complete" and hit.candidate_order == (row.pk,)
+                        and compatible_window_score(self, hit.scores[0], query, row)
+                    ):
+                        cached = hit.scores[0]
+                except (ValueError, TypeError):
+                    pass
+        if cached is None or not self._preparation_open():
+            return None
+        return cached if self.rerank_state.publish(
+            lambda: self._scores.__setitem__(key, cached)
+        ) else None
 
     def score_windows(self, query, chunks, *, phase="final", on_submit=None):
         if self.budget is not None:
@@ -190,32 +222,11 @@ class WindowSelectionScorer:
             if self.clock() >= self.deadline or not self.rerank_state.can_admit():
                 return envelope()
             key = (plan.fingerprint, getattr(row, "source_revision", ""))
-            cached = self._scores.get(key)
             cache_key = window_cache_key(self.scorer_fingerprint, plan.fingerprint)
-            if cached is None and self.cache_enabled:
-                envelope_hit = get_window_result(cache_key, budget=self._cache_budget)
-                if envelope_hit is not None:
-                    try:
-                        validate_score_set(
-                            envelope_hit,
-                            authorized_identities=(
-                                score_identity_for_chunk(
-                                    row, effective_pair_fingerprint=plan.fingerprint
-                                ),
-                            ),
-                            expected_query_fingerprint=fingerprint_text(query),
-                            expected_scorer_fingerprint=self.scorer_fingerprint,
-                        )
-                        if (
-                            envelope_hit.status == "complete"
-                            and envelope_hit.candidate_order == (row.pk,)
-                            and compatible_window_score(
-                                self, envelope_hit.scores[0], query, row
-                            )
-                        ):
-                            cached = envelope_hit.scores[0]
-                    except (ValueError, TypeError):
-                        pass
+            try:
+                cached = self.cached_score(query, row)
+            except PreparationStopped:
+                return envelope()
             slots.append((row, plan, key, cache_key, cached))
         results = score_source_plans(
             {i: slot[1] for i, slot in enumerate(slots) if slot[4] is None},

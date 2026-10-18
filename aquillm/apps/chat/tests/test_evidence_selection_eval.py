@@ -84,6 +84,14 @@ def test_missing_upstream_gold_stays_a_miss(tmp_path):
     assert result["missing_upstream_gold"] == [99]
 
 
+def test_partial_model_replay_keeps_explicit_status(tmp_path):
+    raw = fixture()
+    raw["score_status"] = "partial_model_ranked"
+    result = evaluate_case(load_one(tmp_path, raw), "adaptive")
+    assert result["score_status"] == "partial_model_ranked"
+    assert result["selected_chunk_ids"] == [1, 2]
+
+
 @pytest.mark.parametrize("mutation", ["duplicate", "nan", "limit", "expected"])
 def test_rejects_invalid_replay_inputs(tmp_path, mutation):
     raw = fixture()

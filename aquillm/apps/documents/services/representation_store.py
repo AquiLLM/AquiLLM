@@ -106,6 +106,9 @@ def representation_snapshot_digest(snapshot: RepresentationSnapshotV1) -> str:
     )
 
 
+_NATIVE_REPRESENTATION_DIGEST = representation_snapshot_digest
+
+
 def validate_document_reference(ref, *, using):
     document_payload(ref)
     from apps.documents.models import DESCENDED_FROM_DOCUMENT
@@ -154,6 +157,10 @@ def validate_representation_snapshot(snapshot: RepresentationSnapshotV1, *, usin
 def freeze_active_representations(
     documents: tuple[DocumentRefV1, ...], *, using: str
 ) -> RepresentationSnapshotV1:
+    return validate_representation_snapshot(_capture_active_representations(documents, using=using), using=using)
+
+
+def _capture_active_representations(documents, *, using):
     if type(documents) is not tuple:
         _unavailable()
     from apps.documents.models import DocumentRepresentationState
@@ -169,9 +176,7 @@ def freeze_active_representations(
         expected[key] = ref
         document_ids.add(ref.id)
     if not expected:
-        return validate_representation_snapshot(
-            RepresentationSnapshotV1(()), using=using
-        )
+        return RepresentationSnapshotV1(())
     identity = ("model_label", "document_pkid", "document_id")
     rows = (
         DocumentRepresentationState.objects.using(using)
@@ -215,7 +220,8 @@ def freeze_active_representations(
                 RepresentationSelectionV1(ref, None, ref.source_hash, None)
             )
     snapshot = RepresentationSnapshotV1(tuple(selections))
-    return validate_representation_snapshot(snapshot, using=using)
+    ordered_selections(snapshot)
+    return snapshot
 
 
 def active_chunk_scope(queryset, *, snapshot, document_id=None):
@@ -224,18 +230,15 @@ def active_chunk_scope(queryset, *, snapshot, document_id=None):
     return _active_chunk_predicates(queryset, snapshot=snapshot, document_id=document_id)
 
 
-def _active_chunk_predicates(queryset, *, snapshot, document_id=None):
+def _active_chunk_predicates(queryset, *, snapshot, document_id=None, document_ids=None):
     """Build unchanged SQL fences within a caller's fresh validation boundary."""
     from apps.documents.models import DESCENDED_FROM_DOCUMENT
 
-    selections = ordered_selections(snapshot)
-    if document_id is not None:
-        if type(document_id) is not UUID:
-            _unavailable()
-        selections = tuple(s for s in selections if s.document.id == document_id)
-        if len(selections) != 1:
-            _unavailable()
-    from .representation_scope import _current_active_state_clause, _current_legacy_state_clause
+    from .representation_scope import (
+        _current_active_state_clause, _current_legacy_state_clause, _sql_document_subset,
+    )
+    selections = _sql_document_subset(ordered_selections(snapshot),
+        document_id=document_id, document_ids=document_ids)
     from .representation_tuple_predicate import ExactTupleMembership
     condition = Q(pk__in=[])
     represented, active, legacy = {}, [], []

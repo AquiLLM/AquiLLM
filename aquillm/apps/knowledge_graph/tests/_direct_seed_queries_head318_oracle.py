@@ -1,0 +1,104 @@
+# ruff: noqa: E501,E701,E702,I001
+"""Frozen HEAD 31886022 direct seed query oracle; test-only, never imported by application."""
+
+from __future__ import annotations
+
+from time import monotonic
+
+from apps.knowledge_graph.retrieval.direct_seed_contracts import DirectResolutionTier
+
+from apps.knowledge_graph.retrieval.direct_seed_sql import bounded_seed_read
+from apps.knowledge_graph.retrieval.direct_seed_types import DirectSeedCandidateRow, DirectSeedScopeV1
+from apps.knowledge_graph.retrieval.graph_seed_reads_v2 import seed_query_rows
+
+
+# fmt: off
+def _load_membership_states(**options: object) -> tuple[dict[str, object], ...]:
+    from apps.knowledge_graph.models import CollectionGraphMembershipState
+    fields = ("collection_id", "active_artifact_id", "registry_epoch", "membership_checksum", "resolver_version", "resolution_config_checksum")
+    with bounded_seed_read(using=options["using"], deadline=options.get("deadline"), clock=options.get("clock", monotonic)):
+        query = CollectionGraphMembershipState.objects.using(options["using"]).filter(collection_id__in=options["collection_ids"]).order_by("collection_id").values(*fields)
+        if options.get("read_budget") is None:
+            return tuple(query)
+        return seed_query_rows(query, maximum=len(options["collection_ids"]), budget=options["read_budget"])
+
+
+def _load_candidate_rows(**options: object) -> tuple[DirectSeedCandidateRow, ...]:
+    from django.db.models import Count, F, FloatField, OuterRef, Q, Subquery, Value
+    from django.db.models.expressions import ExpressionWrapper
+    from pgvector.django import CosineDistance
+
+    from apps.knowledge_graph.models import CanonicalEntityLink, CollectionEntity
+
+    scope = options["scope"]
+    assert type(scope) is DirectSeedScopeV1
+    membership_scope = Q()
+    for state in options["membership_states"]:
+        membership_scope |= Q(collection_id=state["collection_id"], artifact_id=state["active_artifact_id"], collection__graph_membership_state__active_artifact_id=state["active_artifact_id"], collection__graph_membership_state__registry_epoch=state["registry_epoch"], collection__graph_membership_state__membership_checksum=state["membership_checksum"], collection__graph_membership_state__resolver_version=state["resolver_version"], collection__graph_membership_state__resolution_config_checksum=state["resolution_config_checksum"])
+    assert options["automatic_only"] is True
+    active_count = CanonicalEntityLink.objects.using(options["using"]).filter(
+        collection_entity_id=OuterRef("pk"), status="active", outcome="automatic",
+        canonical_entity__status="active",
+    ).order_by().values("collection_entity_id").annotate(total=Count("pk")).values("total")[:1]
+    automatic = CanonicalEntityLink.objects.using(options["using"]).filter(
+        collection_entity_id=OuterRef("pk"), status="active", outcome="automatic",
+        canonical_entity__status="active",
+        canonical_entity__resolver_version=F("resolver_version"), canonical_entity__entity_type=OuterRef("entity_type"),
+        canonical_entity__version_signature=OuterRef("version_signature"),
+    ).values("canonical_entity_id")[:1]
+    tier = options["tier"]
+    alias_filters = {
+        "document_links__document_entity__mention_links__status": "active",
+        # Mention assignments belong to the document resolver, which can evolve
+        # independently of the selected collection's assembly resolver.
+        "document_links__document_entity__mention_links__resolver_version": F(
+            "document_links__document_entity__artifact__resolver_version"
+        ),
+        "document_links__document_entity__mention_links__mention__artifact_id__in": scope.selected_document_artifact_ids,
+        "document_links__document_entity__mention_links__mention__document_id__in": scope.selected_document_ids,
+        "document_links__document_entity__mention_links__mention__artifact__status__in": ("active", "superseded"),
+        "document_links__document_entity__mention_links__mention__artifact__evaluation_only": False,
+        "document_links__document_entity__mention_links__mention__artifact__ontology_checksum": scope.ontology_checksum,
+        "document_links__document_entity__mention_links__mention__entity_type": options["ontology_type"],
+        str(options["lookup_field"]): options["lookup"],
+    } if tier is DirectResolutionTier.ALIAS else {}
+    query = (
+        CollectionEntity.objects.using(options["using"])
+        .filter(
+            membership_scope,
+            artifact_id__in=scope.selected_artifact_ids, collection_id__in=scope.selected_collection_ids,
+            artifact__status="active", artifact__evaluation_only=False,
+            artifact__ontology_checksum=scope.ontology_checksum, status="active", entity_type=options["ontology_type"],
+            document_links__artifact_id__in=scope.selected_artifact_ids, document_links__status="active",
+            document_links__outcome="automatic", document_links__resolver_version=scope.resolver_version,
+            document_links__artifact__status="active", document_links__artifact__evaluation_only=False, document_links__artifact__ontology_checksum=scope.ontology_checksum,
+            document_links__manifest_input__artifact_id=F("artifact_id"), document_links__manifest_input__collection_id=F("collection_id"),
+            document_links__manifest_input__document_id__in=scope.selected_document_ids,
+            document_links__manifest_input__document_artifact_id__in=scope.selected_document_artifact_ids,
+            document_links__document_entity__artifact_id__in=scope.selected_document_artifact_ids,
+            document_links__document_entity__document_id__in=scope.selected_document_ids,
+            document_links__manifest_input__document_artifact_id=F("document_links__document_entity__artifact_id"), document_links__manifest_input__document_id=F("document_links__document_entity__document_id"),
+            document_links__document_entity__status="active", document_links__document_entity__artifact__status__in=("active", "superseded"), document_links__document_entity__artifact__evaluation_only=False,
+            document_links__document_entity__artifact__ontology_checksum=scope.ontology_checksum,
+            **alias_filters,
+        )
+        .annotate(automatic_canonical_entity_id=Subquery(automatic), automatic_link_count=Subquery(active_count))
+    )
+    if tier is DirectResolutionTier.EMBEDDING:
+        similarity = ExpressionWrapper(
+            Value(1.0) - CosineDistance("embedding", options["embedding"]),
+            output_field=FloatField(),
+        )
+        query = query.filter(embedding__isnull=False, embedding_model_signature=options["model_signature"]).annotate(similarity=similarity).filter(similarity__gt=0.0, similarity__gte=options["minimum_similarity"])
+    else:
+        if tier is not DirectResolutionTier.ALIAS:
+            query = query.filter(**{str(options["lookup_field"]): options["lookup"]})
+        query = query.annotate(similarity=Value(1.0, output_field=FloatField()))
+    with bounded_seed_read(using=options["using"], deadline=options.get("deadline"), alias=tier is DirectResolutionTier.ALIAS, clock=options.get("clock", monotonic)):
+        bounded = query.distinct().order_by("-similarity", "pk").values("id", "artifact_id", "entity_type", "automatic_canonical_entity_id", "automatic_link_count", "similarity")[: int(options["limit"]) + 1]
+        rows = seed_query_rows(bounded, maximum=int(options["limit"]) + 1, budget=options.get("read_budget"))
+    if len(rows) > int(options["limit"]):
+        raise ValueError("candidate result exceeds its hard cap")
+    if any((row["automatic_link_count"] or 0) > 1 for row in rows):
+        raise ValueError("automatic membership is not unique")
+    return tuple(DirectSeedCandidateRow(int(row["id"]), int(row["artifact_id"]), str(row["entity_type"]), row["automatic_canonical_entity_id"], float(row["similarity"])) for row in rows)
