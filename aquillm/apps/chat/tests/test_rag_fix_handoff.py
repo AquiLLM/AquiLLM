@@ -9,6 +9,7 @@ from apps.chat.tests.persisted_direct_test_support import close_direct_worker
 from channels.db import database_sync_to_async
 
 from apps.chat.refs import CollectionsRef
+from apps.chat.services.rag_planner_contract import PLANNER_SYSTEM
 from apps.chat.tests.test_rag_preservation_routes import configure, fake_search
 from apps.chat.tests.test_rag_source_document_tools import docs as docs
 from lib.llm.types.conversation import Conversation
@@ -91,7 +92,7 @@ async def test_real_final_selection_loses_lookup_support_without_replanning(
     provider = llm.get_message
     planners = []
     async def get_message(*args, **kwargs):
-        if kwargs["system"].startswith("Assess evidence coverage"):
+        if kwargs["system"] == PLANNER_SYSTEM:
             planners.append(kwargs)
         else:
             requests.append(kwargs["messages_pydantic"])
@@ -219,7 +220,7 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
             assert not release.is_set() and not finished.is_set()
             await task
             assert not finished.is_set()
-            assert runtime.observation["acquisition"].stop_reason == "partial_unknown"
+            assert runtime.observation["acquisition"].stop_reason == "acquisition_timeout"
             assert runtime.budget.actions_used == 2
         finally:
             release.set()
