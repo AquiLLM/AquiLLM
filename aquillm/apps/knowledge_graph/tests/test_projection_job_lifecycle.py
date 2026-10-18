@@ -141,6 +141,7 @@ def test_expiry_after_successful_ready_cas_never_requests_staging_retry(
     monkeypatch.setattr(deadlines, "monotonic", lambda: now[0])
     run_projection.state.after_ready = lambda: now.__setitem__(0, 401.0)
     outcome = run_projection.run()
-    assert not outcome.ready and outcome.failure_code == "lease_lost"
+    assert outcome.ready is True and outcome.failure_code is None
     assert run_projection.state.status == "ready"
+    assert run_projection.state.published == 1
     assert run_projection.state.failed == 0
