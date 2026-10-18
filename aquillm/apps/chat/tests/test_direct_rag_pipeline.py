@@ -379,7 +379,7 @@ async def test_multi_query_retrieval_uses_successful_variants_when_one_fails(
     monkeypatch.setenv("OPENAI_CONTEXT_LIMIT", "16000")
     searched, ledgers, synthesized = [], [], []
     async def propose(**kwargs):
-        return SimpleNamespace(text='{"rewrite":"Find selected documents for calibration"}')
+        return SimpleNamespace(text='{"rewrite":"Find selected documents for calibration"}', stop_reason="stop")
 
 
     def fake_search(consumer, query, top_k):
