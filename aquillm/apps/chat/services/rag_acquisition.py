@@ -13,6 +13,7 @@ from .rag_coverage import (
     validate_action,
 )
 from .rag_lookup_coverage import lookup_coverage
+from .rag_planner_context import acquisition_attempt, planner_views
 
 COMPLETION_RESERVE_MS = 1000
 # Admission floor, not a deadline: a follow-up may use the remaining turn time.
@@ -25,6 +26,7 @@ class AcquiredEvidence:
     assessment: CoverageAssessment
     stop_reason: str
     rounds: int
+    attempts: tuple = ()
 
 
 async def acquire_evidence(
@@ -46,8 +48,13 @@ async def acquire_evidence(
     assessment = CoverageAssessment()
     reason = "initial"
     phase = "acquisition"
+    attempts, latest_source_ids = [], ()
+
+    def source_ids(current_results):
+        return tuple(dict.fromkeys(s.identity for s in evidence_views(current_results)))
 
     async def run(action, proposal=None, *, initial=False):
+        nonlocal latest_source_ids
         from lib.llm.turn_context import tool_timeout
         from lib.retrieval.operation import operation_scope
 
@@ -64,7 +71,8 @@ async def acquire_evidence(
             raise TimeoutError("acquisition reserve")
         source_limit = None
         if (
-            initial and iterative
+            initial
+            and iterative
             and budget.limits.actions - budget.actions_used > 1
             and budget.planner_calls < budget.limits.planner_calls
         ):
@@ -72,27 +80,64 @@ async def acquire_evidence(
             # graph admission and body materialization both honor this ceiling.
             free = budget.remaining_source_capacity()
             source_limit = budget.sources_used + free - free // 3
-        with operation_scope(budget, timeout_ms=timeout, source_limit=source_limit):
-            from .retrieval_query_runtime import action_observation
+        before_ids, actions_before = source_ids(results), budget.actions_used
+        completed_results, outcome = [], "failure"
+        latest_source_ids = ()
+        try:
+            with operation_scope(budget, timeout_ms=timeout, source_limit=source_limit):
+                from .retrieval_query_runtime import action_observation
 
-            observation = action_observation(action, proposal, budget)
-            publish(
-                "action_start",
-                observation,
-            )
-            result = await asyncio.wait_for(execute(action), timeout=timeout / 1000)
-            if active():
+                observation = action_observation(action, proposal, budget)
                 publish(
-                    "action_end",
-                    {
-                        "signature": observation["signature"],
-                        "ledger_id": str(id(budget)),
-                        "sources": [str(s.identity) for s in evidence_views([result])],
-                    },
+                    "action_start",
+                    observation,
                 )
-            return result
+                result = await asyncio.wait_for(execute(action), timeout=timeout / 1000)
+                completed_results, outcome = [result], "completed"
+                if active():
+                    publish(
+                        "action_end",
+                        {
+                            "signature": observation["signature"],
+                            "ledger_id": str(id(budget)),
+                            "sources": [
+                                str(s.identity) for s in evidence_views([result])
+                            ],
+                        },
+                    )
+                return result
+        except TimeoutError:
+            outcome = "timeout"
+            raise
+        except asyncio.CancelledError:
+            outcome = "cancelled"
+            raise
+        finally:
+            if (
+                budget.actions_used > actions_before
+                and len(attempts) < budget.limits.actions
+            ):
+                # A failed or cancelled worker can still own runtime locks.
+                # Without an accepted result, retain the pre-action snapshot.
+                after_ids = (
+                    source_ids([*results, *completed_results])
+                    if outcome == "completed"
+                    else before_ids
+                )
+                previous_ids = set(before_ids)
+                latest_source_ids = tuple(
+                    identity for identity in after_ids if identity not in previous_ids
+                )
+                attempts.append(
+                    acquisition_attempt(action, before_ids, after_ids, outcome=outcome)
+                )
 
     try:
+        if initial_acquired and budget.actions_used:
+            latest_source_ids = source_ids(results)
+            attempts.append(
+                acquisition_attempt(None, (), latest_source_ids, outcome="external")
+            )
         if not initial_acquired and budget.actions_used < budget.limits.actions:
             from apps.documents.services.source_loading import current_source_runtime
 
@@ -103,12 +148,17 @@ async def acquire_evidence(
             if prepared and prepared == query_proposals:
                 if prepared[0].text != question or prepared[0].kind != "original":
                     raise ValueError("original query changed")
-                results.append(await run_optional_proposal(
-                    prepared[0], anchors=anchors,
-                    run=lambda action: run(action, initial=True)))
+                results.append(
+                    await run_optional_proposal(
+                        prepared[0],
+                        anchors=anchors,
+                        run=lambda action: run(action, initial=True),
+                    )
+                )
             else:
-                results.append(await run(
-                    AcquisitionAction("vector", question), initial=True))
+                results.append(
+                    await run(AcquisitionAction("vector", question), initial=True)
+                )
         for proposal in query_proposals[1:3]:
             if budget.actions_used >= budget.limits.actions:
                 break
@@ -116,8 +166,9 @@ async def acquire_evidence(
                 break
             from .retrieval_query_runtime import run_optional_proposal
 
-            result = await run_optional_proposal(proposal, anchors=anchors,
-                run=lambda action: run(action, proposal))
+            result = await run_optional_proposal(
+                proposal, anchors=anchors, run=lambda action: run(action, proposal)
+            )
             results.append(result)
         for _ in range(budget.limits.planner_calls if iterative else 0):
             views = evidence_views(results)
@@ -148,6 +199,8 @@ async def acquire_evidence(
                     llm=llm,
                     budget=budget,
                     allowed_documents=allowed_documents,
+                    attempts=tuple(attempts),
+                    latest_source_ids=latest_source_ids,
                 ),
                 timeout=budget.limits.planner_call_ms / 1000,
             )
@@ -160,7 +213,10 @@ async def acquire_evidence(
                 reason = "assessed"
                 break
             validate_action(
-                action, assessment.unresolved_aspects, views, allowed_documents
+                action,
+                assessment.unresolved_aspects,
+                planner_views(views, latest_source_ids=latest_source_ids),
+                allowed_documents,
             )
             if budget.has_action(action.signature):
                 reason = "duplicate_action"
@@ -191,4 +247,6 @@ async def acquire_evidence(
             reason = phase + "_failure"
         # Never log the exception message: provider errors can contain evidence.
         publish("acquisition_failure", {"phase": phase, "reason": reason})
-    return AcquiredEvidence(tuple(results), assessment, reason, budget.actions_used)
+    return AcquiredEvidence(
+        tuple(results), assessment, reason, budget.actions_used, tuple(attempts)
+    )

@@ -50,6 +50,8 @@ async def test_targeted_actions_stop_at_cap_without_third_planner(cap):
     assert len(seen) == cap
     assert len(planned) == cap - 1
     assert result.rounds == cap
+    assert len(result.attempts) == cap
+    assert all(attempt.new_source_count == 1 for attempt in result.attempts)
     assert result.assessment.certainty != "complete"
 
 
@@ -87,6 +89,8 @@ async def test_no_new_revision_stops_expansion():
     )
     assert len(calls) == 2
     assert result.stop_reason == "no_progress"
+    assert result.attempts[-1].outcome == "no_progress"
+    assert result.attempts[-1].new_source_count == 0
 
 
 @pytest.mark.asyncio
@@ -199,9 +203,17 @@ async def test_cancellation_propagates_and_closes_original_budget():
     from apps.chat.services.rag_acquisition import acquire_evidence
 
     budget = TurnBudget(TurnLimits())
+    cancelled = False
 
     async def execute(action):
+        nonlocal cancelled
+        assert budget.reserve_action(action.signature)
+        cancelled = True
         raise asyncio.CancelledError
+
+    def views(results):
+        assert not cancelled, "cancelled worker may still own source runtime locks"
+        return ()
 
     with pytest.raises(asyncio.CancelledError):
         await acquire_evidence(
@@ -209,7 +221,67 @@ async def test_cancellation_propagates_and_closes_original_budget():
             budget=budget,
             llm=None,
             execute=execute,
-            evidence_views=lambda _: (),
+            evidence_views=views,
             iterative=True,
         )
     assert not budget.can_publish()
+
+
+@pytest.mark.asyncio
+async def test_external_initial_retrieval_history_has_no_invented_query():
+    from apps.chat.services.rag_acquisition import acquire_evidence
+    from apps.chat.services.rag_coverage import CoverageAssessment
+
+    budget = TurnBudget(TurnLimits())
+    assert budget.reserve_action("external-initial-action")
+    original = source(1, "method only")
+    planned = []
+
+    async def assess(*args, **kwargs):
+        planned.append(kwargs)
+        return CoverageAssessment()
+
+    async def forbidden(action):
+        pytest.fail("the external initial retrieval must not execute twice")
+
+    result = await acquire_evidence(
+        "Explain the mechanism.",
+        budget=budget,
+        llm=None,
+        execute=forbidden,
+        evidence_views=lambda results: tuple(s for r in results for s in r["sources"]),
+        initial_results=({"sources": [original]},),
+        initial_acquired=True,
+        assess=assess,
+        allowed_documents={"doc"},
+        iterative=True,
+    )
+
+    attempts = planned[0].get("attempts", ())
+    assert len(attempts) == 1
+    assert (attempts[0].kind, attempts[0].query) == ("external", None)
+    assert (attempts[0].available_source_count, attempts[0].new_source_count) == (1, 1)
+    assert result.rounds == 1
+
+
+@pytest.mark.asyncio
+async def test_history_bounds_original_query_without_changing_executed_query():
+    from apps.chat.services.rag_acquisition import acquire_evidence
+
+    question = "Explain " + "mechanism " * 400
+    budget = TurnBudget(TurnLimits(actions=1))
+    executed = []
+
+    async def execute(action):
+        executed.append(action.query)
+        assert budget.reserve_action(action.signature)
+        return {"sources": []}
+
+    result = await acquire_evidence(
+        question, budget=budget, llm=None, execute=execute, evidence_views=lambda _: ()
+    )
+    assert executed == [question]
+    attempts = getattr(result, "attempts", ())
+    assert len(attempts) == 1
+    assert attempts[0].query == question[:2000]
+    assert attempts[0].query_truncated is True

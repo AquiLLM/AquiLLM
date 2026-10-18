@@ -5,6 +5,7 @@ import json
 import unicodedata
 from dataclasses import dataclass, replace
 
+from .rag_planner_context import attempt_context, planner_views
 from .rag_planner_contract import PLANNER_SYSTEM, PlannerFailure, planner_contract
 
 
@@ -29,7 +30,7 @@ class AcquisitionAction:
         return json.dumps(
             [
                 self.kind,
-                " ".join(unicodedata.normalize("NFKC", self.query).casefold().split()),
+                " ".join(unicodedata.normalize("NFC", self.query).casefold().split()),
                 self.document_id,
                 self.chunk_id,
             ],
@@ -83,6 +84,10 @@ def validate_action(action, unresolved, views, allowed_documents):
         raise ValueError("vector action cannot specify source coordinates")
     if action.kind != "vector" and action.document_id not in allowed_documents:
         raise ValueError("action outside selected scope")
+    if action.kind != "vector" and not any(
+        source.document_id == action.document_id for source in views
+    ):
+        raise ValueError("unknown document source")
     if action.kind == "adjacent" and (
         action.query
         or not any(
@@ -188,21 +193,29 @@ def recheck_support(assessment, delivered):
 
 
 async def assess_coverage(
-    question, evidence_views, anchors, *, llm, budget, allowed_documents=()
+    question,
+    evidence_views,
+    anchors,
+    *,
+    llm,
+    budget,
+    allowed_documents=(),
+    attempts=(),
+    latest_source_ids=(),
 ):
     """One bounded structured call to the same provider; never writes an answer."""
-    views, remaining = [], 16000
-    for source in evidence_views:
-        if len(source.text) > remaining:
-            continue  # Whole-view omission is explicit; never invent support offsets.
-        views.append(source)
-        remaining -= len(source.text)
+    evidence_views = tuple(evidence_views)
+    views = planner_views(evidence_views, latest_source_ids=latest_source_ids)
     coordinates, response_format = planner_contract(views, allowed_documents)
     prompt = json.dumps(
         {
             "question": question,
             "unresolved_references": getattr(anchors, "unresolved_references", ()),
-            "omitted_sources": len(evidence_views) - len(views),
+            "attempts": attempt_context(attempts, budget.limits.actions),
+            "omitted_sources": len({s.identity for s in evidence_views}) - len(views),
+            "omitted_documents": len(
+                {s.document_id for s in evidence_views} - {s.document_id for s in views}
+            ),
             "action_coordinates": coordinates,
             "evidence": [
                 vars(v)
