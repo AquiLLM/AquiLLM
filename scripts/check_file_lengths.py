@@ -66,7 +66,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/knowledge_graph/tests/test_canonical_permissions.py": 367,
     "aquillm/apps/knowledge_graph/tests/test_canonical_resolution.py": 1273,
     "aquillm/apps/knowledge_graph/tests/test_collection_resolution.py": 2064,
-    "aquillm/apps/knowledge_graph/tests/test_coreference.py": 2395,
+    "aquillm/apps/knowledge_graph/tests/test_coreference.py": 2392,
     "aquillm/apps/knowledge_graph/tests/test_direct_seed_resolution.py": 327,
     "aquillm/apps/knowledge_graph/tests/test_direct_seed_sql_postgres.py": 385,
     "aquillm/apps/knowledge_graph/tests/test_document_lifecycle.py": 1150,
