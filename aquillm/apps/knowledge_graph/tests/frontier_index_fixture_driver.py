@@ -10,6 +10,7 @@ from apps.knowledge_graph.projection.frontier_cypher_v2 import (
     MANIFEST_LOOKUP,
     RAW_BATCH_MULTI_LOOKUP,
     RAW_LOOKUP,
+    SCOPE_RAW_COMPLETE_BATCH_LOOKUP,
 )
 from apps.knowledge_graph.projection.frontier_index_build_v2 import build_frontier_index
 from apps.knowledge_graph.projection.serialization import projection_checksum
@@ -50,6 +51,7 @@ class FrontierIndexFixtureDriver:
             MANIFEST_BATCH_LOOKUP,
             INDEX_BATCH_MULTI_LOOKUP,
             RAW_BATCH_MULTI_LOOKUP,
+            SCOPE_RAW_COMPLETE_BATCH_LOOKUP,
         }:
             rows = []
             for pair in parameters["lookups_csv"].split(","):
@@ -59,11 +61,13 @@ class FrontierIndexFixtureDriver:
                     rows.append({**identity, "record": self.markers[generation].copy()})
                 elif query == INDEX_BATCH_MULTI_LOOKUP and key in self.index:
                     rows.append({**identity, "record": self.index[key]})
-                elif query == RAW_BATCH_MULTI_LOOKUP:
+                elif query in {RAW_BATCH_MULTI_LOOKUP, SCOPE_RAW_COMPLETE_BATCH_LOOKUP}:
                     rows.extend(
                         {**row, **identity}
                         for row in self.raw.get((generation, key), ())[:10]
                     )
+            if query == SCOPE_RAW_COMPLETE_BATCH_LOOKUP:
+                rows = rows[:320]
             return tuple(rows)
         if query == MANIFEST_LOOKUP:
             return ({"record": self.markers[parameters["generation_key"]].copy()},)

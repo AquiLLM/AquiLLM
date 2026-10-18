@@ -4,6 +4,7 @@ import importlib
 import json
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -51,6 +52,7 @@ def test_actual_graph_cli_persists_legacy_ineligible(tmp_path):
         ],
         capture_output=True,
         text=True,
+        cwd=Path(__file__).resolve().parents[3],
     )
     assert output.exists(), completed.stderr
     result = json.loads(output.read_text())

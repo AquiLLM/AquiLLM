@@ -51,9 +51,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-          cache: pip
       - name: Install dependencies
-        run: pip install -r requirements.txt -r deploy/vllm_plugins/nemotron_asr/requirements-test.txt
+        # Match the dependency lock and uv version used by the runtime images.
+        run: |
+          python -m pip install uv==0.8.17
+          uv sync --frozen --python 3.12
+          uv pip install -r deploy/vllm_plugins/nemotron_asr/requirements-test.txt
+          echo "$GITHUB_WORKSPACE/.venv/bin" >> "$GITHUB_PATH"
       - name: Provision projection roles required by migrations
         run: |
           python - <<'PY'
@@ -602,6 +606,7 @@ jobs:
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_v3.py
           aquillm/apps/knowledge_graph/tests/test_frontier_scope_memgraph_bounds_v3.py
           aquillm/apps/knowledge_graph/tests/test_consumed_source_physical_v3.py
+          aquillm/apps/knowledge_graph/tests/test_projection_orm_purposes.py
           -p scripts.pytest_required_services -q --tb=short
       - name: Clean up the owned test stack
         if: always()

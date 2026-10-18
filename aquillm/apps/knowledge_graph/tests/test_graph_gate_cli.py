@@ -32,7 +32,10 @@ def test_actual_numerical_cli_has_no_activation_authority(tmp_path):
         "--output",
         str(output),
     ]
-    done = subprocess.run(command, capture_output=True, text=True)
+    done = subprocess.run(
+        command, capture_output=True, text=True,
+        cwd=Path(__file__).resolve().parents[3],
+    )
     assert done.returncode == 0, done.stderr
     result = json.loads(output.read_text())
     assert result["result"]["eligible"]
