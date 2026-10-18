@@ -61,7 +61,7 @@ assert budget.actions_used == 2
 - Create: `aquillm/apps/chat/tests/test_rag_planner_context.py`
 - Modify relevant existing acquisition/coverage tests.
 
-**Interfaces:** Extend `assess_coverage(..., attempts=(), latest_source_ids=())` with an optional bounded history of action kind/query/document/chunk and result/new-source counts. Existing injected assess callbacks accepting keyword arguments remain compatible. `planner_views(evidence_views, max_chars=16000, latest_source_ids=())` returns complete immutable source views, ordered in document round-robin. Prioritize groups with newly acquired sources and new sources within each group, retaining stable order otherwise. This is planner context only; final ranking remains unchanged.
+**Interfaces:** Extend `assess_coverage(..., attempts=(), latest_source_ids=())` with an optional bounded history of action kind/query/document/chunk and cumulative available-source/new-source counts. Existing injected assess callbacks accepting keyword arguments remain compatible. `planner_views(evidence_views, max_chars=16000, latest_source_ids=())` returns complete immutable source views, ordered in document round-robin. Prioritize groups with newly acquired sources and new sources within each group, retaining stable order otherwise. This is planner context only; final ranking remains unchanged.
 
 - [x] Add failing synthetic tests: a first document with many chunks cannot hide a second document; a later planner sees newly acquired source views; an oversized source is not clipped into mismatched offsets; source text totals stay within 16000 characters; repeated source identities do not consume context twice.
 - [x] Add failing orchestration tests showing the second planner receives the first attempted query/outcome, and initial external handoff is represented without inventing an unknown query. History is bounded by admitted actions, includes no raw source text, and records action failures without provider bodies.
@@ -128,21 +128,40 @@ assert "400-900" not in recovery_instruction
 
 - [x] Inspect the saved read-only active ontology/build stats. Freeze general synthetic relation examples and real held-out passages before candidate extraction. Include supported relations, unsupported/ambiguous endpoints, negation and alternate dataset/metric types.
 - [x] Run bounded offline extraction with the existing adapter and record raw-output, normalization and endpoint-validation counts. Do not infer passage-level rejection reasons from document aggregates.
-- [x] If the evidence identifies a correctable adapter/schema defect, write a focused design addendum and failing regression before a versioned implementation. Require source provenance and typed endpoints; do not disable validation or invent graph facts. Evaluate the repair on the frozen set before any background rebuild.
-- [ ] Stage an immutable isolated candidate on 254. Run the full ten-question study and pre-frozen held-out questions serially with matched settings; record actions, recall, final evidence, factual correctness, citations, latency and failures separately. Preserve real model prose for independent review.
+- [x] Evaluate the versioned description-preserving graph compiler on the frozen sample with unchanged provenance and endpoint validation. Reject both tested variants after zero accepted relations within their resource bounds; remove the unused compiler from product code. Retain shared extraction identity and private diagnostic evidence. No activation or graph rebuild follows from this experiment.
+- [x] Stage immutable r10 at `079ab3a895d3e7f8b9f540275f0c8dbffaf2574c` and complete all 26 matched cells: ten study questions in two arms plus six pre-frozen held-outs. Preserve model prose and independently review acquisition, final evidence, content, citations, latency and failures. Live evaluation is complete; quality acceptance has not passed.
+- [x] Repair the later resolver-identity test fixture in `44957ae0cb2aed157fd187d8143d6a76325daaa5`; the focused local regression run passed 171 tests. This test/CI repair does not change the frozen r10 evaluation head.
+- [x] Independently review P1's 40 frozen requests and reject the added navigation-output contract: no generic routing gain, repeated structural/span failures, and higher token/latency cost.
+- [x] Independently review all 48 P2 attempts, retaining three 32k timeouts as failures. Reject the 32k context increase and navigation contract: more visible pointers do not produce a clean generic gain or saved-question recovery.
+- [x] Independently review P3's 48 completed requests. The support-free shape yields no useful-action gain at 16k (both arms 4/8 generic); it remains experimental. Diagnostic 32k contract improvements do not authorize a production cap increase.
+- [x] Complete and independently review P4's frozen 48 long-case and 32 small-control requests at 16k. Reject balanced packing and the combined treatment: the combination improves one generic comparison case but balanced packing misroutes the external-method diagnostic in both blocks under both strategies. Do not promote pointer-only strategy: no generic gain and the release-comparison gain is inconsistent across blocks. Small controls pass 16/16 per strategy with no gain or regression. Retain frozen expectations and failures; no product contract or budget change follows.
 - [ ] Run repository checks and review the whole change. Update PR247 and the authorized internal tracking issue with code, artifact, evaluation and deployment status. Keep unproven quality improvements explicit; do not merge/deploy on unit tests alone.
 
 ### Additional confirmed defects (within systemic repair scope)
 
-- **Graph compiler experiment (Task 3/5):** pinned GLiNER2 drops relation descriptions. Add a deterministic description-preserving structure/field compiler, version its behavior, retain endpoint validation and matched inference options, and repeat the frozen offline sample. Do not activate or rebuild unless semantic precision/recall evidence supports it.
-- **Large source snapshot serialization:** add a new reversible migration replacing the quadratic canonical string serializer with an equivalent bounded-work implementation. Preserve canonical bytes and immutable hash guards. Test realistic large mixed text, full escaping/Unicode boundaries, old/new equivalence, and normal adjacent-edit integration under a bounded statement timeout.
-- **Local anaphora:** repair same-question noun/pronoun handling using general grammar, retaining explicit-source and ambiguity barriers. Test generic local nouns, real historical-source references, ambiguous cases and the pre-retrieval routing boundary. Keep frozen held-out questions unchanged.
+- **Graph compiler experiment (Task 3/5):** rejected and removed; the description-loss diagnosis does not establish a successful extraction repair. Shared behavior versioning remains, with existing endpoint validation and serving artifacts unchanged.
+- **Large source snapshot serialization:** completed a reversible migration replacing quadratic work while preserving canonical bytes and immutable hash guards. Equivalence, Unicode/escaping and realistic large-source integration checks passed without shrinking the fixture.
+- **Local anaphora:** completed general same-question noun/pronoun handling with explicit-source and ambiguity barriers. Regression checks passed and the frozen held-out questions remained unchanged; routing repair alone does not establish answer correctness.
+- **Returned source order:** committed `d15430ab`, preserving retrieval-provenance order among the same verified, deduplicated sources instead of cache insertion order. Revision filtering, planner latest-source priority and caps remain unchanged. The 32-test source-order/context/acquisition suite and independent review passed; this does not establish Q3/Q4 success.
+- **Lexical settings wiring:** committed `888203a6`, exposing the three existing full-text, RRF and protected-exact controls through `env_bool` with independent false defaults. Protected exact remains effective only with RRF. The 24-test settings/control suite and independent review passed; the settings file allowance ratcheted from 485 to 480 lines. This repairs operability without activation or a recall claim.
 
-Disjoint SQL, graph and synthesis implementation may proceed in parallel as the
-user requested. Root serializes shared tests, model calls and commits; each change
-receives independent review before final candidate evaluation.
+Root continues to serialize shared tests, model calls and commits. Remaining
+experiments and acceptance review are separate from the completed implementation.
 
-## Verification checkpoint before live candidate evaluation
+Separate candidate-readiness inspection reports 530 documents, 2,701 text and
+499 image chunks, zero current FTS projections and zero structured sections.
+All three lexical flags remain false. The mixed-modality FTS gate is intentional;
+changing it or the native-to-scored fallback requires a separate decision. The
+frozen neighbor policy is rejected: it reaches zero missing targets and removes
+observed acquisition paths for five final-selected sources. The 16 text-only
+FTS probes completed without errors: 12 returned zero matches and none of the
+11 frozen targets matched anywhere. Reject this literal English plain-query
+treatment as a remedy for the recorded misses, not FTS generally. Inputs were
+unchanged unresolved-context questions, not production-routed queries. One
+separate all-lexeme OR contrast is being prepared; no adoption, activation or
+projection backfill follows from this result.
+
+## Verification checkpoint after r10 live evaluation
 
 Tasks 1–4 have focused regression evidence and independent review. Planner tests
 passed in two 88-test groups. Grounding passed 146 regressions and a 20-test
@@ -158,7 +177,28 @@ and source adjudications are retained privately. Shared extraction versioning
 remains implemented. Existing graph extraction quality is an open limitation,
 and no graph rebuild or compiler activation is authorized by these test results.
 
-The six frozen held-out baseline cases expose premature source clarification,
-loss of useful model prose at publication, and incorrect citation/claim scope.
-The final candidate still needs the full matched question evaluation below;
-passing regression tests is not evidence of improved answer faithfulness.
+All 26 r10 cells completed operationally, but acceptance has **not passed**.
+Study questions Q1/Q2 remain partial, Q3/Q4 fail required answer coverage, and
+Q5–Q10 preserve their core answers with remaining citation or scope issues in
+some cells. These outcomes do not establish a general planner or graph gain.
+
+The six held-outs improve from 8 fully correct / 1 partial / 12 missing required
+claims to 18 / 3 / 0; six of seven frozen evidence targets are acquired and
+delivered, versus four at baseline. Core coverage, incidental assertions and
+citation precision remain separate scores; one negative-scope judgment is
+explicitly borderline. No acquired target is lost during final selection.
+
+The 171-test fixture repair, 32-test source-order repair and 24-test settings
+repair are recorded separately from immutable r10. Completed P1/P2 reviews reject
+the navigation contract and 32k increase; P3 supplies no 16k routing benefit.
+P4 is complete: reject balanced
+packing, the combined treatment and promotion of the pointer-only strategy.
+Generic useful-action counts are 4/8 for control, pointer-only and balanced-only,
+versus 6/8 for the combination; saved diagnostics separately score 2/4, 3/4, 0/4
+and 1/4. Small controls score 16/16 per strategy with no gain or regression.
+Prompt and packing experimentation ends for this investigation; any next
+source-candidate diagnosis is a separate workstream. These results do not change
+the r10 findings or production caps.
+The serving development stack remains unchanged; neither operational completion
+nor regression tests authorize quality acceptance, merge, deployment or a graph
+rebuild.
