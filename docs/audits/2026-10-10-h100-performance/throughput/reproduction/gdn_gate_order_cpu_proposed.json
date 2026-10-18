@@ -1,0 +1,566 @@
+{
+  "cuda_visible_devices": "-1",
+  "scope": "CPU source-boundary proof; no GPU kernels, recurrence, or serving run",
+  "source_sha256": {
+    "utils.py": "192e6b5df24ff52ae57a6a23d6cf58d1b4dd34f14c9283ce268e5f88b1123b96",
+    "gdn_attn.py": "4f4293919acca150061ee6fa41b05b5c6f5f1f9989dfbc48188bb9b1b5b18296",
+    "qwen_gdn_linear_attn.py": "55d2f57d434c49dc06472499deaac42392ae889285c760be7a357f966091d14c"
+  },
+  "cases": [
+    {
+      "case": "pure_spec",
+      "in_memory_fix": true,
+      "source_order": [
+        "mtp",
+        "other_mtp"
+      ],
+      "reordered": [
+        "mtp",
+        "other_mtp"
+      ],
+      "reorder_swapped": false,
+      "query_start_loc": [
+        0,
+        5,
+        10
+      ],
+      "draft_counts": [
+        4,
+        4
+      ],
+      "spec_sequence_mask": [
+        true,
+        true
+      ],
+      "spec_token_indices": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9
+      ],
+      "recurrence_qkv_token_ids": [
+        200.0,
+        201.0,
+        202.0,
+        203.0,
+        204.0,
+        300.0,
+        301.0,
+        302.0,
+        303.0,
+        304.0
+      ],
+      "recurrence_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0,
+        1300.0,
+        1301.0,
+        1302.0,
+        1303.0,
+        1304.0
+      ],
+      "expected_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0,
+        1300.0,
+        1301.0,
+        1302.0,
+        1303.0,
+        1304.0
+      ],
+      "recurrence_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0,
+        2300.0,
+        2301.0,
+        2302.0,
+        2303.0,
+        2304.0
+      ],
+      "expected_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0,
+        2300.0,
+        2301.0,
+        2302.0,
+        2303.0,
+        2304.0
+      ],
+      "gates_match_qkv": true,
+      "compacted_query_start_loc": [
+        0,
+        5,
+        10
+      ],
+      "state_indices": [
+        [
+          6,
+          7,
+          8,
+          9,
+          10
+        ],
+        [
+          11,
+          12,
+          13,
+          14,
+          15
+        ]
+      ],
+      "accepted": [
+        2,
+        2
+      ],
+      "pure_spec_zero_copy": true
+    },
+    {
+      "case": "spec_then_new_prefill",
+      "in_memory_fix": true,
+      "source_order": [
+        "mtp",
+        "new_prefill"
+      ],
+      "reordered": [
+        "mtp",
+        "new_prefill"
+      ],
+      "reorder_swapped": false,
+      "query_start_loc": [
+        0,
+        5,
+        8
+      ],
+      "draft_counts": [
+        4,
+        -1
+      ],
+      "spec_sequence_mask": [
+        true,
+        false
+      ],
+      "spec_token_indices": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "recurrence_qkv_token_ids": [
+        200.0,
+        201.0,
+        202.0,
+        203.0,
+        204.0
+      ],
+      "recurrence_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "expected_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "recurrence_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "expected_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "gates_match_qkv": true,
+      "compacted_query_start_loc": [
+        0,
+        5
+      ],
+      "state_indices": [
+        [
+          6,
+          7,
+          8,
+          9,
+          10
+        ]
+      ],
+      "accepted": [
+        2
+      ],
+      "pure_spec_zero_copy": false
+    },
+    {
+      "case": "spec_then_chunk_tail",
+      "in_memory_fix": true,
+      "source_order": [
+        "mtp",
+        "chunk_tail"
+      ],
+      "reordered": [
+        "chunk_tail",
+        "mtp"
+      ],
+      "reorder_swapped": true,
+      "query_start_loc": [
+        0,
+        1,
+        6
+      ],
+      "draft_counts": [
+        -1,
+        4
+      ],
+      "spec_sequence_mask": [
+        false,
+        true
+      ],
+      "spec_token_indices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "recurrence_qkv_token_ids": [
+        200.0,
+        201.0,
+        202.0,
+        203.0,
+        204.0
+      ],
+      "recurrence_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "expected_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "recurrence_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "expected_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "gates_match_qkv": true,
+      "compacted_query_start_loc": [
+        0,
+        5
+      ],
+      "state_indices": [
+        [
+          6,
+          7,
+          8,
+          9,
+          10
+        ]
+      ],
+      "accepted": [
+        2
+      ],
+      "pure_spec_zero_copy": false
+    },
+    {
+      "case": "chunk_tail_then_spec",
+      "in_memory_fix": true,
+      "source_order": [
+        "chunk_tail",
+        "mtp"
+      ],
+      "reordered": [
+        "chunk_tail",
+        "mtp"
+      ],
+      "reorder_swapped": false,
+      "query_start_loc": [
+        0,
+        1,
+        6
+      ],
+      "draft_counts": [
+        -1,
+        4
+      ],
+      "spec_sequence_mask": [
+        false,
+        true
+      ],
+      "spec_token_indices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "recurrence_qkv_token_ids": [
+        200.0,
+        201.0,
+        202.0,
+        203.0,
+        204.0
+      ],
+      "recurrence_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "expected_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "recurrence_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "expected_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "gates_match_qkv": true,
+      "compacted_query_start_loc": [
+        0,
+        5
+      ],
+      "state_indices": [
+        [
+          6,
+          7,
+          8,
+          9,
+          10
+        ]
+      ],
+      "accepted": [
+        2
+      ],
+      "pure_spec_zero_copy": false
+    },
+    {
+      "case": "long_chunk_then_spec",
+      "in_memory_fix": true,
+      "source_order": [
+        "long_chunk",
+        "mtp"
+      ],
+      "reordered": [
+        "long_chunk",
+        "mtp"
+      ],
+      "reorder_swapped": false,
+      "query_start_loc": [
+        0,
+        10,
+        15
+      ],
+      "draft_counts": [
+        -1,
+        4
+      ],
+      "spec_sequence_mask": [
+        false,
+        true
+      ],
+      "spec_token_indices": [
+        10,
+        11,
+        12,
+        13,
+        14
+      ],
+      "recurrence_qkv_token_ids": [
+        200.0,
+        201.0,
+        202.0,
+        203.0,
+        204.0
+      ],
+      "recurrence_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "expected_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "recurrence_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "expected_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "gates_match_qkv": true,
+      "compacted_query_start_loc": [
+        0,
+        5
+      ],
+      "state_indices": [
+        [
+          6,
+          7,
+          8,
+          9,
+          10
+        ]
+      ],
+      "accepted": [
+        2
+      ],
+      "pure_spec_zero_copy": false
+    },
+    {
+      "case": "ordinary_no_draft_entry_then_spec",
+      "in_memory_fix": true,
+      "source_order": [
+        "ordinary_no_draft_entry",
+        "mtp"
+      ],
+      "reordered": [
+        "ordinary_no_draft_entry",
+        "mtp"
+      ],
+      "reorder_swapped": false,
+      "query_start_loc": [
+        0,
+        1,
+        6
+      ],
+      "draft_counts": [
+        -1,
+        4
+      ],
+      "spec_sequence_mask": [
+        false,
+        true
+      ],
+      "spec_token_indices": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "recurrence_qkv_token_ids": [
+        200.0,
+        201.0,
+        202.0,
+        203.0,
+        204.0
+      ],
+      "recurrence_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "expected_a": [
+        1200.0,
+        1201.0,
+        1202.0,
+        1203.0,
+        1204.0
+      ],
+      "recurrence_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "expected_b": [
+        2200.0,
+        2201.0,
+        2202.0,
+        2203.0,
+        2204.0
+      ],
+      "gates_match_qkv": true,
+      "compacted_query_start_loc": [
+        0,
+        5
+      ],
+      "state_indices": [
+        [
+          6,
+          7,
+          8,
+          9,
+          10
+        ]
+      ],
+      "accepted": [
+        2
+      ],
+      "pure_spec_zero_copy": false
+    }
+  ]
+}
