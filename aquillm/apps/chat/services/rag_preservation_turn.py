@@ -95,7 +95,13 @@ async def finish_preservation(
     proposal_anchors = anchors
     if proposal_anchors is None and query_proposals_enabled():
         proposal_anchors = resolve_source_anchors(question, convo)
-    proposals = await prepare_query_proposals(question, llm=llm, runtime=runtime, anchors=proposal_anchors)
+    proposals = await prepare_query_proposals(
+        question,
+        llm=llm,
+        runtime=runtime,
+        anchors=proposal_anchors,
+        initial_acquired=initial_acquired,
+    )
     acquired = await acquire_evidence(
         question,
         budget=budget,

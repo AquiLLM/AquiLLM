@@ -163,7 +163,14 @@ async def _rewrite(question, llm, budget):
     return payload["rewrite"] if type(payload) is dict and set(payload) == {"rewrite"} else None
 
 
-async def prepare_query_proposals(question, *, llm, runtime, anchors=None):
+async def prepare_query_proposals(
+    question,
+    *,
+    llm,
+    runtime,
+    anchors=None,
+    initial_acquired=False,
+):
     original = build_query_proposals(question)
     vocabulary_on = _enabled("RAG_VOCABULARY_QUERY_ENABLED")
     rewrite_on = _enabled("RAG_QUERY_REWRITE_ENABLED")
@@ -171,32 +178,61 @@ async def prepare_query_proposals(question, *, llm, runtime, anchors=None):
         return original
     with runtime.lock:
         if getattr(runtime, "_query_proposal_attempted", False):
-            return getattr(runtime, "_query_proposals", original) if getattr(
-                runtime, "_query_original", None) == question else original
+            return (
+                getattr(runtime, "_query_proposals", original)
+                if getattr(runtime, "_query_original", None) == question
+                else original
+            )
         runtime._query_proposal_attempted = True
         runtime._query_original = question
     from .retrieval_query_binding import ensure_admission, retain_original
+
     await _database_call(ensure_admission, runtime)
     await _database_call(_validate_anchors, runtime, anchors)
     snapshot, rewrite, failed = None, None, False
+    constraints = getattr(anchors, "source_constraints", ())
+    # Earlier unrelated actions do not discharge the pending original search.
+    optional_slots = max(
+        0,
+        runtime.budget.limits.actions
+        - runtime.budget.actions_used
+        - int(not initial_acquired),
+    )
     try:
-        if runtime.budget.actions_used >= runtime.budget.limits.actions:
+        if not optional_slots:
             raise ValueError("optional action allowance")
         if vocabulary_on:
             snapshot = await _database_call(_frozen_vocabulary, runtime)
         if rewrite_on:
-            rewrite = await _rewrite(question, llm, runtime.budget)
+            prior = build_query_proposals(
+                question,
+                vocabulary=snapshot,
+                source_constraints=constraints,
+            )
+            if len(prior) - 1 < optional_slots:
+                rewrite = await _rewrite(question, llm, runtime.budget)
     except asyncio.CancelledError:
         raise
     except Exception:
         failed = True
-    constraints = getattr(anchors, "source_constraints", ())
     if anchors is not None and anchors.chunk_identities and not constraints:
         rewrite = None  # Identity without a retained literal cannot admit a rewrite.
-    rows = original if failed else build_query_proposals(question, vocabulary=snapshot, rewrite=rewrite,
-                                source_constraints=constraints)
+    rows = (
+        original
+        if failed
+        else build_query_proposals(
+            question,
+            vocabulary=snapshot,
+            rewrite=rewrite,
+            source_constraints=constraints,
+            max_queries=optional_slots + 1,
+        )
+    )
     with runtime.lock:
-        retain_original(runtime, BoundProposal(runtime, question, rows[0].policy_key, snapshot, anchors))
+        retain_original(
+            runtime,
+            BoundProposal(runtime, question, rows[0].policy_key, snapshot, anchors),
+        )
     runtime._query_proposal_anchors = anchors
     runtime._query_proposals = rows
     observation = {"configured": configured_proposal_controls(),

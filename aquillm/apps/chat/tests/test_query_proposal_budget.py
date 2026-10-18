@@ -57,7 +57,7 @@ async def test_model_proposal_uses_original_ledger_and_explicit_provider_bounds(
     assert len(rows) == (2 if exhausted == "none" else 1)
     assert len(sent) == (1 if exhausted == "none" else 0)
     if sent:
-        assert sent[0]["max_tokens"] == 512
+        assert sent[0]["max_tokens"] == budget.limits.planner_output_tokens
         assert sent[0]["model"] == "synthetic"
     assert budget.planner_calls == (2 if exhausted == "planner" else 0 if exhausted == "actions" else 1)
     assert await prepare_in_original_scope("What is A_12?", llm=llm, runtime=runtime) == rows
