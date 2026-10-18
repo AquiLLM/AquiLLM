@@ -146,7 +146,7 @@ async def test_planner_failures_preserve_available_sources(failure):
         }
 
     async def message(**kwargs):
-        assert kwargs["max_tokens"] == 512
+        assert kwargs["max_tokens"] == budget.limits.planner_output_tokens
         if failure == "timeout":
             raise TimeoutError
         action = {

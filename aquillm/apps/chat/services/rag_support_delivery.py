@@ -38,9 +38,17 @@ def support_grounding(packet):
     return (
         "\n\nBounded answer_support: "
         + json.dumps(payload, ensure_ascii=True)
-        + "\nAnswer only accepted supported aspects and name unresolved aspects. "
-        "Unknown support permits only exact attributed excerpts with uncertainty. "
-        "Insufficient evidence requires a scoped limitation, never universal absence. "
+        + "\nSynthesize a direct answer to the user's question from the selected evidence. "
+        "Explain and compare findings when the passages permit it; cite each factual "
+        "claim using the supplied source citations. Preserve quantities, qualifiers, "
+        "experimental conditions and conflicting findings. Distinguish source statements "
+        "from your inferences and identify gaps you cannot resolve from the evidence. "
+        "Unknown support means semantic coverage has not been independently validated; "
+        "it does not require a quotation-only response or establish that the evidence "
+        "cannot answer the question. Assessment hints are not evidence. "
+        "Do not claim exhaustive coverage or universal absence. If the selected evidence "
+        "does not support an answer, give a scoped limitation; quote useful passages "
+        "only when they help explain it. "
         "Profile memory is personalization, not document evidence."
     )
 
@@ -61,17 +69,42 @@ def invalidate_answer_support(packet):
 
 
 def _safe_excerpt(text):
-    # Preserve complete excerpts and conditions. Do not clip a sentence or allow
-    # source markup to create links, images, nested citations or instructions.
+    # Preserve complete excerpts and conditions. Presentation escaping happens
+    # later; ordinary scientific notation must not reject a whole source.
     return (
         isinstance(text, str)
         and 0 < len(text) <= 1200
-        and not re.search(r"[<>\[\]`]|!\(|[\x00-\x08\x0b-\x1f]", text)
+        and not re.search(r"[\x00-\x08\x0b-\x1f]", text)
+    )
+
+
+_SOURCE_ESCAPES = str.maketrans(
+    {char: f"&#{ord(char)};" for char in "&<>[]`\\*_#!|~$:=@"}
+)
+
+
+def _literal_source_text(text, *, initial_line=True):
+    """Escape only the display copy, before citation linkification/Markdown.
+
+    The source's brackets must be encoded, since the frontend linkifies raw
+    citation tokens *before* parsing Markdown. GFM can autolink decoded entities,
+    so server-owned word-break nodes separate URL/email syntax into text nodes.
+    They preserve displayed characters without creating a link or hiding text.
+    """
+    text = text.translate(_SOURCE_ESCAPES)
+    text = text.replace("&#58;", "<wbr>&#58;").replace("&#64;", "<wbr>&#64;")
+    text = re.sub(r"(?i)\bwww\.", lambda m: m[0][:-1] + "<wbr>&#46;", text)
+    indentation = r"(?m)^[ \t]+" if initial_line else r"(?<=\n)[ \t]+"
+    text = re.sub(indentation, lambda m: "".join(f"&#{ord(c)};" for c in m[0]), text)
+    return re.sub(
+        r"(?m)^([-+])|^(\d{1,9})([.)])(?=\s)",
+        lambda m: f"&#{ord(m[1])};" if m[1] else f"{m[2]}&#{ord(m[3])};",
+        text,
     )
 
 
 def _attributed_span(text, citation):
-    """Keep exact span characters; add only mechanically necessary references."""
+    """Render an exact span as literal text with server-controlled references."""
     from lib.llm.providers.rag_citations import find_uncited_numeric_claims
 
     # Capture separators rather than replacing source sentence/line boundaries.
@@ -80,11 +113,17 @@ def _attributed_span(text, citation):
         i for i in range(0, len(parts), 2) if any(c.isalnum() for c in parts[i])
     ]
     last = meaningful[-1]
+    # Sentence separators need literal indentation too. Keep ordinary spaces
+    # unchanged so the citation validator still sees sentence boundaries.
+    display_parts = [
+        _literal_source_text(part, initial_line=i % 2 == 0)
+        for i, part in enumerate(parts)
+    ]
 
     def quoted(indices):
         rendered = "".join(
             part + (" " + citation if i in indices else "")
-            for i, part in enumerate(parts)
+            for i, part in enumerate(display_parts)
         )
         return "> " + rendered.replace("\n", "\n> ")
 
@@ -93,7 +132,8 @@ def _attributed_span(text, citation):
         required = {
             i
             for i in meaningful
-            if re.search(r"\d", parts[i]) and re.search(r"[A-Za-z]{2,}", parts[i])
+            if re.search(r"\d", "".join(display_parts[max(0, i - 1) : i + 1]))
+            and re.search(r"[A-Za-z]{2,}", display_parts[i])
         }
         rendered = quoted(required | {last})
     return rendered
@@ -172,13 +212,7 @@ def render_supported_answer(packet):
     points = []
     for text, citation in excerpts:
         if _safe_excerpt(text):
-            points.append(
-                "\n".join(
-                    f"> {sentence} {citation}"
-                    for line in text.splitlines()
-                    for sentence in re.split(r"(?<=[.!?])\s+", line)
-                )
-            )
+            points.append(_attributed_span(text, citation))
         if len(points) == 5:
             break
     if not points:

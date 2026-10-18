@@ -16,6 +16,14 @@ class Operation:
     deadline: float | None = None
     clock: object = monotonic
     parent: object = None
+    source_limit: int | None = None
+
+    def __setattr__(self, name, value):
+        # Captured native owners retain this exact operation. Its admission
+        # ceiling must not widen while workers are using that captured owner.
+        if name == "source_limit" and name in self.__dict__:
+            raise AttributeError("operation source limit is immutable")
+        object.__setattr__(self, name, value)
 
     def active(self):
         return (
@@ -48,6 +56,17 @@ def operation_live(budget):
     return operation is None or operation.budget is not budget or operation.active()
 
 
+def operation_source_limit(budget):
+    """Action-local cumulative ceiling; a child may only narrow its parent."""
+    operation = _OPERATION.get()
+    ceiling = budget.limits.unique_sources
+    while operation is not None and operation.budget is budget:
+        if operation.source_limit is not None:
+            ceiling = min(ceiling, operation.source_limit)
+        operation = operation.parent
+    return ceiling
+
+
 def capture_operation_bound(budget):
     operation = _OPERATION.get()
     if operation is None:
@@ -60,10 +79,12 @@ def capture_operation_bound(budget):
 
 
 @contextmanager
-def operation_scope(budget, *, timeout_ms=None):
+def operation_scope(budget, *, timeout_ms=None, source_limit=None):
+    if source_limit is not None and (type(source_limit) is not int or source_limit < 0):
+        raise ValueError("source limit must be a nonnegative exact integer")
     parent = _OPERATION.get()
     if parent is not None and parent.budget is not budget:
-        if parent.deadline is not None:
+        if parent.deadline is not None or parent.source_limit is not None:
             raise ValueError("bounded operation budget identity changed")
         parent = None
     clock = getattr(budget, "_clock", monotonic)
@@ -75,7 +96,13 @@ def operation_scope(budget, *, timeout_ms=None):
     if parent is not None and parent.deadline is not None:
         parent_deadline = parent.deadline_for(clock)
         deadline = parent_deadline if deadline is None else min(deadline, parent_deadline)
-    operation = Operation(budget, deadline=deadline, clock=clock, parent=parent)
+    if parent is not None and parent.source_limit is not None:
+        source_limit = parent.source_limit if source_limit is None else min(
+            source_limit, parent.source_limit
+        )
+    operation = Operation(
+        budget, deadline=deadline, clock=clock, parent=parent, source_limit=source_limit
+    )
     token = _OPERATION.set(operation)
     try:
         yield operation

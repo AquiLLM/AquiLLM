@@ -118,7 +118,7 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 charged = charged_sources(budget)
                 active = sum(bool(channels[name]) for name in CHANNELS)
                 baseline_allowance, graph_ceiling = allocation(
-                    max(0, budget.limits.unique_sources - len(charged)), cap, active
+                    budget.remaining_source_capacity(), cap, active
                 )
                 ids = {name: tuple(r.pk for r in refs) for name, refs in channels.items()}
                 all_refs = {r.pk: r for refs in channels.values() for r in refs}

@@ -30,10 +30,11 @@ from .rag_citation_extracts import (
 from .rag_citation_extracts import (
     synthesize_doc_level_extract_from_results as synthesize_doc_level_extract_from_results,
 )
+from .rag_citation_prose import logical_factual_lines, numeric_claim_sentences
 
 _CITATION_RE = re.compile(r"\[doc:[^\]\s]+\s+chunk:\d+\]")
 _CITATION_LIKE_RE = re.compile(r"\[doc:[^\]\r\n]*(?:\]|(?=[\r\n]|$))")
-_BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*]\s+|\s*\d+\.\s+)")
+_BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*+]\s+|\s*\d+[.)]\s+)")
 
 
 def citation_enforcement_enabled() -> bool:
@@ -154,7 +155,7 @@ def find_uncited_numeric_claims(answer_text: str | None) -> list[str]:
     for lines in paragraphs:
         # A nonnumeric marker also protects punctuation inside document IDs.
         marked = _CITATION_RE.sub(" \x00", " ".join(lines))
-        sentences = re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"')\u201d\u2019])\s+", marked)
+        sentences = numeric_claim_sentences(marked)
         claims: list[str] = []
         for sentence in sentences:
             # Accept: "Capacity is 18 litres. [doc:a chunk:1]". The citation
@@ -168,7 +169,8 @@ def find_uncited_numeric_claims(answer_text: str | None) -> list[str]:
         uncited.extend(
             claim for claim in claims
             if "\x00" not in claim
-            and re.search(r"\d", claim)
+            # A digit inside an identifier such as PDR3 is not itself a quantity.
+            and re.search(r"\b\d", claim)
             and re.search(r"[A-Za-z]{2,}", claim)
         )
     return uncited
@@ -185,7 +187,7 @@ def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
     uncited: list[str] = []
     in_code_block = False
     inherited_citation: str | None = None
-    for raw_line in answer_text.splitlines():
+    for raw_line in logical_factual_lines(answer_text, _BULLET_OR_ENUM_RE):
         line = raw_line.strip()
         if line.startswith("```"):
             in_code_block = not in_code_block

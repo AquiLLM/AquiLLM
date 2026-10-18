@@ -154,7 +154,7 @@ async def finish_preservation(
         notice
         or assessment.unresolved_aspects
         or acquired.stop_reason
-        in {"partial_unknown", "completion_reserve", "action_limit", "no_progress"}
+        not in {"initial", "adequate_lookup", "assessed"}
     ):
         packet.retrieval_status = "partial" if packet.chunks else "context_limited"
         packet.diagnostic_message = (

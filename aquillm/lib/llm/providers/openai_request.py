@@ -137,6 +137,9 @@ async def prepare_request(
         if transformed_tool_choice is not None:
             arguments["tool_choice"] = transformed_tool_choice
 
+    if "response_format" in kwargs:
+        arguments["response_format"] = kwargs.pop("response_format")
+
     validate_request(arguments, output_reserve=arguments["max_tokens"])
     return PreparedRequest(arguments, thinking_requested)
 

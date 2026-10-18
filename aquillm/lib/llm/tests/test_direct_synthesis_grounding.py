@@ -186,10 +186,11 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
         )
 
     assert len(requests) == 2
-    assert "11 percentage points" not in result[-1].content
-    assert "uncertain" in result[-1].content
-    assert "> Improvement was 18%. [doc:a chunk:1]" in result[-1].content
-    assert "> Improvement was 7%. [doc:b chunk:2]" in result[-1].content
+    assert result[-1].content == repaired + (
+        "\n\nSources:\n- [doc:a chunk:1]\n- [doc:b chunk:2]"
+    )
+    assert result[-1]._validated_answer.outcome == "partial"
+    assert "![" not in result[-1].content
     assert len(stream_payloads) == 1
     assert stream_payloads[0]["done"] is True
     assert stream_payloads[0]["content"] == result[-1].content
@@ -236,6 +237,16 @@ async def test_uncited_numeric_prose_is_repaired_for_every_rag_synthesis(
         streamed.append(payload)
 
     convo = _conversation()
+    # This test checks citation repair, not lexical entailment. Give the model
+    # matching source units and conditions for the comparison it is asked to make.
+    convo[0].content = "Compare the dry-mode and humid-mode capacities."
+    convo[-1].content = "Dry mode reports 18 litres per cycle; humid mode reports 7."
+    convo[-1].result_dict["result"][0]["text"] = (
+        "Dry-mode capacity is 18 litres per cycle."
+    )
+    convo[-1].result_dict["result"][1]["text"] = (
+        "Humid-mode capacity is 7 litres per cycle."
+    )
     with (
         synthetic_publication(packet=_selected_packet(convo)),
         observability_scope("numeric-comparison", stage),
@@ -248,9 +259,9 @@ async def test_uncited_numeric_prose_is_repaired_for_every_rag_synthesis(
         )
 
     assert len(requests) == 2
-    assert "litres per cycle" not in result[-1].content
-    assert "uncertain" in result[-1].content
-    assert "> Improvement was 18%. [doc:a chunk:1]" in result[-1].content
-    assert "> Improvement was 7%. [doc:b chunk:2]" in result[-1].content
+    assert result[-1].content == repaired + (
+        "\n\nSources:\n- [doc:a chunk:1]\n- [doc:b chunk:2]"
+    )
+    assert result[-1]._validated_answer.outcome == "partial"
     assert len(streamed) == 1
     assert streamed[0]["content"] == result[-1].content

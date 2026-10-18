@@ -4,8 +4,11 @@ from __future__ import annotations
 from asgiref.sync import async_to_sync
 from django.test import SimpleTestCase
 
+from apps.chat.tests.chat_message_test_support import (
+    _FakeLLMInterface,
+    _test_document_ids,
+)
 from aquillm.llm import Conversation, LLMResponse, ToolChoice, ToolMessage, UserMessage
-from apps.chat.tests.chat_message_test_support import _FakeLLMInterface, _test_document_ids
 
 
 class InterimAssistantVisibilityTests(SimpleTestCase):
@@ -46,7 +49,7 @@ class InterimAssistantVisibilityTests(SimpleTestCase):
         self.assertNotIn("passage now", updated[-1].content)
 
     def test_retries_post_tool_answer_that_contains_raw_tool_transcript(self):
-        from lib.llm.tests.publication_fixture_support import selected_publication, UNCERTAINTY
+        from lib.llm.tests.publication_fixture_support import selected_publication
         citation = "[doc:doc-1 chunk:1]"
         llm = _FakeLLMInterface([
             LLMResponse(
@@ -94,6 +97,65 @@ class InterimAssistantVisibilityTests(SimpleTestCase):
 
         self.assertEqual(changed, 'changed')
         self.assertEqual(len(llm.calls), 2)
-        self.assertEqual(updated[-1].content, UNCERTAINTY + "\n\n> " + 'The document discusses calibration equations and evaluation metrics.' + " " + citation)
+        self.assertEqual(updated[-1].content, (
+            "The mathematical content centers on calibration equations, measurement "
+            "definitions, and evaluation metrics grounded in the retrieved document. "
+            + citation
+        ))
+        self.assertEqual(updated[-1]._validated_answer.outcome, "partial")
         self.assertNotIn('Tool:retrieve', updated[-1].content)
         self.assertNotIn("Let me first retrieve", updated[-1].content)
+
+    def test_retries_post_tool_placeholder_that_only_promises_to_help(self):
+        from lib.llm.tests.publication_fixture_support import selected_publication
+        citation = "[doc:doc-1 chunk:1]"
+        llm = _FakeLLMInterface(
+            [
+                LLMResponse(
+                    text="I'll help you understand the math from this paper.",
+                    tool_call={},
+                    stop_reason="end_turn",
+                    input_usage=5,
+                    output_usage=5,
+                ),
+                LLMResponse(
+                    text=(
+                        "The paper's math centers on calibration and discrimination: "
+                        "it compares confidence scores against correctness, then studies "
+                        "regions where utility and factuality trade off."
+                    ) + " " + citation,
+                    tool_call={},
+                    stop_reason="stop",
+                    input_usage=5,
+                    output_usage=5,
+                ),
+            ]
+        )
+        convo = Conversation(
+            system="You are a test assistant.",
+            messages=[
+                UserMessage(content="Can you show me some of the math from the paper?"),
+                ToolMessage(
+                    content="The paper discusses calibration, confidence, utility, and factuality.",
+                    tool_name="whole_document",
+                    arguments={"doc_id": "doc-1"},
+                    for_whom="assistant",
+                    result_dict={
+                        "result": "The paper discusses calibration, confidence, utility, and factuality."
+                    },
+                ),
+            ],
+        )
+
+        with selected_publication([{"doc_id": "doc-1", "chunk_id": 1, "text": 'The paper discusses calibration, confidence, utility, and factuality.'}]):
+            updated, changed = async_to_sync(llm.complete)(convo, 512)
+
+        self.assertEqual(changed, "changed")
+        self.assertEqual(len(llm.calls), 2)
+        self.assertEqual(updated[-1].content, (
+            "The paper's math centers on calibration and discrimination: it compares "
+            "confidence scores against correctness, then studies regions where utility "
+            "and factuality trade off. " + citation
+        ))
+        self.assertEqual(updated[-1]._validated_answer.outcome, "partial")
+        self.assertNotIn("I'll help", updated[-1].content)

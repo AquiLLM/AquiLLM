@@ -15,6 +15,7 @@ from .rag_coverage import (
 from .rag_lookup_coverage import lookup_coverage
 
 COMPLETION_RESERVE_MS = 1000
+# Admission floor, not a deadline: a follow-up may use the remaining turn time.
 ACTION_TIMEOUT_MS = 3000
 
 
@@ -44,6 +45,7 @@ async def acquire_evidence(
     results = list(initial_results)
     assessment = CoverageAssessment()
     reason = "initial"
+    phase = "acquisition"
 
     async def run(action, proposal=None, *, initial=False):
         from lib.llm.turn_context import tool_timeout
@@ -58,12 +60,19 @@ async def acquire_evidence(
                 - COMPLETION_RESERVE_MS,
             ),
         )
-        # The mandatory original search may use the unreserved turn allowance.
-        if not initial:
-            timeout = min(timeout, ACTION_TIMEOUT_MS)
         if timeout <= 0:
             raise TimeoutError("acquisition reserve")
-        with operation_scope(budget, timeout_ms=timeout):
+        source_limit = None
+        if (
+            initial and iterative
+            and budget.limits.actions - budget.actions_used > 1
+            and budget.planner_calls < budget.limits.planner_calls
+        ):
+            # Reserve one third of the remaining novel-source allowance. Native
+            # graph admission and body materialization both honor this ceiling.
+            free = budget.remaining_source_capacity()
+            source_limit = budget.sources_used + free - free // 3
+        with operation_scope(budget, timeout_ms=timeout, source_limit=source_limit):
             from .retrieval_query_runtime import action_observation
 
             observation = action_observation(action, proposal, budget)
@@ -119,6 +128,9 @@ async def acquire_evidence(
             if budget.actions_used >= budget.limits.actions:
                 reason = "action_limit"
                 break
+            if budget.remaining_source_capacity() <= 0:
+                reason = "source_limit"
+                break
             if not budget.can_start_optional(
                 budget.limits.planner_call_ms + ACTION_TIMEOUT_MS, COMPLETION_RESERVE_MS
             ):
@@ -127,6 +139,7 @@ async def acquire_evidence(
             if not budget.reserve_planner():
                 reason = "planner_limit"
                 break
+            phase = "planner"
             assessment = await asyncio.wait_for(
                 assess(
                     question,
@@ -156,6 +169,7 @@ async def acquire_evidence(
                 reason = "completion_reserve"
                 break
             before = {s.identity for s in views}
+            phase = "acquisition"
             results.append(await run(action))
             after = {s.identity for s in evidence_views(results)}
             if not after - before:
@@ -166,6 +180,15 @@ async def acquire_evidence(
     except asyncio.CancelledError:
         budget.close("cancelled")
         raise
-    except (Exception,):
-        reason = "partial_unknown"
+    except Exception as exc:
+        from .rag_coverage import PlannerFailure
+
+        if isinstance(exc, PlannerFailure):
+            reason = "planner_" + exc.reason
+        elif isinstance(exc, TimeoutError):
+            reason = phase + "_timeout"
+        else:
+            reason = phase + "_failure"
+        # Never log the exception message: provider errors can contain evidence.
+        publish("acquisition_failure", {"phase": phase, "reason": reason})
     return AcquiredEvidence(tuple(results), assessment, reason, budget.actions_used)

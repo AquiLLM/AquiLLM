@@ -58,7 +58,8 @@ async def preservation_turn(consumer, *, max_func_calls):
         return
     from .retrieval_query_runtime import query_proposals_enabled
 
-    active = rag_preservation_config().active or query_proposals_enabled()
+    config = rag_preservation_config()
+    active = config.active or query_proposals_enabled()
     budget = (
         parent.budget
         if parent
@@ -125,6 +126,14 @@ async def preservation_turn(consumer, *, max_func_calls):
                     handoff,
                     max_func_calls=max_func_calls,
                     worker_cleanup=connections.close_all,
+                    initial_source_limit=(
+                        budget.limits.unique_sources - budget.limits.unique_sources // 3
+                        if (
+                            config.iterative_retrieval_enabled and budget.limits.actions > 1
+                            and budget.planner_calls < budget.limits.planner_calls
+                        )
+                        else None
+                    ),
                 )
         from apps.documents.services.representation_media_acquisition import initialize_media_runtime
         runtime = parent or await asyncio.wait_for(

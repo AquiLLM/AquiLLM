@@ -910,12 +910,12 @@ async def complete_conversation_turn(
             response_text = append_retrieval_notice_if_missing(
                 response_text, retrieval_notice
             )
+    citation_repair_failed = False
     if enforce_citations and (not response_tool_call):
         is_streaming_turn = callable(provider_stream_func)
         require_cited_numeric_claims = True
         citations_valid = citations.response_has_required_citations(
-            response_text,
-            citation_allowlist,
+            response_text, citation_allowlist,
             require_cited_numeric_claims=require_cited_numeric_claims,
         )
         if (not citations_valid) and (not is_streaming_turn):
@@ -969,16 +969,18 @@ async def complete_conversation_turn(
                 response = retry_response
                 response_text = (retry_response.text or "").strip()
                 response_tool_call = {}
-        if not citations.response_has_required_citations(
-            response_text,
-            citation_allowlist,
+        citation_repair_failed = not citations.response_has_required_citations(
+            response_text, citation_allowlist,
             require_cited_numeric_claims=require_cited_numeric_claims,
-        ):
+        )
+        # Bound publication owns authorized fallback; keep failed drafts intact.
+        if citation_repair_failed and publication is None:
             from lib.llm.answer_publication import LIMITED_ANSWER
 
             response_text = LIMITED_ANSWER
     should_append_final_sources = bool(
         (use_live_citation_stream or defer_stream_until_final)
+        and not citation_repair_failed
         and source_allowlist
         and citations.citation_sources_append_enabled()
     )
@@ -990,9 +992,7 @@ async def complete_conversation_turn(
         )
         and visibility.should_append_citation_sources(response_text)
     ):
-        response_text = _append_citation_sources_if_missing(
-            response_text, source_allowlist
-        )
+        response_text = _append_citation_sources_if_missing(response_text, source_allowlist)
     if response_tool_call:
         response_text = visibility.strip_tool_markup(
             visibility.strip_thinking_blocks(response_text)
