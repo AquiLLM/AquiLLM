@@ -309,3 +309,44 @@ The next evidence needed is source admission, displacement, final ranking and
 actual supported answers under the existing 30/45 source ceilings and shared
 work limits. Candidate-stage success does not authorize BM25 activation,
 projection backfill, merge or deployment.
+
+## Paused checkpoint after bounded admission comparison
+
+The frozen comparison completed all 32 arms (sixteen literal questions,
+baseline versus the fixed BM25 candidate treatment) on isolated r12. Every arm
+completed with model scoring; source, authorization, representation, capability
+and serving guards passed. Both arms delivered six of eleven frozen useful
+targets with matching source bytes, offsets and actual score-window coverage.
+There were zero new previously unacquired useful targets and zero losses among
+those mapped baseline targets. The admission criterion failed; do not promote
+the earlier candidate-stage result into a retrieval or answer-quality gain.
+
+Q3/Q4's four targets remain absent even from candidate metadata. The held-out
+date target is present in metadata in both arms but is not materialized or
+accepted in either. Its loss therefore precedes final reranking. The precise
+allocation cause still needs source-level diagnosis. A separate supplemental
+review found Q5–Q10's core evidence retained in all six pairs; that review does
+not change the frozen primary target set or prove general absence of regression.
+This experiment generated no answers and made no serving change. The ranking
+inputs were computed offline, so the run does not measure live BM25 cost.
+
+Full CI at 0555a2fe passed frontend and isolated projection checks, but a later
+backend stage exposed a second obsolete successful-rewrite fixture. Root
+reproduced two failures in the retry/recovery copies, then added terminal
+completion metadata to those mocks and the identity-rewrite integration mock.
+No product validation or assertions changed. The five-file follow-up passed
+65 tests with three existing warnings in 43.88 seconds; independent diff review
+and whitespace checks passed. Full CI for this later fixture repair is pending.
+
+The next identifier-format experiment exists only as private pure code and
+controls. Eight checker methods pass, including complete versus partial name
+matches, protected exclusions and bounds. It has no SQL integration, corpus rank
+result, product implementation or activation. Before resuming it needs review
+of overlap with existing English scoring, a frozen ranking package and controls
+that can expose displacement. It is not a demonstrated remedy for Q4.
+
+Work is paused at the user's request. All live comparison and local regression
+jobs have completed. Keep the current branch and draft PR247; retain the private
+artifacts and handoff. Serving 254, source representations and graph builds are
+unchanged. Quality acceptance, full CI and the remaining acquisition,
+preprocessing and graph-quality work remain open.

@@ -113,7 +113,7 @@ async def test_requested_scope_survives_empty_collections_but_not_mutation(
     original_synthesis = rag_pipeline.synthesize_from_evidence
 
     async def planner(**kwargs):
-        return SimpleNamespace(text=json.dumps({"rewrite": question}))
+        return SimpleNamespace(text=json.dumps({"rewrite": question}), stop_reason="stop")
 
     def search(actual_consumer, query, top_k):
         assert actual_consumer is consumer and query == question

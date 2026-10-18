@@ -231,3 +231,14 @@ current authorization, source ceilings and downstream scoring limits, measure
 displaced evidence, and keep quality-only counterfactuals separate from live
 performance claims. No production integration, backfill or activation follows
 from this candidate-stage result alone.
+
+The subsequent frozen 32-arm admission comparison fails its gain criterion:
+both arms deliver six of eleven mapped useful targets with verified actual
+scoring, with no new missing target recovered and no mapped baseline target lost.
+All arms complete; this is not a timeout or scoring-fallback result. Q3/Q4's
+four targets remain absent from candidate metadata. The held-out date candidate
+is in metadata in both arms but is not materialized, so final reranking cannot
+explain its omission. No answer generation or BM25 serving implementation was
+evaluated. Keep the treatment experimental and retain unmapped cases and source
+displacements as limitations. Work is paused before any further experiment,
+integration or deployment.
