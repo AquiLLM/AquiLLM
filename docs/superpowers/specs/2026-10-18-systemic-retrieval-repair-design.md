@@ -86,6 +86,11 @@ schema retention alone does not establish extraction quality.
 A frozen held-out question exposes a local pronoun being mistaken for a reference
 to a previous source. Repair bounded same-question noun anaphora generally, while
 preserving ambiguity handling and explicit source-reference authorization.
+This gate distinguishes local question content from historical source references;
+it does not choose between ordinary local subjects. A question mentioning two
+local objects must not acquire an unrelated historical document merely because
+the pronoun could refer to either object. Pass the unchanged question to retrieval
+and synthesis, while retaining actual source, citation and quotation barriers.
 
 Integration testing also exposes quadratic SQL string serialization when a large
 legacy source snapshot is saved. Replace it through a new reversible migration

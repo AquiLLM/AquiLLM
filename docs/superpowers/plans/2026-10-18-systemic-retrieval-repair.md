@@ -31,8 +31,8 @@
 
 **Interfaces:** Consume the existing `acquire_evidence` stop reasons and `PLANNER_SYSTEM` contract. Produce tests that still prove loss of support after final selection and strict deadlines with fenced late results. No production changes belong to this task.
 
-- [ ] Reproduce the four known failures using the root-owned archived test runner. Baseline evidence exists in private `publication-db-20261018T101014040538Z`.
-- [ ] Inspect why the fake planner fails and update it to the actual provider call contract. Identify planner calls using the imported contract, not obsolete prose. Preserve the asserted single planner call, single synthesis and missing source/tail support:
+- [x] Reproduce the four known failures using the root-owned archived test runner. Baseline evidence exists in private `publication-db-20261018T101014040538Z`.
+- [x] Inspect why the fake planner fails and update it to the actual provider call contract. Identify planner calls using the imported contract, not obsolete prose. Preserve the asserted single planner call, single synthesis and missing source/tail support:
 
 ```python
 assert acquired.assessment.support
@@ -41,7 +41,7 @@ assert runtime.budget.planner_calls == len(planners) == 1
 assert len(llm.calls) == 2
 ```
 
-- [ ] Update timeout diagnostics to the actual phase-specific contract while preserving the timing and late-worker assertions:
+- [x] Update timeout diagnostics to the actual phase-specific contract while preserving the timing and late-worker assertions:
 
 ```python
 assert task.result().stop_reason == "acquisition_timeout"
@@ -49,7 +49,7 @@ assert late == []
 assert budget.actions_used == 2
 ```
 
-- [ ] Ask root to run both test files with the archived runner. Review the diff, commit only these test changes, and report the exact evidence path.
+- [x] Ask root to run both test files with the archived runner. Review the diff, commit only these test changes, and report the exact evidence path.
 
 ### Task 2: Bounded planner memory and useful source scope
 
@@ -63,12 +63,12 @@ assert budget.actions_used == 2
 
 **Interfaces:** Extend `assess_coverage(..., attempts=(), latest_source_ids=())` with an optional bounded history of action kind/query/document/chunk and result/new-source counts. Existing injected assess callbacks accepting keyword arguments remain compatible. `planner_views(evidence_views, max_chars=16000, latest_source_ids=())` returns complete immutable source views, ordered in document round-robin. Prioritize groups with newly acquired sources and new sources within each group, retaining stable order otherwise. This is planner context only; final ranking remains unchanged.
 
-- [ ] Add failing synthetic tests: a first document with many chunks cannot hide a second document; a later planner sees newly acquired source views; an oversized source is not clipped into mismatched offsets; source text totals stay within 16000 characters; repeated source identities do not consume context twice.
-- [ ] Add failing orchestration tests showing the second planner receives the first attempted query/outcome, and initial external handoff is represented without inventing an unknown query. History is bounded by admitted actions, includes no raw source text, and records action failures without provider bodies.
-- [ ] Add a provider-independent test rejecting a document action for an authorized but unseen document. Validate against precisely the planner-visible source set; adjacent references must also bind to that set.
-- [ ] Implement small context helpers and thread history through the existing acquisition loop. Use source-grounded terms for a new global search; use document search for a known relevant source, adjacency only for local context. Do not force document search for every question.
-- [ ] Keep canonical duplicate detection conservative: case/Unicode/whitespace normalization may reject identical requests, but negations, numbers, scientific punctuation and different document scope must remain distinct. Do not add a semantic deduplicator.
-- [ ] Run focused context, coverage, acquisition, handoff and budget tests through root, inspect observed prompts/counts, commit and review.
+- [x] Add failing synthetic tests: a first document with many chunks cannot hide a second document; a later planner sees newly acquired source views; an oversized source is not clipped into mismatched offsets; source text totals stay within 16000 characters; repeated source identities do not consume context twice.
+- [x] Add failing orchestration tests showing the second planner receives the first attempted query/outcome, and initial external handoff is represented without inventing an unknown query. History is bounded by admitted actions, includes no raw source text, and records action failures without provider bodies.
+- [x] Add a provider-independent test rejecting a document action for an authorized but unseen document. Validate against precisely the planner-visible source set; adjacent references must also bind to that set.
+- [x] Implement small context helpers and thread history through the existing acquisition loop. Use source-grounded terms for a new global search; use document search for a known relevant source, adjacency only for local context. Do not force document search for every question.
+- [x] Keep canonical duplicate detection conservative: case/Unicode/whitespace normalization may reject identical requests, but negations, numbers, scientific punctuation and different document scope must remain distinct. Do not add a semantic deduplicator.
+- [x] Run focused context, coverage, acquisition, handoff and budget tests through root, inspect observed prompts/counts, commit and review.
 
 ```python
 views = planner_views((a1, a2, b1), max_chars=len(a1.text) + len(b1.text))
@@ -80,17 +80,17 @@ assert sum(len(view.text) for view in views) <= 16000
 
 **Files:**
 - Create: `aquillm/lib/knowledge_graph/extraction_identity.py`
-- Modify: `aquillm/apps/knowledge_graph/services/pipeline.py`
+- Modify: `aquillm/apps/knowledge_graph/extraction/pipeline.py`
 - Modify: `aquillm/apps/knowledge_graph/services/builds.py`
 - Modify: `aquillm/apps/knowledge_graph/evals/run_kg_eval.py`
 - Create focused identity tests alongside existing extraction/build tests.
 
 **Interfaces:** A pure `extraction_identity(settings)` function returns a canonical behavior fingerprint fitting the existing 128-character extractor field. It binds provider, immutable checkpoint, adapter/schema-contract version and effective inference settings. Production construction, worker comparison and evaluation use this same function. No model import is permitted in this helper.
 
-- [ ] Write failing tests: stable identity for equivalent settings; identity changes with adapter/schema-contract/inference behavior; operational cache location is not semantic identity; production and evaluation agree.
-- [ ] Inspect actual adapter inference options and pinned package version, then define a canonical sorted JSON manifest and prefixed SHA256 identity. Avoid hashing environment secrets or whole environment variables.
-- [ ] Replace duplicated identity construction and verify existing artifacts are not rewritten, while newly requested artifacts receive distinct build keys. Preserve existing source/ontology/resolver/filter bindings.
-- [ ] Run focused pure and database build identity regressions; inspect all configured-extractor call sites, commit and review.
+- [x] Write failing tests: stable identity for equivalent settings; identity changes with adapter/schema-contract/inference behavior; operational cache location is not semantic identity; production and evaluation agree.
+- [x] Inspect actual adapter inference options and pinned package version, then define a canonical sorted JSON manifest and prefixed SHA256 identity. Avoid hashing environment secrets or whole environment variables.
+- [x] Replace duplicated identity construction and verify existing artifacts are not rewritten, while newly requested artifacts receive distinct build keys. Preserve existing source/ontology/resolver/filter bindings.
+- [x] Run focused pure and database build identity regressions; inspect all configured-extractor call sites, commit and review.
 
 ```python
 identity = extraction_identity(settings)
@@ -109,10 +109,10 @@ assert identity == extraction_identity(settings)
 
 **Interfaces:** Use a shared instruction function/constant for evidence-backed synthesis across direct and post-tool initial/recovery/continuation paths. Citation repair keeps the original evidence and treats the previous answer as an untrusted draft. Coverage metadata explicitly identifies unassessed aspects without declaring the evidence absent.
 
-- [ ] Add failing path-matrix tests that inspect actual provider requests: each path preserves exact source text, source citation coordinates, qualifier requirements and allowance for a concise partial answer.
-- [ ] Remove fixed 400-900-word and unrelated methods/math requirements from post-tool recovery. Preserve relevant user requirements and main-model generation.
-- [ ] Ensure citation repair can remove unsupported assertions and restore source qualifiers; never tell it to preserve every previous claim. Do not enable the rejected model critic or claim deterministic entailment.
-- [ ] Preserve publication authorization, current evidence receipts, source-loss fallback and useful unknown-support synthesis. Run focused synthesis/retry/repair/publication regressions, commit and review.
+- [x] Add failing path-matrix tests that inspect actual provider requests: each path preserves exact source text, source citation coordinates, qualifier requirements and allowance for a concise partial answer.
+- [x] Remove fixed 400-900-word and unrelated methods/math requirements from post-tool recovery. Preserve relevant user requirements and main-model generation.
+- [x] Ensure citation repair can remove unsupported assertions and restore source qualifiers; never tell it to preserve every previous claim. Do not enable the rejected model critic or claim deterministic entailment.
+- [x] Preserve publication authorization, current evidence receipts, source-loss fallback and useful unknown-support synthesis. Run focused synthesis/retry/repair/publication regressions, commit and review.
 
 ```python
 assert supplied_source_text in captured_request
@@ -126,9 +126,9 @@ assert "400-900" not in recovery_instruction
 
 **Interfaces:** Consume the reviewed candidate from Tasks 2-4, current active ontology and pinned corpus/runtime manifests. Produce extraction rejection-stage evidence, full-study/held-out comparison, and an explicit decision on graph schema/adapter changes.
 
-- [ ] Inspect the saved read-only active ontology/build stats. Freeze general synthetic relation examples and real held-out passages before candidate extraction. Include supported relations, unsupported/ambiguous endpoints, negation and alternate dataset/metric types.
-- [ ] Run bounded offline extraction with the existing adapter and record raw-output, normalization and endpoint-validation counts. Do not infer passage-level rejection reasons from document aggregates.
-- [ ] If the evidence identifies a correctable adapter/schema defect, write a focused design addendum and failing regression before a versioned implementation. Require source provenance and typed endpoints; do not disable validation or invent graph facts. Evaluate the repair on the frozen set before any background rebuild.
+- [x] Inspect the saved read-only active ontology/build stats. Freeze general synthetic relation examples and real held-out passages before candidate extraction. Include supported relations, unsupported/ambiguous endpoints, negation and alternate dataset/metric types.
+- [x] Run bounded offline extraction with the existing adapter and record raw-output, normalization and endpoint-validation counts. Do not infer passage-level rejection reasons from document aggregates.
+- [x] If the evidence identifies a correctable adapter/schema defect, write a focused design addendum and failing regression before a versioned implementation. Require source provenance and typed endpoints; do not disable validation or invent graph facts. Evaluate the repair on the frozen set before any background rebuild.
 - [ ] Stage an immutable isolated candidate on 254. Run the full ten-question study and pre-frozen held-out questions serially with matched settings; record actions, recall, final evidence, factual correctness, citations, latency and failures separately. Preserve real model prose for independent review.
 - [ ] Run repository checks and review the whole change. Update PR247 and the authorized internal tracking issue with code, artifact, evaluation and deployment status. Keep unproven quality improvements explicit; do not merge/deploy on unit tests alone.
 
@@ -141,3 +141,24 @@ assert "400-900" not in recovery_instruction
 Disjoint SQL, graph and synthesis implementation may proceed in parallel as the
 user requested. Root serializes shared tests, model calls and commits; each change
 receives independent review before final candidate evaluation.
+
+## Verification checkpoint before live candidate evaluation
+
+Tasks 1–4 have focused regression evidence and independent review. Planner tests
+passed in two 88-test groups. Grounding passed 146 regressions and a 20-test
+review follow-up. The serializer migration passed 40 guard/integration tests and
+13 final focused tests. Local question routing passed 497 tests. Final extraction
+identity/default-adapter checks passed 72 tests; all existing artifact bindings
+and strict endpoint validation remain in place.
+
+The description-preserving graph compiler did not pass its offline quality and
+resource checks. Both tested variants produced no accepted relations within
+their bounds. The unused compiler was removed from product code; experiments
+and source adjudications are retained privately. Shared extraction versioning
+remains implemented. Existing graph extraction quality is an open limitation,
+and no graph rebuild or compiler activation is authorized by these test results.
+
+The six frozen held-out baseline cases expose premature source clarification,
+loss of useful model prose at publication, and incorrect citation/claim scope.
+The final candidate still needs the full matched question evaluation below;
+passing regression tests is not evidence of improved answer faithfulness.
