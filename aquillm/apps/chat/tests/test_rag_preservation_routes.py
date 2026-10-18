@@ -161,7 +161,9 @@ async def test_normal_model_tool_is_counted_once_and_synthesized_once(
                 output_usage=0,
                 model="test",
             )
-        if kwargs["max_tokens"] == 512:
+        from apps.chat.services.rag_coverage import PLANNER_SYSTEM
+
+        if kwargs.get("system") == PLANNER_SYSTEM:
             return LLMResponse(
                 text=(
                     '{"requested_aspects":["exception"],"support":[],"unreso'
@@ -204,13 +206,7 @@ async def test_normal_model_tool_is_counted_once_and_synthesized_once(
     assert not calls[-1].get("tools")
     assert chunks[-1].content in str(calls[-1]["messages"])
     published = send.call_args.args[0][-1]
-    assert "uncertain" in published.content
-    for chunk in chunks:
-        citation = f"[doc:{doc.id} chunk:{chunk.pk}]"
-        assert (
-            f"> Aspect {chunk.chunk_number}. {citation} "
-            f"Qualified tail: only below 1 Pa. {citation}"
-        ) in published.content
+    assert published.content == f"Only below 1 Pa [doc:{doc.id} chunk:{chunks[0].pk}]."
     assert published._validated_answer.outcome == "partial"
 
 

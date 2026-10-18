@@ -334,12 +334,9 @@ def _occurrence_action(artifacts, runs, build_key: str) -> OccurrenceAction:
 
 
 def _extractor_version(settings: object) -> str:
-    value = (
-        f"{getattr(settings, 'provider', '')}:"
-        f"{getattr(settings, 'model_id', '')}@"
-        f"{getattr(settings, 'model_revision', '')}"
-    )
-    return _text(value, "extractor version", maximum=128)
+    from lib.knowledge_graph.extraction_identity import extraction_identity
+
+    return extraction_identity(settings)
 
 
 @dataclass(frozen=True, slots=True)
@@ -474,13 +471,9 @@ def _document_context(
             getattr(settings, "model_revision", None), "extractor model revision"
         ),
         extractor_config_checksum=_identity_key(
-            "kg-extractor-config-v1",
+            "kg-extractor-config-v2",
             {
-                "provider": getattr(settings, "provider", None),
-                "device": getattr(settings, "device", None),
-                "batch_size": getattr(settings, "batch_size", None),
-                "max_batch_characters": getattr(settings, "max_batch_characters", None),
-                "local_files_only": getattr(settings, "local_files_only", None),
+                "extraction_identity": _extractor_version(settings),
                 "max_chunks": DOCUMENT_EXTRACTION_V1_MAX_CHUNKS,
                 "max_characters": DOCUMENT_EXTRACTION_V1_MAX_CHARACTERS,
                 "max_entities": DOCUMENT_EXTRACTION_V1_MAX_ENTITIES,

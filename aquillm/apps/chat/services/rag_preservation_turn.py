@@ -95,7 +95,13 @@ async def finish_preservation(
     proposal_anchors = anchors
     if proposal_anchors is None and query_proposals_enabled():
         proposal_anchors = resolve_source_anchors(question, convo)
-    proposals = await prepare_query_proposals(question, llm=llm, runtime=runtime, anchors=proposal_anchors)
+    proposals = await prepare_query_proposals(
+        question,
+        llm=llm,
+        runtime=runtime,
+        anchors=proposal_anchors,
+        initial_acquired=initial_acquired,
+    )
     acquired = await acquire_evidence(
         question,
         budget=budget,
@@ -154,7 +160,7 @@ async def finish_preservation(
         notice
         or assessment.unresolved_aspects
         or acquired.stop_reason
-        in {"partial_unknown", "completion_reserve", "action_limit", "no_progress"}
+        not in {"initial", "adequate_lookup", "assessed"}
     ):
         packet.retrieval_status = "partial" if packet.chunks else "context_limited"
         packet.diagnostic_message = (

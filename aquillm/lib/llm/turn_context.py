@@ -20,6 +20,7 @@ class TurnContext:
     max_func_calls: int = 0
     worker_cleanup: object = None
     answer_publication: AnswerPublicationContextV1 | None = None
+    initial_source_limit: int | None = None
 
 
 def current_turn():
@@ -114,7 +115,11 @@ async def call_tool_async(llm, message):
         )
     try:
         with (
-            operation_scope(state.budget)
+            operation_scope(
+                state.budget,
+                source_limit=state.initial_source_limit
+                if state.budget.actions_used == 0 else None,
+            )
             if state and is_retrieval_tool(message.tool_call_name)
             else nullcontext()
         ):

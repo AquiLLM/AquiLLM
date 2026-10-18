@@ -22,8 +22,8 @@ def test_partition_keeps_contradictory_tail_without_support_upgrade():
     "text",
     [
         "x" * 1201,
-        "Safe opening. " * 100 + "<unsafe>suffix</unsafe>",
-        "Safe opening. " * 100 + "bad [doc:foreign chunk:5]",
+        "Safe opening. " * 100 + "bad\x00suffix",
+        "Safe opening. " * 100 + "bad\x1bsuffix",
         "Safe opening. " * 100 + "x" * 1201,
         "Safe opening. " * 600,
     ],

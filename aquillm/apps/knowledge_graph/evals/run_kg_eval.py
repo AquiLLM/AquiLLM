@@ -4221,10 +4221,9 @@ def _build_production_extraction_context(
     if tuple(sorted(selected_by_collection)) != expected_scope:
         raise ComparisonAborted("live extraction collection artifact scope changed")
 
-    configured_extractor = (
-        f"{extraction_settings.provider}:{extraction_settings.model_id}@"
-        f"{extraction_settings.model_revision}"
-    )
+    from lib.knowledge_graph.extraction_identity import extraction_identity
+
+    configured_extractor = extraction_identity(extraction_settings)
     resolver_checksum = resolution_config_checksum(resolution_config)
     policy_checksum = filter_policy_checksum(filter_policy)
     for collection_id, artifact in selected_by_collection.items():

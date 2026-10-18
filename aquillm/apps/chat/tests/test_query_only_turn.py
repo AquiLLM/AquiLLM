@@ -57,7 +57,7 @@ async def test_query_only_real_turn_keeps_original_question_modes_and_ledger(mon
     async def get_message(**kwargs):
         runtime = current_source_runtime()
         assert runtime is not None and runtime.budget.planner_calls == 1
-        return SimpleNamespace(text='{"rewrite":"Explain A_12?"}')
+        return SimpleNamespace(text='{"rewrite":"Explain A_12?"}', stop_reason="stop")
 
     async def complete(request, *_args, **_kw):
         captured.append(request[-1].result_dict)

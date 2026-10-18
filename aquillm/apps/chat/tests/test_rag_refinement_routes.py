@@ -87,7 +87,10 @@ async def test_configured_cap_gathers_then_selects_and_synthesizes_once(
         assert {r["chunk_id"] for r in delivered.chunks} == {c.pk for c in chunks[:cap]}
     assert len(searches) == cap
     assert len(planners) == cap - 1
-    assert all(p["max_tokens"] == 512 for p in planners)
+    assert all(
+        p["max_tokens"] == runtime.budget.limits.planner_output_tokens for p in planners
+    )
+    assert all(p["thinking_budget"] == 0 for p in planners)
     assert len(selections) == len(synthesis) == 1
 
 
@@ -109,7 +112,6 @@ async def test_manual_revocation_before_handoff_has_no_provider_request(
         CollectionPermission.objects.filter(user=user).delete()
         return result
 
-    from unittest.mock import AsyncMock
     provider_calls = []
     async def complete(*args, **kwargs):
         provider_calls.append(True)
@@ -167,11 +169,5 @@ async def test_all_off_keeps_the_legacy_direct_route(docs, monkeypatch):
         )
     assert len(llm.calls) == 1
     message = consumer.convo[-1]
-    assert message.content.startswith(
-        "Support for an answer is uncertain in the selected evidence. "
-        "These are attributed excerpts, not a conclusion about the question:\n\n")
-    assert (
-        f"> Aspect 0. {citation} Qualified tail: only below 1 Pa. {citation}"
-    ) in message.content
-    assert "Legacy answer" not in message.content
+    assert message.content == f"Legacy answer {citation}."
     assert message._validated_answer.outcome == "partial"

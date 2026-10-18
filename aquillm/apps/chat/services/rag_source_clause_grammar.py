@@ -21,6 +21,60 @@ _QUESTION = re.compile(
 )
 _WORD = r"[^\W\d_][\w-]*"
 _PROCESS_NOUN_LIMIT = 6
+_LOCAL_WINDOW = 512
+_SOURCE_WORD = re.compile(r"\b(?:papers?|reports?|documents?|sources?)\b", re.I)
+_NOUN_INTRODUCTION = re.compile(
+    r"\b(?:a|an)\s+(?P<subject>(?:" + _WORD + r"\s+){0,5}?" + _WORD
+    + r")\s+(?:to|is|was|has|had|can|could|will|would)\s+" + _WORD + r"\b", re.I,
+)
+_COORDINATED_POSSESSIVE = re.compile(
+    r"(?:[,;]\s*(?:and\s+)?|\band\s+)(?:what|how)\s+(?:" + _AUXILIARY + r")\s+$", re.I,
+)
+_NAMED_AUTHORS = re.compile(
+    r"(?i:\b(?:authors|researchers|investigators)\s+of\s+)"
+    r"(?P<name>\"[^\"\n]+\"|“[^”\n]+”|[A-Z][\w-]*"
+    r"(?:\s+(?:(?:of|the|and|in|for|on|to|under|across|through)\s+)?[A-Z][\w-]*){1,17})"
+    r"\s+[a-z][\w-]*\b",
+)
+
+
+def _local_noun_possessive(question, start, references, quotes):
+    """Bound a local noun clause without choosing the pronoun's referent."""
+    before = question[:start]
+    continuation = _COORDINATED_POSSESSIVE.search(before)
+    if continuation is None:
+        return False
+    boundary = max(
+        (match.end() for match in re.finditer(r"[.!?\n]", before)), default=0)
+    introductions = tuple(_NOUN_INTRODUCTION.finditer(
+        question, max(boundary, start - _LOCAL_WINDOW), continuation.start()))
+    if not introductions:
+        return False
+    # This is a locality boundary, not the selected semantic antecedent. Multiple
+    # ordinary nouns stay in the original query for retrieval and model reasoning.
+    introduction = introductions[0]
+    return not (
+        _SOURCE_WORD.search(question, introduction.start(), start)
+        or _overlap(introduction.start(), start, quotes)
+        or any(introduction.start() <= left < start for left, _, _, _ in references)
+    )
+
+
+def _local_authors(question, start, references, quotes):
+    """People attached to an explicit local name are not historical papers."""
+    before = question[:start]
+    boundary = max(
+        (match.end() for match in re.finditer(r"[.!?;\n]", before)), default=0)
+    introductions = tuple(_NAMED_AUTHORS.finditer(
+        question, max(boundary, start - _LOCAL_WINDOW), start))
+    if len(introductions) != 1:
+        return False
+    introduction = introductions[0]
+    return not (
+        _overlap(introduction.start(), introduction.start() + 1, quotes)
+        or _SOURCE_WORD.search(question, introduction.end(), start)
+        or any(introduction.start() <= left < start for left, _, _, _ in references)
+    )
 
 
 def auxiliary_source_pronoun(question, start, end):
@@ -47,7 +101,8 @@ def _local_auxiliary_subject(question, start, end, references, quotes):
         + r"(?![\w-])[^.!?;\n]*\?", re.I,
     )
     for introduction in earlier.finditer(question, 0, start):
-        words = {word.casefold() for word in re.findall(_WORD, introduction.group("subject"))}
+        words = {word.casefold() for word in re.findall(
+            _WORD, introduction.group("subject"))}
         if (not words.intersection(_SOURCE | {word + "s" for word in _SOURCE})
                 and not _overlap(introduction.start(), start, quotes)
                 and not any(introduction.start() <= left < start
@@ -70,7 +125,8 @@ def _local_process(question, start, end, references, quotes):
         + re.escape(predicate.group(1)) + r"(?![\w-])[^.!?;\n]*\?", re.I,
     )
     for introduction in earlier.finditer(question, 0, start):
-        words = {word.casefold() for word in re.findall(_WORD, introduction.group("subject"))}
+        words = {word.casefold() for word in re.findall(
+            _WORD, introduction.group("subject"))}
         if (not words.intersection(_SOURCE | {word + "s" for word in _SOURCE})
                 and not _overlap(introduction.start(), start, quotes)
                 and not any(introduction.start() <= left < start
@@ -86,7 +142,8 @@ def _overlap(start, end, spans):
 def _barrier(start, end, references):
     return any(
         start <= left < end
-        and (kind in {"citation", "document", "ordinal", "title", "named_source", "plural"}
+        and (kind in {
+            "citation", "document", "ordinal", "title", "named_source", "plural"}
              or (kind == "singular" and " " in value))
         for left, _, kind, value in references
     )
@@ -102,9 +159,13 @@ def local_reference_spans(question, references):
         cue = value.casefold()
         if kind == "singular" and cue == "it":
             if (_local_process(question, start, end, references, quotes)
-                    or _local_auxiliary_subject(question, start, end, references, quotes)):
+                    or _local_auxiliary_subject(
+                        question, start, end, references, quotes)):
                 local.append((start, end))
         elif kind == "singular" and cue == "its":
+            if _local_noun_possessive(question, start, references, quotes):
+                local.append((start, end))
+                continue
             possessors = tuple(_POSSESSOR.finditer(question, 0, start))
             if possessors:
                 possessor = possessors[-1]
@@ -112,6 +173,9 @@ def local_reference_spans(question, references):
                         and not _overlap(*possessor.span(), quotes)
                         and not _barrier(possessor.end(), start, references)):
                     local.append((start, end))
+        elif kind == "plural" and cue == "their":
+            if _local_authors(question, start, references, quotes):
+                local.append((start, end))
         elif kind == "plural" and cue == "them":
             introductions = tuple(_QUANTIFIED.finditer(question, 0, start))
             if introductions:
@@ -141,7 +205,8 @@ def source_predicate_spans(question, references):
     predicates = []
     for start, end, kind, value in references:
         if (kind != "singular"
-                or not re.fullmatch(r"(?:this|that)\s+(?:paper|report|document|source)", value, re.I)
+                or not re.fullmatch(
+                    r"(?:this|that)\s+(?:paper|report|document|source)", value, re.I)
                 or _overlap(start, end, quotes)
                 or not _INTERROGATIVE.search(question[:start])
                 or _NAMED_QUOTE.match(question, end)):

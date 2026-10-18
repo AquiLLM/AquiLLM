@@ -9,12 +9,13 @@ from django.contrib.auth import get_user_model
 from apps.chat.services.rag_evidence import EvidencePacket
 from apps.documents.tests.representation_support import upload as upload
 from apps.documents.tests.test_representation_media import figure as figure
-from .legacy_publication_support import publication_source
 from aquillm.message_adapters import save_conversation_to_db
 from aquillm.models import WSConversation
 from lib.llm.turn_context import TurnContext, bind_turn
 from lib.llm.types.conversation import Conversation
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+
+from .legacy_publication_support import publication_source
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -109,7 +110,10 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
         events.append(payload)
 
     with bind_turn(state):
-        from apps.documents.services.representation_media_acquisition import initialize_media_runtime, chunk_media_url
+        from apps.documents.services.representation_media_acquisition import (
+            chunk_media_url,
+            initialize_media_runtime,
+        )
         initialize_media_runtime(consumer, state)
         if route.startswith("figure_"):
             url = chunk_media_url(chunk)
@@ -143,8 +147,7 @@ def test_legacy_direct_synthesis_binds_actual_selected_database_source(
                 Model(), convo, packet, stream_func=stream, max_tokens=1024
             )
         if change is None:
-            assert "uncertain" in result[-1].content
-            assert f"> {source} {citation}" in result[-1].content
+            assert result[-1].content == f"{source} {citation}"
             assert result[-1]._validated_answer.outcome == "partial"
         else:
             assert result[-1].content == LIMITED_ANSWER

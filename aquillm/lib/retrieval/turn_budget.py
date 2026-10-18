@@ -14,27 +14,12 @@ from time import monotonic
 
 from .budget_observation import observed_budget
 from .evidence import SourceIdentity
+from .turn_limits import PILOT_MAX as _PILOT_MAX
 
 # Actual transports share this weighted, non-waiting admission across all turns.
 # Fleet capacity is worker process count times six until service admission exists.
 _PROCESS_PAIR_LOCK = RLock()
 _PROCESS_PAIRS = 0
-
-_PILOT_MAX = {
-    "actions": 3,
-    "unique_sources": 45,
-    "materialized_codepoints": 250_000,
-    "tokenized_codepoints": 1_000_000,
-    "acquisition_pairs": 90,
-    "final_pairs": 45,
-    "in_flight_pairs": 6,
-    "planner_calls": 2,
-    "planner_call_ms": 2_000,
-    "planner_output_tokens": 512,
-    "retrieval_ms": 30_000,
-    "final_scoring_ms": 3_000,
-}
-
 
 @dataclass(frozen=True, slots=True)
 class TurnLimits:
@@ -46,8 +31,8 @@ class TurnLimits:
     final_pairs: int = 45
     in_flight_pairs: int = 6
     planner_calls: int = 2
-    planner_call_ms: int = 2_000
-    planner_output_tokens: int = 512
+    planner_call_ms: int = 5_000
+    planner_output_tokens: int = 1024
     retrieval_ms: int = 15_000
     final_scoring_ms: int = 3_000
 
@@ -162,10 +147,19 @@ class TurnBudget:
                 return False
             if identity in self._sources:
                 return True
-            if len(self._sources) >= self.limits.unique_sources:
+            if self.remaining_source_capacity() <= 0:
                 return False
             self._sources.add(identity)
             return True
+
+    def remaining_source_capacity(self) -> int:
+        """Novel sources available to this action on the original shared ledger."""
+        from .operation import operation_source_limit
+
+        with self._lock:
+            if not self._open():
+                return 0
+            return max(0, operation_source_limit(self) - len(self._sources))
 
     def reserve_pairs(self, count: int, *, phase: str) -> bool:
         if (

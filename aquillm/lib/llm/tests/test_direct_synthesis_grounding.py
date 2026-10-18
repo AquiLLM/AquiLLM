@@ -4,98 +4,39 @@ from copy import deepcopy
 
 import pytest
 
+from lib.llm.providers.base import LLMInterface
 from lib.llm.providers.complete_turn import complete_conversation_turn
 from lib.llm.providers.request_observability import observability_scope
+from lib.llm.tests.grounding_test_support import (
+    _assert_grounded_request,
+    _conversation,
+    _ModelBoundary,
+    _selected_packet,
+)
 from lib.llm.tests.test_answer_publication import synthetic_publication
 from lib.llm.types.conversation import Conversation
-from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
+from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
 
 
-def _conversation():
-    return Conversation(
-        system="Answer the user from documents.",
-        messages=[
-            UserMessage(content="Compare the improvements reported by both papers."),
-            AssistantMessage(
-                content="",
-                stop_reason="tool_use",
-                tool_call_id="search",
-                tool_call_name="vector_search",
-                tool_call_input={},
-            ),
-            ToolMessage(
-                content="Paper A reports 18%; Paper B reports 7%.",
-                tool_name="vector_search",
-                for_whom="assistant",
-                result_dict={
-                    "result": [
-                        {"doc_id": "a", "chunk_id": 1, "text": "Improvement was 18%."},
-                        {"doc_id": "b", "chunk_id": 2, "text": "Improvement was 7%."},
-                    ]
-                },
-            ),
-        ],
-    )
-
-
-def _selected_packet(convo, image_urls=()):
-    from apps.chat.services.rag_evidence import EvidencePacket
-
-    return EvidencePacket(
-        list(convo[-1].result_dict["result"]),
-        list(image_urls),
-        ["[doc:a chunk:1]", "[doc:b chunk:2]"],
-        convo[0].content,
-        "synthetic selected papers",
-        "results_found",
-        "",
-        20,
-    )
-
-
-class _ModelBoundary:
-    base_args = {}
-
-    def __init__(self, empty_attempts):
-        self.requests = []
-        self.empty_attempts = empty_attempts
-
-    async def get_message(self, **kwargs):
-        self.requests.append(deepcopy(kwargs))
-        text = ""
-        if len(self.requests) > self.empty_attempts:
-            text = (
-                "Paper A reports 18% improvement and Paper B reports 7%, a difference "
-                "of 11 percentage points [doc:a chunk:1] [doc:b chunk:2]."
-            )
-        return LLMResponse(
-            text=text,
-            tool_call={},
-            stop_reason="stop",
-            input_usage=1,
-            output_usage=1,
-            model="grounding-fixture",
-        )
-
-
-async def test_direct_initial_and_all_empty_retries_avoid_expanding_beyond_evidence(
+@pytest.mark.parametrize("stage", ["direct_synthesis", "post_tool_synthesis", None])
+async def test_document_initial_and_all_empty_retries_preserve_grounding(
     monkeypatch,
+    stage,
 ):
     monkeypatch.setenv("LLM_POST_TOOL_SYNTHESIS_RETRIES", "4")
     convo = _conversation()
     model = _ModelBoundary(empty_attempts=4)
 
-    with observability_scope("grounding-direct", "direct_synthesis"):
+    with (
+        synthetic_publication(packet=_selected_packet(convo)),
+        observability_scope("grounding-direct", stage),
+    ):
         result, _ = await complete_conversation_turn(model, convo, 1024)
 
     assert len(model.requests) == 5
     for request in model.requests:
-        system = request["system"]
-        assert "proportionate" in system
-        assert "depth requested" in system
-        assert "concise" not in system
-        assert "thorough" not in system
+        _assert_grounded_request(request)
     for request in model.requests[1:]:
         prompt = request["messages"][-1]["content"]
         assert "400-900" not in prompt
@@ -111,16 +52,78 @@ async def test_direct_initial_and_all_empty_retries_avoid_expanding_beyond_evide
     assert result.system == "Answer the user from documents."
 
 
-async def test_standard_tool_synthesis_retains_existing_depth_instructions(monkeypatch):
+async def test_non_document_tool_recovery_keeps_ordinary_contract(monkeypatch):
     monkeypatch.setenv("LLM_POST_TOOL_SYNTHESIS_RETRIES", "1")
-    model = _ModelBoundary(empty_attempts=1)
+
+    class OrdinaryModel(_ModelBoundary):
+        async def get_message(self, **kwargs):
+            response = await super().get_message(**kwargs)
+            if response.text:
+                response.text = (
+                    "The weather service reports clear skies in the requested city."
+                )
+            return response
+
+    model = OrdinaryModel(empty_attempts=1)
+    convo = Conversation(
+        system="Use the current result.",
+        messages=[
+            UserMessage(content="What is the weather?"),
+            ToolMessage(
+                content="Clear skies", tool_name="weather", for_whom="assistant"
+            ),
+        ],
+    )
 
     with observability_scope("grounding-standard", "post_tool_synthesis"):
-        await complete_conversation_turn(model, _conversation(), 1024)
+        await complete_conversation_turn(model, convo, 1024)
 
     assert len(model.requests) == 2
-    assert "thorough, well-structured" in model.requests[0]["system"]
+    assert "current tool result" in model.requests[0]["system"]
+    assert "Selected evidence grounding rules" not in model.requests[0]["system"]
     assert "400-900" in model.requests[1]["messages"][-1]["content"]
+
+
+@pytest.mark.parametrize("stage", ["direct_synthesis", "post_tool_synthesis"])
+async def test_document_continuation_keeps_source_text_and_shared_contract(
+    stage, monkeypatch
+):
+    monkeypatch.setenv("LLM_CONTINUE_ON_CUTOFF", "1")
+
+    class CutoffModel(_ModelBoundary):
+        _continue_cutoff_response = LLMInterface._continue_cutoff_response
+
+        async def get_message(self, **kwargs):
+            self.requests.append(deepcopy(kwargs))
+            first = len(self.requests) == 1
+            return LLMResponse(
+                text=(
+                    "Paper A reports 18% improvement under dry conditions "
+                    "[doc:a chunk:1]. "
+                    "The comparison with the second paper is"
+                    if first
+                    else "limited to dry conditions, where Paper B reports 7% "
+                    "[doc:b chunk:2]."
+                ),
+                tool_call={},
+                stop_reason="max_tokens" if first else "stop",
+                input_usage=1,
+                output_usage=1,
+                model="continuation-fixture",
+            )
+
+    model = CutoffModel(0)
+    convo = _conversation()
+    with (
+        synthetic_publication(packet=_selected_packet(convo)),
+        observability_scope("grounding-continuation", stage),
+    ):
+        result, _ = await complete_conversation_turn(model, convo, 1024)
+    assert len(model.requests) == 2
+    assert model.requests[1]["_synthesis_phase"] == "continuation"
+    for request in model.requests:
+        _assert_grounded_request(request)
+    assert "limited to dry conditions" in result[-1].content
 
 
 @pytest.mark.parametrize("stage", ["direct_synthesis", "post_tool_synthesis"])
@@ -132,7 +135,7 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
 ):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "1")
     initial = (
-        "- Paper A reports an 18% improvement in the measured outcome. "
+        "- Paper A reports an 18% improvement in all conditions. "
         "This is the reported value for that study [doc:a chunk:1].\n"
         "- Paper B reports a 7% improvement in the measured outcome. "
         "This is the reported value for the other study [doc:b chunk:2].\n"
@@ -140,7 +143,8 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
         "This calculation subtracts 7 from 18."
     )
     repaired = (
-        "- Paper A reports an 18% improvement [doc:a chunk:1].\n"
+        "- Paper A reports an 18% improvement under dry conditions; the wet "
+        "condition was unassessed [doc:a chunk:1].\n"
         "- Paper B reports a 7% improvement [doc:b chunk:2].\n"
         "- The arithmetic difference is 11 percentage points "
         "[doc:a chunk:1] [doc:b chunk:2]."
@@ -184,12 +188,23 @@ async def test_direct_uncited_comparison_is_repaired_before_deferred_stream(
             1024,
             stream_func=capture,
         )
+        await result[-1]._answer_publication_context.verify(
+            result[-1]._validated_answer, content=result[-1].content, sink="persist"
+        )
 
     assert len(requests) == 2
-    assert "11 percentage points" not in result[-1].content
-    assert "uncertain" in result[-1].content
-    assert "> Improvement was 18%. [doc:a chunk:1]" in result[-1].content
-    assert "> Improvement was 7%. [doc:b chunk:2]" in result[-1].content
+    for request in requests:
+        _assert_grounded_request(request)
+    repair_prompt = requests[1]["messages"][-1]["content"]
+    assert "untrusted draft" in repair_prompt
+    assert "Remove unsupported assertions" in repair_prompt
+    assert "Restore material qualifications" in repair_prompt
+    assert "not evidence" in repair_prompt
+    assert result[-1].content == repaired + (
+        "\n\nSources:\n- [doc:a chunk:1]\n- [doc:b chunk:2]"
+    )
+    assert result[-1]._validated_answer.outcome == "partial"
+    assert "![" not in result[-1].content
     assert len(stream_payloads) == 1
     assert stream_payloads[0]["done"] is True
     assert stream_payloads[0]["content"] == result[-1].content
@@ -236,6 +251,16 @@ async def test_uncited_numeric_prose_is_repaired_for_every_rag_synthesis(
         streamed.append(payload)
 
     convo = _conversation()
+    # This test checks citation repair, not lexical entailment. Give the model
+    # matching source units and conditions for the comparison it is asked to make.
+    convo[0].content = "Compare the dry-mode and humid-mode capacities."
+    convo[-1].content = "Dry mode reports 18 litres per cycle; humid mode reports 7."
+    convo[-1].result_dict["result"][0]["text"] = (
+        "Dry-mode capacity is 18 litres per cycle."
+    )
+    convo[-1].result_dict["result"][1]["text"] = (
+        "Humid-mode capacity is 7 litres per cycle."
+    )
     with (
         synthetic_publication(packet=_selected_packet(convo)),
         observability_scope("numeric-comparison", stage),
@@ -248,9 +273,9 @@ async def test_uncited_numeric_prose_is_repaired_for_every_rag_synthesis(
         )
 
     assert len(requests) == 2
-    assert "litres per cycle" not in result[-1].content
-    assert "uncertain" in result[-1].content
-    assert "> Improvement was 18%. [doc:a chunk:1]" in result[-1].content
-    assert "> Improvement was 7%. [doc:b chunk:2]" in result[-1].content
+    assert result[-1].content == repaired + (
+        "\n\nSources:\n- [doc:a chunk:1]\n- [doc:b chunk:2]"
+    )
+    assert result[-1]._validated_answer.outcome == "partial"
     assert len(streamed) == 1
     assert streamed[0]["content"] == result[-1].content

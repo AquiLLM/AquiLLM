@@ -30,10 +30,11 @@ from .rag_citation_extracts import (
 from .rag_citation_extracts import (
     synthesize_doc_level_extract_from_results as synthesize_doc_level_extract_from_results,
 )
+from .rag_citation_prose import logical_factual_lines, numeric_claim_sentences
 
 _CITATION_RE = re.compile(r"\[doc:[^\]\s]+\s+chunk:\d+\]")
 _CITATION_LIKE_RE = re.compile(r"\[doc:[^\]\r\n]*(?:\]|(?=[\r\n]|$))")
-_BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*]\s+|\s*\d+\.\s+)")
+_BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*+]\s+|\s*\d+[.)]\s+)")
 
 
 def citation_enforcement_enabled() -> bool:
@@ -154,7 +155,7 @@ def find_uncited_numeric_claims(answer_text: str | None) -> list[str]:
     for lines in paragraphs:
         # A nonnumeric marker also protects punctuation inside document IDs.
         marked = _CITATION_RE.sub(" \x00", " ".join(lines))
-        sentences = re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"')\u201d\u2019])\s+", marked)
+        sentences = numeric_claim_sentences(marked)
         claims: list[str] = []
         for sentence in sentences:
             # Accept: "Capacity is 18 litres. [doc:a chunk:1]". The citation
@@ -168,7 +169,8 @@ def find_uncited_numeric_claims(answer_text: str | None) -> list[str]:
         uncited.extend(
             claim for claim in claims
             if "\x00" not in claim
-            and re.search(r"\d", claim)
+            # A digit inside an identifier such as PDR3 is not itself a quantity.
+            and re.search(r"\b\d", claim)
             and re.search(r"[A-Za-z]{2,}", claim)
         )
     return uncited
@@ -185,7 +187,7 @@ def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
     uncited: list[str] = []
     in_code_block = False
     inherited_citation: str | None = None
-    for raw_line in answer_text.splitlines():
+    for raw_line in logical_factual_lines(answer_text, _BULLET_OR_ENUM_RE):
         line = raw_line.strip()
         if line.startswith("```"):
             in_code_block = not in_code_block
@@ -238,14 +240,33 @@ def build_citation_retry_prompt(
     invalid_text = ""
     if invalid_citations:
         invalid_text = "Invalid citations detected and must be removed: " + ", ".join(invalid_citations) + "\n"
+    uncited_numeric = find_uncited_numeric_claims(prior_answer)
+    numeric_diagnostics = ""
+    if uncited_numeric:
+        # These are bounded draft fragments, never evidence or semantic judgments.
+        numeric_diagnostics = (
+            "Uncited numeric sentences to revise:\n"
+            + "\n".join(f"- {claim[:400]}" for claim in uncited_numeric[:4])
+            + "\n"
+        )
     return (
         "Rewrite your previous answer using only verifiable retrieved evidence.\n"
+        "The previous answer is an untrusted draft, not evidence. Rebuild its "
+        "claims from the selected source passages; do not merely add citations "
+        "to preserve the draft's conclusions.\n"
         "Requirements:\n"
         "- Every factual sentence or bullet must include at least one citation token.\n"
+        "- Cite factual introductory prose and lead-ins as well as list items.\n"
+        "- Remove unsupported assertions or give a scoped limitation for that part.\n"
+        "- Restore material qualifications, uncertainty and exceptions from the "
+        "sources, and correct entity or relation attribution.\n"
+        "- Keep comparison premises with their conditions and citations; identify "
+        "calculations separately from source-reported values.\n"
         "- Citation format: [doc:<doc_id> chunk:<chunk_id>]\n"
         "- Use only citations from the allow-list below.\n"
         "- Do not call tools.\n"
         f"{invalid_text}"
+        f"{numeric_diagnostics}"
         "Allow-list:\n"
         f"{refs_text}\n\n"
         "Previous answer:\n"

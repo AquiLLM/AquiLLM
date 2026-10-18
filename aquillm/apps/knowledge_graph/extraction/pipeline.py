@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from lib.knowledge_graph.extraction_identity import extraction_contract
+from lib.knowledge_graph.extraction_identity import (
+    extraction_identity as _extractor_identity,
+)
+
 from .evidence import (
     ExtractedDocumentEvidence,
     ExtractionCapacityCode,
@@ -754,13 +759,6 @@ def _build_backend(settings):
     return get_extraction_backend(settings=settings)
 
 
-def _extractor_identity(settings) -> str:
-    identity = f"{settings.provider}:{settings.model_id}@{settings.model_revision}"
-    if len(identity) > 128:
-        raise ValueError("configured extractor identity exceeds artifact storage")
-    return identity
-
-
 def document_artifact_identity_values(
     document_id,
     expected_source_hash: str,
@@ -1167,6 +1165,8 @@ def extract_into_build(
                 "provider": settings.provider,
                 "model_id": settings.model_id,
                 "model_revision": settings.model_revision,
+                "extraction_identity": _extractor_identity(settings),
+                "extraction_contract": extraction_contract(settings).to_dict(),
                 "ontology_checksum": ontology.checksum,
                 "extraction_evidence_fingerprint": evidence_fingerprint,
                 "extraction_commit": {
