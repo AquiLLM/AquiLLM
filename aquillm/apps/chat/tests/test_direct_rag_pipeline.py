@@ -6,7 +6,7 @@ from json import dumps
 from types import SimpleNamespace
 import pytest
 from .persisted_direct_test_support import close_direct_worker as close_direct_worker
-from .direct_rag_test_support import _synthesize, _admit_query, _retrieval, _assert_default_excerpt
+from .direct_rag_test_support import _synthesize, _admit_query, _retrieval, _assert_generated_answer
 
 pytestmark = pytest.mark.usefixtures("close_direct_worker")
 from unittest.mock import AsyncMock, Mock
@@ -112,7 +112,7 @@ async def test_handled_retrieves_before_llm(monkeypatch):
     assert outcome == "handled"
     assert order == ["retrieval", "synthesis"]
     llm_if.get_message.assert_not_called()
-    _assert_default_excerpt(consumer, draft="Answer")
+    _assert_generated_answer(consumer, draft="Answer [doc:doc-a chunk:1].")
 
 
 async def test_candidate_pool_is_larger_than_final_packet(monkeypatch):
@@ -551,4 +551,4 @@ async def test_stream_disconnect_does_not_turn_direct_rag_into_tool_fallback(
 
     assert outcome == "handled"
     assert consumer.transport_connected is False
-    _assert_default_excerpt(consumer, draft="Grounded answer")
+    _assert_generated_answer(consumer, draft="Grounded answer [doc:doc-a chunk:1]")

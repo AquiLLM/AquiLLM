@@ -28,6 +28,46 @@ def test_cited_section_reference_keeps_author_year_in_one_claim(author_year):
 
 
 @pytest.mark.parametrize(
+    "author_year",
+    ["Bosch et al. (2018a)", "Bosch et al.(2018a)", "Bosch et al.\n(2018a)"],
+)
+def test_parenthesized_author_year_can_be_followed_by_cited_prose(author_year):
+    answer = (
+        f"The source references Section 4.9.9 of {author_year} "
+        f"for the measurement procedures {_CITATION}."
+    )
+
+    assert citations.find_uncited_numeric_claims(answer) == []
+    assert citations.response_has_required_citations(
+        answer, {_CITATION}, require_cited_numeric_claims=True
+    )
+
+
+@pytest.mark.parametrize("separator", [". ", "\n\n"])
+def test_parenthesized_author_year_does_not_cross_real_claim_boundaries(separator):
+    claim = "The estimate is 18 according to Bosch et al. (2018a)"
+    answer = f"{claim}{separator}Another estimate is 7 {_CITATION}."
+
+    assert citations.find_uncited_numeric_claims(answer) == [
+        claim + ("." if separator.startswith(".") else "")
+    ]
+    assert not citations.response_has_required_citations(
+        answer, {_CITATION}, require_cited_numeric_claims=True
+    )
+
+
+@pytest.mark.parametrize("quantity", ["(2020.5)", "(2020 observations)"])
+def test_parenthesized_quantities_are_not_treated_as_closed_author_years(quantity):
+    claim = "The estimate is 18 according to Bosch et al."
+    answer = f"{claim} {quantity} observations were collected {_CITATION}."
+
+    assert citations.find_uncited_numeric_claims(answer) == [claim]
+    assert not citations.response_has_required_citations(
+        answer, {_CITATION}, require_cited_numeric_claims=True
+    )
+
+
+@pytest.mark.parametrize(
     "uncited",
     [
         "The estimate is 18 according to Bosch et al.",

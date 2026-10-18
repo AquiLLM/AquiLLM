@@ -4,11 +4,12 @@ import re
 
 
 def numeric_claim_sentences(marked):
-    # Protect only a bounded author-year reference, not a following sentence
-    # starting with a four-digit quantity ("et al. 2020 observations...").
+    # Closed parenthesized years can continue into prose. Bare years still need
+    # a boundary, so "et al. 2020 observations..." remains separate sentences.
     protected = re.sub(
         r"(?i)(\bet[ \t]+al)\."
-        r"(?=[ \t]*\d{4}[a-z]?(?:[ \t]*(?:[\x00),;:!?]|\.(?!\d))|[ \t]*$))",
+        r"(?=[ \t]*(?:\(\d{4}[a-z]?\)"
+        r"|\d{4}[a-z]?(?:[ \t]*(?:[\x00),;:!?]|\.(?!\d))|[ \t]*$)))",
         lambda match: match[1] + "\x01",
         marked,
     )
