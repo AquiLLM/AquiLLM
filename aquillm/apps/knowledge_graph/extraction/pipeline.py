@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from lib.knowledge_graph.extraction_identity import extraction_contract
 from lib.knowledge_graph.extraction_identity import (
-    extraction_contract,
     extraction_identity as _extractor_identity,
 )
 

@@ -220,7 +220,9 @@ async def test_normal_handoff_refinement_obeys_strict_tool_deadline(docs, monkey
             assert not release.is_set() and not finished.is_set()
             await task
             assert not finished.is_set()
-            assert runtime.observation["acquisition"].stop_reason == "acquisition_timeout"
+            assert (
+                runtime.observation["acquisition"].stop_reason == "acquisition_timeout"
+            )
             assert runtime.budget.actions_used == 2
         finally:
             release.set()
