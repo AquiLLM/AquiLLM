@@ -1,4 +1,8 @@
 # Dedicated, deliberately isolated runtime for NVIDIA Nemotron 3.5 ASR.
+FROM ubuntu:22.04 AS mimalloc-builder
+COPY deploy/docker/mimalloc/build.sh deploy/docker/mimalloc/verify.c /build/
+RUN sh /build/build.sh
+
 FROM vllm/vllm-openai:v0.21.0
 
 USER root
@@ -28,4 +32,7 @@ RUN python3 -c "import importlib.metadata as m; print('vLLM', m.version('vllm'))
     && python3 /probe_nemotron_plugin.py --generation-config /opt/aquillm/nemotron-generation-config
 
 EXPOSE 8000
-ENTRYPOINT ["/vllm_start.sh"]
+COPY --from=mimalloc-builder /opt/mimalloc/ /opt/mimalloc/
+COPY --chmod=755 deploy/scripts/with_mimalloc.sh /usr/local/bin/aquillm-allocator
+ENV AQUILLM_ALLOCATOR=mimalloc
+ENTRYPOINT ["/usr/local/bin/aquillm-allocator", "/vllm_start.sh"]
