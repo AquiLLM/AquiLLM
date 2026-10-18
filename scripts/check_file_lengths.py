@@ -94,7 +94,7 @@ _BASELINE_MAX_LINES: dict[str, int] = {
     "aquillm/apps/knowledge_graph/tests/test_topology_snapshot_bounds.py": 317,
     "aquillm/aquillm/crawler_tasks.py": 425,
     "aquillm/aquillm/memory.py": 428,
-    "aquillm/aquillm/settings.py": 485,
+    "aquillm/aquillm/settings.py": 480,
     "aquillm/aquillm/utils.py": 418,
     "aquillm/lib/knowledge_graph/extractors/gliner2_local.py": 510,
     "aquillm/lib/knowledge_graph/query_extractor/service.py": 389,
