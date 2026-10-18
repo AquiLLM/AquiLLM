@@ -1,0 +1,6 @@
+[
+  "[WARNING:aquillm.h100] AQUILLM_H100 {\"status\": \"installed\", \"mtp\": \"baseline\", \"split\": \"baseline\", \"prefill\": false, \"prefill_reason\": \"post-Genesis prefill method fingerprint mismatch\", \"prefill_profile\": null, \"prefill_qualification\": null, \"gdn\": \"baseline\", \"gdn_qualification\": null, \"gdn_prefill_int64_offsets\": true}",
+  "(EngineCore pid=196) [WARNING:aquillm.h100] AQUILLM_H100 {\"status\": \"installed\", \"mtp\": \"baseline\", \"split\": \"baseline\", \"prefill\": true, \"prefill_reason\": \"measured_profile_and_runtime_abi_validated\", \"prefill_profile\": \"h100-long-prefill-dev-v1\", \"prefill_qualification\": \"experimental_pending_serving\", \"gdn\": \"baseline\", \"gdn_qualification\": null, \"gdn_prefill_int64_offsets\": true}",
+  "(EngineCore pid=196) [WARNING:aquillm.h100] AQUILLM_H100 prefill_constructor revision_present=True revision_match=True configured_fa=2 backend_fa=2 kwargs_keys=() causal=True sliding_window=False soft_cap=False",
+  "(EngineCore pid=196) [WARNING:aquillm.h100] AQUILLM_H100 route_exercised prefill runtime=0dcfb87a9f4006b123a71ebee9bc64a4593d47f0fca7815a46637c7946d2993e cached_len=32768 query_len=4096"
+]

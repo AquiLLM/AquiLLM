@@ -1,0 +1,391 @@
+{
+  "prefix": "fi0618-fixed",
+  "kind": "screening_not_statistical_qualification",
+  "arms": {
+    "baseline": {
+      "strict": {
+        "requests": 32,
+        "passed": 32,
+        "failed_cases": []
+      },
+      "long": {
+        "requests": 6,
+        "passed": 6,
+        "failed_cases": []
+      },
+      "latency": {
+        "(512, 256)": {
+          "requests": 3,
+          "median_ttft_s": 0.1075035500107333,
+          "median_total_s": 1.79586944100447,
+          "aggregate_decode_ms_per_token": 6.621101964721639,
+          "output_tokens_per_second": 142.54783320270278,
+          "output_hashes": [
+            "9718b5b4f374e2485708d3e1c60c3453700c0a17dc9ce4427bdfbe017afb2c7d"
+          ],
+          "input_hashes": [
+            "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7"
+          ]
+        },
+        "(8192, 256)": {
+          "requests": 3,
+          "median_ttft_s": 1.274506014000508,
+          "median_total_s": 3.393356225991738,
+          "aggregate_decode_ms_per_token": 8.308569041824157,
+          "output_tokens_per_second": 75.45321066789424,
+          "output_hashes": [
+            "a7de0b12d042dc0b97cdf6f455744fc69285473d4473f5d8a994d71d67383704"
+          ],
+          "input_hashes": [
+            "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da"
+          ]
+        },
+        "(32768, 256)": {
+          "requests": 3,
+          "median_ttft_s": 5.600291614988237,
+          "median_total_s": 8.994414481989224,
+          "aggregate_decode_ms_per_token": 13.31227966015504,
+          "output_tokens_per_second": 28.46145397703807,
+          "output_hashes": [
+            "935a17a1fbd95433600fca0a706251d16c193320b0d905d4524f38d46a45dc29"
+          ],
+          "input_hashes": [
+            "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b"
+          ]
+        },
+        "(36864, 256)": {
+          "requests": 3,
+          "median_ttft_s": 7.467290341010084,
+          "median_total_s": 11.06220216701331,
+          "aggregate_decode_ms_per_token": 14.098838147717936,
+          "output_tokens_per_second": 23.14351515298836,
+          "output_hashes": [
+            "d2410c8bded696c326ce54c3cfeb3d95594e605dab83b389d96dbc885f1eb5ea"
+          ],
+          "input_hashes": [
+            "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49"
+          ]
+        }
+      },
+      "latency_total": {
+        "requests": 12,
+        "serial_output_tokens_per_second": 40.562881781535495
+      },
+      "latency_mtp": {
+        "status": "measured",
+        "deltas": {
+          "vllm:spec_decode_num_drafts": 1204.0,
+          "vllm:spec_decode_num_draft_tokens": 4816.0,
+          "vllm:spec_decode_num_accepted_tokens": 2888.0,
+          "vllm:spec_decode_num_accepted_tokens_per_pos": 2888.0
+        },
+        "draft_tokens": 4816.0,
+        "accepted_tokens": 2888.0,
+        "acceptance_rate": 0.5996677740863787,
+        "interval_includes_warmups": true
+      },
+      "decode": {
+        "(512, 1024)": {
+          "requests": 3,
+          "median_ttft_s": 0.10839814100472722,
+          "median_total_s": 5.159470708007575,
+          "aggregate_decode_ms_per_token": 4.9378401766016875,
+          "output_tokens_per_second": 198.46450259985917,
+          "output_hashes": [
+            "8e10773198a20836bc7d244bbf225526a337af7d99ad526575cee22223c39889"
+          ],
+          "input_hashes": [
+            "f1e744c3c6a8f4c13ba3886b74c8aae123b22ecf8a58159e1eb2ee95c2ea5b57"
+          ]
+        }
+      },
+      "decode_total": {
+        "requests": 3,
+        "serial_output_tokens_per_second": 198.46450259985917
+      },
+      "decode_mtp": {
+        "status": "measured",
+        "deltas": {
+          "vllm:spec_decode_num_drafts": 1004.0,
+          "vllm:spec_decode_num_draft_tokens": 4016.0,
+          "vllm:spec_decode_num_accepted_tokens": 3092.0,
+          "vllm:spec_decode_num_accepted_tokens_per_pos": 3092.0
+        },
+        "draft_tokens": 4016.0,
+        "accepted_tokens": 3092.0,
+        "acceptance_rate": 0.7699203187250996,
+        "interval_includes_warmups": true
+      },
+      "load": [
+        {
+          "block": "1",
+          "concurrency": 2,
+          "requests": 4,
+          "seconds": 16.584988856004202,
+          "output_tokens_per_second": 61.74257992517644,
+          "median_ttft_seconds": 6.584943888497946,
+          "input_sha256": "d10e70a0362580a9a42ce6423c236e541ebbdfe452c586eddbf0d242c93197f2"
+        },
+        {
+          "block": "1",
+          "concurrency": 4,
+          "requests": 8,
+          "seconds": 33.13254966199747,
+          "output_tokens_per_second": 61.81232717954769,
+          "median_ttft_seconds": 14.181856015005906,
+          "input_sha256": "de9061286b0424b40bb88bb057fa121ca9119a7fd6201e7a8615c33b26e6075d"
+        }
+      ],
+      "load_mtp": [
+        {
+          "concurrency": 2,
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 270.0,
+            "vllm:spec_decode_num_draft_tokens": 1080.0,
+            "vllm:spec_decode_num_accepted_tokens": 753.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 753.0
+          },
+          "draft_tokens": 1080.0,
+          "accepted_tokens": 753.0,
+          "acceptance_rate": 0.6972222222222222,
+          "interval_includes_warmups": false
+        },
+        {
+          "concurrency": 4,
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 540.0,
+            "vllm:spec_decode_num_draft_tokens": 2160.0,
+            "vllm:spec_decode_num_accepted_tokens": 1506.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1506.0
+          },
+          "draft_tokens": 2160.0,
+          "accepted_tokens": 1506.0,
+          "acceptance_rate": 0.6972222222222222,
+          "interval_includes_warmups": false
+        }
+      ]
+    },
+    "candidate": {
+      "strict": {
+        "requests": 32,
+        "passed": 32,
+        "failed_cases": []
+      },
+      "long": {
+        "requests": 6,
+        "passed": 6,
+        "failed_cases": []
+      },
+      "latency": {
+        "(512, 256)": {
+          "requests": 3,
+          "median_ttft_s": 0.12054982199333608,
+          "median_total_s": 1.5491759540018393,
+          "aggregate_decode_ms_per_token": 5.606229763418692,
+          "output_tokens_per_second": 165.18989034070984,
+          "output_hashes": [
+            "3886fda89f19b800452b4a88bb358f258262b3299bcf757e09b721e8a09af74d"
+          ],
+          "input_hashes": [
+            "ccf4d444c1d900d4281b8f07d34c5cd6e587be888741482785e84eb38cc15bf7"
+          ]
+        },
+        "(8192, 256)": {
+          "requests": 3,
+          "median_ttft_s": 1.2778285539970966,
+          "median_total_s": 3.2285094349936116,
+          "aggregate_decode_ms_per_token": 7.649641869257941,
+          "output_tokens_per_second": 79.26203483742833,
+          "output_hashes": [
+            "e0fd801cb7c3022df1a9b4bfb839dd8a3a2883f40bf1cf7505d30739ec304df3"
+          ],
+          "input_hashes": [
+            "88ae468ccd6729be136d4191ebf675bf87cf6d7c876ded49644f2ea646ead7da"
+          ]
+        },
+        "(32768, 256)": {
+          "requests": 3,
+          "median_ttft_s": 5.611365602002479,
+          "median_total_s": 8.978641658992274,
+          "aggregate_decode_ms_per_token": 13.206978264041062,
+          "output_tokens_per_second": 28.511961540269034,
+          "output_hashes": [
+            "0ba054e3b77b8d23685aca03ae50ecebdec5a2368c7584d93db53fa0d44df8aa"
+          ],
+          "input_hashes": [
+            "25926b18263a0cd6dec926b21d7cbbf8f73e0b16ff6c7f156ebf5013de03c38b"
+          ]
+        },
+        "(36864, 256)": {
+          "requests": 3,
+          "median_ttft_s": 7.478423676002421,
+          "median_total_s": 11.042650139002944,
+          "aggregate_decode_ms_per_token": 13.971752865358676,
+          "output_tokens_per_second": 23.185043773951026,
+          "output_hashes": [
+            "d356647fa6e2e941328f0285879e87ea3d01e6ee61e9d69f769bd76743f9bf52"
+          ],
+          "input_hashes": [
+            "f099955b32a3c27bde10f3e7a27dad4cebd8e08de02a5f727661db0cf70bdd49"
+          ]
+        }
+      },
+      "latency_total": {
+        "requests": 12,
+        "serial_output_tokens_per_second": 41.29063271327399
+      },
+      "latency_mtp": {
+        "status": "measured",
+        "deltas": {
+          "vllm:spec_decode_num_drafts": 1132.0,
+          "vllm:spec_decode_num_draft_tokens": 4528.0,
+          "vllm:spec_decode_num_accepted_tokens": 2952.0,
+          "vllm:spec_decode_num_accepted_tokens_per_pos": 2952.0
+        },
+        "draft_tokens": 4528.0,
+        "accepted_tokens": 2952.0,
+        "acceptance_rate": 0.6519434628975265,
+        "interval_includes_warmups": true
+      },
+      "decode": {
+        "(512, 1024)": {
+          "requests": 3,
+          "median_ttft_s": 0.11810162900655996,
+          "median_total_s": 5.651879597004154,
+          "aggregate_decode_ms_per_token": 5.409409232326771,
+          "output_tokens_per_second": 181.1759664069757,
+          "output_hashes": [
+            "084049892b33afee8ada20cc774436077a2beab6c3b3e7ca939ef2f207d43f2c"
+          ],
+          "input_hashes": [
+            "f1e744c3c6a8f4c13ba3886b74c8aae123b22ecf8a58159e1eb2ee95c2ea5b57"
+          ]
+        }
+      },
+      "decode_total": {
+        "requests": 3,
+        "serial_output_tokens_per_second": 181.1759664069757
+      },
+      "decode_mtp": {
+        "status": "measured",
+        "deltas": {
+          "vllm:spec_decode_num_drafts": 1124.0,
+          "vllm:spec_decode_num_draft_tokens": 4496.0,
+          "vllm:spec_decode_num_accepted_tokens": 2976.0,
+          "vllm:spec_decode_num_accepted_tokens_per_pos": 2976.0
+        },
+        "draft_tokens": 4496.0,
+        "accepted_tokens": 2976.0,
+        "acceptance_rate": 0.6619217081850534,
+        "interval_includes_warmups": true
+      },
+      "load": [
+        {
+          "block": "1",
+          "concurrency": 2,
+          "requests": 4,
+          "seconds": 16.27937556899269,
+          "output_tokens_per_second": 62.90167553787577,
+          "median_ttft_seconds": 6.5523418840093655,
+          "input_sha256": "d10e70a0362580a9a42ce6423c236e541ebbdfe452c586eddbf0d242c93197f2"
+        },
+        {
+          "block": "1",
+          "concurrency": 4,
+          "requests": 8,
+          "seconds": 32.451231518003624,
+          "output_tokens_per_second": 63.11008563307651,
+          "median_ttft_seconds": 13.957244793004065,
+          "input_sha256": "de9061286b0424b40bb88bb057fa121ca9119a7fd6201e7a8615c33b26e6075d"
+        }
+      ],
+      "load_mtp": [
+        {
+          "concurrency": 2,
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 261.0,
+            "vllm:spec_decode_num_draft_tokens": 1044.0,
+            "vllm:spec_decode_num_accepted_tokens": 762.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 762.0
+          },
+          "draft_tokens": 1044.0,
+          "accepted_tokens": 762.0,
+          "acceptance_rate": 0.7298850574712644,
+          "interval_includes_warmups": false
+        },
+        {
+          "concurrency": 4,
+          "status": "measured",
+          "deltas": {
+            "vllm:spec_decode_num_drafts": 522.0,
+            "vllm:spec_decode_num_draft_tokens": 2088.0,
+            "vllm:spec_decode_num_accepted_tokens": 1524.0,
+            "vllm:spec_decode_num_accepted_tokens_per_pos": 1524.0
+          },
+          "draft_tokens": 2088.0,
+          "accepted_tokens": 1524.0,
+          "acceptance_rate": 0.7298850574712644,
+          "interval_includes_warmups": false
+        }
+      ]
+    }
+  },
+  "comparison": {
+    "latency": {
+      "(512, 256)": {
+        "ttft_reduction_percent": -12.135666200139639,
+        "total_latency_reduction_percent": 13.736716120334979,
+        "decode_latency_reduction_percent": 15.32784431821711,
+        "serial_throughput_increase_percent": 15.883831152880523,
+        "same_output_hashes": false
+      },
+      "(8192, 256)": {
+        "ttft_reduction_percent": -0.2606923749350898,
+        "total_latency_reduction_percent": 4.8579276686445905,
+        "decode_latency_reduction_percent": 7.930693832467062,
+        "serial_throughput_increase_percent": 5.047928558399661,
+        "same_output_hashes": false
+      },
+      "(32768, 256)": {
+        "ttft_reduction_percent": -0.19773947100549805,
+        "total_latency_reduction_percent": 0.1753624210729332,
+        "decode_latency_reduction_percent": 0.7910094950089985,
+        "serial_throughput_increase_percent": 0.17745953271295356,
+        "same_output_hashes": false
+      },
+      "(36864, 256)": {
+        "ttft_reduction_percent": -0.14909471152062537,
+        "total_latency_reduction_percent": 0.1767462546351739,
+        "decode_latency_reduction_percent": 0.9013883344694662,
+        "serial_throughput_increase_percent": 0.17943955655890242,
+        "same_output_hashes": false
+      }
+    },
+    "latency_serial_throughput_increase_percent": 1.79413024858055,
+    "decode": {
+      "(512, 1024)": {
+        "ttft_reduction_percent": -8.951710713756222,
+        "total_latency_reduction_percent": -9.543786889464311,
+        "decode_latency_reduction_percent": -9.550107716317902,
+        "serial_throughput_increase_percent": -8.711147820595567,
+        "same_output_hashes": false
+      }
+    },
+    "decode_serial_throughput_increase_percent": -8.711147820595567,
+    "load": [
+      {
+        "concurrency": 2,
+        "throughput_increase_percent": 1.877303498013827,
+        "median_ttft_reduction_percent": 0.4950991996382492
+      },
+      {
+        "concurrency": 4,
+        "throughput_increase_percent": 2.099513984903356,
+        "median_ttft_reduction_percent": 1.5837928530946677
+      }
+    ]
+  }
+}
