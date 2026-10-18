@@ -12,6 +12,11 @@ from typing import TYPE_CHECKING
 
 import structlog
 
+from lib.knowledge_graph.extraction_identity import (
+    extraction_contract,
+    extraction_identity as _extractor_identity,
+)
+
 from .evidence import (
     ExtractedDocumentEvidence,
     ExtractionCapacityCode,
@@ -754,12 +759,6 @@ def _build_backend(settings):
     return get_extraction_backend(settings=settings)
 
 
-def _extractor_identity(settings) -> str:
-    from lib.knowledge_graph.extraction_identity import extraction_identity
-
-    return extraction_identity(settings)
-
-
 def document_artifact_identity_values(
     document_id,
     expected_source_hash: str,
@@ -1156,8 +1155,6 @@ def extract_into_build(
                 evidence=evidence,
             )
             persistence_seconds = perf_counter() - persistence_started
-            from lib.knowledge_graph.extraction_identity import extraction_contract
-
             locked_run.stats = {
                 "window_count": evidence.window_count,
                 "batch_count": evidence.batch_count,

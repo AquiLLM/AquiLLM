@@ -8,11 +8,11 @@ from apps.chat.services.rag_model_answer import prepare_model_answer
 from lib.llm.answer_publication import FinalCitationPolicy, validate_final_answer
 from lib.llm.providers.complete_turn import complete_conversation_turn
 from lib.llm.providers.request_observability import observability_scope
-from lib.llm.tests.test_answer_publication import synthetic_publication
-from lib.llm.tests.test_direct_synthesis_grounding import (
+from lib.llm.tests.grounding_test_support import (
     _conversation,
     _selected_packet,
 )
+from lib.llm.tests.test_answer_publication import synthetic_publication
 from lib.llm.types.response import LLMResponse
 
 
@@ -53,7 +53,10 @@ async def test_repair_cites_numeric_introduction_and_keeps_useful_answer(
     assert len(requests) == 2
     prompt = requests[1]["messages"][-1]["content"]
     assert "Uncited numeric sentences to revise:" in prompt
-    assert lead in prompt.split("Uncited numeric sentences to revise:", 1)[1]
+    diagnostic_block, _ = prompt.split("Uncited numeric sentences to revise:", 1)[
+        1
+    ].split("Allow-list:", 1)
+    assert lead in diagnostic_block
     assert "factual introductory prose" in prompt
     assert result[-1].content == repaired
     assert result[-1]._validated_answer.outcome == "partial"

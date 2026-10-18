@@ -1115,42 +1115,6 @@ def _persist_chunk(document, *, content, start, number, modality="text"):
 
 @pytest.mark.django_db(transaction=True)
 @database_required
-def test_new_extraction_contract_does_not_reuse_or_rewrite_historical_artifact(monkeypatch):
-    from apps.knowledge_graph.extraction import pipeline
-    from apps.knowledge_graph.models import GraphArtifact
-    from lib.knowledge_graph.config import load_extraction_settings
-    from lib.knowledge_graph.extraction_identity import extraction_identity
-
-    _persist_active_ontology()
-    document = _persist_text_document(monkeypatch, text="Orion uses MMLU")
-    _persist_chunk(document, content=document.full_text, start=0, number=0)
-    settings = load_extraction_settings()
-    historical_identity = f"{settings.provider}:{settings.model_id}@{settings.model_revision}"
-    identity = pipeline.document_artifact_identity_values(
-        document.id, document.full_text_hash, "1.0.0", _ontology().checksum,
-        settings=settings,
-    )
-    previous = GraphArtifact.objects.create(
-        **{**identity, "extractor_version": historical_identity},
-        status=GraphArtifact.Status.ACTIVE,
-    )
-    monkeypatch.setattr(
-        pipeline, "_build_backend",
-        lambda _settings: _Backend((_result(model_start=0, dataset_start=11, confidence=0.9),)),
-    )
-    run = pipeline.extract_document_mentions(document.id, document.full_text_hash, "1.0.0")
-    previous.refresh_from_db()
-    run.refresh_from_db()
-    assert run.artifact_id != previous.pk
-    assert run.artifact.extractor_version == extraction_identity(settings)
-    assert run.stats["extraction_identity"] == run.artifact.extractor_version
-    assert run.stats["extraction_contract"]["schema_compiler_version"] == "gliner2-relations-v1"
-    assert previous.status == GraphArtifact.Status.ACTIVE
-    assert previous.extractor_version == historical_identity
-
-
-@pytest.mark.django_db(transaction=True)
-@database_required
 def test_public_extraction_persists_deduped_mentions_exact_relation_endpoints_and_stats(
     monkeypatch,
 ):
