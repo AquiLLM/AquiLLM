@@ -72,3 +72,24 @@ quality must be measured across the study and held-out questions; passing unit
 tests is not a quality claim. If an extraction/schema change is not validated,
 record it as pending rather than marking graph quality complete. Deploy only a
 tested candidate and report precisely which code and artifacts are active.
+
+## Evidence-driven implementation refinements
+
+Offline inspection of the pinned GLiNER2 API proves that its relation builder
+discards relation descriptions. Evaluate a deterministic structure/field compiler
+that retains relation semantics and typed endpoint descriptions. Keep thresholds,
+source-span checks and independently emitted typed entities unchanged. Bind this
+compiler and effective inference options into extraction identity. Repeat the
+frozen extraction sample before enabling the compiler or rebuilding artifacts;
+schema retention alone does not establish extraction quality.
+
+A frozen held-out question exposes a local pronoun being mistaken for a reference
+to a previous source. Repair bounded same-question noun anaphora generally, while
+preserving ambiguity handling and explicit source-reference authorization.
+
+Integration testing also exposes quadratic SQL string serialization when a large
+legacy source snapshot is saved. Replace it through a new reversible migration
+with byte-identical canonical serialization. Preserve all immutable identity and
+hash checks; do not shrink the source fixture or bypass the trigger. Verify ASCII,
+Unicode, controls, escaping and realistic large source bodies against Python's
+canonical encoder and the previous SQL implementation.

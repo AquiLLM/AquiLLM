@@ -131,3 +131,13 @@ assert "400-900" not in recovery_instruction
 - [ ] If the evidence identifies a correctable adapter/schema defect, write a focused design addendum and failing regression before a versioned implementation. Require source provenance and typed endpoints; do not disable validation or invent graph facts. Evaluate the repair on the frozen set before any background rebuild.
 - [ ] Stage an immutable isolated candidate on 254. Run the full ten-question study and pre-frozen held-out questions serially with matched settings; record actions, recall, final evidence, factual correctness, citations, latency and failures separately. Preserve real model prose for independent review.
 - [ ] Run repository checks and review the whole change. Update PR247 and the authorized internal tracking issue with code, artifact, evaluation and deployment status. Keep unproven quality improvements explicit; do not merge/deploy on unit tests alone.
+
+### Additional confirmed defects (within systemic repair scope)
+
+- **Graph compiler experiment (Task 3/5):** pinned GLiNER2 drops relation descriptions. Add a deterministic description-preserving structure/field compiler, version its behavior, retain endpoint validation and matched inference options, and repeat the frozen offline sample. Do not activate or rebuild unless semantic precision/recall evidence supports it.
+- **Large source snapshot serialization:** add a new reversible migration replacing the quadratic canonical string serializer with an equivalent bounded-work implementation. Preserve canonical bytes and immutable hash guards. Test realistic large mixed text, full escaping/Unicode boundaries, old/new equivalence, and normal adjacent-edit integration under a bounded statement timeout.
+- **Local anaphora:** repair same-question noun/pronoun handling using general grammar, retaining explicit-source and ambiguity barriers. Test generic local nouns, real historical-source references, ambiguous cases and the pre-retrieval routing boundary. Keep frozen held-out questions unchanged.
+
+Disjoint SQL, graph and synthesis implementation may proceed in parallel as the
+user requested. Root serializes shared tests, model calls and commits; each change
+receives independent review before final candidate evaluation.
