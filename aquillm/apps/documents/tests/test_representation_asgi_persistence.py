@@ -80,9 +80,10 @@ async def test_actual_asgi_real_transcript_commit_or_cancel_after_sql(
     before = await database_sync_to_async(_transcript)(case.db.pk)
     citation = f"[doc:{case.document.id} chunk:{case.chunk.pk}]"
     provider_answer = case.chunk.content + " " + citation
-    answer = ("Support for an answer is uncertain in the selected evidence. "
-        "These are attributed excerpts, not a conclusion about the question:\n\n> "
-        + provider_answer)
+    # Publication retains the grounded model response. Match that exact output
+    # to pause the real SQL writer; an obsolete excerpt wrapper never reaches
+    # this barrier and leaves the cancellation assertion unexercised.
+    answer = provider_answer
     sql_ready, worker_finished = asyncio.Event(), asyncio.Event()
     release = Event()
     loop = asyncio.get_running_loop()
