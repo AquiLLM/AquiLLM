@@ -755,10 +755,9 @@ def _build_backend(settings):
 
 
 def _extractor_identity(settings) -> str:
-    identity = f"{settings.provider}:{settings.model_id}@{settings.model_revision}"
-    if len(identity) > 128:
-        raise ValueError("configured extractor identity exceeds artifact storage")
-    return identity
+    from lib.knowledge_graph.extraction_identity import extraction_identity
+
+    return extraction_identity(settings)
 
 
 def document_artifact_identity_values(
@@ -1157,6 +1156,8 @@ def extract_into_build(
                 evidence=evidence,
             )
             persistence_seconds = perf_counter() - persistence_started
+            from lib.knowledge_graph.extraction_identity import extraction_contract
+
             locked_run.stats = {
                 "window_count": evidence.window_count,
                 "batch_count": evidence.batch_count,
@@ -1167,6 +1168,8 @@ def extract_into_build(
                 "provider": settings.provider,
                 "model_id": settings.model_id,
                 "model_revision": settings.model_revision,
+                "extraction_identity": _extractor_identity(settings),
+                "extraction_contract": extraction_contract(settings).to_dict(),
                 "ontology_checksum": ontology.checksum,
                 "extraction_evidence_fingerprint": evidence_fingerprint,
                 "extraction_commit": {

@@ -1,0 +1,212 @@
+# GLiNER2 1.3.2 gliner2/inference/schema.py; captured installed source.
+# Exact StructureBuilder and Schema methods through build(); later methods omitted.
+# Captured source excerpt SHA256: 9408007ffb6eab80db6186cd8318d239d080255c96e44fa04f5a484b57a1adf5
+from __future__ import annotations
+from collections import OrderedDict
+from typing import Any, Dict, List, Literal, Optional, Union
+
+class StructureBuilder:
+    """Builder for structured data schemas."""
+
+    def __init__(self, schema: 'Schema', parent: str):
+        self.schema = schema
+        self.parent = parent
+        self.fields = OrderedDict()
+        self.descriptions = OrderedDict()
+        self.field_order = []
+        self._finished = False
+
+    def field(
+        self,
+        name: str,
+        dtype: Literal["str", "list"] = "list",
+        choices: Optional[List[str]] = None,
+        description: Optional[str] = None,
+        threshold: Optional[float] = None,
+        validators: Optional[List[RegexValidator]] = None
+    ) -> 'StructureBuilder':
+        """Add a field to the structure."""
+        self.fields[name] = {"value": "", "choices": choices} if choices else ""
+        self.field_order.append(name)
+
+        if description:
+            self.descriptions[name] = description
+
+        self.schema._store_field_metadata(self.parent, name, dtype, threshold, choices, validators)
+        return self
+
+    def _auto_finish(self):
+        if not self._finished:
+            self.schema._store_field_order(self.parent, self.field_order)
+            self.schema.schema["json_structures"].append({self.parent: self.fields})
+
+            if self.descriptions:
+                if "json_descriptions" not in self.schema.schema:
+                    self.schema.schema["json_descriptions"] = {}
+                self.schema.schema["json_descriptions"][self.parent] = self.descriptions
+
+            self._finished = True
+
+    def __getattr__(self, name):
+        if hasattr(self.schema, name):
+            self._auto_finish()
+            return getattr(self.schema, name)
+        raise AttributeError(f"'{type(self).__name__}' has no attribute '{name}'")
+
+
+class Schema:
+    """Schema builder for extraction tasks."""
+
+    def __init__(self):
+        self.schema = {
+            "json_structures": [],
+            "classifications": [],
+            "entities": OrderedDict(),
+            "relations": [],
+            "json_descriptions": {},
+            "entity_descriptions": OrderedDict()
+        }
+        self._field_metadata = {}
+        self._entity_metadata = {}
+        self._relation_metadata = {}
+        self._field_orders = {}
+        self._entity_order = []
+        self._relation_order = []
+        self._active_builder = None
+
+    def _store_field_metadata(self, parent, field, dtype, threshold, choices, validators=None):
+        if threshold is not None and not 0 <= threshold <= 1:
+            raise ValueError(f"Threshold must be 0-1, got {threshold}")
+        self._field_metadata[f"{parent}.{field}"] = {
+            "dtype": dtype, "threshold": threshold, "choices": choices,
+            "validators": validators or []
+        }
+
+    def _store_entity_metadata(self, entity, dtype, threshold):
+        if threshold is not None and not 0 <= threshold <= 1:
+            raise ValueError(f"Threshold must be 0-1, got {threshold}")
+        self._entity_metadata[entity] = {"dtype": dtype, "threshold": threshold}
+
+    def _store_field_order(self, parent, order):
+        self._field_orders[parent] = order
+
+    def structure(self, name: str) -> StructureBuilder:
+        """Start building a structure schema."""
+        if self._active_builder:
+            self._active_builder._auto_finish()
+        self._active_builder = StructureBuilder(self, name)
+        return self._active_builder
+
+    def classification(
+        self,
+        task: str,
+        labels: Union[List[str], Dict[str, str]],
+        multi_label: bool = False,
+        cls_threshold: float = 0.5,
+        **kwargs
+    ) -> 'Schema':
+        """Add classification task."""
+        if self._active_builder:
+            self._active_builder._auto_finish()
+            self._active_builder = None
+
+        label_names = list(labels.keys()) if isinstance(labels, dict) else labels
+        label_descs = labels if isinstance(labels, dict) else None
+
+        config = {
+            "task": task, "labels": label_names,
+            "multi_label": multi_label, "cls_threshold": cls_threshold,
+            "true_label": ["N/A"], **kwargs
+        }
+        if label_descs:
+            config["label_descriptions"] = label_descs
+
+        self.schema["classifications"].append(config)
+        return self
+
+    def entities(
+        self,
+        entity_types: Union[str, List[str], Dict[str, Union[str, Dict]]],
+        dtype: Literal["str", "list"] = "list",
+        threshold: Optional[float] = None
+    ) -> 'Schema':
+        """Add entity extraction task."""
+        if self._active_builder:
+            self._active_builder._auto_finish()
+            self._active_builder = None
+
+        entities = self._parse_entity_input(entity_types)
+
+        for name, config in entities.items():
+            self.schema["entities"][name] = ""
+            if name not in self._entity_order:
+                self._entity_order.append(name)
+
+            self._store_entity_metadata(
+                name,
+                config.get("dtype", dtype),
+                config.get("threshold", threshold)
+            )
+
+            if "description" in config:
+                self.schema["entity_descriptions"][name] = config["description"]
+
+        return self
+
+    def _parse_entity_input(self, entity_types):
+        if isinstance(entity_types, str):
+            return {entity_types: {}}
+        elif isinstance(entity_types, list):
+            return {name: {} for name in entity_types}
+        elif isinstance(entity_types, dict):
+            result = {}
+            for name, config in entity_types.items():
+                if isinstance(config, str):
+                    result[name] = {"description": config}
+                elif isinstance(config, dict):
+                    result[name] = config
+                else:
+                    result[name] = {}
+            return result
+        raise ValueError("Invalid entity_types format")
+
+    def relations(
+        self,
+        relation_types: Union[str, List[str], Dict[str, Union[str, Dict]]],
+        threshold: Optional[float] = None
+    ) -> 'Schema':
+        """Add relation extraction task."""
+        if self._active_builder:
+            self._active_builder._auto_finish()
+            self._active_builder = None
+
+        if isinstance(relation_types, str):
+            relations = {relation_types: {}}
+        elif isinstance(relation_types, list):
+            relations = {name: {} for name in relation_types}
+        elif isinstance(relation_types, dict):
+            relations = {}
+            for name, config in relation_types.items():
+                relations[name] = {"description": config} if isinstance(config, str) else (config if isinstance(config, dict) else {})
+        else:
+            raise ValueError("Invalid relation_types format")
+
+        for name, config in relations.items():
+            self.schema["relations"].append({name: {"head": "", "tail": ""}})
+            if name not in self._relation_order:
+                self._relation_order.append(name)
+            self._field_orders[name] = ["head", "tail"]
+
+            rel_threshold = config.get("threshold", threshold)
+            if rel_threshold is not None and not 0 <= rel_threshold <= 1:
+                raise ValueError(f"Threshold must be 0-1, got {rel_threshold}")
+            self._relation_metadata[name] = {"threshold": rel_threshold}
+
+        return self
+
+    def build(self) -> Dict[str, Any]:
+        """Build final schema dictionary."""
+        if self._active_builder:
+            self._active_builder._auto_finish()
+            self._active_builder = None
+        return self.schema

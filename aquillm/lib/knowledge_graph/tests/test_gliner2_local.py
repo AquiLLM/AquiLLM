@@ -131,12 +131,18 @@ def _install_fake_provider(
             format_results,
             include_confidence,
             include_spans,
+            threshold,
+            num_workers,
+            max_len,
         ):
             kwargs = {
                 "batch_size": batch_size,
                 "format_results": format_results,
                 "include_confidence": include_confidence,
                 "include_spans": include_spans,
+                "threshold": threshold,
+                "num_workers": num_workers,
+                "max_len": max_len,
             }
             calls.batch.append((texts, schema, kwargs))
             if inference_error is not None:
@@ -224,6 +230,9 @@ def test_loads_exact_pinned_snapshot_and_supported_gliner2_arguments(
         "format_results": False,
         "include_confidence": True,
         "include_spans": True,
+        "threshold": 0.5,
+        "num_workers": 0,
+        "max_len": None,
     }
     assert calls.schema_entities == [
         {
