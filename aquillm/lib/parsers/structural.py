@@ -6,6 +6,7 @@ from pathlib import PurePath
 
 from .canonical_projection import column_name, literal_text, project_row, validate_extraction
 from .source_contracts import CellV1, ExtractionV1, SourceContractError, SourceElementV1, validate_artifact_ref
+from .text_utils import clean_pdf_text, expand_ligatures, word_vocabulary
 
 # Expand compact repeated-cell structures only within a finite local ceiling.
 MAX_CELLS = 100_000
@@ -242,8 +243,10 @@ def _pptx(builder, data):
 def _pdf(builder, data):
     from pypdf import PdfReader
     reader = PdfReader(io.BytesIO(data))
-    for number, page in enumerate(reader.pages, 1):
-        text = page.extract_text() or ''
+    pages = [expand_ligatures(page.extract_text() or '') for page in reader.pages]
+    vocabulary = word_vocabulary(*pages)
+    for number, text in enumerate(pages, 1):
+        text = clean_pdf_text(text, vocabulary)
         if text:
             builder.add(text, page=number)
         else:
