@@ -141,6 +141,19 @@ def test_pdf_page_identity_and_unknown_layout():
     assert 'layout_unavailable' in result.issue_codes
 
 
+def test_pdf_nul_characters_are_dropped_not_rejected(monkeypatch):
+    import fitz
+    from pypdf import PageObject
+    doc = fitz.open()
+    doc.new_page().insert_text((30, 30), 'redshift')
+    data = doc.tobytes()
+    doc.close()
+    monkeypatch.setattr(PageObject, 'extract_text', lambda self, *a, **k: 'red\0shift\0')
+    result = extract('nul.pdf', data)
+    assert result.canonical_text == 'redshift'
+    assert result.elements[0].page == 1
+
+
 def test_malformed_source_has_stable_issue_code():
     with pytest.raises(SourceContractError, match='malformed_source_structure'):
         extract('broken.docx', b'broken')
