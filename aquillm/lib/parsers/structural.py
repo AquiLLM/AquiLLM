@@ -243,7 +243,8 @@ def _pptx(builder, data):
 def _pdf(builder, data):
     from pypdf import PdfReader
     reader = PdfReader(io.BytesIO(data))
-    pages = [expand_ligatures(page.extract_text() or '') for page in reader.pages]
+    # pypdf can emit NUL; the canonical contract rejects it, as PDFDocument drops it.
+    pages = [expand_ligatures((page.extract_text() or '').replace('\0', '')) for page in reader.pages]
     vocabulary = word_vocabulary(*pages)
     for number, text in enumerate(pages, 1):
         text = clean_pdf_text(text, vocabulary)
