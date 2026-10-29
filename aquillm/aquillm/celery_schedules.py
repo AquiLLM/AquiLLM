@@ -65,6 +65,13 @@ def application_maintenance_schedule(*, enabled: bool) -> dict[str, dict[str, ob
             "kwargs": {"limit": 25},
             "options": {"queue": "celery"},
         },
+        "document-embedding-recovery": {
+            "task": "apps.documents.tasks.embedding_recovery.recover_embedding_generations",
+            "schedule": 60,
+            # Small batches: recovery must not recreate the burst that let leases lapse.
+            "kwargs": {"limit": 3},
+            "options": {"queue": "celery"},
+        },
         "conversation-memory-recovery": {
             "task": "aquillm.tasks.recover_conversation_memory_jobs",
             "schedule": 60,
