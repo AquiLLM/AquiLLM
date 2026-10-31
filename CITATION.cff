@@ -18,8 +18,8 @@ authors:
 repository-code: "https://github.com/AquiLLM/AquiLLM"
 url: "https://aquillm.org"
 license: GPL-2.0
-version: 0.1.1
-date-released: 2026-06-30
+version: 0.1.2
+date-released: 2026-10-30
 keywords:
   - retrieval-augmented generation
   - large language models
