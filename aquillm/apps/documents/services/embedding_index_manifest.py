@@ -105,12 +105,29 @@ def _lock_selection(selection, *, using):
         yield
 
 
-def source_chunk(row):
-    if row.representation_generation_id is not None:
-        from .representation_inputs import content_hash, manifest_hash
+def _verified_generation(row, verified):
+    from .representation_inputs import manifest_hash
+    key = row.representation_generation_id
+    if verified is not None and key in verified:
+        return verified[key]
+    if verified is None:
         generation = row.representation_generation
-        if manifest_hash(generation.manifest) != generation.manifest_sha256:
-            raise EmbeddingContractError("representation_manifest_changed")
+    else:
+        # One load and one full-manifest hash per generation, not per chunk.
+        model = TextChunk._meta.get_field("representation_generation").related_model
+        generation = model.objects.using(row._state.db).select_related("owner").get(pk=key)
+    if manifest_hash(generation.manifest) != generation.manifest_sha256:
+        raise EmbeddingContractError("representation_manifest_changed")
+    if verified is not None:
+        verified[key] = generation
+    return generation
+
+
+def source_chunk(row, verified=None):
+    """`verified` caches checked representation generations across one document's chunks."""
+    if row.representation_generation_id is not None:
+        from .representation_inputs import content_hash
+        generation = _verified_generation(row, verified)
         try:
             entry = generation.manifest["chunks"][row.chunk_number]
             if (row.doc_id, row.start_position, row.end_position, row.content, content_hash(row.content)) != (
@@ -155,10 +172,10 @@ def capture_embedding_manifest(selection, *, using, space=None):
         TextChunk.objects.using(using).all(),
         snapshot=RepresentationSnapshotV1((selection,)),
     ).order_by("chunk_number", "pk")
-    manifest = []
+    manifest, verified = [], {}
     for row in rows:
         check_active_build_deadline()
-        chunk = source_chunk(row)
+        chunk = source_chunk(row, verified)
         item = {
             "chunk_id": row.pk,
             "chunk_number": row.chunk_number,

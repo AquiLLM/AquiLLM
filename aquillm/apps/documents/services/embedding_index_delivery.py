@@ -3,6 +3,7 @@
 from datetime import timedelta
 from uuid import uuid4
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from lib.embeddings.document_contracts import EmbeddingLeaseV1
 from apps.documents.models.embedding_index import EmbeddingGeneration
@@ -67,3 +68,51 @@ def fail_embedding_delivery(lease, *, kind, using):
             using=using, update_fields=["failure_kind", "state", "next_attempt_at"]
         )
         return not terminal
+
+
+def handoff_embedding_delivery(lease, *, using):
+    """Release a lease that staged progress; the continuation does not spend a delivery."""
+    with transaction.atomic(using=using):
+        generation = (
+            EmbeddingGeneration.objects.using(using)
+            .select_for_update()
+            .filter(
+                pk=lease.generation_key,
+                lease_token=lease.lease_token,
+                state="building",
+                failure_kind="",
+            )
+            .first()
+        )
+        if generation is None:
+            return False
+        generation.deliveries = max(0, generation.deliveries - 1)
+        generation.next_attempt_at = timezone.now()
+        generation.save(using=using, update_fields=["deliveries", "next_attempt_at"])
+        return True
+
+
+RECOVERY_QUIET_PERIOD = timedelta(minutes=5)
+
+
+def recover_due_embedding_generations(*, limit=3, using="default"):
+    """Redeliver building generations whose lease lapsed or whose first dispatch was lost."""
+    from apps.documents.tasks.embedding_index import build_embedding_generation
+
+    limit = min(25, max(1, int(limit)))
+    now = timezone.now()
+    quiet = now - RECOVERY_QUIET_PERIOD
+    lapsed = Q(state="building", failure_kind="") & (
+        Q(next_attempt_at__lte=quiet) | Q(next_attempt_at__isnull=True, created_at__lte=quiet)
+    )
+    generations = EmbeddingGeneration.objects.using(using)
+    keys = list(generations.filter(lapsed).order_by("created_at", "pk").values_list("pk", flat=True)[:limit])
+    dispatched = 0
+    for key in keys:
+        # Stamping the dispatch keeps a queued redelivery from being sent again for the
+        # quiet period; the claim still accepts it because the stamp is not in the future.
+        if generations.filter(lapsed, pk=key).update(next_attempt_at=now):
+            # Claiming re-checks the fence; exhausted generations close as delivery_exhausted.
+            build_embedding_generation.delay(str(key), using=using)
+            dispatched += 1
+    return dispatched
