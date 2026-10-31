@@ -1,0 +1,88 @@
+cff-version: 1.2.0
+message: "If you use AquiLLM in your research, please cite it as below."
+title: "AquiLLM"
+type: software
+authors:
+  - family-names: Boscoe
+    given-names: Bernie
+    affiliation: Southern Oregon University
+  - family-names: Do
+    given-names: Tuan
+    affiliation: University of California, Los Angeles
+  - family-names: Campbell
+    given-names: Chandler
+    affiliation: Southern Oregon University
+  - family-names: Stark
+    given-names: Jack
+    affiliation: University of California, Los Angeles
+repository-code: "https://github.com/AquiLLM/AquiLLM"
+url: "https://aquillm.org"
+license: GPL-2.0
+version: 0.1.1
+date-released: 2026-06-30
+keywords:
+  - retrieval-augmented generation
+  - large language models
+  - tacit knowledge
+  - research software
+preferred-citation:
+  type: conference-paper
+  title: "AquiLLM: An Architecture for Supporting Tacit Knowledge Capture in Research Groups"
+  authors:
+    - family-names: Stark
+      given-names: Jack
+    - family-names: Saikrishnan
+      given-names: Srinath
+    - family-names: Seenivasan
+      given-names: Vikram
+    - family-names: Boscoe
+      given-names: Bernie
+    - family-names: Lizarraga
+      given-names: Andrew
+    - family-names: Do
+      given-names: Tuan
+  collection-title: "NGEN-AI 2026"
+  publisher:
+    name: Springer
+  year: 2026
+  url: "https://arxiv.org/abs/2608.08883"
+  identifiers:
+    - type: other
+      value: "arXiv:2608.08883"
+references:
+  - type: conference-paper
+    title: "AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups"
+    authors:
+      - family-names: Campbell
+        given-names: Chandler
+      - family-names: Boscoe
+        given-names: Bernie
+      - family-names: Do
+        given-names: Tuan
+    collection-title: "US Research Software Engineer Association Conference (US-RSE 2025)"
+    year: 2025
+    url: "https://arxiv.org/abs/2508.05648"
+  - type: conference-paper
+    title: "AquiLLM: Evaluating Faithfulness in Open-Weight RAG-LLM Systems for Scientific Research"
+    authors:
+      - family-names: Boscoe
+        given-names: Bernie
+      - family-names: Saikrishnan
+        given-names: Srinath
+      - family-names: Seenivasan
+        given-names: Vikram
+      - family-names: Stark
+        given-names: Jack
+      - family-names: Lizarraga
+        given-names: Andrew
+      - family-names: Himes
+        given-names: Morgan
+      - family-names: Soriano
+        given-names: Jonathan
+      - family-names: Allen
+        given-names: PJ
+      - family-names: Do
+        given-names: Tuan
+    collection-title: "US Research Software Engineer Association Conference (US-RSE 2026)"
+    year: 2026
+    url: "https://arxiv.org/abs/2609.16519"

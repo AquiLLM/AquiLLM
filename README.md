@@ -14,7 +14,7 @@
 **AquiLLM is an open-source open-weight RAG (Retrieval-Augmented Generation) application designed specifically for researchers and research groups.**  It helps users manage, search, and interact with research documents through a natural-language interface to their data, supporting literature review, onboarding, collaboration, and knowledge discovery workflows. Users can upload and organize documents into collections across a variety of file formats. AquiLLM is designed for local or pseudo-local deployment, giving research groups greater control over their data, models, and infrastructure.
 
 More info can be found at [https://aquillm.org](https://aquillm.org). For a brief video tutorial using MRI data, visit [youtube](https://www.youtube.com/watch?v=7B3V2a0Xzaw).
-See also our paper ["AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups"](https://arxiv.org/abs/2508.05648) by Chandler Campbell, Bernie Boscoe, and Tuan Do
+See also our paper ["AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups"](https://arxiv.org/abs/2508.05648) by Chandler Campbell, Bernie Boscoe, and Tuan Do. If you use AquiLLM, please see [Citing AquiLLM](#citing-aquillm).
 
 <!-- ![AquiLLM Screenshot](path/to/screenshot.gif) -->
 
@@ -542,6 +542,46 @@ python -m pytest aquillm/tests aquillm/apps/chat/tests aquillm/apps/ingestion/te
 ```
 
 To ensure generated paths such as `node_modules/` are not committed, run `pwsh -ExecutionPolicy Bypass -File scripts/check_hygiene.ps1` from the repository root.
+
+## Citing AquiLLM
+
+If you use AquiLLM in your research, please cite our architecture paper:
+
+```bibtex
+@inproceedings{stark2026aquillm,
+  title     = {AquiLLM: An Architecture for Supporting Tacit Knowledge Capture in Research Groups},
+  author    = {Stark, Jack and Saikrishnan, Srinath and Seenivasan, Vikram and Boscoe, Bernie and Lizarraga, Andrew and Do, Tuan},
+  booktitle = {NGEN-AI 2026},
+  publisher = {Springer},
+  year      = {2026},
+  eprint    = {2608.08883},
+  archivePrefix = {arXiv}
+}
+```
+
+Related papers:
+
+```bibtex
+@inproceedings{campbell2025aquillm,
+  title     = {AquiLLM: a RAG Tool for Capturing Tacit Knowledge in Research Groups},
+  author    = {Campbell, Chandler and Boscoe, Bernie and Do, Tuan},
+  booktitle = {Proceedings of the US Research Software Engineer Association Conference (US-RSE 2025)},
+  year      = {2025},
+  eprint    = {2508.05648},
+  archivePrefix = {arXiv}
+}
+
+@inproceedings{boscoe2026faithfulness,
+  title     = {AquiLLM: Evaluating Faithfulness in Open-Weight RAG-LLM Systems for Scientific Research},
+  author    = {Boscoe, Bernie and Saikrishnan, Srinath and Seenivasan, Vikram and Stark, Jack and Lizarraga, Andrew and Himes, Morgan and Soriano, Jonathan and Allen, PJ and Do, Tuan},
+  booktitle = {Proceedings of the US Research Software Engineer Association Conference (US-RSE 2026)},
+  year      = {2026},
+  eprint    = {2609.16519},
+  archivePrefix = {arXiv}
+}
+```
+
+GitHub's "Cite this repository" button (from [CITATION.cff](CITATION.cff)) also provides APA and BibTeX formats.
 
 ## Contributors
 
