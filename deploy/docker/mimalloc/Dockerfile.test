@@ -1,0 +1,16 @@
+# Small, GPU-free image exercising the same build and launcher as shipping images.
+ARG SMOKE_BASE_IMAGE=python:3.12-slim-bookworm
+FROM ubuntu:22.04 AS mimalloc-builder
+COPY deploy/docker/mimalloc/build.sh deploy/docker/mimalloc/verify.c /build/
+RUN sh /build/build.sh
+
+FROM ${SMOKE_BASE_IMAGE}
+# The Ubuntu variant checks compatibility with the oldest supported runtime libc.
+RUN if ! command -v python3 >/dev/null; then \
+        apt-get update && apt-get install -y --no-install-recommends python3; \
+    fi
+COPY --from=mimalloc-builder /opt/mimalloc/ /opt/mimalloc/
+COPY --chmod=755 deploy/scripts/with_mimalloc.sh /usr/local/bin/aquillm-allocator
+ENV AQUILLM_ALLOCATOR=mimalloc
+ENTRYPOINT ["/usr/local/bin/aquillm-allocator"]
+CMD ["python3", "-c", "print('allocator smoke image')"]
