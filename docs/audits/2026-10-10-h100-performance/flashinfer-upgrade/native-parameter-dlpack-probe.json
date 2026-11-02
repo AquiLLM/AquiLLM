@@ -1,0 +1,74 @@
+[
+  {
+    "dtype": "torch.float16",
+    "inference_mode": false,
+    "detached": false,
+    "requires_grad": true,
+    "same_storage": true,
+    "exported": false,
+    "error_type": "BufferError",
+    "error": "Can't export tensors that require gradient, use tensor.detach()"
+  },
+  {
+    "dtype": "torch.float16",
+    "inference_mode": false,
+    "detached": true,
+    "requires_grad": false,
+    "same_storage": true,
+    "exported": true
+  },
+  {
+    "dtype": "torch.float16",
+    "inference_mode": true,
+    "detached": false,
+    "requires_grad": true,
+    "same_storage": true,
+    "exported": false,
+    "error_type": "BufferError",
+    "error": "Can't export tensors that require gradient, use tensor.detach()"
+  },
+  {
+    "dtype": "torch.float16",
+    "inference_mode": true,
+    "detached": true,
+    "requires_grad": false,
+    "same_storage": true,
+    "exported": true
+  },
+  {
+    "dtype": "torch.float32",
+    "inference_mode": false,
+    "detached": false,
+    "requires_grad": true,
+    "same_storage": true,
+    "exported": false,
+    "error_type": "BufferError",
+    "error": "Can't export tensors that require gradient, use tensor.detach()"
+  },
+  {
+    "dtype": "torch.float32",
+    "inference_mode": false,
+    "detached": true,
+    "requires_grad": false,
+    "same_storage": true,
+    "exported": true
+  },
+  {
+    "dtype": "torch.float32",
+    "inference_mode": true,
+    "detached": false,
+    "requires_grad": true,
+    "same_storage": true,
+    "exported": false,
+    "error_type": "BufferError",
+    "error": "Can't export tensors that require gradient, use tensor.detach()"
+  },
+  {
+    "dtype": "torch.float32",
+    "inference_mode": true,
+    "detached": true,
+    "requires_grad": false,
+    "same_storage": true,
+    "exported": true
+  }
+]

@@ -1,0 +1,11 @@
+{
+  "files": [
+    "native-parameter-dlpack-probe.json",
+    "native-parameter-launch-failure.json"
+  ],
+  "image": "sha256:14d96a9075473581c695b07779731f33108588760e9412d2d79ae9b51641c4fa",
+  "source_commit": "d30f4fb4b79f0956095dd992fdcc8b7d7043c11a",
+  "identity_evidence": "native-baseline-image-identity.json",
+  "provenance": "Recorded by the operator from the active build identity used by run_parameter_probe.py before the fixed image was built; original probe payloads are preserved unchanged.",
+  "scope": "Independent bounded reproductions, not a recovered full-model startup traceback"
+}

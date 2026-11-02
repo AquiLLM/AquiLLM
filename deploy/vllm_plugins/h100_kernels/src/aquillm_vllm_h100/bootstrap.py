@@ -12,6 +12,7 @@ def settings(env):
                   split=env.get("AQUILLM_H100_SPLIT_POLICY", "baseline"),
                   prefill=env.get("AQUILLM_H100_PREFILL", "0"),
                   gdn=env.get("AQUILLM_H100_GDN", "baseline"),
+                  runtime_profile=env.get("AQUILLM_H100_RUNTIME_PROFILE", "baseline"),
                   profile=env.get("AQUILLM_H100_PROFILE"))
     if result["mtp"] not in ("baseline", "fused"):
         raise ValueError("unknown MTP kernel setting")
@@ -19,15 +20,21 @@ def settings(env):
         raise ValueError("unknown split policy")
     if result["prefill"] not in ("0", "1"):
         raise ValueError("unknown prefill setting")
-    if result["gdn"] != "baseline":
-        raise ValueError("GDN adapter has not been qualified on the pinned runtime")
+    if result["gdn"] not in ("baseline", "flashinfer", "native-fp16"):
+        raise ValueError("unknown GDN adapter setting")
+    if ((result["gdn"] == "native-fp16")
+            != (result["runtime_profile"] == "native-gdn-baseline")):
+        raise ValueError("native-fp16 requires runtime profile native-gdn-baseline together")
+    if result["gdn"] == "flashinfer" and result["runtime_profile"] != "flashinfer-0.6.18":
+        raise ValueError("FlashInfer GDN requires candidate runtime flashinfer-0.6.18")
     return result
 
 
 def install(env=None):
     global _installed
     config = settings(os.environ if env is None else env)
-    if config["mtp"] == config["split"] == "baseline" and config["prefill"] == "0":
+    if (config["mtp"] == config["split"] == config["gdn"] == "baseline"
+            and config["prefill"] == "0" and config["runtime_profile"] == "baseline"):
         return {"status": "disabled"}
     if _installed:
         return {"status": "already_installed"}

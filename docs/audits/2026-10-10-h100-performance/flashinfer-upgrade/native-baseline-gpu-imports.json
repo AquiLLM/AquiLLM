@@ -1,0 +1,30 @@
+{
+  "packages": {
+    "vllm": "0.23.1rc1.dev748+g2dfaae752",
+    "torch": "2.11.0+cu130",
+    "triton": "3.6.0",
+    "flashinfer-python": "0.6.13",
+    "flashinfer-cubin": "0.6.13",
+    "flashinfer-jit-cache": "0.6.13+cu130",
+    "nvidia-cutlass-dsl": "4.5.2",
+    "apache-tvm-ffi": "0.1.9"
+  },
+  "gpu": "NVIDIA H100 80GB HBM3",
+  "sources": {
+    "gdn_mtp": {
+      "module": "flashinfer.gdn_decode",
+      "signature": "(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, initial_state: torch.Tensor, initial_state_indices: torch.Tensor, A_log: torch.Tensor, a: torch.Tensor, dt_bias: torch.Tensor, b: torch.Tensor, scale: Optional[float] = None, output: Optional[torch.Tensor] = None, intermediate_states_buffer: Optional[torch.Tensor] = None, disable_state_update: Optional[bool] = None, use_qk_l2norm: bool = True) -> Tuple[torch.Tensor, torch.Tensor]",
+      "sha256": "059ee9b41a51021626b9e178a4cf6e92afdbd2731717c3737240c8ee0d03d44c"
+    },
+    "vllm_fused_gating": {
+      "module": "vllm.model_executor.layers.fla.ops.fused_sigmoid_gating",
+      "signature": "(A_log: torch.Tensor, a: torch.Tensor, b: torch.Tensor, dt_bias: torch.Tensor, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, beta: float = 1.0, threshold: float = 20.0, scale: float = None, initial_state: torch.Tensor = None, inplace_final_state: bool = True, cu_seqlens: torch.Tensor | None = None, ssm_state_indices: torch.Tensor | None = None, num_accepted_tokens: torch.Tensor | None = None, use_qk_l2norm_in_kernel: bool = False, is_kda: bool = False)",
+      "sha256": "fc0c2869092321bba91685d6e303629a1cf9e0b7e08d5cc6ba7fecf234318de7"
+    },
+    "turboquant_prefill": {
+      "module": "vllm.v1.attention.backends.turboquant_attn",
+      "signature": "(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, kv_cache: torch.Tensor, attn_metadata: vllm.v1.attention.backends.turboquant_attn.TurboQuantMetadata, Pi: torch.Tensor, centroids: torch.Tensor, PiT: torch.Tensor | None = None, layer: Any = None) -> torch.Tensor",
+      "sha256": "8fa3de6b33ad8d068e0183fe0b82f7d1f56ac143091ab5bdd0e8a007fdbcae17"
+    }
+  }
+}
