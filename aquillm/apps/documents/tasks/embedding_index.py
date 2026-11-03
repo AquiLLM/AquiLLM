@@ -82,6 +82,7 @@ def build_embedding_generation(
         with embedding_build_transaction(budget, using=using):
             handed_off = handoff_embedding_delivery(lease, using=using)
         if handed_off:
+            check_embedding_deadline(budget)
             build_embedding_generation.delay(generation_key, using=using, timeout_ms=timeout_ms)
             return "handed_off"
         return "lease_lost"

@@ -87,6 +87,15 @@ jobs:
       - name: Django system check
         working-directory: aquillm
         run: python manage.py check
+
+      - name: PDF extraction identity and embedding recovery
+        run: >-
+          python -m pytest
+          aquillm/lib/parsers/tests/test_pdf_text_cleaning.py
+          aquillm/lib/parsers/tests/test_structural_extraction.py
+          aquillm/apps/ingestion/tests/test_extraction_revisions.py
+          aquillm/apps/documents/tests/test_embedding_generation_recovery.py
+          --ds=aquillm.settings_projection_test -q --tb=short
       - name: Architecture + import-boundary tests
         run: >-
           python -m pytest

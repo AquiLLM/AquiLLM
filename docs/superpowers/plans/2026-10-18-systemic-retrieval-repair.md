@@ -350,3 +350,58 @@ jobs have completed. Keep the current branch and draft PR247; retain the private
 artifacts and handoff. Serving 254, source representations and graph builds are
 unchanged. Quality acceptance, full CI and the remaining acquisition,
 preprocessing and graph-quality work remain open.
+
+## November 3: integration with development
+
+PR247 incorporates development at `2439ca86`: PDF ligature and line-break
+cleanup (#248), native PDF NUL removal (#249), background embedding recovery
+(#250), and release metadata (#225). The October runs remain evidence for their
+original deployment and corpus only. Cleaning affects new extraction; recovering
+stalled embedding builds does not add missing contextual text to existing
+passages. No reparse, reindex, change to graph artifacts, or deployment follows
+from merging these changes into the repair branch.
+
+The cleanup changed canonical PDF text and offsets without changing the native
+parser key. Ingestion includes that key in the output identity for a source
+occurrence. PR247 versions new native PDF extractions as v2, preserving the
+stored extraction and offsets for v1. A real-PDF regression binds both revisions
+to one occurrence and verifies idempotent persistence of each. Direct legacy
+document saves are not rewritten. The PDF parser suites passed locally (32
+tests); a separate PostgreSQL 16 run covering revision identity, embedding
+recovery and rewrite validation passed 55 tests.
+
+The integrated embedding worker could enqueue a continuation after its delivery
+deadline when the handoff transaction committed late. A regression reproduced
+the late dispatch. Checking the original deadline immediately before enqueue
+keeps staged rows recoverable by scheduled redelivery. On a fresh PostgreSQL
+16 instance, all 37 recovery, deadline and extraction-revision tests passed
+after the fix, including the handoff that expires precisely at commit.
+
+A replay of the original admission traces reproduces both 30-source charge
+sequences for the held-out report date. Ten slots went to the initial search
+lanes and six to new graph results, leaving fourteen slots. The date passage
+was 32nd in the remaining baseline order and 30th with BM25. Its sixth-place
+BM25 position became 15th after nine trigram entries were prepended. Across the
+16 treatment questions only five of 59 candidates appearing exclusively through
+that lexical suffix were charged. These counts measure exposure, not usefulness.
+The allocator followed its contract. For Q3/Q4, the four targets were absent
+from first-stage candidate lists; a change to final reranking cannot recover
+them. The current study does not justify a feature rollout.
+
+A second offline replay alternated trigram and BM25 candidates at the same
+cutoff and held observed graph outputs fixed. Of the 15 interpretable pairs,
+no additional mapped target could be charged and three previously selected
+baseline source occurrences would definitely be displaced. Q3 was inconclusive
+because its original graph phase boundary was ambiguous. This does not measure
+live graph effects or answer quality.
+
+In a separate PostgreSQL test with seven synthetic ten-source pools, the useful
+source made the first eight in five pools with baseline ranking, six with full
+identifier-format matching and seven with adjacent component matching added.
+Wrong-version distractors also gained score. Both saved Q3 target bodies contain
+the partial identifier match, but the whole identifier does not match; this does
+not establish a top-eight rank on the corpus. Q4 contributes no identifier keys.
+Its saved passages ranked 45th and 24th globally and 11th and 7th within the
+relevant paper in the October diagnosis. Test source context separately; do
+not force a paper or add benchmark-specific aliases. No identifier experiment
+or document-context change has been enabled in the product.
