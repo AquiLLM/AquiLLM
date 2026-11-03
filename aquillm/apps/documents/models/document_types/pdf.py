@@ -2,6 +2,8 @@ from django.core.validators import FileExtensionValidator
 from django.db import models
 from pypdf import PdfReader
 
+from lib.parsers.text_utils import clean_pdf_text
+
 from ..document import Document
 
 
@@ -33,4 +35,4 @@ class PDFDocument(Document):
         reader = PdfReader(self.pdf_file)
         for page in reader.pages:
             text += page.extract_text() + '\n'
-        self.full_text = text.replace('\0', '')
+        self.full_text = clean_pdf_text(text.replace('\0', ''))

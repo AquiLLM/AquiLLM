@@ -14,6 +14,7 @@ from apps.documents.services.embedding_index_store import (
     claim_embedding_delivery,
     embedding_manifest_digest,
     fail_embedding_delivery,
+    handoff_embedding_delivery,
     load_embedding_space,
     source_chunk,
     stage_embedding_batch,
@@ -29,6 +30,13 @@ from apps.documents.services.embedding_index_deadline import (
     embedding_build_database,
     check_embedding_deadline,
 )
+
+# Kept back after the last batch for activation and lease bookkeeping.
+HANDOFF_RESERVE_SECONDS = 15
+
+
+class EmbeddingHandoff(Exception):
+    """This delivery staged progress but cannot fit its next step before the deadline."""
 
 
 def rebuild_document_embeddings(selection, *, space_key, using, timeout_ms=120000):
@@ -69,6 +77,14 @@ def build_embedding_generation(
             if lease is None:
                 return "not_claimed"
             return _build(lease, budget=budget, using=using)
+    except EmbeddingHandoff:
+        # Staged rows survive; continue in a fresh delivery instead of lapsing the lease.
+        with embedding_build_transaction(budget, using=using):
+            handed_off = handoff_embedding_delivery(lease, using=using)
+        if handed_off:
+            build_embedding_generation.delay(generation_key, using=using, timeout_ms=timeout_ms)
+            return "handed_off"
+        return "lease_lost"
     except EmbeddingUpstreamUnavailableError:
         check_embedding_deadline(budget)
         with embedding_build_transaction(budget, using=using):
@@ -122,10 +138,16 @@ def _build(lease, *, budget, using):
     # Exact successful rows survive retry; no cross-document reuse.
     completed = set(generation.embeddings.values_list("chunk_id", flat=True))
     batch, ids, hashes, wire_size, text_size = [], [], [], 0, 0
+    staged, slowest = 0, 0.0
 
     def flush():
+        nonlocal staged, slowest
         if not batch:
             return
+        # Hand off only after progress, so a delivery that stages nothing still counts.
+        if staged and budget.remaining_seconds() < slowest * 1.5 + HANDOFF_RESERVE_SECONDS:
+            raise EmbeddingHandoff()
+        started = budget.clock()
         results = embed_document_batch(tuple(batch), space=space, budget=budget)
         if budget.remaining_seconds() <= 0:
             raise TimeoutError("embedding_deadline")
@@ -137,15 +159,21 @@ def _build(lease, *, budget, using):
                 input_sha256=tuple(hashes),
                 using=using,
             )
+        staged += len(ids)
+        slowest = max(slowest, budget.clock() - started)
 
+    pending = [item["chunk_id"] for item in generation.manifest if item["chunk_id"] not in completed]
+    rows, verified = TextChunk.objects.using(using).in_bulk(pending), {}
     for item in generation.manifest:
         if budget.remaining_seconds() <= 0:
             raise TimeoutError("embedding_deadline")
         if item["chunk_id"] in completed:
             continue
-        row = TextChunk.objects.using(using).get(pk=item["chunk_id"])
+        row = rows.get(item["chunk_id"])
+        if row is None:
+            raise TextChunk.DoesNotExist(item["chunk_id"])
         check_embedding_deadline(budget)
-        chunk = source_chunk(row)
+        chunk = source_chunk(row, verified)
         wire, sha = prepare_document(chunk, space=space)
         check_embedding_deadline(budget)
         if sha != item["prepared_input_sha256"]:
@@ -169,6 +197,8 @@ def _build(lease, *, budget, using):
         wire_size += wire_amount
         text_size += text_amount
     flush()
+    if staged and budget.remaining_seconds() < HANDOFF_RESERVE_SECONDS:
+        raise EmbeddingHandoff()
     if budget.remaining_seconds() <= 0:
         raise TimeoutError("embedding_deadline")
     with embedding_build_transaction(budget, using=using):

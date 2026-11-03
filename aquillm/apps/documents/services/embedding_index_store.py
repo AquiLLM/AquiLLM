@@ -24,6 +24,7 @@ from .embedding_index_manifest import (
 from .embedding_index_delivery import (
     claim_embedding_delivery as claim_embedding_delivery,
     fail_embedding_delivery as fail_embedding_delivery,
+    handoff_embedding_delivery as handoff_embedding_delivery,
 )
 
 
