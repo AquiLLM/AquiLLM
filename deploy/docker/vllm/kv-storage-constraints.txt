@@ -1,0 +1,11 @@
+torch==2.11.0+cu130
+torchvision==0.26.0+cu130
+torchaudio==2.11.0+cu130
+vllm==0.23.1rc1.dev748+g2dfaae752
+transformers==5.12.1
+huggingface-hub==1.21.0
+grpcio==1.81.1
+grpcio-tools==1.81.1
+protobuf==6.33.6
+setuptools==80.10.2
+setuptools-scm==10.2.0

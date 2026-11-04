@@ -76,10 +76,42 @@ if [ -z "${VLLM_EXTRA_ARGS// }" ]; then
   esac
 fi
 
+# Shared env_file settings apply only to the main serving role. Existing sidecar
+# contracts keep their own scheduler/quantization even without a service kind.
+_kv_profile_requested=0
+_kv_profile_sidecar=0
+case "${VLLM_SERVICE_KIND:-}" in
+  embed|embedding|rerank|reranker|transcribe|ocr) _kv_profile_sidecar=1 ;;
+esac
+case "${VLLM_MODEL:-}" in
+  openai/whisper-*|Qwen/Qwen2.5-VL-*|Qwen/Qwen3.5-4B|nvidia/nemotron-3.5-asr-streaming-0.6b) _kv_profile_sidecar=1 ;;
+esac
+if [ "${VLLM_RUNNER:-}" = "pooling" ] || [ "${VLLM_TASK:-}" = "score" ]; then
+  _kv_profile_sidecar=1
+fi
+for _kv_setting in \
+  KV_CACHE_TARGET_ACTIVE_SEQUENCES KV_CACHE_RETAINED_CONTEXTS \
+  KV_CACHE_VRAM_GIB KV_CACHE_RAM_GIB KV_CACHE_SSD_GIB \
+  KV_CACHE_STORAGE_MODE KV_CACHE_EXECUTION_MODE; do
+  if [ -n "${!_kv_setting:-}" ]; then
+    _kv_profile_requested=1
+  fi
+done
+if [ "${_kv_profile_sidecar}" = "1" ]; then
+  if [ "${_kv_profile_requested}" = "1" ]; then
+    case "${VLLM_STRICT_PROTECTED_ARGS:-0}" in
+      1|true|TRUE) ;; # Protected contracts reject incompatible explicit LMCache.
+      *) LMCACHE_ENABLED=0; LMCACHE_EXTRA_ARGS="" ;;
+    esac
+  fi
+  _kv_profile_requested=0
+fi
+
 # Strict sidecars must reject an alternate interpreter before invoking it for
 # help, parsing, downloads, or model startup.
 case "${VLLM_STRICT_PROTECTED_ARGS:-0}" in
   1|true|TRUE)
+    _kv_profile_requested=0
     if [ "${VLLM_PYTHON_BIN:-}" != "python3" ]; then
       echo "ERROR: invalid strict vLLM service contract: VLLM_PYTHON_BIN must be python3" >&2
       exit 64
@@ -189,8 +221,8 @@ parse_extra_args_into() {
     return 0
   fi
 
-  if strict_protected_args_enabled; then
-    echo "ERROR: strict vLLM service requires /parse_vllm_extra_args.py." >&2
+  if strict_protected_args_enabled || [ "${_kv_profile_requested}" = "1" ]; then
+    echo "ERROR: strict vLLM service or capacity profile requires /parse_vllm_extra_args.py." >&2
     return 66
   fi
   # Compatibility fallback for legacy images. Strict sidecars never evaluate it.
@@ -341,6 +373,54 @@ if strict_protected_args_enabled; then
   validate_strict_service_contract
 fi
 
+apply_capacity_profile() {
+  local profile_script="/kv_cache_config.py"
+  local profile_output
+  local -a profile_input=()
+  local -a profile_lmc_args=()
+  local required_arg
+  if [ ! -r "${profile_script}" ]; then
+    echo "ERROR: capacity profile requires /kv_cache_config.py." >&2
+    return 66
+  fi
+  parse_extra_args_into "${VLLM_EXTRA_ARGS:-}" profile_input
+  case "${LMCACHE_ENABLED:-0}" in
+    1|true|TRUE)
+      parse_extra_args_into "${LMCACHE_EXTRA_ARGS:-}" profile_lmc_args
+      profile_input+=("${profile_lmc_args[@]}")
+      ;;
+  esac
+  profile_output="$(mktemp)"
+  if ! VLLM_MODEL="${MODEL_TO_SERVE}" "${PYTHON_BIN}" "${profile_script}" \
+    --launch-argv -- "${profile_input[@]}" > "${profile_output}"; then
+    rm -f -- "${profile_output}"
+    echo "ERROR: KV capacity helper rejected startup." >&2
+    return 64
+  fi
+  mapfile -d '' -t extra_args < "${profile_output}"
+  rm -f -- "${profile_output}"
+  if [ "${#extra_args[@]}" -eq 0 ]; then
+    echo "ERROR: KV capacity helper returned no launch arguments." >&2
+    return 65
+  fi
+  for required_arg in --max-num-seqs --max-model-len --kv-cache-dtype; do
+    if ! supports_arg "${required_arg}"; then
+      echo "ERROR: capacity profile requires supported ${required_arg}." >&2
+      return 64
+    fi
+  done
+  if printf '%s\n' "${extra_args[@]}" | grep -Fxq -- '--kv-cache-memory-bytes' \
+    && ! supports_arg '--kv-cache-memory-bytes'; then
+    echo "ERROR: explicit VRAM budget requires supported --kv-cache-memory-bytes." >&2
+    return 64
+  fi
+  _strict_extra_args_preparsed=1
+}
+
+if [ "${_kv_profile_requested}" = "1" ]; then
+  apply_capacity_profile
+fi
+
 resolve_gguf_model_path() {
   local spec="$1"
   if [[ "${spec}" == */*:* && "${spec}" != /* ]]; then
@@ -470,7 +550,7 @@ if [ -n "${VLLM_GPU_MEMORY_UTILIZATION:-}" ]; then
   cmd+=(--gpu-memory-utilization "${VLLM_GPU_MEMORY_UTILIZATION}")
 fi
 
-if [ -n "${VLLM_MAX_MODEL_LEN:-}" ]; then
+if [ "${_kv_profile_requested}" = "0" ] && [ -n "${VLLM_MAX_MODEL_LEN:-}" ]; then
   cmd+=(--max-model-len "${VLLM_MAX_MODEL_LEN}")
 fi
 
@@ -561,7 +641,7 @@ PY
   )"
 fi
 
-if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
+if [ -n "${VLLM_EXTRA_ARGS:-}" ] || [ "${_kv_profile_requested}" = "1" ]; then
   if [ "${_strict_extra_args_preparsed}" != "1" ]; then
     parse_extra_args_into "${VLLM_EXTRA_ARGS}" extra_args
   fi
@@ -571,7 +651,7 @@ if [ -n "${VLLM_EXTRA_ARGS:-}" ]; then
 fi
 
 # Optional LMCache / KV connector flags (see .env.example: LMCACHE_*).
-if [ "${LMCACHE_ENABLED:-0}" = "1" ] || [ "${LMCACHE_ENABLED:-}" = "true" ] || [ "${LMCACHE_ENABLED:-}" = "TRUE" ]; then
+if [ "${_kv_profile_requested}" = "0" ] && { [ "${LMCACHE_ENABLED:-0}" = "1" ] || [ "${LMCACHE_ENABLED:-}" = "true" ] || [ "${LMCACHE_ENABLED:-}" = "TRUE" ]; }; then
   if [ -n "${LMCACHE_EXTRA_ARGS:-}" ]; then
     parse_extra_args_into "${LMCACHE_EXTRA_ARGS}" lmc_args
     if [ "${#lmc_args[@]}" -gt 0 ]; then
@@ -585,7 +665,7 @@ fi
 
 # vLLM's offloading connector requires hybrid KV cache manager to be disabled.
 # Auto-append the flag when KV offloading is enabled so startup doesn't crash.
-if printf '%s\n' "${cmd[@]}" | grep -q -- '--kv-offloading-'; then
+if [ "${_kv_profile_requested}" = "0" ] && printf '%s\n' "${cmd[@]}" | grep -q -- '--kv-offloading-'; then
   if ! printf '%s\n' "${cmd[@]}" | grep -q -- '--disable-hybrid-kv-cache-manager'; then
     echo "Detected KV offloading args; adding --disable-hybrid-kv-cache-manager"
     cmd+=(--disable-hybrid-kv-cache-manager)
@@ -594,6 +674,16 @@ fi
 
 # Avoid vLLM env validation warnings for wrapper-only variables.
 unset \
+  _kv_profile_requested \
+  _kv_profile_sidecar \
+  _kv_setting \
+  KV_CACHE_TARGET_ACTIVE_SEQUENCES \
+  KV_CACHE_RETAINED_CONTEXTS \
+  KV_CACHE_VRAM_GIB \
+  KV_CACHE_RAM_GIB \
+  KV_CACHE_SSD_GIB \
+  KV_CACHE_STORAGE_MODE \
+  KV_CACHE_EXECUTION_MODE \
   _rerank_bnb_strip \
   _strict_extra_args_preparsed \
   _vllm_task_trim \

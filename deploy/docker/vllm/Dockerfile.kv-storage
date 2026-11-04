@@ -1,0 +1,29 @@
+# Experimental derivative; first build Dockerfile.genesis from this checkout.
+# Supply its local image ID/digest, never a floating registry tag.
+ARG GENESIS_IMAGE
+FROM ${GENESIS_IMAGE}
+USER root
+ENV MAX_JOBS=2 NVCC_THREADS=1 CMAKE_BUILD_PARALLEL_LEVEL=2 LMCACHE_CUDA_MAJOR=13 \
+    TORCH_CUDA_ARCH_LIST="8.6;9.0" BUILD_WITH_MOONCAKE=1 \
+    MOONCAKE_LIB_DIR=/opt/mooncake-sdk/lib \
+    LD_LIBRARY_PATH=/opt/mooncake-sdk/lib:${LD_LIBRARY_PATH}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    cmake ninja-build git libibverbs-dev libgoogle-glog-dev libjsoncpp-dev \
+    libunwind-dev libnuma-dev libboost-all-dev libssl-dev libgrpc-dev libgrpc++-dev \
+    libprotobuf-dev libyaml-cpp-dev protobuf-compiler-grpc libcurl4-openssl-dev \
+    libhiredis-dev liburing-dev libjemalloc-dev libmsgpack-dev libzmq3-dev \
+    libzstd-dev libasio-dev libxxhash-dev pkg-config patchelf \
+    && rm -rf /var/lib/apt/lists/*
+# Compiler layers do not depend on frequently edited planner/diagnostic helpers.
+COPY deploy/docker/vllm/build_kv_storage.sh /opt/kv-storage/build-sdk.sh
+RUN bash /opt/kv-storage/build-sdk.sh
+COPY deploy/docker/vllm/kv-storage-constraints.txt /opt/kv-storage/constraints.txt
+COPY deploy/docker/vllm/build_lmcache.sh /opt/kv-storage/build-lmcache.sh
+RUN bash /opt/kv-storage/build-lmcache.sh
+COPY deploy/scripts/kv_cache_config.py deploy/scripts/kv_storage_layout.py deploy/scripts/kv_storage_plan.py /opt/kv-storage/
+COPY deploy/scripts/kv_storage_preflight.py /opt/kv-storage/
+# Docker build has no injected NVIDIA driver. This records base identity only.
+# Run --native after build with --gpus all; never load build stubs at runtime.
+RUN python3 /opt/kv-storage/kv_storage_preflight.py --base-identity > /opt/kv-storage/base-manifest.json
+# Keep Genesis and optional H100 integration inherited, with the same default entrypoint.
+# Storage is deliberately not enabled by an image ENV or altered entrypoint.

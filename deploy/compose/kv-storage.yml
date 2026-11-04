@@ -1,0 +1,67 @@
+# Standalone experimental infrastructure, not an override of application services.
+# Requires a locally built pinned candidate and a planner-produced plan.json.
+# No model service is defined; readiness remains blocked on actual registration.
+name: aquillm-kv-storage-experiment
+services:
+  lmcache:
+    image: ${KV_STORAGE_IMAGE:-aquillm-kv-storage-local:task2}
+    profiles: [kv-local, kv-mooncake]
+    entrypoint: [python3, /opt/kv-storage/kv_storage_preflight.py]
+    command: [--server-plan, /etc/kv-storage/plan.json]
+    gpus: all
+    ipc: shareable
+    shm_size: ${KV_STORAGE_SHM_SIZE:-2g}
+    mem_limit: ${KV_STORAGE_MEMORY_LIMIT:-8g}
+    restart: "no"
+    depends_on:
+      mooncake:
+        condition: service_healthy
+        required: false
+    volumes:
+      - type: bind
+        source: ${KV_STORAGE_PLAN_PATH:-./kv-storage-plan.json}
+        target: /etc/kv-storage/plan.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${KV_STORAGE_SSD_PATH:-./kv-storage-ssd}
+        target: /var/lib/mooncake
+        bind: {create_host_path: false}
+    networks: [kv-storage]
+  mooncake:
+    image: ${KV_STORAGE_IMAGE:-aquillm-kv-storage-local:task2}
+    profiles: [kv-mooncake]
+    entrypoint: [/opt/mooncake-sdk/bin/mooncake_master]
+    command: [--rpc_port=50051, --enable_offload=true]
+    mem_limit: 512m
+    restart: "no"
+    healthcheck:
+      test: [CMD, python3, -c, "import socket; socket.create_connection(('127.0.0.1', 50051), timeout=2).close()"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    networks: [kv-storage]
+  kv-storage-preflight:
+    image: ${KV_STORAGE_IMAGE:-aquillm-kv-storage-local:task2}
+    profiles: [kv-local, kv-mooncake]
+    entrypoint: [python3, /opt/kv-storage/kv_storage_preflight.py]
+    command: [--plan, /etc/kv-storage/plan.json]
+    gpus: all
+    ipc: service:lmcache
+    mem_limit: ${KV_STORAGE_MEMORY_LIMIT:-8g}
+    depends_on: [lmcache]
+    restart: "no"
+    volumes:
+      - type: bind
+        source: ${KV_STORAGE_PLAN_PATH:-./kv-storage-plan.json}
+        target: /etc/kv-storage/plan.json
+        read_only: true
+        bind: {create_host_path: false}
+      - type: bind
+        source: ${KV_STORAGE_SSD_PATH:-./kv-storage-ssd}
+        target: /var/lib/mooncake
+        bind: {create_host_path: false}
+    networks: [kv-storage]
+networks:
+  kv-storage:
+    internal: true
