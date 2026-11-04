@@ -14,11 +14,16 @@ from apps.knowledge_graph.tests.test_ready_scope import _DOC_A
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-@pytest.mark.parametrize("boundary", ["graph", "action", "permission", "slice", "revoked_during_read", "committed"])
+@pytest.mark.parametrize("boundary", ["graph", "action", "permission", "slice", "revoked_during_read", "committed", "default_off"])
 def test_scoped_graph_deadline_only_recovers_fresh_captured_baseline(monkeypatch, boundary):
     from apps.documents.services import graph_candidate_admission, source_body_batch
     from lib import replay_observation
 
+    gate = "RAG_SCOPED_BASELINE_RECOVERY_ENABLED"
+    if boundary == "default_off":
+        monkeypatch.delenv(gate, raising=False)
+    else:
+        monkeypatch.setenv(gate, "1")
     epoch = monotonic()
     with native_case(
         monkeypatch, fail=False, controlled_graph_clock=True, graph_epoch=epoch,
@@ -78,6 +83,13 @@ def test_scoped_graph_deadline_only_recovers_fresh_captured_baseline(monkeypatch
             assert {r.doc_id for r in result.final_rows[2]} == {_DOC_A}
             assert result.graph_diagnostics["graph_failure_reason"] == "deadline"
             assert not result.graph_diagnostics["source_admission"]["fallback_top_up_skipped"]
+            assert result.schedule_version == "native-closure-v3"
+        elif boundary == "default_off":
+            result = run_current_or_native(case)
+            assert {r.pk for r in result.final_rows[2]} == initial and not fetched
+            assert after[0] == pytest.approx(5.0, abs=.01)  # Earlier 5s graph cap, no extra reserve.
+            assert result.graph_diagnostics["source_admission"]["fallback_top_up_skipped"]
+            assert result.schedule_version == "native-closure-v2"
         elif boundary == "slice":
             result = run_current_or_native(case)
             assert fetched and case.operation.active()

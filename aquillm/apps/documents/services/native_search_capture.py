@@ -18,7 +18,7 @@ from .closed_search_finalizer import _NativeSearchAuthorizer
 from .graph_candidate_admission import _query_bindings
 from .graph_source_admission import NativeSourceAdmission, native_dependencies
 from .graph_source_runtime import graph_source_runtime
-from .native_search_schedule import acquisition_schedule
+from .native_search_schedule import acquisition_schedule, scoped_baseline_recovery_enabled
 from .representation_contracts import SourceScopeUnavailable
 from .source_deadline import _DEADLINE
 from .source_loading import SourcePreparationLimited, current_source_runtime
@@ -138,6 +138,7 @@ class _CapturedSearch:
         from .graph_source_admission import dependency_header
 
         self.snapshot, self.query, self.top_k = snapshot, query, top_k
+        self.scoped_recovery = scoped_baseline_recovery_enabled()
         self.authorize, self.dependencies = authorize, dependencies
         self.overlay_enabled, self.scope = overlay_enabled, scope
         self.overlay_setting = getattr(settings, "KG_OVERLAY_ENABLED", False)
@@ -208,6 +209,7 @@ class _CapturedSearch:
         # No clock, active(), can_publish(), or admission call below this point.
         if (
             acquisition_schedule() != "native_closure"
+            or scoped_baseline_recovery_enabled() != self.scoped_recovery
             or controls() != self.ranking
             or getattr(settings, "KG_OVERLAY_ENABLED", False) != self.overlay_setting
             or current_scope() is not scope

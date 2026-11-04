@@ -19,6 +19,7 @@ from .native_search_schedule import (
     NATIVE_CLOSURE_RESERVE_MS,
     NATIVE_CLOSURE_SCHEDULE_VERSION,
     SCOPED_BASELINE_RESERVE_MS,
+    native_closure_version,
 )
 from .native_scoped_fallback import recover_scoped_baseline, scoped_fallback_window
 from .representation_contracts import SourceScopeUnavailable
@@ -95,7 +96,7 @@ def _try_native_search_closure(
     captured.check()
     pool, graph_observation = captured.baseline, {}
     if attempt is not None:
-        window = scoped_fallback_window(captured)
+        window = scoped_fallback_window(captured) if captured.scoped_recovery else None
         outcome = attempt.run_native_closure(
             closure_reserve_ms=NATIVE_CLOSURE_RESERVE_MS + (SCOPED_BASELINE_RESERVE_MS if window else 0)
         )
@@ -167,6 +168,7 @@ def _try_native_search_closure(
         graph_observation,
         ranked,
         len(combined),
+        schedule_version=native_closure_version(captured.scoped_recovery),
     )
     captured.check()
     if observation is not None:

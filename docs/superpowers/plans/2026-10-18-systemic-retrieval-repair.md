@@ -473,3 +473,99 @@ branch reaching its deadline. No model planner selected this route and no
 answers were generated. Do not enable majority-document routing. The remaining
 Q4 gaps are returning relevant candidates and selecting explanatory passages;
 the Q3 gap still begins at acquisition.
+
+## November 4 follow-up on primary sources and graph deadlines
+
+We checked the internal faithfulness references and the scored development
+passages separately. For Q4, development has both primary catalog lists. The
+older paper is a preprint of the journal paper used in the original study,
+with different chunk boundaries and an opaque filename. The two lists support
+the SDSS version change, the six additional catalogs, and the retained QSO
+catalog citation. The DR14 label needs another source. For Q3, the collection
+contains the two component fluxes and a pointer to the pipeline paper. The
+full fit procedure still lacks a verified passage in this collection.
+
+We tried splitting literal comparison questions into two searches under the
+same 17-slot budget. Across 16 questions, only two qualified. The candidate
+union retained 7 of 11 mapped targets in both arms. Neither Q4 subquery found
+the primary catalog lists, and one control lost useful evidence. We did not
+enable this routing policy.
+
+We also found a separate defect in document-scoped follow-ups. The graph child
+could time out after reserving source slots, leaving already-ranked baseline
+candidates unread while the parent search still had time. The revised native
+schedule sets aside up to 2.5 seconds from the graph allowance to revalidate
+and read those candidates for an eligible single-document follow-up. It keeps
+the original turn, source and byte limits and the final closure reserve.
+Permission loss and hard expiry still invalidate the search. A PostgreSQL
+regression covers expiry on each side of the point where the sources enter the
+cache. The scoped, closure and replay run passed 127 tests.
+Another 53 admission, publication and provenance tests passed on PostgreSQL.
+
+Five isolated local-vLLM answer replays on 254 separated source sufficiency
+from automatic retrieval. The replays used the real publication authorization
+check, acquired its row locks and rolled the diagnostic transaction back. An
+earlier read-only harness prevented those locks and produced five limitation
+messages. Those messages cannot establish a serving defect.
+
+Given the ten sources from the ordinary Q4 selection, the model inferred no
+intrinsic survey changes and missed both the SDSS update and all six additions.
+With both primary catalog passages supplied, it cited the DR12-to-DR16 change
+and named all six. With their title pages also supplied, it explicitly
+identified the retained QSO catalog. Q3's ordinary selection supported a
+reference to the method paper. Supplying the two component passages yielded a
+cited, appropriately limited explanation. These were individual outputs with
+controlled source packets. Only the selection replays used ordinarily
+retrieved sources.
+
+The six-arm comparison on the isolated development candidate at `ebcf7cb4`
+gave the scoped recovery a concrete benefit and two rollout blockers. Each
+question used the same literal query, initial ordered sources and authorized
+collection across its old and new arms. The one-document follow-up was an
+experimental routing choice. It wasn't chosen by the model planner.
+
+| Case | Old acquisition and final scoring | With scoped recovery |
+| --- | --- | --- |
+| Q4 | 33 sources scored. The full later catalog never reached the scorer. | 45 sources scored. The full later catalog ranked 28th, outside the final nine. The earlier catalog was outside the chosen paper. |
+| Q3 | All 29 acquired sources scored in 35 windows. | 41 acquired, 39 scored in 45 windows. Two previously scored sources lost their scores, including one previously selected. The follow-up still chose the wrong paper. |
+| Q7 | All 32 sources scored. Final evidence contained the reported maximum of 4.119. | The extra 13 sources exhausted the cumulative tokenization allowance before final evidence handoff. A separate instrumented run reproduced the failure with 999,973 of 1,000,000 codepoints used and 4.2 seconds left. |
+
+Keep scoped recovery disabled by default. The measured behavior is available
+through `RAG_SCOPED_BASELINE_RECOVERY_ENABLED=1` with native closure. Protect
+the ordinary candidates' scoring windows and final text-preparation budget
+before adding recovered sources. Raising the graph timeout would not address
+either downstream constraint.
+
+With the gate in place, 93 scoped timeout, dispatch and replay tests passed
+on PostgreSQL. The native replay report records the effective version and
+the time reserved for scoped recovery, including zero when it is disabled.
+
+One old Q4 arm logged a generic graph error. In a separate reproduction the
+source-preparation deadline check stopped graph evidence hydration. The
+trace did not distinguish which nested time limit expired first. That guard
+raises a different exception from the graph deadline classifier.
+The recovery experiment intentionally requires an explicitly classified graph
+deadline. Fixing the missing classification requires distinguishing expiry of
+the graph child from loss of the original authorized search.
+
+We also tested a two-paper candidate search on the same development corpus.
+It identified both primary papers from self-descriptions already present in
+the first five ordinary Q4 results despite their opaque titles. It reused
+the original embedding and split the 17 dense slots into nine global and
+four per paper. The resulting candidates contained the full later list and
+a partial earlier list. The full earlier list ranked first in its paper's
+trigram search but missed its top 17 dense results. Q3 did not qualify and
+kept its candidate set. This policy was designed after inspecting Q4.
+
+A subsequent Q4 comparison charged both arms for the same five source reads
+and two scoped metadata searches, within the existing three-action budget.
+Both used ordinary graph admission and the local final scorer. The paired
+search placed the later and earlier passages at dense ranks 15 and 16,
+respectively. Both appeared in graph seed metadata, but neither received one
+of the 30 source reads. The reranker never saw either passage. Two other
+acquired sources changed. Both arms selected the same 11 sources, with
+identical order and excerpt bytes, and delivered none of the mapped comparative
+facts. We stopped before answer generation. This experiment isolates an
+admission problem as well as the separate ranking miss seen when a
+single-document follow-up did return the full later catalog. Do not enable
+the paired routing policy on the strength of candidate-level recall.

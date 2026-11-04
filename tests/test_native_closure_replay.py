@@ -89,6 +89,7 @@ def test_native_stage_omits_materialized_union_and_keeps_actual_schedule():
     event = captured_stage(
         acquisition_schedule_requested="native_closure",
         acquisition_schedule_observed="native_closure",
+        acquisition_schedule_version="native-closure-v3",
         acquisition_score_status="not_requested",
         materialized_union_status="unavailable",
         preclosure_pool_count=40,
@@ -101,6 +102,7 @@ def test_native_stage_omits_materialized_union_and_keeps_actual_schedule():
     result = summarize([event], [], [TARGET])
     stage = result["stages"][0]
     assert stage["preclosure_pool_count"] == 40
+    assert stage["acquisition_schedule_version"] == "native-closure-v3"
     assert stage["pool_count"] is None
     assert stage["acquisition_schedule_observed"] == "native_closure"
     assert stage["acquisition_score_status"] == "not_requested"
@@ -295,15 +297,25 @@ def test_effective_config_reports_requested_schedule_version_and_reserve(monkeyp
 
     from apps.chat.evals import replay_controls
 
-    for mode, version, reserve in (
-        ("scored", None, None),
-        ("native_closure", "native-closure-v3", 1250),
+    for mode, enabled, version, reserve, recovery_ms in (
+        ("scored", "1", None, None, None),
+        ("native_closure", None, "native-closure-v2", 1250, 0),
+        ("native_closure", "false", "native-closure-v2", 1250, 0),
+        ("native_closure", "1", "native-closure-v3", 1250, 2500),
     ):
         monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", mode)
+        if enabled is None:
+            monkeypatch.delenv("RAG_SCOPED_BASELINE_RECOVERY_ENABLED", raising=False)
+        else:
+            monkeypatch.setenv("RAG_SCOPED_BASELINE_RECOVERY_ENABLED", enabled)
         report = replay_controls.effective_schedule_config()
         assert report["acquisition_schedule"] == mode
         assert report["acquisition_schedule_version"] == version
         assert report["native_closure_reserve_ms"] == reserve
+        assert report["scoped_baseline_recovery_reserve_ms"] == recovery_ms
+    monkeypatch.setenv("RAG_SCOPED_BASELINE_RECOVERY_ENABLED", "mistyped")
+    with pytest.raises(ImproperlyConfigured, match="RAG_SCOPED_BASELINE_RECOVERY_ENABLED"):
+        replay_controls.effective_schedule_config()
     monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", "invalid")
     with pytest.raises(ImproperlyConfigured):
         replay_controls.effective_schedule_config()
