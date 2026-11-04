@@ -1,12 +1,12 @@
 """Persisted vocabulary pins enter graph identity and remain revocable."""
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
 
 from apps.collections.models import Collection, CollectionPermission
 from apps.collections.tests.test_vocabulary_scope import setup_scope, publish, service, entry
 from apps.documents.services.source_loading import SourceRuntime, source_runtime_scope
+from lib.knowledge_graph.config import load_extraction_settings
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
@@ -31,7 +31,7 @@ def test_actual_document_identity_artifact_and_frozen_consumer_reject_repin(monk
     from apps.knowledge_graph.models import GraphArtifact, graph_identity_checksum
     capture = v.capture_build_vocabulary((collection.pk,))
     capsule = capture.get(collection.pk)
-    settings = SimpleNamespace(provider="synthetic", model_id="fixture", model_revision="1")
+    settings = replace(load_extraction_settings({}), provider="synthetic", model_id="fixture", model_revision="1")
     values = document_artifact_identity_values(next(iter(auth.selected_document_ids)), "a" * 64,
         "test", "b" * 64, settings=settings, identity_policy="contextual_v2", vocabulary=capsule.policy)
     base = graph_identity_checksum("document-resolver", values["resolver_version"])

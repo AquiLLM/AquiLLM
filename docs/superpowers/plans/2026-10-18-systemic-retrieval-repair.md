@@ -405,3 +405,71 @@ Its saved passages ranked 45th and 24th globally and 11th and 7th within the
 relevant paper in the October diagnosis. Test source context separately; do
 not force a paper or add benchmark-specific aliases. No identifier experiment
 or document-context change has been enabled in the product.
+
+## November 4: real-collection identifier comparison
+
+The original isolated r12 runtime reproduced all 16 baseline lexical rankings
+against the authorized development collection after maintenance. The same
+530 documents, 2,701 text chunks, 499 other chunks, representation digest,
+title inputs and full text input digest passed the October checks. Baseline,
+full-format matching, and full-plus-partial matching each placed the same
+seven of eleven mapped passages in the top eight, at the same ranks. Neither
+Q3 method passage entered the shortlist. Q4 had no eligible identifier.
+
+All seven newly shortlisted Q3 passages were read and checked against their
+content hashes. The highest-scoring new source uses the SDSS field name but
+describes catalog selection and error scaling, not the HSC fitting procedure.
+The other passages discuss comparisons, calibration, or figure labels. Four
+of these reads were obtained on an isolated copy of the integrated PR runtime
+with 1,184 verified runtime files; three were identical to previously captured
+source bytes. The gain on synthetic controls did not transfer to the study
+question. Reject this ranking treatment; no activation or answer change.
+
+Fetched `origin/development` still points to `2439ca86`. All four merges
+since #246 are contained in this PR. A read-only check found that the ten
+application files changed by #248, #249 and #250 in the **running web
+container** also match development. This is a scoped file comparison, not a
+claim that the entire image, deployed workers, or active corpus are identical
+to the branch.
+
+The last full CI run for `cd824799` failed in the remaining graph tests on an
+incomplete vocabulary test fixture. The database regression reproduced the
+missing extraction-device error; the fixture now starts with complete
+extraction settings while retaining its synthetic provider/model and all
+repinning and authorization assertions. The focused three-file PostgreSQL 16
+run passed 32 tests. Full CI for the fixture correction is separate.
+
+On the integrated PR candidate, a separately bound 16-question comparison used
+the native global and document-scoped retrieval paths on the same query
+embedding. A document with at least three of the first five global dense hits
+could supply the tail of the 17-slot dense lane; the first nine global hits
+and the other search lanes were retained. The candidate union included 9/11
+mapped passages versus the current baseline's 7/11. The two new hits were
+both Q4 passages. Q3 still missed both. This was not universal improvement:
+46 candidate paths disappeared, one belonging to a previously selected Q7
+source, and a broad-query control lost its only useful minority-document hit.
+Do not replace the global tail unconditionally. The earlier attempt to enforce
+October dense order stopped at its first question and is not included.
+
+A subsequent downstream test initially stopped **before acquisition** because
+the post-maintenance reranker process had no current verification proof. The
+container, image and creation identity were unchanged, but its start time had
+changed. An explicit operator verification of all 14 pinned artifacts, runtime
+arguments and packages, template and tokenizer cache restored the deployment
+record. The ordinary timer issued a later successful renewal; a new, separate
+Q4 baseline completed with actual model scoring. The earlier failed arm is
+retained as a readiness failure, not credited as a successful search.
+
+All four post-repair arms then completed with local model scoring. Each pair
+started with the same returned source identities. For Q4 the diagnostic added
+one same-query document action instead of replacing the initial retrieval.
+It spent 9.49 seconds and charged three more sources (33 total). Both reference
+passages reached the scoped dense lane; only one returned as evidence and was
+scored (raw rank 19/33). Neither survived final selection. The ten selected
+identities and their order were unchanged. On Q3 the rule chose the wrong
+paper, spent 8.89 seconds, and changed two selected identities without recovering
+either reference. Both document tools completed despite their internal graph
+branch reaching its deadline. No model planner selected this route and no
+answers were generated. Do not enable majority-document routing. The remaining
+Q4 gaps are returning relevant candidates and selecting explanatory passages;
+the Q3 gap still begins at acquisition.
