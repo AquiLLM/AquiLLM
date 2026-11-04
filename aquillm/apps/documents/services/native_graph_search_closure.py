@@ -18,7 +18,9 @@ from .native_search_capture import capture_search, hydrated_rows
 from .native_search_schedule import (
     NATIVE_CLOSURE_RESERVE_MS,
     NATIVE_CLOSURE_SCHEDULE_VERSION,
+    SCOPED_BASELINE_RESERVE_MS,
 )
+from .native_scoped_fallback import recover_scoped_baseline, scoped_fallback_window
 from .representation_contracts import SourceScopeUnavailable
 from .source_loading import bounded_source_database
 
@@ -93,8 +95,9 @@ def _try_native_search_closure(
     captured.check()
     pool, graph_observation = captured.baseline, {}
     if attempt is not None:
+        window = scoped_fallback_window(captured)
         outcome = attempt.run_native_closure(
-            closure_reserve_ms=NATIVE_CLOSURE_RESERVE_MS
+            closure_reserve_ms=NATIVE_CLOSURE_RESERVE_MS + (SCOPED_BASELINE_RESERVE_MS if window else 0)
         )
         captured.check()  # Admission.check now runs in the restored source context.
         if outcome.kind == "invalid":
@@ -103,8 +106,12 @@ def _try_native_search_closure(
         if outcome.kind == "success":
             pool = outcome.pool
         else:
+            added = 0
+            if window is not None and graph_observation.get("graph_failure_reason") == "deadline":
+                pool, added = recover_scoped_baseline(captured, window)
+                captured.check()
             captured.admission.counts.update(
-                fallback_top_up_skipped=True, fallback_top_up_count=0
+                fallback_top_up_skipped=not added, fallback_top_up_count=added
             )
             graph_observation["source_admission"] = captured.admission.diagnostics()
         snapshot = captured.admission.refresh_snapshot(snapshot, pool)

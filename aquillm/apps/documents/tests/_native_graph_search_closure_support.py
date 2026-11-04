@@ -75,6 +75,8 @@ def native_case(
     start=0.0,
     rrf=False,
     controlled_graph_clock=False,
+    requested=None,
+    timeout_ms=10_000,
 ):
     monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", "native_closure")
     monkeypatch.setattr(settings, "KG_OVERLAY_ENABLED", graph_on, raising=False)
@@ -87,7 +89,8 @@ def native_case(
         prepare_sources=pressure_rows,
         dataset=True,
         budget=budget,
-        timeout_ms=10_000,
+        timeout_ms=timeout_ms,
+        requested=requested,
     ) as active:
         f, graph, source, scope, _, dependencies, operation, driver = active
         if fail or controlled_graph_clock:
@@ -95,9 +98,16 @@ def native_case(
         monkeypatch.setattr(settings, "RAG_RRF_ENABLED", rrf)
         monkeypatch.setattr(settings, "RAG_PROTECTED_EXACT_ENABLED", rrf, raising=False)
         scope.graph_enabled = graph_on
-        snapshot = capture(active, native=graph_on)
+        incoming = f.authorization
+        if requested is not None:
+            from apps.documents.tests.hybrid_graph_test_support import authorization
+            incoming = authorization(
+                f.policy, document_ids=requested,
+                collection_ids=frozenset(d.collection_id for d in active[4].documents),
+            )
+        snapshot = capture(active, native=graph_on, authorization=incoming)
         authorize = _bind_search_authorizer(
-            chunk_search.authorized_search_rows, f.authorization, graph_on
+            chunk_search.authorized_search_rows, incoming, graph_on
         )
         case = SimpleNamespace(
             active=active,

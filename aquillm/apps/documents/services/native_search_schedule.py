@@ -5,7 +5,10 @@ from os import getenv
 from django.core.exceptions import ImproperlyConfigured
 
 NATIVE_CLOSURE_RESERVE_MS = 1250
-NATIVE_CLOSURE_SCHEDULE_VERSION = "native-closure-v2"
+# Single-document searches can recover their captured baseline after graph
+# traversal expires. This slice is taken from graph time, never final closure.
+SCOPED_BASELINE_RESERVE_MS = 2500
+NATIVE_CLOSURE_SCHEDULE_VERSION = "native-closure-v3"
 
 
 def acquisition_schedule():

@@ -21,7 +21,7 @@ from .graph_source_runtime import graph_source_runtime
 from .native_search_schedule import acquisition_schedule
 from .representation_contracts import SourceScopeUnavailable
 from .source_deadline import _DEADLINE
-from .source_loading import current_source_runtime
+from .source_loading import SourcePreparationLimited, current_source_runtime
 
 _REQUIRED = frozenset(
     (
@@ -32,6 +32,10 @@ _REQUIRED = frozenset(
         "representation_generation_id",
     )
 )
+
+
+class _CapturedPhaseExpired(SourcePreparationLimited):
+    """The original search can still be live when its private child expires."""
 
 
 def hydrated_rows(rows):
@@ -171,7 +175,7 @@ class _CapturedSearch:
             deepcopy(_settings_values(dependencies.settings)) if dependencies else None
         )
 
-    def check(self):
+    def check(self, *, phase_deadline=None, restored=False):
         from apps.knowledge_graph.retrieval.graph_candidate_operation_v2 import (
             _settings_values,
         )
@@ -196,6 +200,11 @@ class _CapturedSearch:
             raise SourceScopeUnavailable("native_search_original_scope_unavailable")
         if self.overlay_enabled:
             self.admission.check()
+        if phase_deadline is not None:
+            # Like the parent clock above, this callback can reenter or revoke
+            # the owner. Sample it before the final identity-only comparisons.
+            if (phase_deadline[0] - phase_deadline[1]()) * 1000 < 1:
+                raise _CapturedPhaseExpired("scoped baseline deadline")
         # No clock, active(), can_publish(), or admission call below this point.
         if (
             acquisition_schedule() != "native_closure"
@@ -205,7 +214,7 @@ class _CapturedSearch:
             or runtime is not scope.runtime
             or current_source_runtime() is not self.source_binding
             or _OPERATION.get() is not operation
-            or _DEADLINE.get() is not parent
+            or _DEADLINE.get() is not (parent if phase_deadline is None or restored else phase_deadline)
             or any(
                 not original.live
                 or original.parent is not parent_op
