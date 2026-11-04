@@ -93,6 +93,8 @@ def install_adapters(config):
     # are still validated before either independent adapter can mutate runtime.
     profile = (development_profile(config.get("profile"))
                if config["prefill"] == "1" or config.get("profile") is not None else None)
+    from .gdn_mixed import install_gdn_mixed
+    gdn_mixed_result = install_gdn_mixed()
     prefill_result = {"installed": False, "reason": "disabled"}
     if config["prefill"] == "1":
         from .prefill_adapter import install_prefill_adapter
@@ -100,6 +102,7 @@ def install_adapters(config):
     if config["mtp"] == "fused":
         baseline.call_p67_splitk = make_verifier_adapter(baseline.call_p67_splitk, config)
     return {"status": "installed", "mtp": config["mtp"], "split": config["split"],
+            "gdn_mixed": gdn_mixed_result["installed"],
             "prefill": prefill_result["installed"], "prefill_reason": prefill_result["reason"],
             "prefill_profile": PROFILE_NAME if prefill_result["installed"] else None,
             "prefill_qualification": "experimental_pending_serving" if prefill_result["installed"] else None}

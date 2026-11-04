@@ -1,0 +1,63 @@
+{
+  "cached_checkpoint_geometry": {
+    "path": ".superpowers/sdd/2026-10-10-throughput/logits-sources/model-geometry.json",
+    "sha256": "ac460c325167abc9b73b7b244a62a2143983c5773e8daa14aa1128cacb6923c3",
+    "revision": "2d783431e303148fc6e16622fac5edac83a6b5c4",
+    "lm_head": {
+      "dtype": "F16",
+      "shape": [
+        248320,
+        5120
+      ],
+      "data_offsets": [
+        0,
+        2542796800
+      ]
+    }
+  },
+  "public_config": {
+    "url": "https://huggingface.co/hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16/resolve/main/config.json",
+    "revision": "2d783431e303148fc6e16622fac5edac83a6b5c4",
+    "sha256": "cfa49a4ad5eac9045ea1721bcfd346879f5c68ba6c86f3580f65102ba73653b7",
+    "text_config": {
+      "hidden_size": 5120,
+      "vocab_size": 248320,
+      "dtype": "float16"
+    },
+    "lm_head_ignored": true
+  },
+  "lm_head_in_quantization_ignore_list": true,
+  "installed_logits_source_identity": {
+    "linear.py": {
+      "sha256": "ae9e65314846d3c9609c198c561b0759d94698a56c84481dd0e8699d837b0fb4",
+      "byte_identical_to_pin_2dfaae752": true
+    },
+    "vocab_parallel_embedding.py": {
+      "sha256": "60b116e260d5438513c9bb60370306eed5e9b0ce612bfbe0a3885e64fdf0587b",
+      "byte_identical_to_pin_2dfaae752": true
+    },
+    "logits_processor.py": {
+      "sha256": "d6dfec7287020d587f4a4d475ce113c383b2eb55afe5ae9b0e037df2e2d13310",
+      "byte_identical_to_pin_2dfaae752": true
+    },
+    "interfaces.py": {
+      "sha256": "52a4de9e636afe58aaa8f8fa06cff94a2126aec59cae132212944e9d1e0323a5",
+      "byte_identical_to_pin_2dfaae752": true
+    },
+    "qwen3_5_mtp.py": {
+      "sha256": "95fc4e68738aca61a3777b4af0e1dd77f9346ef6c578537e71f13c3f21d58f0a",
+      "byte_identical_to_pin_2dfaae752": false
+    },
+    "layer_utils.py": {
+      "sha256": "061adffc6af55ef3b001557c0fad738e474c5e4134fa3dc35cb967bdbc90a121",
+      "byte_identical_to_pin_2dfaae752": true
+    }
+  },
+  "source_pin": "2dfaae752",
+  "installed_mtp_difference": "Genesis PN348 sharing/allocation/load changes",
+  "captured_source_sha256": {
+    "gpu_model_runner.py": "8db8e5bbd05cbbb38dbf0a4e50a48cee301cb382ffeb00998a318ba7a6df236a",
+    "llm_base_proposer.py": "54d9f45fc173b5370d13a04cb992c252bad1bd94fc30b8157e849c7a3cb65510"
+  },
+  "provenance_note": "Source hashes and checkpoint header fields were verified during original analysis; reproduction uses these recorded fields without independently rehashing absent source/config files."
+}

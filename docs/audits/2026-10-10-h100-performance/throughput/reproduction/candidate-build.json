@@ -1,0 +1,39 @@
+{
+  "source_commit": "d337f5cd70de68c74e1942f288d08be6bd4be248",
+  "baseline": "sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+  "candidate": "sha256:6c6005ebae4f46c98ace93c78df10420eb3a39370bc9da7173c501017595eee0",
+  "image_configuration_unchanged": true,
+  "packages_checked": 265,
+  "plugins": [
+    [
+      "vllm.general_plugins",
+      "genesis_v7",
+      "sndr.plugin:register"
+    ],
+    [
+      "vllm.general_plugins",
+      "lora_filesystem_resolver",
+      "vllm.plugins.lora_resolvers.filesystem_resolver:register_filesystem_resolver"
+    ],
+    [
+      "vllm.general_plugins",
+      "lora_hf_hub_resolver",
+      "vllm.plugins.lora_resolvers.hf_hub_resolver:register_hf_hub_resolver"
+    ]
+  ],
+  "genesis": "34e269301cc3df71ae4b0da00a0a159b16b4e5d8",
+  "build_command": [
+    "docker",
+    "build",
+    "--pull=false",
+    "--build-arg",
+    "BASE_IMAGE=sha256:f3f93409ed546b6438147b7b633aa4380573b8f547fc7758662be17700b6bdb7",
+    "--iidfile",
+    "/tmp/h100-throughput/candidate-d337f5cd70de.image-id",
+    "-t",
+    "aquillm-h100-throughput:d337f5cd70de",
+    "-f",
+    "/home/exouser/AquiLLM-throughput/deploy/docker/vllm/Dockerfile.throughput-baseline",
+    "/home/exouser/AquiLLM-throughput"
+  ]
+}

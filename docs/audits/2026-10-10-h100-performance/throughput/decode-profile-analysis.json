@@ -1,0 +1,1151 @@
+{
+  "trace": {
+    "path": "docs/audits/2026-10-10-h100-performance/throughput/reproduction/decode-worker-trace.json.gz",
+    "compressed_bytes": 2428622,
+    "sha256": "79ee8969d455a1c04c4f1d27141263d98404aea99891e804fdd67b7d44507a07",
+    "trace_id": "BBE1E901CE804580AB42C9DF3EFF7383",
+    "device": "NVIDIA H100 80GB HBM3",
+    "timestamp_unit": "microseconds",
+    "profiler_overhead_unknown": true,
+    "performance_claim": false
+  },
+  "raw_event_count": 157324,
+  "event_categories": {
+    "user_annotation": 512,
+    "cpu_op": 49056,
+    "kernel": 40416,
+    "ac2g": 53698,
+    "gpu_memset": 363,
+    "gpu_memcpy": 2166,
+    "cuda_runtime": 9857,
+    "cuda_driver": 896,
+    "overhead": 5,
+    "gpu_user_annotation": 288,
+    "none": 66,
+    "Trace": 1
+  },
+  "captured_source_sha256": {
+    "gpu_model_runner.py": "8db8e5bbd05cbbb38dbf0a4e50a48cee301cb382ffeb00998a318ba7a6df236a",
+    "llm_base_proposer.py": "54d9f45fc173b5370d13a04cb992c252bad1bd94fc30b8157e849c7a3cb65510"
+  },
+  "source_provenance": {
+    "mode": "recorded compact metadata; original source files not rehashed",
+    "metadata_path": "docs/audits/2026-10-10-h100-performance/throughput/decode-model-geometry.json",
+    "metadata_sha256": "f3de3b11df1b59292f974f35c45171d734f4ab8919d21a59b889e542fb237f7b"
+  },
+  "installed_logits_source_identity": {
+    "linear.py": {
+      "sha256": "ae9e65314846d3c9609c198c561b0759d94698a56c84481dd0e8699d837b0fb4",
+      "byte_identical_to_pin_2dfaae752": true
+    },
+    "vocab_parallel_embedding.py": {
+      "sha256": "60b116e260d5438513c9bb60370306eed5e9b0ce612bfbe0a3885e64fdf0587b",
+      "byte_identical_to_pin_2dfaae752": true
+    },
+    "logits_processor.py": {
+      "sha256": "d6dfec7287020d587f4a4d475ce113c383b2eb55afe5ae9b0e037df2e2d13310",
+      "byte_identical_to_pin_2dfaae752": true
+    },
+    "interfaces.py": {
+      "sha256": "52a4de9e636afe58aaa8f8fa06cff94a2126aec59cae132212944e9d1e0323a5",
+      "byte_identical_to_pin_2dfaae752": true
+    },
+    "qwen3_5_mtp.py": {
+      "sha256": "95fc4e68738aca61a3777b4af0e1dd77f9346ef6c578537e71f13c3f21d58f0a",
+      "byte_identical_to_pin_2dfaae752": false
+    },
+    "layer_utils.py": {
+      "sha256": "061adffc6af55ef3b001557c0fad738e474c5e4134fa3dc35cb967bdbc90a121",
+      "byte_identical_to_pin_2dfaae752": true
+    }
+  },
+  "actual_active_executions": 32,
+  "profiler_steps": [
+    "ProfilerStep#4",
+    "ProfilerStep#5",
+    "ProfilerStep#6",
+    "ProfilerStep#7",
+    "ProfilerStep#8",
+    "ProfilerStep#9",
+    "ProfilerStep#10",
+    "ProfilerStep#11",
+    "ProfilerStep#12",
+    "ProfilerStep#13",
+    "ProfilerStep#14",
+    "ProfilerStep#15",
+    "ProfilerStep#16",
+    "ProfilerStep#17",
+    "ProfilerStep#18",
+    "ProfilerStep#19",
+    "ProfilerStep#20",
+    "ProfilerStep#21",
+    "ProfilerStep#22",
+    "ProfilerStep#23",
+    "ProfilerStep#24",
+    "ProfilerStep#25",
+    "ProfilerStep#26",
+    "ProfilerStep#27",
+    "ProfilerStep#28",
+    "ProfilerStep#29",
+    "ProfilerStep#30",
+    "ProfilerStep#31",
+    "ProfilerStep#32",
+    "ProfilerStep#33",
+    "ProfilerStep#34",
+    "ProfilerStep#35"
+  ],
+  "cpu_step_window_ms": 642.280659,
+  "cpu_step_durations": {
+    "count": 32,
+    "summed_ms": 641.698529,
+    "median_ms": 20.035163,
+    "min_ms": 19.399399,
+    "max_ms": 20.628838
+  },
+  "correlation": {
+    "raw_kernel_events": 40416,
+    "attributed_kernel_events": 39648,
+    "unattributed_kernel_events": 768,
+    "unattributed": {
+      "count": 768,
+      "summed_ms": 13.683094,
+      "median_ms": 0.002704,
+      "min_ms": 0.00096,
+      "max_ms": 0.843613
+    },
+    "method": "CUPTI kernel correlation -> recorded CUDA runtime/driver call -> enclosing CPU stage/ProfilerStep; graph child kernels share replay correlation"
+  },
+  "kernel_device_ms": 613.673046,
+  "device_activity": {
+    "attributed_events": 42144,
+    "envelope_ms": 641.991501,
+    "union_busy_ms": 616.383284,
+    "gaps_ms": 25.608217,
+    "gap_count": 42044,
+    "largest_gap_ms": 0.0096
+  },
+  "device_families": {
+    "cuBLAS NVJet GEMM": {
+      "count": 5408,
+      "summed_ms": 311.953587,
+      "median_ms": 0.028672,
+      "min_ms": 0.004544,
+      "max_ms": 0.847452,
+      "percent_kernel_device_ms": 50.8338
+    },
+    "AWQ Marlin GEMM": {
+      "count": 5120,
+      "summed_ms": 166.342713,
+      "median_ms": 0.027007,
+      "min_ms": 0.013248,
+      "max_ms": 0.048959,
+      "percent_kernel_device_ms": 27.1061
+    },
+    "TurboQuant P67 attention": {
+      "count": 1088,
+      "summed_ms": 51.541442,
+      "median_ms": 0.047488,
+      "min_ms": 0.044927,
+      "max_ms": 0.049791,
+      "percent_kernel_device_ms": 8.3988
+    },
+    "GDN delta-rule update": {
+      "count": 1536,
+      "summed_ms": 21.5239,
+      "median_ms": 0.013984,
+      "min_ms": 0.013696,
+      "max_ms": 0.015424,
+      "percent_kernel_device_ms": 3.5074
+    },
+    "other kernels": {
+      "count": 8992,
+      "summed_ms": 17.068434,
+      "median_ms": 0.001408,
+      "min_ms": 0.00096,
+      "max_ms": 0.018464,
+      "percent_kernel_device_ms": 2.7814
+    },
+    "RMS normalization/fused residual": {
+      "count": 4480,
+      "summed_ms": 12.387945,
+      "median_ms": 0.002624,
+      "min_ms": 0.002303,
+      "max_ms": 0.003968,
+      "percent_kernel_device_ms": 2.0187
+    },
+    "activation/gating": {
+      "count": 2176,
+      "summed_ms": 10.424013,
+      "median_ms": 0.0048,
+      "min_ms": 0.004255,
+      "max_ms": 0.005599,
+      "percent_kernel_device_ms": 1.6986
+    },
+    "copy/layout kernels": {
+      "count": 5792,
+      "summed_ms": 9.226663,
+      "median_ms": 0.001408,
+      "min_ms": 0.001055,
+      "max_ms": 0.003936,
+      "percent_kernel_device_ms": 1.5035
+    },
+    "GDN causal convolution": {
+      "count": 1536,
+      "summed_ms": 6.412119,
+      "median_ms": 0.00416,
+      "min_ms": 0.003775,
+      "max_ms": 0.004991,
+      "percent_kernel_device_ms": 1.0449
+    },
+    "cuBLAS split-K reduction": {
+      "count": 1792,
+      "summed_ms": 2.912091,
+      "median_ms": 0.001568,
+      "min_ms": 0.001503,
+      "max_ms": 0.00272,
+      "percent_kernel_device_ms": 0.4745
+    },
+    "Genesis QKV split": {
+      "count": 1536,
+      "summed_ms": 2.138677,
+      "median_ms": 0.001376,
+      "min_ms": 0.001312,
+      "max_ms": 0.001665,
+      "percent_kernel_device_ms": 0.3485
+    },
+    "argmax reduction": {
+      "count": 192,
+      "summed_ms": 1.741462,
+      "median_ms": 0.009312,
+      "min_ms": 0.008,
+      "max_ms": 0.010048,
+      "percent_kernel_device_ms": 0.2838
+    }
+  },
+  "device_by_correlated_cpu_stage": {
+    "gpu_model_runner: forward": {
+      "count": 33856,
+      "summed_ms": 423.765607,
+      "median_ms": 0.003168,
+      "min_ms": 0.00096,
+      "max_ms": 0.058368
+    },
+    "gpu_model_runner: draft": {
+      "count": 3936,
+      "summed_ms": 159.17212,
+      "median_ms": 0.002528,
+      "min_ms": 0.001183,
+      "max_ms": 0.845309
+    },
+    "gpu_model_runner: postprocess": {
+      "count": 64,
+      "summed_ms": 27.063551,
+      "median_ms": 0.421183,
+      "min_ms": 0.001632,
+      "max_ms": 0.847452
+    },
+    "gpu_model_runner: preprocess": {
+      "count": 1280,
+      "summed_ms": 2.143168,
+      "median_ms": 0.001536,
+      "min_ms": 0.000991,
+      "max_ms": 0.00528
+    },
+    "gpu_model_runner: sample": {
+      "count": 384,
+      "summed_ms": 1.322071,
+      "median_ms": 0.002752,
+      "min_ms": 0.000991,
+      "max_ms": 0.0088
+    },
+    "outside named stage": {
+      "count": 128,
+      "summed_ms": 0.206529,
+      "median_ms": 0.001392,
+      "min_ms": 0.001184,
+      "max_ms": 0.002623
+    }
+  },
+  "device_families_by_cpu_stage": {
+    "gpu_model_runner: preprocess": {
+      "other kernels": {
+        "count": 1024,
+        "summed_ms": 1.76036,
+        "median_ms": 0.001616,
+        "min_ms": 0.000991,
+        "max_ms": 0.00528
+      },
+      "copy/layout kernels": {
+        "count": 256,
+        "summed_ms": 0.382808,
+        "median_ms": 0.00144,
+        "min_ms": 0.00128,
+        "max_ms": 0.001952
+      }
+    },
+    "gpu_model_runner: forward": {
+      "AWQ Marlin GEMM": {
+        "count": 5120,
+        "summed_ms": 166.342713,
+        "median_ms": 0.027007,
+        "min_ms": 0.013248,
+        "max_ms": 0.048959
+      },
+      "cuBLAS NVJet GEMM": {
+        "count": 4608,
+        "summed_ms": 138.714422,
+        "median_ms": 0.028448,
+        "min_ms": 0.004544,
+        "max_ms": 0.058368
+      },
+      "TurboQuant P67 attention": {
+        "count": 1024,
+        "summed_ms": 48.464397,
+        "median_ms": 0.047456,
+        "min_ms": 0.044927,
+        "max_ms": 0.048992
+      },
+      "GDN delta-rule update": {
+        "count": 1536,
+        "summed_ms": 21.5239,
+        "median_ms": 0.013984,
+        "min_ms": 0.013696,
+        "max_ms": 0.015424
+      },
+      "RMS normalization/fused residual": {
+        "count": 4096,
+        "summed_ms": 11.34997,
+        "median_ms": 0.002624,
+        "min_ms": 0.002303,
+        "max_ms": 0.003968
+      },
+      "activation/gating": {
+        "count": 2048,
+        "summed_ms": 9.871831,
+        "median_ms": 0.0048,
+        "min_ms": 0.004576,
+        "max_ms": 0.005599
+      },
+      "other kernels": {
+        "count": 6208,
+        "summed_ms": 9.360409,
+        "median_ms": 0.001312,
+        "min_ms": 0.00096,
+        "max_ms": 0.003488
+      },
+      "copy/layout kernels": {
+        "count": 4608,
+        "summed_ms": 7.183427,
+        "median_ms": 0.001376,
+        "min_ms": 0.001055,
+        "max_ms": 0.00272
+      },
+      "GDN causal convolution": {
+        "count": 1536,
+        "summed_ms": 6.412119,
+        "median_ms": 0.00416,
+        "min_ms": 0.003775,
+        "max_ms": 0.004991
+      },
+      "cuBLAS split-K reduction": {
+        "count": 1536,
+        "summed_ms": 2.403742,
+        "median_ms": 0.001568,
+        "min_ms": 0.001503,
+        "max_ms": 0.001825
+      },
+      "Genesis QKV split": {
+        "count": 1536,
+        "summed_ms": 2.138677,
+        "median_ms": 0.001376,
+        "min_ms": 0.001312,
+        "max_ms": 0.001665
+      }
+    },
+    "gpu_model_runner: postprocess": {
+      "cuBLAS NVJet GEMM": {
+        "count": 32,
+        "summed_ms": 27.00912,
+        "median_ms": 0.843837,
+        "min_ms": 0.840541,
+        "max_ms": 0.847452
+      },
+      "other kernels": {
+        "count": 32,
+        "summed_ms": 0.054431,
+        "median_ms": 0.001696,
+        "min_ms": 0.001632,
+        "max_ms": 0.001824
+      }
+    },
+    "gpu_model_runner: sample": {
+      "argmax reduction": {
+        "count": 64,
+        "summed_ms": 0.531995,
+        "median_ms": 0.008352,
+        "min_ms": 0.008,
+        "max_ms": 0.0088
+      },
+      "copy/layout kernels": {
+        "count": 192,
+        "summed_ms": 0.449535,
+        "median_ms": 0.002272,
+        "min_ms": 0.00128,
+        "max_ms": 0.003936
+      },
+      "other kernels": {
+        "count": 128,
+        "summed_ms": 0.340541,
+        "median_ms": 0.002496,
+        "min_ms": 0.000991,
+        "max_ms": 0.00544
+      }
+    },
+    "outside named stage": {
+      "other kernels": {
+        "count": 64,
+        "summed_ms": 0.119069,
+        "median_ms": 0.001855,
+        "min_ms": 0.001216,
+        "max_ms": 0.002623
+      },
+      "copy/layout kernels": {
+        "count": 64,
+        "summed_ms": 0.08746,
+        "median_ms": 0.001392,
+        "min_ms": 0.001184,
+        "max_ms": 0.001504
+      }
+    },
+    "gpu_model_runner: draft": {
+      "cuBLAS NVJet GEMM": {
+        "count": 768,
+        "summed_ms": 146.230045,
+        "median_ms": 0.056848,
+        "min_ms": 0.023903,
+        "max_ms": 0.845309
+      },
+      "other kernels": {
+        "count": 1536,
+        "summed_ms": 5.433624,
+        "median_ms": 0.002176,
+        "min_ms": 0.00128,
+        "max_ms": 0.018464
+      },
+      "TurboQuant P67 attention": {
+        "count": 64,
+        "summed_ms": 3.077045,
+        "median_ms": 0.048752,
+        "min_ms": 0.045408,
+        "max_ms": 0.049791
+      },
+      "argmax reduction": {
+        "count": 128,
+        "summed_ms": 1.209467,
+        "median_ms": 0.009439,
+        "min_ms": 0.009088,
+        "max_ms": 0.010048
+      },
+      "copy/layout kernels": {
+        "count": 672,
+        "summed_ms": 1.123433,
+        "median_ms": 0.001504,
+        "min_ms": 0.001183,
+        "max_ms": 0.002656
+      },
+      "RMS normalization/fused residual": {
+        "count": 384,
+        "summed_ms": 1.037975,
+        "median_ms": 0.002657,
+        "min_ms": 0.002431,
+        "max_ms": 0.003616
+      },
+      "activation/gating": {
+        "count": 128,
+        "summed_ms": 0.552182,
+        "median_ms": 0.00432,
+        "min_ms": 0.004255,
+        "max_ms": 0.004385
+      },
+      "cuBLAS split-K reduction": {
+        "count": 256,
+        "summed_ms": 0.508349,
+        "median_ms": 0.001983,
+        "min_ms": 0.001887,
+        "max_ms": 0.00272
+      }
+    }
+  },
+  "likely_logits_projection_kernel_by_stage": {
+    "gpu_model_runner: postprocess": {
+      "count": 32,
+      "summed_ms": 27.00912,
+      "median_ms": 0.843837,
+      "min_ms": 0.840541,
+      "max_ms": 0.847452
+    },
+    "gpu_model_runner: draft": {
+      "count": 128,
+      "summed_ms": 107.343942,
+      "median_ms": 0.838541,
+      "min_ms": 0.835101,
+      "max_ms": 0.845309
+    }
+  },
+  "logits_projection_roofline": {
+    "status": "recorded compact checkpoint geometry; original sources not rehashed",
+    "cached_checkpoint_geometry": {
+      "path": ".superpowers/sdd/2026-10-10-throughput/logits-sources/model-geometry.json",
+      "sha256": "ac460c325167abc9b73b7b244a62a2143983c5773e8daa14aa1128cacb6923c3",
+      "revision": "2d783431e303148fc6e16622fac5edac83a6b5c4",
+      "lm_head": {
+        "dtype": "F16",
+        "shape": [
+          248320,
+          5120
+        ],
+        "data_offsets": [
+          0,
+          2542796800
+        ]
+      }
+    },
+    "public_config": {
+      "url": "https://huggingface.co/hampsonw/Qwen3.6-27B-AWQ-BF16-INT4-mtp-bf16/resolve/main/config.json",
+      "revision": "2d783431e303148fc6e16622fac5edac83a6b5c4",
+      "sha256": "cfa49a4ad5eac9045ea1721bcfd346879f5c68ba6c86f3580f65102ba73653b7",
+      "text_config": {
+        "hidden_size": 5120,
+        "vocab_size": 248320,
+        "dtype": "float16"
+      },
+      "lm_head_ignored": true
+    },
+    "vocab_size": 248320,
+    "hidden_size": 5120,
+    "assumed_weight_dtype": "float16",
+    "bytes_per_weight": 2,
+    "lm_head_in_quantization_ignore_list": true,
+    "assumed_weight_bytes": 2542796800,
+    "peak_hbm_bandwidth_bytes_per_second": 3350000000000.0,
+    "peak_bandwidth_source": "https://docs.nvidia.com/enterprise-reference-architectures/hgx-ai-factory-h100-h200-b200/latest/components.html",
+    "single_weight_read_floor_ms": 0.7590438208955224,
+    "recorded_projection_calls": 160,
+    "measured_projection_sum_ms": 134.353062,
+    "effective_weight_read_bandwidth_tb_s": 3.028196618250502,
+    "ideal_reducible_projection_sum_ms": 12.906050656716417,
+    "ideal_reducible_percent_all_kernel_duration": 2.1030825356987273,
+    "assumptions": [
+      "TP1 full unquantized head; no added vocabulary/padding beyond public dimensions.",
+      "Each call reads weight once from HBM; small L2 reuse, activation/logit traffic and computation omitted.",
+      "Published peak bandwidth is an optimistic ceiling, not measured sustained bandwidth.",
+      "This bounds the simple full-weight-read model; it is not a predicted benchmark gain."
+    ],
+    "recommendation": "No new GEMM kernel from size alone; theoretical remaining bandwidth headroom is small. Prefer validated batching correctness and paired throughput tests, then measured shape-specific opportunities."
+  },
+  "cpu_ranges": {
+    "execute_context_0(0)_generation_1(5)": {
+      "count": 32,
+      "summed_ms": 270.679007,
+      "median_ms": 8.467879,
+      "min_ms": 7.86308,
+      "max_ms": 8.875991
+    },
+    "gpu_model_runner: sample": {
+      "count": 32,
+      "summed_ms": 177.800759,
+      "median_ms": 5.560836,
+      "min_ms": 5.34166,
+      "max_ms": 5.609601
+    },
+    "gpu_model_runner: draft": {
+      "count": 32,
+      "summed_ms": 164.941326,
+      "median_ms": 5.133271,
+      "min_ms": 5.081196,
+      "max_ms": 5.655741
+    },
+    "gpu_model_runner: preprocess": {
+      "count": 32,
+      "summed_ms": 133.449955,
+      "median_ms": 4.151886,
+      "min_ms": 4.07697,
+      "max_ms": 4.341771
+    },
+    "gpu_model_runner: forward": {
+      "count": 32,
+      "summed_ms": 31.017679,
+      "median_ms": 0.945491,
+      "min_ms": 0.915798,
+      "max_ms": 1.31752
+    },
+    "gpu_model_runner: postprocess": {
+      "count": 32,
+      "summed_ms": 7.696809,
+      "median_ms": 0.239885,
+      "min_ms": 0.219446,
+      "max_ms": 0.338997
+    },
+    "gpu_model_runner: AsyncGPUModelRunnerOutput": {
+      "count": 32,
+      "summed_ms": 3.079122,
+      "median_ms": 0.093672,
+      "min_ms": 0.086041,
+      "max_ms": 0.113905
+    },
+    "gpu_model_runner: bookkeep": {
+      "count": 32,
+      "summed_ms": 2.243123,
+      "median_ms": 0.067081,
+      "min_ms": 0.064481,
+      "max_ms": 0.089564
+    },
+    "schedule: allocate_slots": {
+      "count": 32,
+      "summed_ms": 1.810595,
+      "median_ms": 0.048696,
+      "min_ms": 0.045672,
+      "max_ms": 0.129624
+    },
+    "schedule: make_cached_request_data": {
+      "count": 32,
+      "summed_ms": 1.128597,
+      "median_ms": 0.015626,
+      "min_ms": 0.013203,
+      "max_ms": 0.16161
+    },
+    "schedule: update_after_schedule": {
+      "count": 32,
+      "summed_ms": 0.990425,
+      "median_ms": 0.013302,
+      "min_ms": 0.010303,
+      "max_ms": 0.099889
+    },
+    "schedule: get_num_common_prefix_blocks": {
+      "count": 32,
+      "summed_ms": 0.430464,
+      "median_ms": 0.0096,
+      "min_ms": 0.008249,
+      "max_ms": 0.120329
+    },
+    "gpu_model_runner: ModelRunnerOutput": {
+      "count": 32,
+      "summed_ms": 0.324288,
+      "median_ms": 0.010096,
+      "min_ms": 0.009367,
+      "max_ms": 0.011697
+    },
+    "gpu_model_runner: eplb": {
+      "count": 32,
+      "summed_ms": 0.28235,
+      "median_ms": 0.008596,
+      "min_ms": 0.007712,
+      "max_ms": 0.010857
+    },
+    "gpu_model_runner: set_async_sampled_token_ids": {
+      "count": 32,
+      "summed_ms": 0.255706,
+      "median_ms": 0.007396,
+      "min_ms": 0.006511,
+      "max_ms": 0.025802
+    }
+  },
+  "gpu_ranges_inclusive_multistream": {
+    "gpu_model_runner: forward": {
+      "count": 32,
+      "summed_ms": 428.810214,
+      "median_ms": 13.722945,
+      "min_ms": 3.404662,
+      "max_ms": 13.750417
+    },
+    "gpu_model_runner: draft": {
+      "count": 96,
+      "summed_ms": 165.33761,
+      "median_ms": 0.002066,
+      "min_ms": 0.001441,
+      "max_ms": 5.174768
+    },
+    "gpu_model_runner: postprocess": {
+      "count": 32,
+      "summed_ms": 27.198911,
+      "median_ms": 0.84976,
+      "min_ms": 0.846174,
+      "max_ms": 0.853759
+    },
+    "gpu_model_runner: preprocess": {
+      "count": 32,
+      "summed_ms": 7.643938,
+      "median_ms": 0.239665,
+      "min_ms": 0.232033,
+      "max_ms": 0.242433
+    },
+    "gpu_model_runner: sample": {
+      "count": 32,
+      "summed_ms": 2.080954,
+      "median_ms": 0.065154,
+      "min_ms": 0.063106,
+      "max_ms": 0.066818
+    },
+    "gpu_model_runner: AsyncGPUModelRunnerOutput": {
+      "count": 32,
+      "summed_ms": 0.061056,
+      "median_ms": 0.00189,
+      "min_ms": 0.001507,
+      "max_ms": 0.002914
+    }
+  },
+  "cuda_graph_launches": {
+    "gpu_model_runner: forward": {
+      "count": 32,
+      "summed_ms": 28.734102,
+      "median_ms": 0.872548,
+      "min_ms": 0.847075,
+      "max_ms": 1.243705
+    },
+    "gpu_model_runner: draft": {
+      "count": 256,
+      "summed_ms": 5.98066,
+      "median_ms": 0.022715,
+      "min_ms": 0.017519,
+      "max_ms": 0.040337
+    }
+  },
+  "graph_kernel_counts": {
+    "1058": 32,
+    "9": 128,
+    "8": 128
+  },
+  "cpu_sync_calls": {
+    "gpu_model_runner: sample": {
+      "count": 64,
+      "summed_ms": 160.628667,
+      "median_ms": 2.357262,
+      "min_ms": 0.002642,
+      "max_ms": 5.042463
+    },
+    "outside named stage": {
+      "count": 65,
+      "summed_ms": 107.276308,
+      "median_ms": 2.383762,
+      "min_ms": 0.007947,
+      "max_ms": 13.69504
+    },
+    "gpu_model_runner: preprocess": {
+      "count": 32,
+      "summed_ms": 0.223521,
+      "median_ms": 0.006625,
+      "min_ms": 0.005664,
+      "max_ms": 0.018246
+    }
+  },
+  "top_kernel_names": [
+    {
+      "name": "void marlin::Marlin<1125899906910725l, 1125899906843648l, 1125899906910725l, 1125899906910725l, 256, 1, 8, 8, true, 4, 2, false>(int4 const*, int4 const*, int4*, int4*, int4 const*, float const*, int4 const*, float const*, int4 const*, int const*, int, int, int, int, int, int*, bool, bool, bool, int)",
+      "count": 5120,
+      "summed_ms": 166.342713,
+      "median_ms": 0.027007,
+      "min_ms": 0.013248,
+      "max_ms": 0.048959
+    },
+    {
+      "name": "nvjet_sm90_hsh_512x8_64x3_2x1_v_bz_TNT",
+      "count": 160,
+      "summed_ms": 134.353062,
+      "median_ms": 0.83899,
+      "min_ms": 0.835101,
+      "max_ms": 0.847452
+    },
+    {
+      "name": "nvjet_sm90_hsh_128x8_64x12_2x1_v_bz_TNT",
+      "count": 1536,
+      "summed_ms": 87.565795,
+      "median_ms": 0.057056,
+      "min_ms": 0.056063,
+      "max_ms": 0.058368
+    },
+    {
+      "name": "nvjet_sm90_hsh_64x8_64x16_4x1_v_bz_TNT",
+      "count": 1664,
+      "summed_ms": 47.007682,
+      "median_ms": 0.028415,
+      "min_ms": 0.023903,
+      "max_ms": 0.030144
+    },
+    {
+      "name": "p67_splitk_stage2",
+      "count": 544,
+      "summed_ms": 26.091647,
+      "median_ms": 0.047936,
+      "min_ms": 0.04688,
+      "max_ms": 0.049791
+    },
+    {
+      "name": "p67_stage1_splitk",
+      "count": 544,
+      "summed_ms": 25.449795,
+      "median_ms": 0.046768,
+      "min_ms": 0.044927,
+      "max_ms": 0.048864
+    },
+    {
+      "name": "fused_sigmoid_gating_delta_rule_update_kernel",
+      "count": 1536,
+      "summed_ms": 21.5239,
+      "median_ms": 0.013984,
+      "min_ms": 0.013696,
+      "max_ms": 0.015424
+    },
+    {
+      "name": "nvjet_sm90_hsh_384x8_64x4_4x1_v_bz_TNT",
+      "count": 128,
+      "summed_ms": 16.21479,
+      "median_ms": 0.126703,
+      "min_ms": 0.124223,
+      "max_ms": 0.129759
+    },
+    {
+      "name": "void vllm::act_and_mul_kernel<c10::Half, __half2, &(c10::Half vllm::silu_kernel<c10::Half>(c10::Half const&, float)), &(__half2 vllm::packed_silu_kernel<__half2>(__half2 const&, float)), true, true, false, false>(c10::Half*, c10::Half const*, int, float, float, float)",
+      "count": 2176,
+      "summed_ms": 10.424013,
+      "median_ms": 0.0048,
+      "min_ms": 0.004255,
+      "max_ms": 0.005599
+    },
+    {
+      "name": "nvjet_sm90_hsh_128x8_64x12_4x1_v_bz_splitK_TNT",
+      "count": 128,
+      "summed_ms": 8.049127,
+      "median_ms": 0.06296,
+      "min_ms": 0.062111,
+      "max_ms": 0.063776
+    },
+    {
+      "name": "nvjet_sm90_hsh_64x8_64x16_2x1_v_bz_splitK_TNT",
+      "count": 1536,
+      "summed_ms": 7.285741,
+      "median_ms": 0.004735,
+      "min_ms": 0.004544,
+      "max_ms": 0.00592
+    },
+    {
+      "name": "nvjet_sm90_hsh_64x8_64x16_2x1_v_bz_TNT",
+      "count": 128,
+      "summed_ms": 6.470978,
+      "median_ms": 0.050655,
+      "min_ms": 0.049728,
+      "max_ms": 0.051584
+    }
+  ],
+  "per_step": [
+    {
+      "step": "ProfilerStep#4",
+      "count": 1239,
+      "summed_ms": 19.181782,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.846813
+    },
+    {
+      "step": "ProfilerStep#5",
+      "count": 1239,
+      "summed_ms": 19.171654,
+      "median_ms": 0.002657,
+      "min_ms": 0.00096,
+      "max_ms": 0.842237
+    },
+    {
+      "step": "ProfilerStep#6",
+      "count": 1239,
+      "summed_ms": 19.168721,
+      "median_ms": 0.002657,
+      "min_ms": 0.00096,
+      "max_ms": 0.845245
+    },
+    {
+      "step": "ProfilerStep#7",
+      "count": 1239,
+      "summed_ms": 19.186457,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.844957
+    },
+    {
+      "step": "ProfilerStep#8",
+      "count": 1239,
+      "summed_ms": 19.202223,
+      "median_ms": 0.002656,
+      "min_ms": 0.00096,
+      "max_ms": 0.841341
+    },
+    {
+      "step": "ProfilerStep#9",
+      "count": 1239,
+      "summed_ms": 19.209421,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.846397
+    },
+    {
+      "step": "ProfilerStep#10",
+      "count": 1239,
+      "summed_ms": 19.191613,
+      "median_ms": 0.00272,
+      "min_ms": 0.00096,
+      "max_ms": 0.842717
+    },
+    {
+      "step": "ProfilerStep#11",
+      "count": 1239,
+      "summed_ms": 19.20541,
+      "median_ms": 0.00272,
+      "min_ms": 0.00096,
+      "max_ms": 0.842844
+    },
+    {
+      "step": "ProfilerStep#12",
+      "count": 1239,
+      "summed_ms": 19.196794,
+      "median_ms": 0.00272,
+      "min_ms": 0.00096,
+      "max_ms": 0.842237
+    },
+    {
+      "step": "ProfilerStep#13",
+      "count": 1239,
+      "summed_ms": 19.189963,
+      "median_ms": 0.00272,
+      "min_ms": 0.00096,
+      "max_ms": 0.845309
+    },
+    {
+      "step": "ProfilerStep#14",
+      "count": 1239,
+      "summed_ms": 19.198989,
+      "median_ms": 0.00272,
+      "min_ms": 0.00096,
+      "max_ms": 0.842173
+    },
+    {
+      "step": "ProfilerStep#15",
+      "count": 1239,
+      "summed_ms": 19.194001,
+      "median_ms": 0.00272,
+      "min_ms": 0.00096,
+      "max_ms": 0.841405
+    },
+    {
+      "step": "ProfilerStep#16",
+      "count": 1239,
+      "summed_ms": 19.173341,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.844925
+    },
+    {
+      "step": "ProfilerStep#17",
+      "count": 1239,
+      "summed_ms": 19.137874,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.843485
+    },
+    {
+      "step": "ProfilerStep#18",
+      "count": 1239,
+      "summed_ms": 19.160773,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.846238
+    },
+    {
+      "step": "ProfilerStep#19",
+      "count": 1239,
+      "summed_ms": 19.154619,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.842621
+    },
+    {
+      "step": "ProfilerStep#20",
+      "count": 1239,
+      "summed_ms": 19.145153,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.841053
+    },
+    {
+      "step": "ProfilerStep#21",
+      "count": 1239,
+      "summed_ms": 19.175572,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.842525
+    },
+    {
+      "step": "ProfilerStep#22",
+      "count": 1239,
+      "summed_ms": 19.162941,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.845789
+    },
+    {
+      "step": "ProfilerStep#23",
+      "count": 1239,
+      "summed_ms": 19.159375,
+      "median_ms": 0.00272,
+      "min_ms": 0.00096,
+      "max_ms": 0.843837
+    },
+    {
+      "step": "ProfilerStep#24",
+      "count": 1239,
+      "summed_ms": 19.185071,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.847069
+    },
+    {
+      "step": "ProfilerStep#25",
+      "count": 1239,
+      "summed_ms": 19.177673,
+      "median_ms": 0.00272,
+      "min_ms": 0.00096,
+      "max_ms": 0.843518
+    },
+    {
+      "step": "ProfilerStep#26",
+      "count": 1239,
+      "summed_ms": 19.172124,
+      "median_ms": 0.002688,
+      "min_ms": 0.00096,
+      "max_ms": 0.844541
+    },
+    {
+      "step": "ProfilerStep#27",
+      "count": 1239,
+      "summed_ms": 19.177476,
+      "median_ms": 0.002656,
+      "min_ms": 0.00096,
+      "max_ms": 0.843389
+    },
+    {
+      "step": "ProfilerStep#28",
+      "count": 1239,
+      "summed_ms": 19.172141,
+      "median_ms": 0.002656,
+      "min_ms": 0.00096,
+      "max_ms": 0.845565
+    },
+    {
+      "step": "ProfilerStep#29",
+      "count": 1239,
+      "summed_ms": 19.181384,
+      "median_ms": 0.002625,
+      "min_ms": 0.00096,
+      "max_ms": 0.843933
+    },
+    {
+      "step": "ProfilerStep#30",
+      "count": 1239,
+      "summed_ms": 19.169498,
+      "median_ms": 0.002687,
+      "min_ms": 0.00096,
+      "max_ms": 0.847325
+    },
+    {
+      "step": "ProfilerStep#31",
+      "count": 1239,
+      "summed_ms": 19.175447,
+      "median_ms": 0.002656,
+      "min_ms": 0.00096,
+      "max_ms": 0.843837
+    },
+    {
+      "step": "ProfilerStep#32",
+      "count": 1239,
+      "summed_ms": 19.180912,
+      "median_ms": 0.002624,
+      "min_ms": 0.00096,
+      "max_ms": 0.847452
+    },
+    {
+      "step": "ProfilerStep#33",
+      "count": 1239,
+      "summed_ms": 19.171065,
+      "median_ms": 0.002624,
+      "min_ms": 0.00096,
+      "max_ms": 0.843389
+    },
+    {
+      "step": "ProfilerStep#34",
+      "count": 1239,
+      "summed_ms": 19.166345,
+      "median_ms": 0.002656,
+      "min_ms": 0.00096,
+      "max_ms": 0.841693
+    },
+    {
+      "step": "ProfilerStep#35",
+      "count": 1239,
+      "summed_ms": 19.177234,
+      "median_ms": 0.002656,
+      "min_ms": 0.00096,
+      "max_ms": 0.844989
+    }
+  ],
+  "longest_kernel_examples": [
+    {
+      "name": "nvjet_sm90_hsh_512x8_64x3_2x1_v_bz_TNT",
+      "duration_ms": 0.847452,
+      "relative_gpu_start_ms": 589.738035,
+      "correlation": 99808,
+      "cpu_launch_name": "cuLaunchKernelEx",
+      "cpu_stage": "gpu_model_runner: postprocess",
+      "cpu_step": "ProfilerStep#32"
+    },
+    {
+      "name": "nvjet_sm90_hsh_512x8_64x3_2x1_v_bz_TNT",
+      "duration_ms": 0.847325,
+      "relative_gpu_start_ms": 549.616258,
+      "correlation": 93262,
+      "cpu_launch_name": "cuLaunchKernelEx",
+      "cpu_stage": "gpu_model_runner: postprocess",
+      "cpu_step": "ProfilerStep#30"
+    },
+    {
+      "name": "nvjet_sm90_hsh_512x8_64x3_2x1_v_bz_TNT",
+      "duration_ms": 0.847069,
+      "relative_gpu_start_ms": 429.255183,
+      "correlation": 73624,
+      "cpu_launch_name": "cuLaunchKernelEx",
+      "cpu_stage": "gpu_model_runner: postprocess",
+      "cpu_step": "ProfilerStep#24"
+    },
+    {
+      "name": "nvjet_sm90_hsh_512x8_64x3_2x1_v_bz_TNT",
+      "duration_ms": 0.846813,
+      "relative_gpu_start_ms": 27.983303,
+      "correlation": 8164,
+      "cpu_launch_name": "cuLaunchKernelEx",
+      "cpu_stage": "gpu_model_runner: postprocess",
+      "cpu_step": "ProfilerStep#4"
+    },
+    {
+      "name": "nvjet_sm90_hsh_512x8_64x3_2x1_v_bz_TNT",
+      "duration_ms": 0.846397,
+      "relative_gpu_start_ms": 128.345569,
+      "correlation": 24529,
+      "cpu_launch_name": "cuLaunchKernelEx",
+      "cpu_stage": "gpu_model_runner: postprocess",
+      "cpu_step": "ProfilerStep#9"
+    }
+  ],
+  "limits": [
+    "Profiled single request; no unprofiled speed estimate or gain claim.",
+    "CPU and GPU scopes overlap asynchronously; sums of nested ranges are not elapsed time.",
+    "Unmatched kernels are retained separately; do not fold preceding in-flight work into active-step attribution.",
+    "No tensor shapes or stacks were recorded; kernel names alone do not establish layer identity.",
+    "Device idle gaps include kernel-launch spacing and instrumentation; not all are recoverable host bottlenecks."
+  ]
+}
