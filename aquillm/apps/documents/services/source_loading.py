@@ -30,7 +30,7 @@ class SourceRuntime:
     windows: dict = field(default_factory=dict, repr=False)
     lock: RLock = field(default_factory=RLock, repr=False)
     observation: dict = field(default_factory=dict, repr=False)
-    comparison_coverage: object | None = field(default=None, repr=False)
+
 
 _RUNTIME = ContextVar("source_runtime", default=None)
 

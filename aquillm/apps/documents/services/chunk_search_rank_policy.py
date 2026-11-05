@@ -20,11 +20,8 @@ def controls():
 
 
 def ranking_policy(scope):
-    from .comparison_coverage_policy import comparison_policy_identity
-
     return {
         "version": "lexical-ranking-v2",
-        "comparison_coverage": comparison_policy_identity(),
         "controls": controls(),
         "projection": POLICY,
         "fts_bindings": sorted(

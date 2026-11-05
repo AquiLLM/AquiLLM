@@ -82,32 +82,36 @@ def _tie_break(candidate: SelectionCandidate) -> tuple[float, int, str, int, int
     return (-candidate.relevance, candidate.fused_rank, *_identity(candidate))
 
 
-def _coverage_prefix(pool, groups, *, limits, score_status, mode):
-    """Reserve two complete groups without changing their source scores or costs."""
-    if not groups:
-        return ()
-    if not isinstance(groups, tuple) or len(groups) > 2 or any(
-        not isinstance(group, tuple) or not 1 <= len(group) <= 2 for group in groups
+def support_scores_usable(pool, score_status):
+    """Full comparable scores are required; their scale is not confidence."""
+    if score_status != "model" or not pool or any(
+        type(c.raw_score) not in (int, float)
+        or not math.isfinite(c.raw_score)
+        or not c.scorer_fingerprint
+        or c.scoring_kind not in ("pointwise", "listwise")
+        for c in pool
     ):
-        raise ValueError("invalid comparison coverage groups")
-    members = tuple(candidate for group in groups for candidate in group)
-    if any(not any(candidate is row for row in pool) for candidate in members):
-        raise ValueError("coverage requires the original scored candidate objects")
-    if len({_identity(candidate) for candidate in members}) != len(members):
-        raise ValueError("duplicate comparison coverage source")
-    if len(groups) != 2 or score_status != "model" or mode != "adaptive":
-        return ()
-    if (any(len({candidate.doc_id for candidate in group}) != 1 for group in groups)
-            or groups[0][0].doc_id == groups[1][0].doc_id):
-        raise ValueError("comparison coverage requires two distinct documents")
-    if any(candidate.raw_score is None or not candidate.scorer_fingerprint or
-           candidate.scoring_kind not in ("pointwise", "listwise") for candidate in members):
-        return ()
-    if (len(members) > limits.max_passages
-            or any(len(group) > limits.max_per_document for group in groups)
-            or sum(candidate_token_cost(candidate) for candidate in members) > limits.token_budget):
-        return ()
-    return members
+        return False
+    if len({(c.scorer_fingerprint, c.scoring_kind) for c in pool}) != 1:
+        return False
+    low, high = min(c.raw_score for c in pool), max(c.raw_score for c in pool)
+    # Match the normalizer's constant-score tolerance. Normalizing a flat pool
+    # cannot provide a meaningful relevance frontier for an untrusted hint.
+    return high - low > 1e-9 * max(1.0, abs(low), abs(high))
+
+
+def _support_keys(pool, hints, score_status, mode):
+    if not hints:
+        return {}
+    if type(hints) is not tuple or len(hints) > 4:
+        raise ValueError("invalid support hints")
+    result = {}
+    for candidate, keys in hints:
+        if (not any(candidate is row for row in pool) or type(keys) is not tuple
+                or not 1 <= len(keys) <= 4 or id(candidate) in result):
+            raise ValueError("support hints require original scored candidates")
+        result[id(candidate)] = frozenset(keys)
+    return result if mode == "adaptive" and support_scores_usable(pool, score_status) else {}
 
 
 def select_evidence(
@@ -117,12 +121,12 @@ def select_evidence(
     limits: SelectionLimits,
     score_status: str,
     mode: str = "adaptive",
-    coverage_groups: tuple = (),
+    support_hints: tuple = (),
 ) -> EvidenceSelection:
     """Choose feasible passages by score and marginal textual novelty.
 
     The single loop enforces text cost, passage count, and per-document cap.
-    Similarity only affects ordering inside the relevance-gap frontier.
+    Similarity and untrusted support hints only order the relevance-gap frontier.
     """
     pool = tuple(candidates)
     from lib.evidence_observation import publish
@@ -164,8 +168,8 @@ def select_evidence(
         identity: 0.0 for identity in by_identity
     }
     estimated_tokens = 0
-    priority = list(_coverage_prefix(remaining, coverage_groups, limits=limits,
-                                    score_status=score_status, mode=mode))
+    hint_keys = _support_keys(pool, support_hints, score_status, mode)
+    represented = set()
 
     while len(selected) < limits.max_passages:
         available = limits.token_budget - estimated_tokens
@@ -194,15 +198,15 @@ def select_evidence(
             )
             return (-value, *_tie_break(candidate))
 
-        if priority:
-            best = priority.pop(0)
-        else:
-            best = (
-                min(feasible, key=lambda c: legacy_order[_identity(c)])
-                if mode == "legacy"
-                else min(frontier, key=order)
-            )
+        best = (
+            min(feasible, key=lambda c: legacy_order[_identity(c)])
+            if mode == "legacy"
+            else min(frontier, key=lambda c: (
+                not bool(hint_keys.get(id(c), frozenset()) - represented), *order(c)
+            ))
+        )
         selected.append(best)
+        represented.update(hint_keys.get(id(best), ()))
         estimated_tokens += candidate_token_cost(best)
         document_counts[best.doc_id] += 1
         remaining.remove(best)

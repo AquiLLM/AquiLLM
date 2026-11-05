@@ -132,19 +132,28 @@ async def finish_preservation(
         prepare_source_tool_handoff,
     )
 
-    _, packet, raw = await bounded_retrieval(
-        prepare_source_tool_handoff(
-            consumer,
-            llm,
-            convo,
-            acquired.results,
-            question=question,
-            top_k=direct_rag_top_k(),
-            prepare_fn=prepare_fn or prepare_selection_turn,
-            revalidate_fn=revalidate_fn or revalidate_selection_turn,
-        ),
-        budget,
+    from .rag_selection_hints import (
+        bind_selection_hints, clear_selection_hints, support_hints_enabled,
     )
+
+    hints = bind_selection_hints(runtime, question, acquired.assessment,
+        source_views(acquired.results) if support_hints_enabled() else ())
+    try:
+        _, packet, raw = await bounded_retrieval(
+            prepare_source_tool_handoff(
+                consumer,
+                llm,
+                convo,
+                acquired.results,
+                question=question,
+                top_k=direct_rag_top_k(),
+                prepare_fn=prepare_fn or prepare_selection_turn,
+                revalidate_fn=revalidate_fn or revalidate_selection_turn,
+            ),
+            budget,
+        )
+    finally:
+        clear_selection_hints(runtime, hints)
     assessment = recheck_support(acquired.assessment, packet.source_evidence)
     packet.coverage_assessment = assessment
     packet.auxiliary_handoff = auxiliary_handoff

@@ -209,12 +209,12 @@ def prepare_selection_turn(
         else evidence_token_budget(),
     )
     profile = choose_selection_profile(question)
-    from apps.documents.services.comparison_coverage_policy import POLICY, selection_coverage_groups
+    from .rag_selection_hints import POLICY, consume_selection_hints
 
-    coverage_groups = selection_coverage_groups(runtime, prepared, pool, primary_query)
+    support_hints = consume_selection_hints(runtime, prepared, pool, primary_query)
     selection_options = {}
-    if coverage_groups and config.mode == "adaptive":
-        selection_options["coverage_groups"] = coverage_groups
+    if support_hints and config.mode == "adaptive":
+        selection_options["support_hints"] = support_hints
         profile = replace(profile, version=profile.version + "+" + POLICY)
     select_started = monotonic()
     selection = select_evidence(

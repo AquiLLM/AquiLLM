@@ -8,6 +8,7 @@ from apps.documents.services.chunk_search_rank_policy import controls
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.documents.services.source_deadline import _DEADLINE
 from lib.retrieval.operation import _OPERATION, capture_operation_bound
+from .graph_failure_observations_v2 import failure_diagnostics
 
 
 @dataclass(frozen=True)
@@ -196,6 +197,7 @@ class _ClosedGraphAttempt:
                 raise ValueError("graph timeout is invalid")
             clock = graph.clock
             if native_closure:
+                stage.failure_phase = "authorization"
                 # Fresh requested authorization is bounded by the captured original
                 # source context. Its cleanup cost is paid before partitioning time.
                 self._check()
@@ -211,6 +213,7 @@ class _ClosedGraphAttempt:
                             self._snapshot.documents,
                         )
                         self._check()
+                        stage.failure_phase = "authorization_cleanup"
                     self._check()
                 self._check()
                 now = clock()
@@ -230,6 +233,7 @@ class _ClosedGraphAttempt:
                         deadline, bound.deadline_for(clock, reserve_ms=reserve_ms)
                     )
 
+            stage.failure_phase = "preparation"
             def phase_check():
                 if clock() >= deadline:
                     raise _ClosedGraphLimited("deadline")
@@ -263,9 +267,12 @@ class _ClosedGraphAttempt:
                             self._admission,
                             native_closure=native_closure,
                         )
+                        stage.failure_phase = "database_cleanup"
                     phase_check()  # Classify DB cleanup expiry before child scope exit.
+                    stage.failure_phase = "preparation_cleanup"
                 # Preparation and DB cleanup precede publication under the same lock.
                 phase_check()
+                stage.failure_phase = "publication"
                 stage.publish(final_rows, phase_check)
                 owner.observe_published_graph(selected_pks)
                 return _ClosedGraphAttemptResult("success", result[0], result[1])
@@ -275,16 +282,19 @@ class _ClosedGraphAttempt:
                 self._check()
             except Exception:
                 return _ClosedGraphAttemptResult(
-                    "invalid", None, self._diagnostics("error")
+                    "invalid", None, {**self._diagnostics("error"),
+                        **failure_diagnostics(exc, stage.failure_phase, owner_valid=False)}
                 )
             stage.withdraw()
             observations = self._diagnostics("error")
             observations.update(owner._limit_observations(exc))
+            admit_deferred = deadline is None or clock() < deadline
+            observations.update(failure_diagnostics(exc, stage.failure_phase, owner_valid=True))
             return _ClosedGraphAttemptResult(
                 "failure",
                 None,
                 observations,
-                admit_deferred=deadline is None or clock() < deadline,
+                admit_deferred=admit_deferred,
             )
         finally:
             stage.withdraw()

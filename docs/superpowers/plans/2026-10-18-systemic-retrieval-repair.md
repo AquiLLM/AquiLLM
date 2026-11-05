@@ -23,6 +23,75 @@
 - Root alone runs SSH, shared database tests, model calls and GPU experiments; serialize these resources.
 - Keep the serving development stack unchanged while isolated candidate verification is incomplete.
 
+## Current closure work: November 5
+
+The original 21 feature implementations are not equivalent to completion of
+the 25-task program. Data migration, independent quality acceptance and rollout
+remain separate gates. The following work supersedes any earlier suggestion
+that the experimental version-comparison policy is ready for general use.
+
+- [x] Freeze broader counterexamples before changing selection. The 34-case
+  synthetic audit on 71bb0bc8 has digest
+  `802f9df3eba3961b96e91fc67df003d7209f1d4f2e8be39bc5844b4c69e088bc`.
+  It found three incorrect primary-role resolutions, irrelevant lexical heads
+  displacing useful evidence, and a secondary condition lost when the passage
+  limit increased. These are mechanism counterexamples, not a population study.
+- [x] Remove the version-comparison acquisition experiment and its forced
+  selection prefixes. Reuse existing planner references as
+  optional ordering hints inside the ordinary relevance frontier, with exact
+  span/turn bindings, unchanged scores and budgets, and no additional calls.
+  Conflicting references and secondary conditions must compete without a
+  primary-document preference. A pointer is not proof of semantic support.
+  `RAG_SELECTION_SUPPORT_HINTS_ENABLED` defaults off pending prospective tests.
+- [x] Preserve bounded failure phase/type/reason through the normal graph
+  diagnostic and replay paths; verify observation cannot change recovery or
+  authorization decisions. The original intermittent graph failure remains
+  unresolved until an actual failure is captured.
+- [x] Connect the existing human-review packet to all ten support labels,
+  using blank human judgments and strict subject-bound import. Keep gold
+  claims and treatment metadata out of the initial support-review sheet.
+  Import verifies the displayed question, answer and evidence against the
+  original review subject, including rejection of rehashed altered packets.
+- [x] Inventory the actual selected text-source corpus on 254, read-only.
+  All 30 PDFs and the original raw-text document have no structured
+  representation state or ingestion-output ledger. The separately added
+  primary article has a canonical-snapshot generation. All 32 inspected dense
+  generations are ready; this metadata count is not full per-vector validation.
+  All 32 document graphs use `document-coreference-v3-sparse-acronym` and all
+  32 collection graphs use `collection-resolution-v1`. The effective identity
+  policy is `legacy`, independently of the working v2 graph-retrieval mode.
+- [ ] Establish exact retained inputs, stage an artifact-backed representation
+  rebuild and verify historical citations/rollback before broad migration.
+  Native PDF extraction currently preserves page-level text and reports
+  `layout_unavailable`; reparsing does not establish recovered headings or tables.
+- [ ] Evaluate contextual identity before adopting its background rebuilds.
+  Graph readiness does not close F05 or prove identity precision.
+- [ ] Collect the independent P2/G6 quality and operational evidence, complete
+  human review, and perform P3 cutover/rollback verification. The support-review
+  trust manifest is absent on the inspected candidate; no acceptance is inferred.
+
+Q3/Q4 and the other study questions remain exposed regression cases. New
+quality cohorts must be frozen before tuning, include unrelated question
+forms and failure cases, and retain unsuccessful runs. Compare matched
+corpus/runtime/budgets; measure source acquisition, selection, answer entailment,
+citations and latency separately. Source additions and graph effects require
+separate comparisons. Changes must not contain study answers, document IDs,
+question-specific aliases or required graph-result quotas.
+
+Local verification passed 62 selection, binding, handoff and deadline tests,
+66 native admission/provenance tests, and 94 offline review/calibration tests.
+Graph diagnostics passed 133 recovery/limit/replay regressions followed by
+24 focused final cases and a slow-observer timing regression. File-length,
+import-boundary, retrieval-logging and diff checks passed. These checks establish
+implementation behavior, not real-corpus answer quality or deployment acceptance.
+
+A read-only inspection of the lowest authorized PDF owner found its retained
+948,559-byte, 31-page file. The native parser returned 31 paragraphs with
+`layout_unavailable`; normalized token counts changed from 17,401 to 17,321.
+This confirms a usable retained input for a staged migration rehearsal, while
+also requiring extraction-fidelity review before replacement. No original
+document, collection selection or citation was changed by the inspection.
+
 ### Task 1: Restore meaningful handoff regression coverage
 
 **Files:**

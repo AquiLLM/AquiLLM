@@ -13,8 +13,6 @@ from .graph_candidate_metadata import capture_metadata
 from .graph_source_admission import NativeSourceAdmission, dependency_header, native_dependencies
 from .graph_source_admission_policy import CHANNELS, allocation, charged_sources, fair_prefix
 from .representation_contracts import SourceScopeUnavailable
-from .comparison_coverage_native import prepare_comparison_coverage
-from .comparison_coverage_policy import comparison_policy_identity, publish_coverage
 
 
 @contextmanager
@@ -54,7 +52,6 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
             or dependencies is None or not native_dependencies(dependencies, scope)):
         return None
     base = model.objects.using(scope.using).all()
-    comparison_policy = comparison_policy_identity()
     header = _closed_header(base, scope)
     if header is None:
         return None
@@ -87,7 +84,6 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 or any(a is not b for a, b in zip(dependencies_before,
                        dependency_header(dependencies), strict=True))
                 or tuple(controls().items()) != ranking
-                or comparison_policy_identity() != comparison_policy
                 or _settings_values(dependencies.settings) != settings_before
                 or scope.dense_rows is not dense_container or dense_container != dense_before):
             raise SourceScopeUnavailable("source_admission_original_scope_unavailable")
@@ -114,10 +110,6 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 channels, dense, terms, timings, coverage, error = capture_metadata(
                     model, query, scope, limits, observation, check,
                     stage=stage, allow_lexical_overlap=allow_lexical_overlap,
-                )
-                channels, dense, comparison = prepare_comparison_coverage(
-                    model, query, scope, limits, observation, channels, dense,
-                    stage=stage, check=check,
                 )
                 from apps.knowledge_graph.retrieval.graph_runtime_v2 import _caps
 
@@ -149,7 +141,6 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 scope, header, operation, parent_deadline, dependencies, dependencies_before, settings_before, ranking,
                 tuple((name, channels[name]) for name in CHANNELS), tuple(dense.items()),
                 query, graph_ceiling, initial_ids, frozenset(),
-                comparison_policy=comparison_policy,
             )
             stage.check()
             initial, plan = _read_initial_captured_refs(plan, stage)
@@ -169,7 +160,7 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
             baseline = initial
             from .chunk_search_candidates import HybridCandidateSnapshot
 
-            snapshot = HybridCandidateSnapshot(
+            return HybridCandidateSnapshot(
                 documents=tuple(documents),
                 vector_results=tuple(by_id[pk] for pk in ids["dense"] if pk in by_id),
                 trigram_results=tuple(by_id[pk] for pk in ids["trigram"] if pk in by_id),
@@ -184,7 +175,5 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 full_text_chunk_ids=ids["full_text"], full_text_coverage=coverage,
                 fusion_v2=scope.fusion_v2, source_admission=plan,
             )
-            publish_coverage(comparison, plan)
-            return snapshot
     finally:
         stage.withdraw()

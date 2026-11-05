@@ -27,13 +27,13 @@ def pressure_rows(fixture):
     TextChunk.objects.bulk_create(rows)
 
 
-def controlled_channels(monkeypatch, count):
+def controlled_channels(monkeypatch, count, *, paid=None):
     """Control lane overlap only; real refs, body readers and authorities remain."""
     original = admission.capture_metadata
     observed = []
 
-    def metadata(model, query, scope, *args, **kwargs):
-        result = original(model, query, scope, *args, **kwargs)
+    def metadata(model, query, scope, limits, observation, check, **kwargs):
+        result = original(model, query, scope, limits, observation, check, **kwargs)
         rows = model.objects.using(scope.using).filter(
             doc_id__in=scope.requested_document_ids, chunk_number__gte=100,
         ).order_by("chunk_number")
@@ -41,6 +41,11 @@ def controlled_channels(monkeypatch, count):
         exact, trigram = rank_refs(rows[:split]), rank_refs(rows[split:count])
         channels = {"dense": (), "exact": exact, "trigram": trigram, "full_text": ()}
         observed.append(channels)
+        if paid is not None:
+            refs = exact[:5] + exact[-2:] + trigram[-2:]
+            paid.extend(refs)
+            kwargs["stage"].read_captured(refs)
+            check()
         return (channels, {}, *result[2:])
 
     monkeypatch.setattr(admission, "capture_metadata", metadata)
@@ -48,17 +53,8 @@ def controlled_channels(monkeypatch, count):
 
 
 def test_initial_publication_retains_paid_tails_beyond_45_metadata_refs(monkeypatch):
-    observed = controlled_channels(monkeypatch, 49)
     paid = []
-
-    def read_paid(model, query, scope, limits, observation, channels, dense, *, stage, check):
-        refs = channels["exact"][:5] + channels["exact"][-2:] + channels["trigram"][-2:]
-        paid.extend(refs)
-        stage.read_captured(refs)
-        check()
-        return channels, dense, None
-
-    monkeypatch.setattr(admission, "prepare_comparison_coverage", read_paid)
+    observed = controlled_channels(monkeypatch, 49, paid=paid)
     with graph_frame(monkeypatch, prepare_sources=pressure_rows, dataset=True) as active:
         source, scope = active[2], active[3]
         with operation_scope(source.budget, source_limit=30):

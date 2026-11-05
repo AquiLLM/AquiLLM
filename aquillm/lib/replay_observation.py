@@ -2,6 +2,7 @@
 
 from lib.evidence_observation import active, mark_failed, publish
 from lib.replay_coverage import coverage_reasons as _coverage_reasons
+from lib.graph_failure_observation import safe_graph_failure
 
 
 def _emit(event, make_data):
@@ -201,6 +202,7 @@ def retrieval_stages(
                 ),
                 "reasons": reasons if reasons else None,
                 "failure_reason": failure_reason,
+                "failure": safe_graph_failure(diagnostics.get("graph_failure")),
                 "branch_statuses": branch_statuses or None,
                 "candidate_provenance": (
                     "finalized_novel"
