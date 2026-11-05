@@ -4,9 +4,11 @@ from .complete_turn_policy import DIRECT_SYNTHESIS_GROUNDING
 
 
 def build_synthesis_retry_prompt(
-    query, attempt, stage, wants_figures, allow_evidence_retry
+    query, attempt, stage, wants_figures, allow_evidence_retry,
+    *, grounded_document=False,
 ):
-    if stage == "direct_synthesis":
+    # Observability labels cannot decide which evidence the request may use.
+    if grounded_document:
         return "\n\n".join(
             [
                 f"User request: {query or 'Answer using the selected evidence.'}",

@@ -2,7 +2,6 @@
 
 import asyncio
 import json
-import re
 from dataclasses import asdict
 
 from lib.llm.answer_publication import (
@@ -54,7 +53,9 @@ def _evidence_digest(packet):
 
 
 def _scope_digest(packet):
-    from apps.documents.services.representation_store import representation_snapshot_digest
+    from apps.documents.services.representation_store import (
+        representation_snapshot_digest,
+    )
     snapshot = getattr(packet, "_publication_representation", None)
     from .rag_immutable_images import media_digest
     from .retrieval_query_publication import query_binding_digest
@@ -134,7 +135,9 @@ class RagAnswerPublication:
         if _evidence_digest(self.packet) != self.policy.evidence_digest:
             raise AnswerPublicationRejected("evidence_changed")
         try:
-            from apps.documents.services.representation_principal import validate_packet_principal
+            from apps.documents.services.representation_principal import (
+                validate_packet_principal,
+            )
             validate_packet_principal(self.packet)
             from .retrieval_query_publication import _packet_binding
             _packet_binding(self.packet)
@@ -195,21 +198,34 @@ class RagAnswerPublication:
 
                 invalidate_answer_support(self.packet)
                 limited = True
-            limited = limited or not validate_final_answer(text, self.policy).valid
-            image_urls = set(re.findall(r"!\[[^\]]*\]\(([^\s)]+)", text))
-            from .rag_immutable_images import selected_image_lines
-            try:
-                image_lines = selected_image_lines(self.packet, image_urls)
-            except ValueError:
-                image_lines, limited = (), True
             if not limited:
-                from .rag_support_delivery import render_supported_answer
+                from .rag_model_answer import prepare_model_answer
+                from .rag_support_delivery import (
+                    refresh_answer_support,
+                    render_supported_answer,
+                )
 
-                text, outcome = render_supported_answer(self.packet)
-                if outcome != "limited" and image_lines:
-                    text += "\n\n" + "\n\n".join(image_lines)
+                try:
+                    text = prepare_model_answer(self.packet, text)
+                except ValueError as exc:
+                    # Uncaptured images or unsafe presentation cannot acquire
+                    # publication rights through otherwise valid citations.
+                    if str(exc) == "invalid_citation":
+                        text = ""
+                    else:
+                        limited = True
+                if not limited:
+                    support = refresh_answer_support(self.packet)
+                    if support.state == "insufficient":
+                        limited = True
+                    elif validate_final_answer(text, self.policy).valid:
+                        # The receipt proves authorized, bound publication,
+                        # not independent validation of the model's claims.
+                        outcome = "partial"
+                    else:
+                        text, outcome = render_supported_answer(self.packet)
                 limited = (
-                    outcome == "limited"
+                    limited or outcome == "limited"
                     or not validate_final_answer(text, self.policy).valid
                 )
         self._active()

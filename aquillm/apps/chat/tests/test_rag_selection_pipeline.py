@@ -137,7 +137,8 @@ async def test_adaptive_selects_full_union_once_and_persists_only_selected(
             authorization=object(),
             candidate_count=3,
             selection_duration_ms=1.0,
-            prepared=SimpleNamespace(
+            prepared=PreparedSelection(
+                score_status="rank_fallback",
                 scoring_duration_ms=0.0,
                 reused_pairs=0,
                 new_pairs=0,

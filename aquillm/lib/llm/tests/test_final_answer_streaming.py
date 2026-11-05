@@ -9,7 +9,7 @@ import pytest
 
 from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.providers.complete_turn import complete_conversation_turn
-from lib.llm.tests.publication_fixture_support import selected_publication, UNCERTAINTY
+from lib.llm.tests.publication_fixture_support import selected_publication
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
@@ -81,7 +81,7 @@ async def test_post_tool_stream_replays_only_final_retry_answer():
 
 
 @pytest.mark.asyncio
-async def test_final_only_stream_publishes_exact_selected_excerpt_after_validation():
+async def test_final_only_stream_publishes_cited_model_answer_after_validation():
     stream_payloads: list[dict] = []
 
     async def _capture_stream(payload: dict) -> None:
@@ -124,7 +124,10 @@ async def test_final_only_stream_publishes_exact_selected_excerpt_after_validati
         )
 
     assert changed == "changed"
-    assert updated[-1].content == UNCERTAINTY + "\n\n> alpha [doc:doc-a chunk:7]"
+    assert updated[-1].content == (
+        "Final cited answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
+    )
+    assert updated[-1]._validated_answer.outcome == "partial"
     assert llm.get_message.await_count == 1
     assert llm.get_message.await_args.kwargs["stream_callback"] is None
     assert stream_payloads == [

@@ -40,7 +40,8 @@ async def test_narrative_planner_keeps_exact_support_after_selection(field, valu
         supplied = json.loads(kwargs["messages"][0]["content"])
         assert supplied["question"] == question
         assert supplied["evidence"][0]["text"] == text
-        assert kwargs["max_tokens"] == 512 and budget.planner_calls == 1
+        assert kwargs["max_tokens"] == budget.limits.planner_output_tokens
+        assert budget.planner_calls == 1
         return SimpleNamespace(text=json.dumps({"requested_aspects": [field],
             "support": [{"aspect": field, "chunk_id": source.chunk_id,
                 "source_fingerprint": source.source_fingerprint, "start": 12, "end": len(text)}],

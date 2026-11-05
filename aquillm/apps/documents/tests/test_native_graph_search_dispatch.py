@@ -95,6 +95,7 @@ def dispatch_case(monkeypatch, *, graph_on=True, fail=False, schedule="native_cl
 def test_actual_dispatch_closes_once_before_stage_without_acquisition_scoring(
     monkeypatch, graph_on, fail
 ):
+    monkeypatch.delenv("RAG_SCOPED_BASELINE_RECOVERY_ENABLED", raising=False)
     with dispatch_case(monkeypatch, graph_on=graph_on, fail=fail) as case:
         for name in ("hybrid_graph_candidate_pool", "materialize_and_rerank_candidates",
                      "finalize_ranking"):
@@ -116,6 +117,7 @@ def test_actual_dispatch_closes_once_before_stage_without_acquisition_scoring(
         args, observed = case.stages[0]
         assert observed["acquisition_schedule_requested"] == "native_closure"
         assert observed["acquisition_schedule_observed"] == "native_closure"
+        assert observed["acquisition_schedule_version"] == "native-closure-v2"
         assert observed["acquisition_initial_ineligibility_reason"] is None
         assert observed["acquisition_score_status"] == "not_requested"
         assert observed["materialized_union_status"] == "unavailable"

@@ -98,7 +98,7 @@ async def test_independent_query_arms_share_corpus_but_not_turn_authority(
 
 
 @pytest.mark.asyncio
-async def test_three_real_queries_exhaust_original_action_budget_without_fourth_planner(
+async def test_three_real_queries_allow_assessment_but_no_fourth_search(
     query_corpus, score_transport, monkeypatch,
 ):
     controls(monkeypatch, "interaction", True, iterative=True)
@@ -107,8 +107,12 @@ async def test_three_real_queries_exhaust_original_action_budget_without_fourth_
     result = await run(query_corpus, provider, new_consumer(query_corpus), repeat_preparation=True)
     assert [row[0] for row in audit.searches] == [QUESTION, QUESTION + ' "' + EXPANSION + '"', REWRITE]
     assert result.runtime.budget.actions_used == result.runtime.budget.limits.actions == 3
-    assert result.runtime.budget.planner_calls == len(provider.plans) == 1
+    assert len(provider.plans) == len(provider.assessments) == 1
+    assert result.runtime.budget.planner_calls == result.runtime.budget.limits.planner_calls == 2
     assert len(provider.answers) == 1
     assert len(audit.acquisitions) == 1 and audit.acquisitions[0].rounds == 3
+    assert audit.acquisitions[0].assessment.certainty == "assessed"
+    assert audit.acquisitions[0].assessment.next_action.query == "BRX-9 response conditions"
+    assert audit.acquisitions[0].stop_reason == "action_limit"
     starts = [e for e in result.trace.events if e["event"] == "action_start"]
     assert len(starts) == 3 and {e["ledger_id"] for e in starts} == {str(id(result.turn.budget))}

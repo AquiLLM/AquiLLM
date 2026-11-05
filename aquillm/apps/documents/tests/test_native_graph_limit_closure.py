@@ -143,6 +143,7 @@ def test_public_compatibility_fallback_keeps_calls_rows_and_admission(
             assert rows is fallback_results[0][0]
             if expired:
                 allowed = {
+                    "graph_failure",
                     "graph_failure_reason",
                     "graph_coverage_v2",
                     "frontier_budget",
@@ -156,7 +157,7 @@ def test_public_compatibility_fallback_keeps_calls_rows_and_admission(
                 assert observation["graph_failure_reason"] == "deadline" and seen
                 assert observation["graph_coverage_v2"]["reasons"] == ("deadline",)
             else:
-                assert observation == fallback_results[0][1]
+                assert {key: value for key, value in observation.items() if key != "graph_failure"} == fallback_results[0][1]
                 assert "graph_failure_reason" not in observation
             assert len(rows) == (25 if expired else 45)
             assert case.source.budget.sources_used == (27 if expired else 45)

@@ -1,5 +1,6 @@
 """Source-only eager staging for the native plan, including ordering and cleanup."""
 
+from contextlib import nullcontext
 
 def read_owned_refs(plan, refs, reader):
     """Narrow only the original native bound reader in this exact plan scope."""
@@ -58,7 +59,7 @@ def _read_initial_captured_refs(plan, stage):
     plan.check()
     return tuple(ordered), plan
 
-def read_captured_refs(plan, ids, *, baseline=(), order=False):
+def read_captured_refs(plan, ids, *, baseline=(), order=False, owner_check=None, preparation=None):
     from apps.documents.models import TextChunk
     from apps.knowledge_graph.retrieval.graph_candidate_stage_v2 import (
         _GraphSourceStage,
@@ -74,16 +75,21 @@ def read_captured_refs(plan, ids, *, baseline=(), order=False):
     def check():
         plan.check()
         stage.check()
+        if owner_check is not None:
+            owner_check()
 
     try:
         with plan.header[0][5]:
-            check()
-            with scope.database():
+            with preparation() if preparation is not None else nullcontext():
                 check()
-                stage.initial_keys = set(scope.validate())
-                ordered = _read_stage(plan, ids, stage, baseline=baseline, order=order)
-                check()
-            # Database cleanup can revoke lifetime or replace captured state.
+                with scope.database():
+                    check()
+                    stage.initial_keys = set(scope.validate())
+                    ordered = _read_stage(plan, ids, stage, baseline=baseline, order=order)
+                    check()
+                if preparation is not None:
+                    check()
+            # Both DB and optional preparation cleanup precede the commit gate.
             check()
             stage.publish(ordered, check)
             plan.check()

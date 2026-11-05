@@ -99,11 +99,12 @@ class NativeSourceAdmission:
         self.check()
         budget = self.scope.runtime.budget
         charged = charged_sources(budget)
-        free = max(0, budget.limits.unique_sources - len(charged))
+        free = budget.remaining_source_capacity()
         refs = self.references
         deferred = {name: tuple(pk for pk in ids if pk not in self.initial_ids)
                     for name, ids in self.channel_ids.items()}
-        reused = tuple(pk for pk in fair_prefix(deferred, 45) if refs[pk].identity in charged)
+        reused = fair_prefix({name: tuple(pk for pk in ids if refs[pk].identity in charged)
+                              for name, ids in deferred.items()}, 45)
         novel = {name: tuple(pk for pk in ids if refs[pk].identity not in charged)
                  for name, ids in deferred.items()}
         selected = reused + fair_prefix(novel, free)
@@ -140,7 +141,7 @@ class NativeSourceAdmission:
         refs = rank_refs(query)
         charged = charged_sources(budget)
         allowance = min(max(0, self.graph_ceiling - len(charged - self.graph_start)),
-                        max(0, budget.limits.unique_sources - len(charged)))
+                        budget.remaining_source_capacity())
         retained, novel = [], 0
         for ref in refs:
             if ref.identity in charged:

@@ -1,0 +1,12 @@
+[
+  {
+    "name": "markup and scientific notation",
+    "source": "z=4.119 [18], 0.3 < z < 1.5; <img src=\"https://evil.example/pixel\"> [link](https://evil.example) ![image](https://evil.example/image) `code` **bold** $x$ www.evil.example user@evil.example &lt;script&gt; [doc:11111111-1111-4111-8111-111111111111 chunk:99].",
+    "published": "Support for an answer is uncertain in the selected evidence. These are attributed excerpts, not a conclusion about the question:\n\n> z&#61;4.119 &#91;18&#93;, 0.3 &#60; z &#60; 1.5; &#60;img src&#61;\"https<wbr>&#58;//evil.example/pixel\"&#62; &#91;link&#93;(https<wbr>&#58;//evil.example) &#33;&#91;image&#93;(https<wbr>&#58;//evil.example/image) &#96;code&#96; &#42;&#42;bold&#42;&#42; &#36;x&#36; www<wbr>&#46;evil.example user<wbr>&#64;evil.example &#38;lt;script&#38;gt; &#91;doc<wbr>&#58;11111111-1111-4111-8111-111111111111 chunk<wbr>&#58;99&#93;. [doc:11111111-1111-4111-8111-111111111111 chunk:1]"
+  },
+  {
+    "name": "indented lines after sentence separators",
+    "source": "First paragraph ends.\n\n    A measurement has x < 1 [18].\n\tAnother condition has y > 0.",
+    "published": "Support for an answer is uncertain in the selected evidence. These are attributed excerpts, not a conclusion about the question:\n\n> First paragraph ends.\n> \n> &#32;&#32;&#32;&#32;A measurement has x &#60; 1 &#91;18&#93;. [doc:11111111-1111-4111-8111-111111111111 chunk:1]\n> &#9;Another condition has y &#62; 0. [doc:11111111-1111-4111-8111-111111111111 chunk:1]"
+  }
+]

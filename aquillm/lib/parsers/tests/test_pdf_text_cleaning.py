@@ -59,5 +59,6 @@ def test_pdf_extraction_cleans_pages_with_document_vocabulary(monkeypatch):
 
     monkeypatch.setattr(pypdf, "PdfReader", _Reader)
     result = extract('ligatures.pdf', b'%PDF-synthetic')
+    assert result.parser_key == "native-pdf-ordered-v2"
     assert result.canonical_text == "five filters; spectroscopic data\nthe spectroscopic flux"
     assert [(e.page, e.start, e.end) for e in result.elements] == [(1, 0, 33), (2, 33, 55)]

@@ -27,6 +27,7 @@ from .ready_scope_v2 import (
     SelectedGraphScopeV2,
     assemble_group_v2,
     compatible_signature,
+    distinct_representation_pair,
     requested_authorities_v2,
 )
 
@@ -157,8 +158,6 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
         for bound in (captured, artifact_snapshot):
             check()
             if bound is not None:
-                validate_representation_snapshot(bound, using=using)
-                check()
                 by_document = {s.document.id: s for s in bound.selections}
                 if any(
                     by_document.get(d) != s
@@ -166,6 +165,11 @@ def load_authorities_v2(*, authorization, settings, representation_snapshot, cod
                     if s.document.collection_id == row.collection_id
                 ):
                     mismatch()
+        for bound in distinct_representation_pair(captured, artifact_snapshot):
+            check()
+            if bound is not None:
+                validate_representation_snapshot(bound, using=using)
+                check()
         if certified.get(row.id) != state.membership_checksum:
             assignments = load_automatic_membership_assignments(
                 collection_ids=(row.collection_id,),

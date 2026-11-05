@@ -82,6 +82,38 @@ def _tie_break(candidate: SelectionCandidate) -> tuple[float, int, str, int, int
     return (-candidate.relevance, candidate.fused_rank, *_identity(candidate))
 
 
+def support_scores_usable(pool, score_status):
+    """Full comparable scores are required; their scale is not confidence."""
+    if score_status != "model" or not pool or any(
+        type(c.raw_score) not in (int, float)
+        or not math.isfinite(c.raw_score)
+        or not c.scorer_fingerprint
+        or c.scoring_kind not in ("pointwise", "listwise")
+        for c in pool
+    ):
+        return False
+    if len({(c.scorer_fingerprint, c.scoring_kind) for c in pool}) != 1:
+        return False
+    low, high = min(c.raw_score for c in pool), max(c.raw_score for c in pool)
+    # Match the normalizer's constant-score tolerance. Normalizing a flat pool
+    # cannot provide a meaningful relevance frontier for an untrusted hint.
+    return high - low > 1e-9 * max(1.0, abs(low), abs(high))
+
+
+def _support_keys(pool, hints, score_status, mode):
+    if not hints:
+        return {}
+    if type(hints) is not tuple or len(hints) > 4:
+        raise ValueError("invalid support hints")
+    result = {}
+    for candidate, keys in hints:
+        if (not any(candidate is row for row in pool) or type(keys) is not tuple
+                or not 1 <= len(keys) <= 4 or id(candidate) in result):
+            raise ValueError("support hints require original scored candidates")
+        result[id(candidate)] = frozenset(keys)
+    return result if mode == "adaptive" and support_scores_usable(pool, score_status) else {}
+
+
 def select_evidence(
     candidates: Iterable[SelectionCandidate],
     *,
@@ -89,11 +121,12 @@ def select_evidence(
     limits: SelectionLimits,
     score_status: str,
     mode: str = "adaptive",
+    support_hints: tuple = (),
 ) -> EvidenceSelection:
     """Choose feasible passages by score and marginal textual novelty.
 
     The single loop enforces text cost, passage count, and per-document cap.
-    Similarity only affects ordering inside the relevance-gap frontier.
+    Similarity and untrusted support hints only order the relevance-gap frontier.
     """
     pool = tuple(candidates)
     from lib.evidence_observation import publish
@@ -135,6 +168,8 @@ def select_evidence(
         identity: 0.0 for identity in by_identity
     }
     estimated_tokens = 0
+    hint_keys = _support_keys(pool, support_hints, score_status, mode)
+    represented = set()
 
     while len(selected) < limits.max_passages:
         available = limits.token_budget - estimated_tokens
@@ -166,9 +201,12 @@ def select_evidence(
         best = (
             min(feasible, key=lambda c: legacy_order[_identity(c)])
             if mode == "legacy"
-            else min(frontier, key=order)
+            else min(frontier, key=lambda c: (
+                not bool(hint_keys.get(id(c), frozenset()) - represented), *order(c)
+            ))
         )
         selected.append(best)
+        represented.update(hint_keys.get(id(best), ()))
         estimated_tokens += candidate_token_cost(best)
         document_counts[best.doc_id] += 1
         remaining.remove(best)

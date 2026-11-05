@@ -88,6 +88,29 @@ fresh verification even if its model name is unchanged. Keep the renewal service
 timer, proof-directory bind, and their rollback state with the private deployment
 receipt. Do not install credentials in the proof or print runtime environment maps.
 
+After host maintenance, a healthy reranker HTTP endpoint is not evidence that
+the web worker can score a source. On development, check the last timer result:
+
+```sh
+systemctl show aquillm-development-reranker-attestation.service \
+  -p Result -p ExecMainStatus -p ExecMainStartTimestamp -p ExecMainExitTimestamp
+docker inspect -f '{{.Id}} {{.Image}} {{.State.StartedAt}}' compose-vllm_rerank-1
+```
+
+If the mounted proof is absent and only the start time differs from the trusted
+record, reverify the restarted process **before** rebinding. Stage the new record
+privately and run the original artifact, tokenizer-cache, template and engine
+checks. Confirm the container and PID stayed unchanged during verification.
+Under the renewal lock, retain the old verifier and record for rollback and
+publish only the verified record, its pinned digest and the corresponding
+short-lived proof. Do not copy the old proof or extend its expiry. A replacement
+container, image or artifact requires a new deployment verification.
+
+Verify a **later** successful timer invocation renews the new record, then run a
+bounded search that produces actual model scores. Record a pre-repair readiness
+failure separately from the post-repair result. An isolated process can verify
+the shared scorer and proof; it does not attest every live ASGI worker's memory.
+
 Warm-up consumes its own bounded startup allowance. Request retrieval keeps its
 original 15-second ledger; diagnostic runs with a longer deadline are not release
 acceptance results.

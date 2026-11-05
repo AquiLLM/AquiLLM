@@ -1,0 +1,106 @@
+[
+  {
+    "name": "authorized citation starts a prose block with a colon",
+    "draft": "[doc:12345678-1234-1234-1234-123456789abc chunk:1]: The interval is 0.3 < z < 10.",
+    "published": "[doc:12345678-1234-1234-1234-123456789abc chunk:1]: The interval is 0.3 < z < 10.",
+    "visible": "The interval is 0.3 < z < 10",
+    "hasCitation": true,
+    "hasMath": false
+  },
+  {
+    "name": "authorized citation starts a quote block with a colon",
+    "draft": "> [doc:12345678-1234-1234-1234-123456789abc chunk:1]: The interval is 0.3 < z < 10.",
+    "published": "> [doc:12345678-1234-1234-1234-123456789abc chunk:1]: The interval is 0.3 < z < 10.",
+    "visible": "The interval is 0.3 < z < 10",
+    "hasCitation": true,
+    "hasMath": false
+  },
+  {
+    "name": "authorized citation starts a list item with a colon",
+    "draft": "- [doc:12345678-1234-1234-1234-123456789abc chunk:1]: The interval is 0.3 < z < 10.",
+    "published": "- [doc:12345678-1234-1234-1234-123456789abc chunk:1]: The interval is 0.3 < z < 10.",
+    "visible": "The interval is 0.3 < z < 10",
+    "hasCitation": true,
+    "hasMath": false
+  },
+  {
+    "name": "inline citation followed by colon introduces a cited list",
+    "draft": "The selected evidence reports [doc:12345678-1234-1234-1234-123456789abc chunk:1]:\n\n- The interval is 0.3 < z < 10 [doc:12345678-1234-1234-1234-123456789abc chunk:1].",
+    "published": "The selected evidence reports [doc:12345678-1234-1234-1234-123456789abc chunk:1]:\n\n- The interval is 0.3 < z < 10 [doc:12345678-1234-1234-1234-123456789abc chunk:1].",
+    "visible": "The interval is 0.3 < z < 10",
+    "hasCitation": true,
+    "hasMath": false
+  },
+  {
+    "name": "incomplete iframe closed by citation markup",
+    "draft": "A cited result [doc:12345678-1234-1234-1234-123456789abc chunk:1].\n\n<iframe src=https://unacquired.example/ [doc:12345678-1234-1234-1234-123456789abc chunk:1]",
+    "published": "I could not produce a reliably cited answer from the selected excerpts. This does not establish that the documents contain no supporting information.",
+    "visible": "I could not produce a reliably cited answer",
+    "hasCitation": false,
+    "hasMath": false
+  },
+  {
+    "name": "incomplete script closed by citation markup",
+    "draft": "A cited result [doc:12345678-1234-1234-1234-123456789abc chunk:1].\n\n<script src=https://unacquired.example/script [doc:12345678-1234-1234-1234-123456789abc chunk:1]",
+    "published": "I could not produce a reliably cited answer from the selected excerpts. This does not establish that the documents contain no supporting information.",
+    "visible": "I could not produce a reliably cited answer",
+    "hasCitation": false,
+    "hasMath": false
+  },
+  {
+    "name": "incomplete style closed by citation markup",
+    "draft": "A cited result [doc:12345678-1234-1234-1234-123456789abc chunk:1].\n\n<style [doc:12345678-1234-1234-1234-123456789abc chunk:1]",
+    "published": "I could not produce a reliably cited answer from the selected excerpts. This does not establish that the documents contain no supporting information.",
+    "visible": "I could not produce a reliably cited answer",
+    "hasCitation": false,
+    "hasMath": false
+  },
+  {
+    "name": "multiline dollar span cannot hide an authored HTML attribute",
+    "draft": "A cited result [doc:12345678-1234-1234-1234-123456789abc chunk:1].\n\nbefore $$\n<div style=display:none [doc:12345678-1234-1234-1234-123456789abc chunk:1]\n$$",
+    "published": "I could not produce a reliably cited answer from the selected excerpts. This does not establish that the documents contain no supporting information.",
+    "visible": "I could not produce a reliably cited answer",
+    "hasCitation": false,
+    "hasMath": false
+  },
+  {
+    "name": "plain scientific inequality retains citation",
+    "draft": "The interval is 0.3 < z < 10 [doc:12345678-1234-1234-1234-123456789abc chunk:1].",
+    "published": "The interval is 0.3 < z < 10 [doc:12345678-1234-1234-1234-123456789abc chunk:1].",
+    "visible": "The interval is 0.3 < z < 10",
+    "hasCitation": true,
+    "hasMath": false
+  },
+  {
+    "name": "unspaced scientific inequality",
+    "draft": "The comparison is x<y\n[doc:12345678-1234-1234-1234-123456789abc chunk:1]",
+    "published": "The comparison is x&lt;y\n[doc:12345678-1234-1234-1234-123456789abc chunk:1]",
+    "visible": "The comparison is x<y",
+    "hasCitation": true,
+    "hasMath": false
+  },
+  {
+    "name": "compact math inequality retains citation",
+    "draft": "The comparison is $x<y$ [doc:12345678-1234-1234-1234-123456789abc chunk:1].",
+    "published": "The comparison is $x<y$ [doc:12345678-1234-1234-1234-123456789abc chunk:1].",
+    "visible": "The comparison is",
+    "hasCitation": true,
+    "hasMath": true
+  },
+  {
+    "name": "standalone multiline math inequality retains citation",
+    "draft": "The comparison is:\n\n$$\nx<y + z\n$$\n\n[doc:12345678-1234-1234-1234-123456789abc chunk:1]",
+    "published": "The comparison is:\n\n$$\nx<y + z\n$$\n\n[doc:12345678-1234-1234-1234-123456789abc chunk:1]",
+    "visible": "The comparison is:",
+    "hasCitation": true,
+    "hasMath": true
+  },
+  {
+    "name": "math scientific inequality retains citation",
+    "draft": "The interval is $0.3 < z < 10$ [doc:12345678-1234-1234-1234-123456789abc chunk:1].",
+    "published": "The interval is $0.3 < z < 10$ [doc:12345678-1234-1234-1234-123456789abc chunk:1].",
+    "visible": "The interval is",
+    "hasCitation": true,
+    "hasMath": true
+  }
+]

@@ -10,6 +10,7 @@ from copy import deepcopy
 
 from .evidence_quality_eval import digest
 from .evidence_review_subject import review_subject, validated_review
+from .evidence_review_support import reviewed_support_labels, review_instructions, support_template, support_question_matches
 
 PACKET_SCHEMA = "evidence-review-packet-v1"
 RESPONSE_SCHEMA = "evidence-review-responses-v1"
@@ -20,11 +21,7 @@ def _packet_digest(packet):
     return digest({**packet, "response_template": template})
 
 
-def _review_template(case, subject):
-    claims = {
-        claim["claim_id"]: {label: None for label in ("faithful", *claim["labels"])}
-        for claim in case["required_claims"]
-    }
+def _review_template(case, subject, row):
     return {
         "reviewer": None,
         "audit_attested": None,
@@ -32,7 +29,11 @@ def _review_template(case, subject):
         "answer_sha256": subject["answer_sha256"],
         "answer_faithful": None,
         "citation_entailment": None,
-        "claims": claims,
+        "claims": {
+            claim["claim_id"]: {label: None for label in ("faithful", *claim["labels"])}
+            for claim in case["required_claims"]
+        },
+        **support_template(row),
     }
 
 
@@ -40,18 +41,16 @@ def _sheet(items):
     lines = [
         "# Independent answer review",
         "",
-        "Read the exact answer and evidence below. Open the audit supplement "
-        "for the full original observation before attesting.",
+        "Read the exact answer and evidence below. For support-bearing items, "
+        "record support judgments before opening the unblinded rubric or audit.",
+        "Then consult the private claim rubric and full original observation "
+        "in the audit supplement for claim judgments and the final attestation.",
         "The audit supplement includes arm metadata; answers and traces may also "
         "reveal treatment. Blinding is partial.",
     ]
     for item in items:
         lines.extend(["", f"## {item['id']}"])
-        lines.extend(["", "### Required claims", ""])
-        lines.extend(
-            f"- {claim['claim_id']}: {claim['statement']}"
-            for claim in item["required_claims"]
-        )
+        lines.extend(review_instructions(item))
         for label, field in (
             ("Question", "question"),
             ("History", "turns"),
@@ -138,6 +137,7 @@ def prepare_packet(reports, cases, *, random_seed):
             or case.get("quality_aggregation") != "normal"
             or row.get("snapshot", {}).get("source") != digest(case["sources"])
             or row.get("split") != case.get("split")
+            or not support_question_matches(row, case.get("question"))
         ):
             status = "invalid_case_binding"
         elif counts[case_id] != 1:
@@ -158,6 +158,7 @@ def prepare_packet(reports, cases, *, random_seed):
             continue
         item = {
             "id": opaque_id,
+            **({"support_review": True} if "support_decision" in row else {}),
             "question": deepcopy(case["question"]),
             "turns": deepcopy(case["turns"]),
             "required_claims": [
@@ -177,9 +178,7 @@ def prepare_packet(reports, cases, *, random_seed):
             },
         }
         packet["items"].append(item)
-        packet["response_template"]["reviews"][opaque_id] = _review_template(
-            case, subject
-        )
+        packet["response_template"]["reviews"][opaque_id] = _review_template(case, subject, row)
     packet["sheet"] = _sheet(packet["items"])
     manifest["packet_sha256"] = _packet_digest(packet)
     packet["response_template"]["packet_sha256"] = manifest["packet_sha256"]
@@ -301,6 +300,7 @@ def import_reviews(packet, binding_manifest, original_reports, responses):
             "answer_faithful": response["answer_faithful"],
             "citation_entailment": response["citation_entailment"],
             "claims": deepcopy(claims),
+            **reviewed_support_labels(row, template, response, packet, opaque_id),
         }
         if validated_review(row, review) is None:
             raise ValueError("review rejected by existing subject validator")

@@ -7,6 +7,44 @@ import pytest
 from lib.retrieval.evidence import SourceEvidence, SourceSpan
 
 
+@pytest.mark.parametrize("kind,chunk_id", [("document", None), ("adjacent", 2)])
+def test_authorized_but_unseen_document_is_not_a_planner_coordinate(kind, chunk_id):
+    from apps.chat.services.rag_coverage import AcquisitionAction, validate_action
+
+    action = AcquisitionAction(
+        kind, "" if kind == "adjacent" else "mechanism", "unseen", chunk_id, "mechanism"
+    )
+    with pytest.raises(ValueError):
+        validate_action(
+            action,
+            ("mechanism",),
+            (SourceEvidence(1, "visible", 0, "r", "methods"),),
+            {"visible", "unseen"},
+        )
+
+
+@pytest.mark.parametrize("query", ["not CO2", "CO3", "CO+2", "CO-2", "CO²"])
+def test_duplicate_detection_preserves_negation_numbers_and_scientific_punctuation(
+    query,
+):
+    from apps.chat.services.rag_coverage import AcquisitionAction
+
+    assert (
+        AcquisitionAction("vector", "CO2").signature
+        != AcquisitionAction("vector", query).signature
+    )
+
+
+def test_duplicate_detection_normalizes_surface_form_but_keeps_document_scope():
+    from apps.chat.services.rag_coverage import AcquisitionAction
+
+    first = AcquisitionAction("document", "Caf\u00e9\t RATE", "a")
+    same = AcquisitionAction("document", "cafe\u0301 rate", "a")
+    different = AcquisitionAction("document", "cafe\u0301 rate", "b")
+    assert first.signature == same.signature
+    assert first.signature != different.signature
+
+
 @pytest.mark.parametrize(
     "question,text,needed",
     [

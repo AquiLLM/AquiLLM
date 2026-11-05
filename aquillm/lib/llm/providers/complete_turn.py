@@ -203,7 +203,9 @@ def _post_tool_synthesis_unsatisfied(text: str | None) -> bool:
     return not visibility.is_displayable_answer_text(visible)
 
 
-def _build_synthesis_retry_prompt(conversation: Conversation, attempt: int) -> str:
+def _build_synthesis_retry_prompt(
+    conversation: Conversation, attempt: int, *, grounded_document: bool = False
+) -> str:
     from .synthesis_retry_prompt import build_synthesis_retry_prompt
 
     user_turn = _latest_user_turn(conversation)
@@ -213,6 +215,7 @@ def _build_synthesis_retry_prompt(conversation: Conversation, attempt: int) -> s
         current_stage(),
         _latest_user_requested_image(conversation),
         _post_tool_evidence_retry_enabled(),
+        grounded_document=grounded_document,
     )
 
 
@@ -229,8 +232,11 @@ async def _run_post_tool_synthesis_attempt(
     stream_message_uuid: str,
     attempt: int,
     allow_tools: bool,
+    grounded_document: bool,
 ) -> LLMResponse:
-    prompt = _build_synthesis_retry_prompt(conversation, attempt)
+    prompt = _build_synthesis_retry_prompt(
+        conversation, attempt, grounded_document=grounded_document
+    )
     retry_messages = message_dicts + [{"role": "user", "content": prompt}]
     retry_pydantic_messages = messages_for_bot + [UserMessage(content=prompt)]
     retry_args: dict[str, Any] = llm.base_args | {
@@ -371,6 +377,7 @@ async def _retry_post_tool_synthesis(
     stream_callback: Callable[[dict], Awaitable[Any]] | None,
     stream_message_uuid: str,
     initial_response: LLMResponse,
+    grounded_document: bool = False,
 ) -> LLMResponse:
     """
     Re-run full-context synthesis until satisfied or retries exhausted.
@@ -386,6 +393,7 @@ async def _retry_post_tool_synthesis(
             _post_tool_evidence_retry_enabled()
             and attempt == retry_count - 1
             and not chunk_evidence
+            and not grounded_document
         )
         response = await _run_post_tool_synthesis_attempt(
             llm,
@@ -399,6 +407,7 @@ async def _retry_post_tool_synthesis(
             stream_message_uuid=stream_message_uuid,
             attempt=attempt,
             allow_tools=allow_tools,
+            grounded_document=grounded_document,
         )
         if response.tool_call:
             return response
@@ -471,56 +480,12 @@ async def complete_conversation_turn(
         or publication is not None
         or bool(current_source_refs)
     )
-    citation_allowlist: set[str] = set()
-    source_allowlist: set[str] = set()
-    enforce_citations = False
-    request_system_prompt = system_prompt
-    if rag_answer and citations.citation_enforcement_enabled():
-        citation_allowlist = citations.collect_allowed_chunk_citations(
-            Conversation(system="", messages=[last_message])
-        )
-        if citation_allowlist:
-            enforce_citations = True
-            request_system_prompt = (
-                f"{system_prompt}\n\n"
-                f"{citations.build_citation_system_suffix(citation_allowlist)}"
-            )
-    if is_post_tool_result_turn:
-        if not rag_answer:
-            synthesis_instruction = (
-                "Answer the user's request using the current tool result. "
-                "Do not reuse document evidence or citations from earlier turns."
-            )
-        elif current_stage() == "direct_synthesis":
-            if DIRECT_SYNTHESIS_GROUNDING not in request_system_prompt:
-                request_system_prompt += f"\n\n{DIRECT_SYNTHESIS_GROUNDING}"
-            synthesis_instruction = (
-                "Final synthesis step: answer at the depth requested "
-                "with detail proportionate "
-                "to the selected evidence. Complete the supported answer"
-                " without "
-                "padding it. Do not emit status lines, tool markup, or "
-                "promises to "
-                "retrieve later."
-            )
-        else:
-            synthesis_instruction = (
-                "Final synthesis step: answer the user using retrieved "
-                "document content "
-                "already in this thread. Write a thorough, well-"
-                "structured user-facing "
-                "answer with enough detail to stand alone; finish every "
-                "section and do "
-                "not stop mid-sentence. Do not emit status lines, tool "
-                "markup, or promises "
-                "to retrieve later."
-            )
-        request_system_prompt = f"{request_system_prompt}\n\n{synthesis_instruction}"
-    if CONDITIONAL_IMAGE_INSTRUCTION not in request_system_prompt:
-        request_system_prompt += f"\n\n{CONDITIONAL_IMAGE_INSTRUCTION}"
-    source_allowlist = set(citation_allowlist)
-    if rag_answer and not source_allowlist:
-        source_allowlist = current_source_refs
+    from .complete_turn_inputs import completion_prompt_inputs, initial_request_policy
+
+    request_system_prompt, citation_allowlist, source_allowlist, enforce_citations = (
+        completion_prompt_inputs(conversation, rag_answer=rag_answer,
+            post_tool=is_post_tool_result_turn, source_refs=current_source_refs)
+    )
     # Any answer can introduce document markup, even with no document history.
     # Classify the complete answer before releasing any of its provider tokens.
     defer_stream_until_final = callable(stream_func)
@@ -555,19 +520,8 @@ async def complete_conversation_turn(
     post_tool_max_tokens, continuation_max_tokens, citation_retry_prior_max_chars = (
         turn_token_limits()
     )
-    observability_stage = current_stage()
-    request_max_tokens = max_tokens
-    tool_choice_type = (
-        str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
-    )
-    if isinstance(last_message, UserMessage) and last_message.tools:
-        request_max_tokens = _resolve_tool_step_max_tokens(max_tokens, tool_choice_type)
-    elif is_post_tool_result_turn and observability_stage != "direct_synthesis":
-        request_max_tokens = _resolve_post_tool_max_tokens(
-            conversation,
-            default_cap=post_tool_max_tokens,
-            global_max=_post_tool_global_max(max_tokens),
-        )
+    request_max_tokens, tool_choice_type, observability_stage = initial_request_policy(
+        conversation, max_tokens, stage=current_stage(), post_tool_cap=post_tool_max_tokens)
     if last_message.tools:
         tools = {
             "tools": [tool.llm_definition for tool in last_message.tools],
@@ -577,17 +531,6 @@ async def complete_conversation_turn(
         tools = {}
     stream_message_uuid = str(uuid.uuid4())
     observability_correlation_id = current_correlation_id() or new_correlation_id()
-    if observability_stage is None:
-        if isinstance(last_message, UserMessage) and last_message.tools:
-            observability_stage = "tool_selection"
-        elif is_post_tool_result_turn:
-            observability_stage = "post_tool_synthesis"
-        else:
-            observability_stage = "general_answer"
-    if observability_stage == "general_answer":
-        general_answer_cap = _general_answer_max_tokens()
-        if general_answer_cap > 0:
-            request_max_tokens = min(request_max_tokens, general_answer_cap)
     sdk_args = {
         **(
             llm.base_args
@@ -715,6 +658,7 @@ async def complete_conversation_turn(
             stream_callback=provider_stream_func,
             stream_message_uuid=stream_message_uuid,
             initial_response=response,
+            grounded_document=rag_answer,
         )
 
     allowed_tool_names = {tool.name for tool in (last_message.tools or [])}
@@ -887,6 +831,7 @@ async def complete_conversation_turn(
                 stream_callback=provider_stream_func,
                 stream_message_uuid=stream_message_uuid,
                 initial_response=response,
+                grounded_document=rag_answer,
             )
             if retry_response.tool_call:
                 response_tool_call = retry_response.tool_call or {}
@@ -910,12 +855,12 @@ async def complete_conversation_turn(
             response_text = append_retrieval_notice_if_missing(
                 response_text, retrieval_notice
             )
+    citation_repair_failed = False
     if enforce_citations and (not response_tool_call):
         is_streaming_turn = callable(provider_stream_func)
         require_cited_numeric_claims = True
         citations_valid = citations.response_has_required_citations(
-            response_text,
-            citation_allowlist,
+            response_text, citation_allowlist,
             require_cited_numeric_claims=require_cited_numeric_claims,
         )
         if (not citations_valid) and (not is_streaming_turn):
@@ -969,16 +914,18 @@ async def complete_conversation_turn(
                 response = retry_response
                 response_text = (retry_response.text or "").strip()
                 response_tool_call = {}
-        if not citations.response_has_required_citations(
-            response_text,
-            citation_allowlist,
+        citation_repair_failed = not citations.response_has_required_citations(
+            response_text, citation_allowlist,
             require_cited_numeric_claims=require_cited_numeric_claims,
-        ):
+        )
+        # Bound publication owns authorized fallback; keep failed drafts intact.
+        if citation_repair_failed and publication is None:
             from lib.llm.answer_publication import LIMITED_ANSWER
 
             response_text = LIMITED_ANSWER
     should_append_final_sources = bool(
         (use_live_citation_stream or defer_stream_until_final)
+        and not citation_repair_failed
         and source_allowlist
         and citations.citation_sources_append_enabled()
     )
@@ -990,9 +937,7 @@ async def complete_conversation_turn(
         )
         and visibility.should_append_citation_sources(response_text)
     ):
-        response_text = _append_citation_sources_if_missing(
-            response_text, source_allowlist
-        )
+        response_text = _append_citation_sources_if_missing(response_text, source_allowlist)
     if response_tool_call:
         response_text = visibility.strip_tool_markup(
             visibility.strip_thinking_blocks(response_text)
