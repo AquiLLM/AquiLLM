@@ -47,6 +47,13 @@ that the experimental version-comparison policy is ready for general use.
   diagnostic and replay paths; verify observation cannot change recovery or
   authorization decisions. The original intermittent graph failure remains
   unresolved until an actual failure is captured.
+- [x] Remove duplicate live representation reads for an exactly equal
+  projection/artifact snapshot pair inside one ready-scope loader call. Both
+  records still pass payload/digest and selected-document checks; fresh SQL
+  validation and the independent final authority reload remain. Nothing is
+  cached across records, actions or turns. The two query-count regressions
+  failed first; all 26 coalescing, conflict, authority, native-operation and
+  vocabulary checks passed after the change, with independent review clear.
 - [x] Separate evidence assessment admission from permission to perform another
   search. The planner retains its existing 5-second allowance and 4 seconds
   of completion/scoring reserves. A proposed action must then independently
@@ -155,6 +162,15 @@ before establishing a result. A separate preserved revision used bounded
 ordinary-cursor pages under the same read-only/deadline checks and verified
 all 32 owners. Its completed log digest is
 `cc1b70af20c7de65cfffbd8fe69956efa69d100393247cb192a4375f9dd08143`.
+
+A passive, read-only profile of one ready-scope load on `0a0fa6aa` found all
+29 membership certificate proofs positive and no full membership expansion.
+The loader took 5.69 seconds under profiling, including 36 representation
+validations and 110 SQL executions. Timings overlap and SQL execute timing
+excludes fetching/decoding; they do not establish CPU time or serving latency.
+This motivated exact pair coalescing above. A fresh candidate measurement is
+still required before claiming a speed improvement. The profile performed no
+model call, graph build or traversal.
 
 ### Task 1: Restore meaningful handoff regression coverage
 
