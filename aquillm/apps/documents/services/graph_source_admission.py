@@ -26,6 +26,7 @@ class NativeSourceAdmission:
     initial_ids: tuple
     graph_start: frozenset = field(repr=False)
     counts: dict = field(default_factory=dict, repr=False, compare=False)
+    comparison_policy: str | None = None
 
     def check(self):
         from apps.documents.models import TextChunk
@@ -36,6 +37,7 @@ class NativeSourceAdmission:
         from .graph_source_runtime import graph_source_runtime
         from .chunk_search_source_operation import _closed_header, _same_header
         from .source_deadline import check_source_deadline
+        from .comparison_coverage_policy import comparison_policy_identity
 
         check_source_deadline()
         if (
@@ -52,6 +54,7 @@ class NativeSourceAdmission:
                 dependency_header(self.dependencies), strict=True))
             or _settings_values(self.dependencies.settings) != self.settings_values
             or tuple(controls().items()) != self.ranking
+            or (self.comparison_policy is not None and self.comparison_policy != comparison_policy_identity())
             or (self.parent_deadline is not None and (
                 self.parent_deadline[1]() >= self.parent_deadline[0]
                 or (self.parent_deadline[2] is not None

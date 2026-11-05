@@ -82,6 +82,34 @@ def _tie_break(candidate: SelectionCandidate) -> tuple[float, int, str, int, int
     return (-candidate.relevance, candidate.fused_rank, *_identity(candidate))
 
 
+def _coverage_prefix(pool, groups, *, limits, score_status, mode):
+    """Reserve two complete groups without changing their source scores or costs."""
+    if not groups:
+        return ()
+    if not isinstance(groups, tuple) or len(groups) > 2 or any(
+        not isinstance(group, tuple) or not 1 <= len(group) <= 2 for group in groups
+    ):
+        raise ValueError("invalid comparison coverage groups")
+    members = tuple(candidate for group in groups for candidate in group)
+    if any(not any(candidate is row for row in pool) for candidate in members):
+        raise ValueError("coverage requires the original scored candidate objects")
+    if len({_identity(candidate) for candidate in members}) != len(members):
+        raise ValueError("duplicate comparison coverage source")
+    if len(groups) != 2 or score_status != "model" or mode != "adaptive":
+        return ()
+    if (any(len({candidate.doc_id for candidate in group}) != 1 for group in groups)
+            or groups[0][0].doc_id == groups[1][0].doc_id):
+        raise ValueError("comparison coverage requires two distinct documents")
+    if any(candidate.raw_score is None or not candidate.scorer_fingerprint or
+           candidate.scoring_kind not in ("pointwise", "listwise") for candidate in members):
+        return ()
+    if (len(members) > limits.max_passages
+            or any(len(group) > limits.max_per_document for group in groups)
+            or sum(candidate_token_cost(candidate) for candidate in members) > limits.token_budget):
+        return ()
+    return members
+
+
 def select_evidence(
     candidates: Iterable[SelectionCandidate],
     *,
@@ -89,6 +117,7 @@ def select_evidence(
     limits: SelectionLimits,
     score_status: str,
     mode: str = "adaptive",
+    coverage_groups: tuple = (),
 ) -> EvidenceSelection:
     """Choose feasible passages by score and marginal textual novelty.
 
@@ -135,6 +164,8 @@ def select_evidence(
         identity: 0.0 for identity in by_identity
     }
     estimated_tokens = 0
+    priority = list(_coverage_prefix(remaining, coverage_groups, limits=limits,
+                                    score_status=score_status, mode=mode))
 
     while len(selected) < limits.max_passages:
         available = limits.token_budget - estimated_tokens
@@ -163,11 +194,14 @@ def select_evidence(
             )
             return (-value, *_tie_break(candidate))
 
-        best = (
-            min(feasible, key=lambda c: legacy_order[_identity(c)])
-            if mode == "legacy"
-            else min(frontier, key=order)
-        )
+        if priority:
+            best = priority.pop(0)
+        else:
+            best = (
+                min(feasible, key=lambda c: legacy_order[_identity(c)])
+                if mode == "legacy"
+                else min(frontier, key=order)
+            )
         selected.append(best)
         estimated_tokens += candidate_token_cost(best)
         document_counts[best.doc_id] += 1

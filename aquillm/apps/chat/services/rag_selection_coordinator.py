@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any
 
@@ -209,6 +209,13 @@ def prepare_selection_turn(
         else evidence_token_budget(),
     )
     profile = choose_selection_profile(question)
+    from apps.documents.services.comparison_coverage_policy import POLICY, selection_coverage_groups
+
+    coverage_groups = selection_coverage_groups(runtime, prepared, pool, primary_query)
+    selection_options = {}
+    if coverage_groups and config.mode == "adaptive":
+        selection_options["coverage_groups"] = coverage_groups
+        profile = replace(profile, version=profile.version + "+" + POLICY)
     select_started = monotonic()
     selection = select_evidence(
         prepared.candidates,
@@ -225,6 +232,7 @@ def prepare_selection_turn(
         ),
         score_status=prepared.score_status,
         mode="legacy" if config.mode == "legacy" else "adaptive",
+        **selection_options,
     )
     return SelectionTurn(
         selection,

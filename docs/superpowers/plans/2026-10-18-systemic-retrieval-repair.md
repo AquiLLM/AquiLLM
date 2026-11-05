@@ -569,3 +569,90 @@ facts. We stopped before answer generation. This experiment isolates an
 admission problem as well as the separate ranking miss seen when a
 single-document follow-up did return the full later catalog. Do not enable
 the paired routing policy on the strength of candidate-level recall.
+
+## Authorized comparison and method experiments
+
+The next bounded experiments address the two different first failures.
+
+1. For comparison questions, identify primary source roles from text actually
+   returned by the initial query. Capture ordinary lexical and dense ranks
+   inside both authorized papers. Give a bounded priority to the strongest
+   scoped lexical candidate from each, retaining the original source, graph,
+   scoring and text-work limits. Measure admission, final selection and
+   supported differential claims separately.
+2. For method questions, derive one follow-up from an explicit method/citation
+   or section pointer in the first returned passages. Use the current source
+   authorization and actual remaining turn allowance. Inspect the corpus
+   before crediting a complete method explanation.
+3. Freeze additional method and comparison controls before running their
+   treatments. Keep Q7's numeric answer as an explicit regression control.
+   A study-specific improvement without control evidence remains experimental.
+4. Run answer checks through the local main model and publication checks.
+   Any corpus addition is a separate intervention with its own source and
+   version provenance. Keep the original frozen collection for the paired
+   retrieval comparison.
+
+### Results and integration checkpoint
+
+The first comparison admission experiment returned both primary list starts
+for Q4 within 30 source reads. Both received real original-question scores,
+at ranks 15 and 18, and neither reached the selected evidence. The next
+experiment kept each head with at most one already-ranked consecutive chunk,
+verified by a unique exact overlap. It retained separate original citations
+and source spans. Both arms acquired the same 30 sources and used 30 final
+scoring windows. Only the final coverage reservation differed.
+
+That reservation delivered all three mapped Q4 comparison components. The
+model correctly named the six added catalogs, SDSS DR12 to DR16, and the
+retained SDSS IV QSO catalog, with source citations. It used 10 passages and
+6,880 of the existing 7,000 evidence tokens. The matched ordinary selector
+used 11 passages and omitted the comparison. The DR14 numeral remains
+unsupported by these particular excerpts. This is one successful controlled
+comparison, with code integration and broader controls tracked separately.
+
+The four method-reference runs did not recover Q3's component passages.
+Following the actual Bosch section reference added 8.93 seconds and three
+scoring windows. The independent QuasarNET question retained its required
+evidence but also gained no evidence from the follow-up. The tested method
+cue policy remains outside the product.
+
+We separately added the complete versioned Bosch article through normal
+RawTextDocument ingestion into a private evaluation collection on 254. Its
+120 canonical chunks and 120 embedding receipts became ready. The original
+31-collection selection remains the control, with the new collection added
+only to the separate 32-collection arm. Canonical text is preserved, but the
+RawText route records unavailable section structure. The primary paper
+contains the full CModel procedure in section 4.9.9. [Bosch et al.](https://arxiv.org/html/1705.06766v1#S4.SS9.SSS9)
+
+This ingestion exposed a deployment mismatch. The web container used graph
+mode v2, while the application, graph extraction, schema and projection
+workers defaulted to legacy. The legacy guard rejected the modern source
+representation before graph task publication. A bounded rollout aligned
+those four workers with v2, preserving their running images and commands,
+restoring their consumers, and verifying web health. The durable request was
+then resumed successfully. The new document graph and collection graph are
+active, and the projection is ready with 1,383 entities and 14 relations.
+Those counts establish background readiness, not answer usefulness.
+
+The corresponding Compose fix passes the graph mode explicitly to the five
+source-reading/writing roles in all four deployment configurations. The
+unset default remains legacy. The comparison feature is independently
+opt-in through RAG_COMPARISON_COVERAGE_ENABLED. It uses the same source,
+action, text, scoring and final passage limits as the successful experiment.
+
+The separate corpus-addition comparison has now completed through normal
+retrieval, scoring, main-model synthesis and publication authorization.
+Original31 produced supported background and acknowledged the missing
+procedure. Augmented32 explained all three fits, the PSF convolution and
+the n=1/n=4 profiles with citations to the new primary article. Its extra
+equations are also in the selected source. The runs scored 26 and 28
+acquired sources respectively, using 29 windows each. The decisive passages
+arrived through ordinary vector retrieval. This demonstrates a successful
+source addition, with no graph-specific answer gain inferred.
+
+Independent review verified all 120 chunk hashes and original offsets,
+the one-document/one-collection scope difference, complete scoring,
+unchanged original scope, and actual published answer bytes. The answer's
+wording about robust interpolation is stronger than the paper's description
+of crude interpolation. Each arm was run once. The publication receipt
+remains partial because semantic support is recorded as unvalidated.
