@@ -123,8 +123,11 @@ async def test_initial_search_leaves_novel_source_slots_for_followup():
     assert len(result.results[0]["sources"]) == 30
     assert len(result.results[1]["sources"]) == 15
     assert budget.sources_used == 45
-    assert result.stop_reason == "source_limit"
-    assert budget.planner_calls == 1
+    # The second assessment is allowed to inspect the completed evidence even
+    # at source capacity. Its repeated action is rejected before dispatch.
+    assert result.stop_reason == "duplicate_action"
+    assert budget.planner_calls == 2 == budget.limits.planner_calls
+    assert budget.sources_used == budget.limits.unique_sources
 
 
 @pytest.mark.asyncio
@@ -189,9 +192,14 @@ async def test_no_possible_followup_keeps_full_initial_source_allowance(iterativ
             source(i) for i in range(50) if budget.admit_source(source(i).identity)
         ]}
 
+    async def assessment_only(*args, **kwargs):
+        return CoverageAssessment()
+
     result = await acquire_evidence(
         "Which method?", budget=budget, llm=None, execute=execute,
-        evidence_views=views, iterative=iterative,
+        evidence_views=views, iterative=iterative, assess=assessment_only,
     )
     assert len(result.results[0]["sources"]) == 45
-    assert budget.planner_calls == 0
+    assert budget.planner_calls == int(iterative and limits.planner_calls > 0)
+    assert budget.actions_used == 1
+    assert budget.sources_used == budget.limits.unique_sources

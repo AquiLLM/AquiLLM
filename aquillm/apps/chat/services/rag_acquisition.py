@@ -176,14 +176,18 @@ async def acquire_evidence(
                 assessment = lookup_coverage(question, views, anchors)
                 reason = "adequate_lookup"
                 break
-            if budget.actions_used >= budget.limits.actions:
-                reason = "action_limit"
-                break
-            if budget.remaining_source_capacity() <= 0:
-                reason = "source_limit"
-                break
+            # Existing evidence can still benefit from assessment at a search
+            # cap. With no evidence and no search capacity, there is no useful
+            # work for the planner to perform.
+            if not views:
+                if budget.actions_used >= budget.limits.actions:
+                    reason = "action_limit"
+                    break
+                if budget.remaining_source_capacity() <= 0:
+                    reason = "source_limit"
+                    break
             if not budget.can_start_optional(
-                budget.limits.planner_call_ms + ACTION_TIMEOUT_MS, COMPLETION_RESERVE_MS
+                budget.limits.planner_call_ms, COMPLETION_RESERVE_MS
             ):
                 reason = "completion_reserve"
                 break
@@ -220,6 +224,12 @@ async def acquire_evidence(
             )
             if budget.has_action(action.signature):
                 reason = "duplicate_action"
+                break
+            if budget.actions_used >= budget.limits.actions:
+                reason = "action_limit"
+                break
+            if budget.remaining_source_capacity() <= 0:
+                reason = "source_limit"
                 break
             if not budget.can_start_optional(ACTION_TIMEOUT_MS, COMPLETION_RESERVE_MS):
                 reason = "completion_reserve"

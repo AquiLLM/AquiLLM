@@ -48,7 +48,11 @@ async def test_targeted_actions_stop_at_cap_without_third_planner(cap):
         iterative=True,
     )
     assert len(seen) == cap
-    assert len(planned) == cap - 1
+    # Reaching a search cap still permits one bounded assessment of the
+    # evidence already acquired; it cannot dispatch another search.
+    assert len(planned) == min(cap, budget.limits.planner_calls)
+    assert budget.planner_calls == len(planned)
+    assert budget.actions_used == cap == budget.limits.actions
     assert result.rounds == cap
     assert len(result.attempts) == cap
     assert all(attempt.new_source_count == 1 for attempt in result.attempts)

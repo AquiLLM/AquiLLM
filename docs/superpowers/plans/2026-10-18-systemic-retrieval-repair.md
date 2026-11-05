@@ -47,6 +47,12 @@ that the experimental version-comparison policy is ready for general use.
   diagnostic and replay paths; verify observation cannot change recovery or
   authorization decisions. The original intermittent graph failure remains
   unresolved until an actual failure is captured.
+- [x] Separate evidence assessment admission from permission to perform another
+  search. The planner retains its existing 5-second allowance and 4 seconds
+  of completion/scoring reserves. A proposed action must then independently
+  pass the remaining-time, action and source-capacity checks. Existing evidence
+  may be assessed at search capacity; empty evidence cannot trigger a pointless
+  assessment when no search capacity remains. No turn limits were increased.
 - [x] Connect the existing human-review packet to all ten support labels,
   using blank human judgments and strict subject-bound import. Keep gold
   claims and treatment metadata out of the initial support-review sheet.
@@ -91,6 +97,23 @@ A read-only inspection of the lowest authorized PDF owner found its retained
 This confirms a usable retained input for a staged migration rehearsal, while
 also requiring extraction-fidelity review before replacement. No original
 document, collection selection or citation was changed by the inspection.
+
+Four prospective normal-path controls on `f52d7cc8` completed with graph hits,
+30 fully scored acquired sources each, and main-model synthesis. The support
+hint option changed neither selected source order nor planner activity: all
+four skipped assessment with `completion_reserve`, so the frozen continuation
+rule stopped the remaining runs. This is an inactive result, not evidence of
+selection quality. Preserve these attempts when evaluating the separate
+assessment-admission repair. That repair first failed eight regression cases,
+then passed all 71 focused acquisition, deadline and handoff tests after the
+implementation change. The live controls also retained an unsupported
+release-specific attribution in both answers; valid citations alone do not
+establish entailment.
+
+The actual serving ingestion worker uses the local Qwen OCR endpoint, but its
+parser and embedding-writer files differ from the candidate. The prepared
+one-PDF staging operator has therefore not been enqueued. Verify the candidate
+writer rollout before attributing any new ingestion artifact to this code.
 
 ### Task 1: Restore meaningful handoff regression coverage
 
