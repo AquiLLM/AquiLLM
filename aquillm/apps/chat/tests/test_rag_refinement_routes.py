@@ -28,6 +28,7 @@ async def test_configured_cap_gathers_then_selects_and_synthesizes_once(
     monkeypatch.setenv("RAG_DIRECT_MAX_QUERIES", str(cap))
     user, doc, chunks, _ = docs
     searches, planners, selections, synthesis = [], [], [], []
+    assessed_ledgers = []
 
     def search(query, top_k, documents, **kwargs):
         searches.append(query)
@@ -38,6 +39,9 @@ async def test_configured_cap_gathers_then_selects_and_synthesizes_once(
 
     async def planner(**kwargs):
         planners.append(kwargs)
+        assessed_ledgers.append(
+            (runtime.budget.actions_used, runtime.budget.sources_used, len(searches))
+        )
         return SimpleNamespace(
             text=json.dumps(
                 {
@@ -76,17 +80,30 @@ async def test_configured_cap_gathers_then_selects_and_synthesizes_once(
     llm = SimpleNamespace(complete=complete, get_message=planner, base_args={})
     async with preservation_turn(consumer, max_func_calls=5) as runtime:
         await rag_pipeline.run_direct_rag_turn(consumer, llm, convo)
+        expected_assessments = min(cap, runtime.budget.limits.planner_calls)
         assert runtime.budget.actions_used == cap
-        assert runtime.budget.planner_calls == cap - 1
+        assert runtime.budget.sources_used == cap
+        assert runtime.budget.sources_used <= runtime.budget.limits.unique_sources
+        assert runtime.budget.planner_calls == expected_assessments
         assert runtime.budget.pairs_used["final"] <= 45
-        if cap == 3:
-            assert (
-                runtime.observation["acquisition"].assessment.certainty == "unassessed"
-            )
+        acquisition = runtime.observation["acquisition"]
+        assert acquisition.stop_reason == "action_limit"
+        if cap <= runtime.budget.limits.planner_calls:
+            # The terminal assessment sees the capped pool, but its proposed
+            # follow-up must not reserve an action or acquire another source.
+            assert assessed_ledgers[-1] == (cap, cap, cap)
+            assert acquisition.assessment.certainty == "assessed"
+            assert acquisition.assessment.next_action.query == f"measurement {cap}"
+            assert not runtime.budget.has_action(acquisition.assessment.next_action.signature)
+        else:
+            # The last permitted search exhausts the separate planner allowance.
+            assert acquisition.assessment.certainty == "unassessed"
+            assert acquisition.assessment.next_action is None
         delivered = runtime.observation["delivered_packet"]
         assert {r["chunk_id"] for r in delivered.chunks} == {c.pk for c in chunks[:cap]}
     assert len(searches) == cap
-    assert len(planners) == cap - 1
+    assert len(planners) == expected_assessments
+    assert assessed_ledgers == [(i, i, i) for i in range(1, expected_assessments + 1)]
     assert all(
         p["max_tokens"] == runtime.budget.limits.planner_output_tokens for p in planners
     )
