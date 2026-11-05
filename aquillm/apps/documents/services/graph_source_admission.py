@@ -106,7 +106,8 @@ class NativeSourceAdmission:
         refs = self.references
         deferred = {name: tuple(pk for pk in ids if pk not in self.initial_ids)
                     for name, ids in self.channel_ids.items()}
-        reused = tuple(pk for pk in fair_prefix(deferred, 45) if refs[pk].identity in charged)
+        reused = fair_prefix({name: tuple(pk for pk in ids if refs[pk].identity in charged)
+                              for name, ids in deferred.items()}, 45)
         novel = {name: tuple(pk for pk in ids if refs[pk].identity not in charged)
                  for name, ids in deferred.items()}
         selected = reused + fair_prefix(novel, free)
