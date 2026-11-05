@@ -656,3 +656,78 @@ unchanged original scope, and actual published answer bytes. The answer's
 wording about robust interpolation is stronger than the paper's description
 of crude interpolation. Each arm was run once. The publication receipt
 remains partial because semantic support is recorded as unvalidated.
+
+### Integrated comparison verification on November 5
+
+The first integrated Q4 run at bc6806b5 acquired and fully scored all four
+comparison passages, but their coverage record was absent. Both initial
+admission and later top-up clipped the combined metadata lanes before
+filtering already-charged source identities. With more than 45 distinct
+candidates, this lost paid low-ranked passages at the first publication
+boundary. A later top-up returned the text after the coverage handoff had
+already been skipped.
+
+Two PostgreSQL regressions reproduced this general defect with 49 and 90
+distinct metadata references, including an exhausted source allowance and
+changed content revisions. Commit 54e8f601 filters exact charged identities
+before applying the existing bound in both places. Novel-source allocation,
+source limits, revision checks and publication checks retain their original
+behavior. The two final PostgreSQL batches passed 63 and 64 tests across
+comparison selection, native admission, provenance, dispatch and races.
+
+Normal application turns on the exact 1,188-file runtime at 54e8f601 now
+preserve both complete comparison groups through final selection. Q4 with
+the feature enabled used 30 acquired sources and three actions. Its cited
+model-written answer identified the six added catalogs, SDSS DR12 to DR16,
+and the retained catalog membership. The disabled arm used 33 sources and
+two actions, including a real iterative follow-up, and still lacked the
+comparison evidence. Both arms fully scored their acquired sources. These
+single runs retain normal planner variability. Population-level effects
+and graph-specific gains remain unevaluated in this comparison.
+
+The normal Q7 turn preserved 4.119 and the HSC/DESI discrepancy qualification
+with matching citations. Both Q4 and Q7 used the configured local main
+model and actual publication authorization, with diagnostic writes rolled
+back. The optional comparison feature remains disabled in the serving web
+deployment. The worker-mode repair and separate primary-source ingestion
+are already applied on 254.
+
+Independent answer review confirmed the three mapped Q4 comparison claims
+and both Q7 claims against the selected original spans. Q4's wording that
+the remaining surveys were unchanged is supported as catalog membership
+and labels. Stability of the underlying data remains unverified. Its additions
+bullet cites the later list locally, while the earlier list is cited
+elsewhere in the same answer. The exact DR14 label remains outside the
+mapped source evidence. These qualifications remain part of the broader
+semantic-quality review.
+
+Post-hoc displacement review found that the disabled arm selected a
+secondary source explicitly naming SDSS DR14Q, while the enabled arm
+removed it. The label therefore has evidence in the corpus. Its loss from
+the enabled final packet remains an additional selection gap. The original
+frozen rubric remains intact. Complete reference-answer coverage remains
+open after recovery of the three mapped comparison claims.
+
+All six additional control arms retained their frozen required spans.
+The QuasarNET method pair selected identical nine-source packets. The
+DESI flag comparison retained its three required spans, but the enabled
+arm returned only ten sources after charging thirty. Its optional graph
+stage failed after reading ten graph sources and ten deferred baseline
+sources. The stage was withdrawn and the original ten-source pool survived.
+Every returned source was fully scored. The original trace omitted the
+caught exception, so its exact cause requires a separate diagnostic.
+
+The observing-night pair retained the 174- and 278-night passages with
+27 returned sources in each arm. Final selections contained ten and
+eleven sources. Comparison coverage abstained in all three control pairs.
+The positive-control evidence is preserved, while active-policy transfer
+to another real question remains unproven. The paired tests use exposed
+sources, including an additional attribute of the known release pair.
+
+A separately frozen diagnostic repeated the enabled DESI control with
+passive exception observation on the exact native graph-owner frame.
+The graph completed in 16,687 ms, returned thirty sources and fully scored
+them in thirty-one windows. The observer saw zero caught exceptions and
+restored the original thread tracing state. The first failure remains in
+the cohort record. Its exact exception remains unresolved because the
+diagnostic succeeded. Trace overhead also limits timing comparisons.
