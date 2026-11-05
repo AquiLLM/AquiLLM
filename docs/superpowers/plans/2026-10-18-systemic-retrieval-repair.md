@@ -58,6 +58,10 @@ that the experimental version-comparison policy is ready for general use.
   claims and treatment metadata out of the initial support-review sheet.
   Import verifies the displayed question, answer and evidence against the
   original review subject, including rejection of rehashed altered packets.
+- [x] Include the effective support-hint setting and policy identity in the
+  existing evaluation configuration digest. Changed settings invalidate stale
+  reviews and prevent undeclared treatment differences from joining as matched
+  arms. Explicitly test cancellation during both planning and answer delivery.
 - [x] Inventory the actual selected text-source corpus on 254, read-only.
   All 30 PDFs and the original raw-text document have no structured
   representation state or ingestion-output ledger. The separately added
@@ -66,6 +70,13 @@ that the experimental version-comparison policy is ready for general use.
   All 32 document graphs use `document-coreference-v3-sparse-acronym` and all
   32 collection graphs use `collection-resolution-v1`. The effective identity
   policy is `legacy`, independently of the working v2 graph-retrieval mode.
+- [x] Verify all 2,288 persisted embedding receipts for the 32 current text
+  owners, including exact current manifests, canonical offsets, regenerated
+  prepared-input hashes, complete row membership, stored vectors and serving
+  bindings. A bounded read-only snapshot on `0a0fa6aa` passed and preserved
+  original/augmented scope bindings. The result excludes 499 figure owners,
+  semantic embedding quality and fresh live-provider attestation. It does not
+  repair legacy structure or establish compatibility of future writer rollout.
 - [ ] Establish exact retained inputs, stage an artifact-backed representation
   rebuild and verify historical citations/rollback before broad migration.
   Native PDF extraction currently preserves page-level text and reports
@@ -114,6 +125,36 @@ The actual serving ingestion worker uses the local Qwen OCR endpoint, but its
 parser and embedding-writer files differ from the candidate. The prepared
 one-PDF staging operator has therefore not been enqueued. Verify the candidate
 writer rollout before attributing any new ingestion artifact to this code.
+
+The follow-up frozen cohort on `0a0fa6aa` completed all ten real-corpus arms
+with complete original-question scoring. Assessment executed and bounded
+follow-up search occurred; three enabled arms accepted exact support hints.
+No selection-quality improvement is established: one pair acquired different
+evidence pools, other pairs retained the same selected source sets, and one
+answer omitted a delivered scientific caveat. Both Q4 arms still failed to
+acquire the required comparison passages. One answer incorrectly inferred
+absence of changes from absence of retrieved evidence. The optional hint policy
+therefore remains off. These are exposed controls with one stochastic run per
+arm, not independent acceptance evidence.
+
+Observed application time ranged from about 42 to 213 seconds. The slowest
+answer spent about 178 seconds in generation/retries; retrieval was about
+22 seconds. Bounded follow-up graph fallbacks now identify deadline/timeout in
+preparation or ready-scope discovery. They do not resolve the earlier
+unclassified intermittent failure. Preserve acquisition, selection, answer
+entailment and latency as separate open quality concerns.
+
+The final evaluation/configuration/review/live-path suite passed 111 tests.
+The new snapshot checks first failed all six added regressions. An existing
+cancellation fixture initially stopped at the newly admitted planner call;
+the final tests separately prove cancellation before synthesis and after
+evidence delivery, with no answer or late publication in either case.
+
+The receipt inventory's first attempt failed in diagnostic cursor handling
+before establishing a result. A separate preserved revision used bounded
+ordinary-cursor pages under the same read-only/deadline checks and verified
+all 32 owners. Its completed log digest is
+`cc1b70af20c7de65cfffbd8fe69956efa69d100393247cb192a4375f9dd08143`.
 
 ### Task 1: Restore meaningful handoff regression coverage
 

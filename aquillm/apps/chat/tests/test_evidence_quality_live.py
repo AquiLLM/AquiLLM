@@ -22,6 +22,7 @@ from apps.chat.evals.evidence_quality_seed import seed_cases
         "combined",
         "verified_windows",
         "cancellation",
+        "planner_cancellation",
         "observer_failure",
     ],
 )
@@ -45,10 +46,24 @@ async def test_actual_asgi_seed_retrieval_and_sdk_observation(
     ]
     manifest = await sync_to_async(seed_cases)([case], tmp_path / "seed.json")
     sent = []
+    cancellation = mode in ("cancellation", "planner_cancellation")
+    if mode == "cancellation":
+        from dataclasses import replace
+
+        from apps.chat.services import rag_turn
+
+        original_limits = rag_turn.TurnLimits
+
+        def post_evidence_limits(*args, **kwargs):
+            # This variant targets cancellation after evidence delivery. The
+            # separate planner variant retains the ordinary planner allowance.
+            return replace(original_limits(*args, **kwargs), planner_calls=0)
+
+        monkeypatch.setattr(rag_turn, "TurnLimits", post_evidence_limits)
 
     async def create(**kwargs):
         sent.append(kwargs)
-        if mode == "cancellation":
+        if cancellation:
             import asyncio
 
             await asyncio.Event().wait()
@@ -132,19 +147,31 @@ async def test_actual_asgi_seed_retrieval_and_sdk_observation(
             )
 
         monkeypatch.setattr(requests, "post", score)
-    if mode == "cancellation":
+    if cancellation:
         case = {**case, "scenario": "cancellation"}
-    with mode_environment("combined" if mode == "cancellation" else mode):
+    with mode_environment("combined" if cancellation else mode):
         result = await run_case(
             case,
             manifest,
-            mode="combined" if mode == "cancellation" else mode,
+            mode="combined" if cancellation else mode,
             cache_state="cold",
         )
-    if mode == "cancellation":
+    if cancellation:
+        from apps.chat.services.rag_planner_contract import PLANNER_SYSTEM
+
         assert result["closed"] and result["late_publications"] == 0
         assert result["answer"] == "" and result["published_after_disconnect"] == []
-        assert result["delivered"]  # the SDK saw evidence before disconnect
+        planner_dispatches = sum(
+            any(message.get("content") == PLANNER_SYSTEM for message in payload.get("messages", []))
+            for payload in result["sdk_payloads"]
+        )
+        assert len(sent) == len(result["sdk_payloads"]) == 1
+        if mode == "planner_cancellation":
+            assert result["planner_calls"] == planner_dispatches == 1
+            assert result["delivered"] == []  # no synthesis evidence was dispatched
+        else:
+            assert result["planner_calls"] == planner_dispatches == 0
+            assert result["delivered"]  # the SDK saw evidence before disconnect
         assert any(
             e["event"] == "ledger" and e["after"]["terminal"] == "cancelled"
             for e in result["events"]
