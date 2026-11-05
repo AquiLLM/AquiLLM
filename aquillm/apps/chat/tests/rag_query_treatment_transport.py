@@ -10,6 +10,8 @@ import requests
 from apps.documents.services.rerank_transport_policy import (
     discover_rerank_protocol, revoke_rerank_protocol,
 )
+from apps.chat.services.rag_planner_contract import PLANNER_SYSTEM
+from apps.documents.services.chunk_rerank_budget import count_rerank_tokens
 from lib.llm.providers.openai import OpenAIInterface
 
 
@@ -17,6 +19,9 @@ from lib.llm.providers.openai import OpenAIInterface
 def score_transport(query_corpus, monkeypatch):
     calls = []
     base, model = "http://synthetic-r5-score:8000/v1", "r5-constant-score"
+    # Initialize the real tokenizer before replacing HTTP with a scorer-only
+    # transport: a missing tokenizer asset is not a malformed scorer request.
+    assert count_rerank_tokens("", "") == 0
 
     def send(session, request, **kwargs):
         assert request.url == "http://synthetic-r5-score:8000/score", request.url
@@ -63,6 +68,7 @@ class QueryProvider:
     """A deterministic extractive external response, with no quality labels."""
     def __init__(self, rewrite):
         self.rewrite, self.requests, self.plans, self.answers = rewrite, [], [], []
+        self.assessments = []
         self.llm = OpenAIInterface(SimpleNamespace(base_url="http://fake-models:8000/v1",
             chat=SimpleNamespace(completions=self)), "qwen3.5:27b")
 
@@ -72,6 +78,12 @@ class QueryProvider:
         if "Propose one retrieval query" in system:
             self.plans.append(deepcopy(kwargs))
             text = json.dumps({"rewrite": self.rewrite})
+        elif system == PLANNER_SYSTEM:
+            self.assessments.append(deepcopy(kwargs))
+            text = json.dumps({"requested_aspects": ["response"], "support": [],
+                "unresolved_aspects": ["response"], "next_action": {
+                    "kind": "vector", "query": "BRX-9 response conditions",
+                    "document_id": None, "chunk_id": None, "aspect": "response"}})
         else:
             rows = selected_rows(kwargs)
             assert rows, "unexpected answer with no actual selected source"
