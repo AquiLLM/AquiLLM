@@ -95,6 +95,7 @@ def _try_native_search_closure(
             return None  # Still before any optional work or route consumption.
     captured.check()
     pool, graph_observation = captured.baseline, {}
+    recovered = False
     if attempt is not None:
         window = scoped_fallback_window(captured) if captured.scoped_recovery else None
         outcome = attempt.run_native_closure(
@@ -110,6 +111,7 @@ def _try_native_search_closure(
             added = 0
             if window is not None and graph_observation.get("graph_failure_reason") == "deadline":
                 pool, added = recover_scoped_baseline(captured, window)
+                recovered = bool(added)
                 captured.check()
             captured.admission.counts.update(
                 fallback_top_up_skipped=not added, fallback_top_up_count=added
@@ -173,4 +175,9 @@ def _try_native_search_closure(
     captured.check()
     if observation is not None:
         observation["acquisition_schedule"] = "native_closure"
+    if captured.scoped_recovery:
+        from apps.chat.services.rag_recovery_origins import record_native_recovery
+
+        record_native_recovery(captured, ranked,
+            {row.pk for row in captured.baseline} if recovered else {row.pk for row in ranked})
     return result

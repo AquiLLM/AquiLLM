@@ -77,6 +77,7 @@ def native_case(
     controlled_graph_clock=False,
     requested=None,
     timeout_ms=10_000,
+    initial_capture=True,
 ):
     monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", "native_closure")
     monkeypatch.setattr(settings, "KG_OVERLAY_ENABLED", graph_on, raising=False)
@@ -105,7 +106,7 @@ def native_case(
                 f.policy, document_ids=requested,
                 collection_ids=frozenset(d.collection_id for d in active[4].documents),
             )
-        snapshot = capture(active, native=graph_on, authorization=incoming)
+        snapshot = capture(active, native=graph_on, authorization=incoming) if initial_capture else active[4]
         authorize = _bind_search_authorizer(
             chunk_search.authorized_search_rows, incoming, graph_on
         )

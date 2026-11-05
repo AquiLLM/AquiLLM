@@ -25,6 +25,26 @@
 
 ## Current closure work: November 5
 
+Major architectural changes now have a prospectively registered
+[internal ablation record](https://github.com/AquiLLM/AquiLLM-internal/tree/main/research/architectural-ablations-2026-11-05).
+It separates implementation history, isolated measurements and unmeasured
+effects, preserving failed attempts and configuration/state hashes. The first
+four-arm graph-loader comparison matched its inputs; the eight-attempt
+assessment study retained a matched method-question block and an invalid Q4
+block after observed graph-state drift. These are exposed regression pilots,
+not independent acceptance or proof of improved general answer quality.
+
+Ordinary-first optional-recovery preparation now pays the exact first ordinary
+answer request before optional work and reuses only its bounded tokenizer
+computation. It preserves the original source, text, pair and time limits;
+normal context, authorization and publication checks still run. Generic long
+optional, cheap useful and changed-request controls passed, as did both normal
+chat entry routes (initial30 and ordinary25 followed by cumulative45). Root
+verification included 49 focused, 59 provider, 103 broader passing checks,
+14 repaired-fixture checks and the two normal-entry checks. Independent code
+review found no remaining blocker. Recovery and hints still default off;
+real-corpus A3 attribution and independent quality acceptance remain pending.
+
 The original 21 feature implementations are not equivalent to completion of
 the 25-task program. Data migration, independent quality acceptance and rollout
 remain separate gates. The following work supersedes any earlier suggestion

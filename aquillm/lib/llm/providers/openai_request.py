@@ -2,11 +2,16 @@
 
 import asyncio
 from dataclasses import dataclass
-from os import getenv
 
 from lib.llm.evidence_guard import current_protection, validate_request
 
 from .openai_tools_format import transform_openai_tool_choice, transform_openai_tools
+from .openai_source_shape import (
+    base_request_arguments,
+    configured_sampling,
+    protected_text_request_arguments,
+    requested_thinking,
+)
 
 
 @dataclass(frozen=True)
@@ -26,59 +31,19 @@ async def prepare_request(
     kwargs,
     compress_messages,
 ) -> PreparedRequest:
-    if (
-        "[User preferences and background]" in system_text
-        or "[Historical conversation context]" in system_text
-    ):
-        system_text = (
-            "You have access to retrieved user memory in the system context below. "
-            "When relevant memory is present, use it directly. "
-            "Do not claim you cannot remember past convers"
-            "ations when memory items are provided. "
-            "Do not describe internal memory tools, storag"
-            "e backends, or persistence mechanisms. "
-            "If the user asks you to remember something, a"
-            "cknowledge it naturally without discussing wh"
-            "ether "
-            "a tool is available or whether storage will happen behind the scenes.\n\n"
-            + system_text
-        )
-
-    configured_role = getenv("OPENAI_SYSTEM_ROLE", "").strip().lower()
-    base_url = str(getattr(provider.client, "base_url", "") or "").lower()
-    is_local_compatible_endpoint = any(
-        token in base_url for token in ("ollama", "vllm", "11434", "8000")
-    )
-    if configured_role in ("system", "developer"):
-        system_role = configured_role
-    else:
-        system_role = "system" if is_local_compatible_endpoint else "developer"
-
-    arguments = {
-        "model": provider.base_args["model"],
-        "messages": [{"role": system_role, "content": system_text}] + message_list,
-        "max_tokens": max_tokens,
-    }
-    is_vllm_endpoint = "vllm" in base_url or "8000" in base_url
-    try:
-        thinking_requested = (
-            True if thinking_budget is None else int(thinking_budget) != 0
-        )
-    except Exception:
-        thinking_requested = True
-    if is_vllm_endpoint:
-        if thinking_budget is None:
-            enable_thinking = (
-                getenv("OPENAI_COMPAT_ENABLE_THINKING", "1") or "1"
-            ).strip().lower() in ("1", "true", "yes", "on")
-        else:
-            enable_thinking = int(thinking_budget) != 0
-        thinking_requested = enable_thinking
-        arguments["extra_body"] = {
-            "chat_template_kwargs": {"enable_thinking": enable_thinking}
-        }
+    protection = current_protection()
+    if (protection is not None and not protection.allow_history_trim
+            and "tools" not in kwargs and tool_choice_raw is None
+            and not ("response_format" in kwargs and kwargs["response_format"] is None)):
+        arguments = protected_text_request_arguments(provider,
+            system_text=system_text, message_list=message_list, max_tokens=max_tokens,
+            thinking_budget=thinking_budget, response_format=kwargs.get("response_format"))
+        if arguments is not None:
+            validate_request(arguments, output_reserve=arguments["max_tokens"])
+            return PreparedRequest(arguments, requested_thinking(thinking_budget, arguments))
+    arguments, thinking_requested, is_local_compatible_endpoint = base_request_arguments(
+        provider, system_text, message_list, max_tokens, thinking_budget)
     from .openai_runtime_config import context_limit as configured_limit
-    from .openai_runtime_config import optional_float
 
     context_limit = configured_limit()
     should_compress = True
@@ -123,10 +88,7 @@ async def prepare_request(
         else:
             prompt_slack = provider._env_int("OPENAI_API_PROMPT_SLACK_TOKENS", 384)
         provider._preflight_trim_for_context(arguments, context_limit, prompt_slack)
-    for key, name in (("temperature", "OPENAI_TEMPERATURE"), ("top_p", "OPENAI_TOP_P")):
-        value = optional_float(name)
-        if value is not None:
-            arguments[key] = value
+    configured_sampling(arguments)
 
     if "tools" in kwargs:
         arguments["tools"] = await transform_openai_tools(

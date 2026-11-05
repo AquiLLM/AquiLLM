@@ -49,6 +49,11 @@ async def acquire_evidence(
     reason = "initial"
     phase = "acquisition"
     attempts, latest_source_ids = [], ()
+    from .rag_recovery_origins import (
+        accept_recovery_action, recovery_action, start_recovery_origins,
+    )
+
+    recovery_origins = start_recovery_origins(question, budget, initial_results, evidence_views)
 
     def source_ids(current_results):
         return tuple(dict.fromkeys(s.identity for s in evidence_views(current_results)))
@@ -84,7 +89,8 @@ async def acquire_evidence(
         completed_results, outcome = [], "failure"
         latest_source_ids = ()
         try:
-            with operation_scope(budget, timeout_ms=timeout, source_limit=source_limit):
+            with (operation_scope(budget, timeout_ms=timeout, source_limit=source_limit),
+                  recovery_action(recovery_origins) as recovery):
                 from .retrieval_query_runtime import action_observation
 
                 observation = action_observation(action, proposal, budget)
@@ -93,6 +99,8 @@ async def acquire_evidence(
                     observation,
                 )
                 result = await asyncio.wait_for(execute(action), timeout=timeout / 1000)
+                if recovery is not None:
+                    accept_recovery_action(recovery, result, evidence_views([result]))
                 completed_results, outcome = [result], "completed"
                 if active():
                     publish(

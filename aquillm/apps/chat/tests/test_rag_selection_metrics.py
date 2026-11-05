@@ -163,3 +163,27 @@ def test_selection_metrics_are_closed_and_bounded(monkeypatch):
     assert "candidate_count" not in fields
     assert "profile_version" not in fields
     assert "fixed_fallback_reason" not in fields
+
+
+def test_optional_recovery_metrics_distinguish_acquired_and_retained_counts(monkeypatch):
+    from apps.chat.services.rag_selection_types import OmittedRecoverySource
+
+    candidate = SelectionCandidate(7, "private-document", 1, "private evidence", .8, 1, "private-hash", {})
+    profile = SelectionProfile("balanced", .9, .1, "adaptive-evidence-v1-minmax-1e-9")
+    prepared = PreparedSelection((candidate,), "partial_model_ranked", 0, 1, 0,
+        "optional_recovery_pruned", acquired_count=2,
+        omitted_optional=(OmittedRecoverySource(8, "private-document", 2, "private-other-hash", "optional_text_limit"),))
+    turn = rag_selection_coordinator.SelectionTurn(
+        EvidenceSelection((candidate,), 4, profile, "partial_model_ranked"), object(), prepared, 1, 1)
+    fields = _emit(monkeypatch, **rag_selection_coordinator.selection_metric_fields(
+        EvidenceSelectionConfig(mode="adaptive"), turn, SimpleNamespace(chunks=[{"doc_id":"selected"}], total_tokens=4)))
+    assert fields["candidate_count"] == 1
+    assert fields["acquired_count"] == 2 and fields["omitted_optional_count"] == 1
+    assert fields["fixed_fallback_reason"] == "optional_recovery_pruned"
+    assert fields["proposed_score_status"] == "partial_model_ranked"
+    assert "private" not in repr(fields)
+
+
+def test_optional_recovery_metric_counts_are_fixed_bounded_numbers(monkeypatch):
+    fields = _emit(monkeypatch, acquired_count=46, omitted_optional_count="private-document")
+    assert "acquired_count" not in fields and "omitted_optional_count" not in fields

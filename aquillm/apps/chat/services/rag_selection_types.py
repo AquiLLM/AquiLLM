@@ -27,6 +27,15 @@ class SelectionCandidate:
 
 
 @dataclass(frozen=True)
+class OmittedRecoverySource:
+    chunk_id: int
+    doc_id: str
+    chunk_number: int
+    source_fingerprint: str
+    reason: str
+
+
+@dataclass(frozen=True)
 class PreparedSelection:
     candidates: tuple[SelectionCandidate, ...]
     score_status: str
@@ -34,6 +43,9 @@ class PreparedSelection:
     new_pairs: int
     scoring_duration_ms: float
     fallback_reason: str | None
+    acquired_count: int | None = None
+    omitted_optional: tuple[OmittedRecoverySource, ...] = ()
+    prepaid_selection: EvidenceSelection | None = None
 
 
 @dataclass(frozen=True)

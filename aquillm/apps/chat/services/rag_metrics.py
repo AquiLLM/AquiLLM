@@ -24,6 +24,7 @@ _FALLBACK_REASONS = frozenset(
         "score_incompatible",
         "deadline",
         "incomplete_scores",
+        "optional_recovery_pruned",
     }
 )
 _PROFILE_VERSIONS = frozenset({"adaptive-evidence-v1-minmax-1e-9"})
@@ -85,6 +86,8 @@ def log_direct_rag_turn(
     selector_ms: float | None = None,
     final_scoring_ms: float | None = None,
     candidate_count: int | None = None,
+    acquired_count: int | None = None,
+    omitted_optional_count: int | None = None,
     selected_doc_count: int | None = None,
     estimated_tokens: int | None = None,
     reused_pairs: int | None = None,
@@ -142,6 +145,8 @@ def log_direct_rag_turn(
         "selector_ms": _safe_graph_ms(selector_ms),
         "final_scoring_ms": _safe_graph_ms(final_scoring_ms),
         "candidate_count": _safe_graph_count(candidate_count, maximum=45),
+        "acquired_count": _safe_graph_count(acquired_count, maximum=45),
+        "omitted_optional_count": _safe_graph_count(omitted_optional_count, maximum=45),
         "selected_doc_count": _safe_graph_count(selected_doc_count, maximum=15),
         "estimated_tokens": _safe_graph_count(estimated_tokens, maximum=100_000),
         "reused_pairs": _safe_graph_count(reused_pairs, maximum=45),

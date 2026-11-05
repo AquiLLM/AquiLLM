@@ -480,44 +480,12 @@ async def complete_conversation_turn(
         or publication is not None
         or bool(current_source_refs)
     )
-    citation_allowlist: set[str] = set()
-    source_allowlist: set[str] = set()
-    enforce_citations = False
-    request_system_prompt = system_prompt
-    if rag_answer and citations.citation_enforcement_enabled():
-        citation_allowlist = citations.collect_allowed_chunk_citations(
-            Conversation(system="", messages=[last_message])
-        )
-        if citation_allowlist:
-            enforce_citations = True
-            request_system_prompt = (
-                f"{system_prompt}\n\n"
-                f"{citations.build_citation_system_suffix(citation_allowlist)}"
-            )
-    if is_post_tool_result_turn:
-        if not rag_answer:
-            synthesis_instruction = (
-                "Answer the user's request using the current tool result. "
-                "Do not reuse document evidence or citations from earlier turns."
-            )
-        else:
-            if DIRECT_SYNTHESIS_GROUNDING not in request_system_prompt:
-                request_system_prompt += f"\n\n{DIRECT_SYNTHESIS_GROUNDING}"
-            synthesis_instruction = (
-                "Final synthesis step: answer at the depth requested "
-                "with detail proportionate "
-                "to the selected evidence. Complete the supported answer"
-                " without "
-                "padding it. Do not emit status lines, tool markup, or "
-                "promises to "
-                "retrieve later."
-            )
-        request_system_prompt = f"{request_system_prompt}\n\n{synthesis_instruction}"
-    if CONDITIONAL_IMAGE_INSTRUCTION not in request_system_prompt:
-        request_system_prompt += f"\n\n{CONDITIONAL_IMAGE_INSTRUCTION}"
-    source_allowlist = set(citation_allowlist)
-    if rag_answer and not source_allowlist:
-        source_allowlist = current_source_refs
+    from .complete_turn_inputs import completion_prompt_inputs, initial_request_policy
+
+    request_system_prompt, citation_allowlist, source_allowlist, enforce_citations = (
+        completion_prompt_inputs(conversation, rag_answer=rag_answer,
+            post_tool=is_post_tool_result_turn, source_refs=current_source_refs)
+    )
     # Any answer can introduce document markup, even with no document history.
     # Classify the complete answer before releasing any of its provider tokens.
     defer_stream_until_final = callable(stream_func)
@@ -552,19 +520,8 @@ async def complete_conversation_turn(
     post_tool_max_tokens, continuation_max_tokens, citation_retry_prior_max_chars = (
         turn_token_limits()
     )
-    observability_stage = current_stage()
-    request_max_tokens = max_tokens
-    tool_choice_type = (
-        str(getattr(last_message.tool_choice, "type", "") or "").strip().lower()
-    )
-    if isinstance(last_message, UserMessage) and last_message.tools:
-        request_max_tokens = _resolve_tool_step_max_tokens(max_tokens, tool_choice_type)
-    elif is_post_tool_result_turn and observability_stage != "direct_synthesis":
-        request_max_tokens = _resolve_post_tool_max_tokens(
-            conversation,
-            default_cap=post_tool_max_tokens,
-            global_max=_post_tool_global_max(max_tokens),
-        )
+    request_max_tokens, tool_choice_type, observability_stage = initial_request_policy(
+        conversation, max_tokens, stage=current_stage(), post_tool_cap=post_tool_max_tokens)
     if last_message.tools:
         tools = {
             "tools": [tool.llm_definition for tool in last_message.tools],
@@ -574,17 +531,6 @@ async def complete_conversation_turn(
         tools = {}
     stream_message_uuid = str(uuid.uuid4())
     observability_correlation_id = current_correlation_id() or new_correlation_id()
-    if observability_stage is None:
-        if isinstance(last_message, UserMessage) and last_message.tools:
-            observability_stage = "tool_selection"
-        elif is_post_tool_result_turn:
-            observability_stage = "post_tool_synthesis"
-        else:
-            observability_stage = "general_answer"
-    if observability_stage == "general_answer":
-        general_answer_cap = _general_answer_max_tokens()
-        if general_answer_cap > 0:
-            request_max_tokens = min(request_max_tokens, general_answer_cap)
     sdk_args = {
         **(
             llm.base_args
