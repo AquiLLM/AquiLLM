@@ -61,7 +61,7 @@ test.describe('Collection Management and Operations', () => {
     test('should allow uploading a PDF, entering its title, and submitting', async ({ page }) => {
       const pdfTitle = getUniqueName('Test PDF Lecture');
       // Assumes tests run from 'react/' directory.
-      const pdfFilePath = 'test-data/cpu-intro-2.pdf';
+      const pdfFilePath = 'test-data/synthetic-upload.pdf';
 
       let pdfIngestionResponseStatus = 0;
       let pdfIngestionResponseBody: any = null;
@@ -238,7 +238,7 @@ test.describe('Collection Management and Operations', () => {
 
     test('should open an ingested document from collection view', async ({ page }) => {
       const docTitleToOpen = getUniqueName('DocToOpenForViewing');
-      const pdfFilePath = 'test-data/cpu-intro-2.pdf'; // Relative to CWD (e.g., react/).
+      const pdfFilePath = 'test-data/synthetic-upload.pdf'; // Relative to CWD (e.g., react/).
 
       // Ingest a document for this test.
       await page.locator('button[title="PDF"]').click(); // Ensure PDF type.

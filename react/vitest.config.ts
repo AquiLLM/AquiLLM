@@ -6,7 +6,7 @@ import { defineConfig } from 'vitest/config'
 // remains sufficient. Component tests opt into jsdom per-file.
 export default defineConfig({
   test: {
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'tooling/**/*.test.ts'],
     environment: 'node',
   },
 })

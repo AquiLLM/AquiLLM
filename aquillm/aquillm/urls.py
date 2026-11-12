@@ -30,6 +30,7 @@ from .views import UserSettingsPageView
 from . import zotero_views
 
 urlpatterns = [
+    path("", include("apps.core.licensing_urls")),
     path("", views.index, name="index"),
     path("api/", include(api_urlpatterns)),
     path('api/', include('apps.memory.urls')),

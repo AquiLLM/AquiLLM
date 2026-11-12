@@ -1,0 +1,43 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Source code and licenses · AquiLLM</title>
+  <style>
+    body { font: 1rem/1.6 system-ui, sans-serif; max-width: 48rem; margin: 3rem auto; padding: 0 1.25rem; color: #182736; }
+    a { color: #155a8a; text-underline-offset: .15em; }
+    h1, h2 { line-height: 1.2; }
+    li { margin-block: .5rem; }
+  </style>
+</head>
+<body>
+  <a href="/">Return to AquiLLM</a>
+  <h1>Source code and licenses</h1>
+  {% if deployment_source_url %}
+  <p><a href="{{ deployment_source_url }}">Source for this deployment</a> is available at no charge,
+    including the materials provided by this operator to build and modify this version.</p>
+  {% else %}
+  <p>This operator has not configured a source download for this deployment.
+    Please contact the operator for the corresponding source.</p>
+  {% endif %}
+  <p><a href="https://github.com/AquiLLM/AquiLLM">Upstream repository</a> —
+    an operator's deployed version may contain additional changes.</p>
+  <h2>License documents</h2>
+  <p>AquiLLM is provided without warranty, subject to the terms in its
+    <a href="{% url 'project_license' %}">project license</a>, which describes your rights to copy,
+    modify and redistribute it. Third-party components retain their own licenses.</p>
+  <ul>
+    <li><a href="{% url 'third_party_notices' %}">Third-party notices and source locations</a></li>
+    <li><a href="{% static 'js/dist/THIRD_PARTY_LICENSES.txt' %}">Browser bundle licenses and notices</a></li>
+    <li><a href="{% static 'fonts/OFL-Lexend.txt' %}">Lexend font license</a></li>
+    <li><a href="{% static 'fonts/OFL-OpenDyslexic3.txt' %}">OpenDyslexic3 font license</a></li>
+  </ul>
+  <p>The application uses PyMuPDF and EbookLib under the GNU Affero General Public License
+    (AGPL). Their terms, including applicable corresponding-source obligations, remain in force.</p>
+  <p>Thank you to arXiv for use of its open access interoperability.
+    This service was not reviewed or approved by, nor does it necessarily express
+    or reflect the policies or opinions of, arXiv.</p>
+</body>
+</html>

@@ -14,7 +14,7 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /app
 
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock LICENSE ./
 RUN UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_INSTALLS=1 uv sync --frozen --no-dev --no-cache
 COPY deploy/docker/web/runtime-constraints.txt /opt/aquillm-runtime-constraints.txt
 RUN uv pip install --python /opt/venv/bin/python --no-cache-dir --constraint /opt/aquillm-runtime-constraints.txt "mem0ai[graph]" langchain-memgraph rank-bm25

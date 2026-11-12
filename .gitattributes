@@ -1,4 +1,6 @@
 *.sh text eol=lf
+# Keep PDF offsets intact on Windows, even when the generated PDF is ASCII-only.
+react/test-data/synthetic-upload.pdf binary
 # Reviewed corpus digests bind exact bytes, including their authored newlines.
 aquillm/apps/chat/evals/evidence_quality_cases.json -text
 aquillm/apps/chat/evals/evidence_operational_cases.json -text whitespace=cr-at-eol

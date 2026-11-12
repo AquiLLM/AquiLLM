@@ -8,7 +8,9 @@
 [![Django](https://img.shields.io/badge/Django-5.1-green.svg)](https://www.djangoproject.com/)
 [![React](https://img.shields.io/badge/React-Frontend-61DAFB.svg)](https://reactjs.org/)
 [![Docker](https://img.shields.io/badge/Docker-Compose-blue.svg)](https://www.docker.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![License: See LICENSE](https://img.shields.io/badge/License-See_LICENSE-blue.svg)](LICENSE)
+
+**Licensing status:** See [LICENSING.md](LICENSING.md). A GPLv3 migration is proposed; contributor permissions are pending. Third-party components keep their own licenses.
 
 
 **AquiLLM is an open-source open-weight RAG (Retrieval-Augmented Generation) application designed specifically for researchers and research groups.**  It helps users manage, search, and interact with research documents through a natural-language interface to their data, supporting literature review, onboarding, collaboration, and knowledge discovery workflows. Users can upload and organize documents into collections across a variety of file formats. AquiLLM is designed for local or pseudo-local deployment, giving research groups greater control over their data, models, and infrastructure.

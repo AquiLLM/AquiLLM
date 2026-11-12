@@ -9,7 +9,7 @@ ENV PATH=/opt/venv/bin:$PATH
 WORKDIR /app
 
 # Copy dependency files first to leverage Docker cache
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock LICENSE ./
 RUN UV_CONCURRENT_DOWNLOADS=1 UV_CONCURRENT_INSTALLS=1 uv sync --frozen --no-dev --no-cache
 RUN apt update && apt install -y curl npm inotify-tools tesseract-ocr \
     libreoffice-writer-nogui libreoffice-calc-nogui libreoffice-impress-nogui

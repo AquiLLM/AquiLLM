@@ -17,7 +17,7 @@
                         fontFamily: {
                         opendyslexic: ['"OpenDyslexic"', 'sans-serif'],
                         lexend: ['Lexend', 'sans-serif'],
-                        comicsans: ['"Comic Sans"', 'cursive'],
+                        comicsans: ['"Comic Sans MS"', '"Comic Sans"', 'cursive'],
                         verdana: ['Verdana', 'sans-serif'],
                         timesnewroman: ['"Times New Roman"', 'serif'],
                         latin_modern_roman: ['Latin Modern Roman', 'serif'],
@@ -127,6 +127,9 @@
         {% endblock body %}
         {% block extra_body %}
         {% endblock extra_body %}
+        <footer class="p-4 text-center">
+            <a href="{% url 'licensing' %}" class="underline">Source code and licenses</a>
+        </footer>
         <script src="https://cdn.jsdelivr.net/npm/alpinejs@2.8.2/dist/alpine.min.js" defer></script>
     </body>
 </html>

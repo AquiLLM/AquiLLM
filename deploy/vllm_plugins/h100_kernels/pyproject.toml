@@ -3,6 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
+license = { file = "LICENSE" }
 name = "aquillm-vllm-h100"
 version = "0.1.0"
 description = "Opt-in H100 TurboQuant kernels for the pinned AquiLLM runtime"
@@ -13,7 +14,7 @@ dependencies = []
 where = ["src"]
 
 [tool.setuptools.package-data]
-aquillm_vllm_h100 = ["kernels/*.LICENSE"]
+aquillm_vllm_h100 = ["kernels/*.LICENSE", "kernels/*.NOTICE"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
