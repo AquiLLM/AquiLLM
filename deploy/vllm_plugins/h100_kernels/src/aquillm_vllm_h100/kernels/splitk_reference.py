@@ -2,6 +2,7 @@
 """Genesis 34e2693 arithmetic with fixed-grid device split selection.
 
 Derived from sndr/engines/vllm/kernels_legacy/p67_multi_query_kernel.py.
+Original author: Sandermage (Sander) Barzov Aleksandr, Ukraine, Odessa.
 Committed QK remains tf32, PV remains tf32x3, raw tail remains scalar FP32,
 and scratch stores normalized output with log2 LSE. This module enables no
 tuning: the coordinator supplies an already validated frozen SplitPlan.

@@ -179,14 +179,9 @@
 
                 <div class="flex justify-between items-center my-[12px]" style="overflow-x: visible;" id="sidebar-header">
                     <span class="text-base pl-[8px]">Menu</span>
-                    <button id="menu-toggle" class="p-[8px] mr-[8px] hover:bg-scheme-shade_5 transition-all rounded-[8px] cursor-pointer">
-                        <svg xmlns="http://www.w3.org/2000/svg" id="Outline" viewBox="0 0 24 24" width="20" height="20">
-                            <path d="M7,6H23a1,1,0,0,0,0-2H7A1,1,0,0,0,7,6Z" fill="var(--color-contrast)"/>
-                            <path d="M23,11H7a1,1,0,0,0,0,2H23a1,1,0,0,0,0-2Z" fill="var(--color-contrast)"/>
-                            <path d="M23,18H7a1,1,0,0,0,0,2H23a1,1,0,0,0,0-2Z" fill="var(--color-contrast)"/>
-                            <circle cx="2" cy="5" r="2" fill="var(--color-contrast)"/>
-                            <circle cx="2" cy="12" r="2" fill="var(--color-contrast)"/>
-                            <circle cx="2" cy="19" r="2" fill="var(--color-contrast)"/>
+                    <button id="menu-toggle" aria-label="Toggle menu" class="p-[8px] mr-[8px] hover:bg-scheme-shade_5 transition-all rounded-[8px] cursor-pointer">
+                        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                            <path d="M4 6H20 M4 12H20 M4 18H20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
                         </svg>
                     </button>
                 </div>
@@ -258,6 +253,7 @@
                         {% endif %}
                     </div>
                 </div>
+                <a href="{% url 'licensing' %}" class="text-sm pl-[8px] pr-[8px] py-[8px] text-text-normal underline">Source code and licenses</a>
                 {% if app_version %}
                 <div class="text-xs pl-[8px] pr-[8px] py-[8px] text-text-normal opacity-50 select-none">
                     v{{ app_version }}

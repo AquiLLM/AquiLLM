@@ -7,7 +7,7 @@ ENV PORT=${PORT}
 WORKDIR /app
 
 # Copy dependency files first to leverage Docker cache
-COPY pyproject.toml uv.lock ./
+COPY pyproject.toml uv.lock LICENSE ./
 RUN uv sync --frozen
 RUN apt update && apt install -y curl tesseract-ocr
 # Copy the rest of the application

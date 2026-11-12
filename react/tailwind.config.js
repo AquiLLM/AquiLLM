@@ -10,7 +10,7 @@ module.exports = {
         fontFamily: {
           opendyslexic: ['"OpenDyslexic"', 'sans-serif'],
           lexend: ['Lexend', 'sans-serif'],
-          comicsans: ['"Comic Sans"', 'cursive'],
+          comicsans: ['"Comic Sans MS"', '"Comic Sans"', 'cursive'],
           verdana: ['Verdana', 'sans-serif'],
           timesnewroman: ['"Times New Roman"', 'serif'],
           latin_modern_roman: ['Latin Modern Roman', 'serif'],

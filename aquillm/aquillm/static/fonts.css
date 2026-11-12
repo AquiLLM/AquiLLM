@@ -12,9 +12,4 @@
     font-style: normal;
 }
 
-@font-face {
-    font-family: 'Comic Sans';
-    src: url('/static/fonts/Comic Sans MS.ttf') format('truetype');
-    font-weight: normal;
-    font-style: normal;
-}
+/* Comic Sans uses only a locally installed font; see THIRD_PARTY_NOTICES.md. */

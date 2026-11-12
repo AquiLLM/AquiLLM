@@ -4,6 +4,7 @@ import tailwindcss from "tailwindcss"
 import { copyFileSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { thirdPartyNotices } from './tooling/thirdPartyNotices'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -44,7 +45,7 @@ function placeholderMainCss(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [react(), copyPdfWorker(), placeholderMainCss()],
+  plugins: [react(), copyPdfWorker(), placeholderMainCss(), thirdPartyNotices(__dirname)],
   base: '/static/js/dist/',
   build: {
     outDir: '../aquillm/aquillm/static/js/dist/',

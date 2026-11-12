@@ -235,7 +235,7 @@ const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
               <option value="timesnewroman">Times New Roman</option>
               <option value="opendyslexic">Open Dyslexic</option>
               <option value="lexend">Lexend</option>
-              <option value="comicsans">Comic Sans (Helps with dyslexia!)</option>
+              <option value="comicsans">Comic Sans (if installed)</option>
             </select>
           </div>
           <button
