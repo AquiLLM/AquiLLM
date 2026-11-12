@@ -49,7 +49,7 @@ def capture_legacy(document, state, *, using):
 def _snapshot(document, state, *, using, expected_hash=None):
     expected_hash = expected_hash or document.full_text_hash
     origins = list(IngestionOutput.objects.using(using).filter(
-        status="success", document_model=document._meta.label_lower, document_pkid=document.pkid,
+        status="success", provenance_kind="ingestion", document_model=document._meta.label_lower, document_pkid=document.pkid,
         document_id=document.id, document_source_hash=document.full_text_hash,
     ).select_related("source_occurrence", "extraction_revision")[:2])
     source_matches = expected_hash == document.full_text_hash

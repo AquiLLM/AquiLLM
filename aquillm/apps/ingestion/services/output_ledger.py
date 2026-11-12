@@ -33,11 +33,11 @@ def _result(row):
 
 def _fenced(lease, *, using):
     return IngestionOutput.objects.using(using).filter(pk=lease.output_id,
-        generation=lease.generation, attempt=lease.attempt, status='processing')
+        generation=lease.generation, attempt=lease.attempt, status='processing', provenance_kind='ingestion')
 
 
 def claim_output(output_key: str, *, using: str) -> OutputLeaseV1 | None:
-    observed = IngestionOutput.objects.using(using).filter(output_key=output_key).first()
+    observed = IngestionOutput.objects.using(using).filter(output_key=output_key, provenance_kind='ingestion').first()
     if observed is None:
         return None
     with transaction.atomic(using=using):
@@ -71,6 +71,8 @@ def publish_output(lease: OutputLeaseV1, *, using: str) -> OutputResultV1:
     observed = IngestionOutput.objects.using(using).select_related('item__batch__collection', 'parent_output').filter(pk=lease.output_id).first()
     if observed is None:
         return OutputResultV1('', 'error', None, 'source_scope_unavailable')
+    if observed.provenance_kind != 'ingestion':
+        return OutputResultV1(observed.output_key, 'error', None, 'source_scope_unavailable')
     if observed.status == 'success':
         document = exact_document(observed, using=using)
         if document is None or not document.collection.user_can_edit(observed.item.batch.user):
@@ -132,7 +134,7 @@ def fail_output(lease: OutputLeaseV1, exc: Exception, *, using: str) -> OutputRe
 
 
 def reset_output(output_key, *, generation, extraction_revision_id, using):
-    observed = IngestionOutput.objects.using(using).filter(output_key=output_key).first()
+    observed = IngestionOutput.objects.using(using).filter(output_key=output_key, provenance_kind='ingestion').first()
     if (observed is None or observed.output_kind == 'registration_error'
             or not observed.payload.get('full_text', '').strip()
             or (observed.output_kind == 'figure' and not observed.parent_output_id)):

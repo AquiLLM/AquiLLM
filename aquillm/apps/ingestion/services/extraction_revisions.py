@@ -11,7 +11,11 @@ from lib.parsers.source_contracts import SourceArtifactOccurrenceRefV1, SourceCo
 from .source_artifacts import bind_payload_source, persist_occurrence
 
 
-def persist_extraction_revision(occurrence, extraction, *, using: str) -> int:
+def persist_extraction_revision(occurrence, extraction, *, using: str, deadline: float | None = None) -> int:
+    if deadline is not None:
+        from .source_storage import check_deadline
+
+        check_deadline(deadline)
     validate_extraction(extraction)
     if type(occurrence) is not SourceArtifactOccurrenceRefV1 or type(occurrence.occurrence_id) is not int or occurrence.occurrence_id <= 0:
         raise SourceContractError('extraction_occurrence_mismatch')
@@ -24,7 +28,8 @@ def persist_extraction_revision(occurrence, extraction, *, using: str) -> int:
     # Existing source service revalidates every stored field and actual archive
     # ordinal/name/bytes, including nested duplicate-container occurrence proofs.
     verified = persist_occurrence(occurrence.artifact, archive_lineage=occurrence.archive_lineage,
-                                  original_filename=stored.original_filename, content_type=stored.content_type, using=using)
+                                  original_filename=stored.original_filename, content_type=stored.content_type, using=using,
+                                  deadline=deadline)
     if verified != occurrence:
         raise SourceContractError('extraction_occurrence_mismatch')
     wire_elements = elements_to_json(extraction.elements)
@@ -41,6 +46,8 @@ def persist_extraction_revision(occurrence, extraction, *, using: str) -> int:
     expected = dict(fields, occurrence_id=occurrence.occurrence_id, parser_key=extraction.parser_key, manifest_sha256=manifest)
     if any(getattr(row, name) != value for name, value in expected.items()):
         raise SourceContractError('extraction_revision_registration_mismatch')
+    if deadline is not None:
+        check_deadline(deadline)
     return row.pk
 
 

@@ -23,7 +23,60 @@
 - Root alone runs SSH, shared database tests, model calls and GPU experiments; serialize these resources.
 - Keep the serving development stack unchanged while isolated candidate verification is incomplete.
 
-## Current closure work: November 5
+## Current closure work: November 12
+
+The [retained-PDF controls](https://github.com/AquiLLM/AquiLLM-internal/blob/a624d55262783d165c7248f8b673297eeb1f0d9c/research/architectural-ablations-2026-11-05/results-nov12-legacy-parity.md)
+now distinguish the current PDF model method from the actual historical upload
+producer. On the same 30 current attached PDFs, the current-method control had
+29 mismatches and one page-bound result. The separately registered historical
+policy replay under recorded current dependencies had 24 exact canonical
+matches, five mismatches and one page-bound result. Those matches establish
+current correspondence, not historical file provenance; neither control is
+an answer-quality measurement.
+
+A [native preparation rehearsal](https://github.com/AquiLLM/AquiLLM-internal/blob/a624d55262783d165c7248f8b673297eeb1f0d9c/research/architectural-ablations-2026-11-05/results-nov12-native-shadow.md)
+on the fixed lowest-owner real PDF produced 31 paragraph elements and 81
+chunks with closed lexical bindings in scratch, then rolled back. It yielded
+no headings and reported partial quality/layout unavailable. Original sources,
+bindings and serving were unchanged. That first rehearsal used a new scratch
+owner and did not establish a same-owner transition.
+
+The [current-adoption verification](https://github.com/AquiLLM/AquiLLM-internal/blob/c80231c64425e926d65800b83ea582b9ce446d61/research/architectural-ablations-2026-11-05/results-nov12-current-adoption.md)
+now covers a trusted internal PDF coordinator, explicit immutable provenance,
+bounded capture/isolated validation, one successful origin per exact owner,
+ordinary-writer compatibility, and historical snapshot exclusion. The service
+executes current validation itself; it accepts no caller bytes, policy or receipt.
+Exact retries freshly authorize and validate. It leaves existing owners, chunks
+and representation pointers unchanged. The six unmatched/bounded owners remain
+outside this route, and no retained-source owner has been migrated.
+
+A synthetic same-owner test uses actual native extraction and public generation
+APIs. It verifies canonical/lexical publication, transactional failure rollback,
+old citation identity/text retention with artifact_unknown, current permission
+checks, and compensating restoration through a fresh generation. Old adoption
+evidence remains immutable. Dense membership stays empty and graph dispatch is
+held; seeded graph rows demonstrate supersession, not readiness.
+
+Actual POSIX verification retained 113 passing tests, one platform skip and one
+incorrect parent-only policy-test expectation. The corrected policy test and new
+same-owner transition then both passed on 254. The ordinary archive-ingestion
+regression introduced during module splitting was diagnosed and repaired; 50
+archive/history/source/revision checks passed afterward. Failed attempts and
+independent reviews are preserved. Scratch stores were removed and serving was
+unchanged. These checks do not measure retrieval or answer-quality gains.
+
+- [x] Implement and review current PDF adoption and its SQL/history guards.
+- [x] Verify bounded POSIX source/worker behavior and ordinary ingestion compatibility.
+- [x] Verify synthetic same-owner citation transition and compensating rollback.
+- [ ] Rehearse one retained-source owner with its exact dependent figure/permission scope.
+- [ ] Verify source fidelity and new dense/graph readiness before opening retrieval.
+- [ ] Evaluate preparation changes with separately registered controls, then complete rollout.
+
+The completed A4/A5 block retained all 12 turns: Q4 acquired no mapped primary
+witnesses and had no correct core comparison, while all six Q7 answers returned
+4.119. A6's added primary article improved Q3's core method coverage but lost a
+qualification. These exposed pilots, human-review gaps and earlier failed
+attempts remain in the internal record; they do not close independent acceptance.
 
 Major architectural changes now have a prospectively registered
 [internal ablation record](https://github.com/AquiLLM/AquiLLM-internal/tree/main/research/architectural-ablations-2026-11-05).
