@@ -120,10 +120,10 @@ class RecoveryRequest:
 def recovery_request(conversation, question, llm, *, max_tokens, stage,
                      assessment=None, stop_reason="initial", notice=None, auxiliary=None,
                      initial_acquired=False, top_k=None):
-    from apps.documents.services.native_search_schedule import scoped_baseline_recovery_enabled
+    from apps.documents.services.native_search_schedule import acquisition_schedule, scoped_baseline_recovery_enabled
 
     runtime = current_source_runtime()
-    if runtime is None or not scoped_baseline_recovery_enabled():
+    if runtime is None or not (scoped_baseline_recovery_enabled() or acquisition_schedule() == "native_closure"):
         return None
     from .rag_config import direct_rag_top_k
     top_k = direct_rag_top_k() if top_k is None else top_k

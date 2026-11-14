@@ -31,12 +31,15 @@ def _classification(exc):
     from apps.documents.services.representation_contracts import SourceScopeUnavailable
     from apps.documents.services.source_loading import SourcePreparationLimited
     from .closed_graph_attempt_v2 import _ClosedGraphLimited
+    from .graph_child_deadline import _ReadyAuthorityDeadline
     from .ready_scope import ReadyScopeError
 
     args = BaseException.args.__get__(exc, type(exc))
     message = args[0] if len(args) == 1 and type(args[0]) is str else None
     if type(exc) is _ClosedGraphLimited:
         return "graph_limit", limit_observations(exc).get("graph_failure_reason", "unclassified")
+    if type(exc) is _ReadyAuthorityDeadline:
+        return "timeout_error", "source_deadline"
     if type(exc) is ReadyScopeError:
         return "ready_scope_error", message if message in {
             "readiness_mismatch", "authorization_context_invalid",

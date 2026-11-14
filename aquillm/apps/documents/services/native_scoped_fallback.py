@@ -12,12 +12,20 @@ from .source_deadline import _DEADLINE, source_preparation_scope, source_remaini
 from .source_loading import SourcePreparationLimited
 
 
+def scoped_fallback_applies(captured):
+    scope = captured.scope
+    return (len(scope.requested_document_ids) == 1
+            and scope.requested_document_ids != scope.authorization.selected_document_ids)
+
+
 def scoped_fallback_window(captured):
+    return baseline_completion_window(captured) if scoped_fallback_applies(captured) else None
+
+
+def baseline_completion_window(captured):
     """Capture the cutoff before graph work on the original clock and allowance."""
     scope = captured.scope
-    if (len(scope.requested_document_ids) != 1
-            or scope.requested_document_ids == scope.authorization.selected_document_ids
-            or not scope.runtime.budget.remaining_source_capacity()
+    if (not scope.runtime.budget.remaining_source_capacity()
             or not (captured.admission.references.keys() - set(captured.admission.initial_ids))):
         return None
     parent = captured.parent_deadline
@@ -30,6 +38,10 @@ def scoped_fallback_window(captured):
 
 
 def recover_scoped_baseline(captured, window):
+    return complete_captured_baseline(captured, window)
+
+
+def complete_captured_baseline(captured, window):
     """A fresh eager read; never retry the graph, re-rank or refund any charge."""
     clock, cutoff = window
     started = clock()

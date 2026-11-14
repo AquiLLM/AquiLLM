@@ -21,7 +21,10 @@ from .native_search_schedule import (
     SCOPED_BASELINE_RESERVE_MS,
     native_closure_version,
 )
-from .native_scoped_fallback import recover_scoped_baseline, scoped_fallback_window
+from .native_scoped_fallback import (
+    baseline_completion_window, complete_captured_baseline,
+    recover_scoped_baseline, scoped_fallback_applies,
+)
 from .representation_contracts import SourceScopeUnavailable
 from .source_loading import bounded_source_database
 
@@ -95,9 +98,13 @@ def _try_native_search_closure(
             return None  # Still before any optional work or route consumption.
     captured.check()
     pool, graph_observation = captured.baseline, {}
-    recovered = False
+    scoped_recovered = completed_baseline = False
     if attempt is not None:
-        window = scoped_fallback_window(captured) if captured.scoped_recovery else None
+        from apps.knowledge_graph.retrieval.graph_child_deadline import permits_baseline_completion
+
+        window = baseline_completion_window(captured)
+        scoped_completion = captured.scoped_recovery and scoped_fallback_applies(captured)
+        captured.admission.counts["baseline_completion_reserved_ms"] = SCOPED_BASELINE_RESERVE_MS if window else 0
         outcome = attempt.run_native_closure(
             closure_reserve_ms=NATIVE_CLOSURE_RESERVE_MS + (SCOPED_BASELINE_RESERVE_MS if window else 0)
         )
@@ -109,9 +116,13 @@ def _try_native_search_closure(
             pool = outcome.pool
         else:
             added = 0
-            if window is not None and graph_observation.get("graph_failure_reason") == "deadline":
-                pool, added = recover_scoped_baseline(captured, window)
-                recovered = bool(added)
+            eligible = window is not None and permits_baseline_completion(outcome.baseline_completion, captured)
+            captured.admission.counts["baseline_completion_attempted"] = eligible
+            if eligible:
+                read = recover_scoped_baseline if scoped_completion else complete_captured_baseline
+                pool, added = read(captured, window)
+                completed_baseline = bool(added)
+                scoped_recovered = scoped_completion and bool(added)
                 captured.check()
             captured.admission.counts.update(
                 fallback_top_up_skipped=not added, fallback_top_up_count=added
@@ -175,9 +186,13 @@ def _try_native_search_closure(
     captured.check()
     if observation is not None:
         observation["acquisition_schedule"] = "native_closure"
+    if completed_baseline and not scoped_recovered:
+        from apps.chat.services.rag_preparation_order import record_native_preparation
+
+        record_native_preparation(captured, ranked, {row.pk for row in captured.baseline})
     if captured.scoped_recovery:
         from apps.chat.services.rag_recovery_origins import record_native_recovery
 
         record_native_recovery(captured, ranked,
-            {row.pk for row in captured.baseline} if recovered else {row.pk for row in ranked})
+            {row.pk for row in captured.baseline} if scoped_recovered else {row.pk for row in ranked})
     return result

@@ -65,23 +65,14 @@ def prepare_selection_candidates(
             deadline, clock() + turn_budget.scoring_remaining_ms("final") / 1000
         )
     if source_mode:
-        from .rag_recovery_origins import take_recovery_order
-        recovery = take_recovery_order(pool, primary_query, authorization)
-        if recovery is not None:
-            if scorer is None and (allow_new_scores or pool.source_score_sets):
-                from apps.documents.services.chunk_rerank_selection_provider import current_selection_scorer
-
-                scorer = current_selection_scorer(deadline=deadline, clock=clock, turn_budget=turn_budget)
-            if (isinstance(scorer, WindowSelectionScorer) and scorer.scoring_kind == "pointwise"
-                    and getattr(scorer.provider, "scoring_kind", "pointwise") == "pointwise"):
-                from .rag_recovery_preparation import prepare_recovery_selection
-
-                return prepare_recovery_selection(recovery, prepare=prepare_selection_candidates,
-                    pool=pool, primary_query=primary_query, authorization=authorization,
-                    deadline=deadline, allow_new_scores=allow_new_scores, scorer=scorer,
-                    chunk_loader=chunk_loader, clock=clock, turn_budget=turn_budget,
-                    source_mode=source_mode, token_ceiling=token_ceiling, source_windows=source_windows,
-                    answer_preflight=recovery_preflight)
+        from .rag_preparation_dispatch import prepare_ordered_selection
+        ordered = prepare_ordered_selection(prepare_selection_candidates, pool=pool,
+            primary_query=primary_query, authorization=authorization, deadline=deadline,
+            allow_new_scores=allow_new_scores, scorer=scorer, chunk_loader=chunk_loader,
+            clock=clock, turn_budget=turn_budget, source_mode=source_mode,
+            token_ceiling=token_ceiling, source_windows=source_windows, recovery_preflight=recovery_preflight)
+        if ordered is not None:
+            return ordered
 
     def hydrate():
         if source_mode:

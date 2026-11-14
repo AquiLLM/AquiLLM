@@ -5,10 +5,9 @@ from os import getenv
 from django.core.exceptions import ImproperlyConfigured
 
 NATIVE_CLOSURE_RESERVE_MS = 1250
-# Single-document searches can recover their captured baseline after graph
-# traversal expires. This slice is taken from graph time, never final closure.
+# Captured baseline completion borrows graph time, never final closure.
 SCOPED_BASELINE_RESERVE_MS = 2500
-NATIVE_CLOSURE_SCHEDULE_VERSION = "native-closure-v2"
+NATIVE_CLOSURE_SCHEDULE_VERSION = "native-closure-v4"
 
 
 def scoped_baseline_recovery_enabled():
@@ -22,7 +21,7 @@ def scoped_baseline_recovery_enabled():
 
 
 def native_closure_version(scoped_recovery):
-    return "native-closure-v3" if scoped_recovery else NATIVE_CLOSURE_SCHEDULE_VERSION
+    return "native-closure-v5" if scoped_recovery else NATIVE_CLOSURE_SCHEDULE_VERSION
 
 
 def acquisition_schedule():

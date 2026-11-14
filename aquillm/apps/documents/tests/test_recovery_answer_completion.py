@@ -97,11 +97,10 @@ def test_optional_recovery_preserves_normal_validated_answer_dispatch(monkeypatc
         assert len(dispatched) == 1, outcomes
         assert [item["stage"] for item in validations] == ["prepare_request", "provider_dispatch"]
         assert all(item["reason"] is None and item["after"] >= item["before"] for item in validations)
-        if recovery:
-            assert case.answer.prepared.prepaid_selection is selected
-            assert dispatched[0]["tokenized"] == before_answer, "exact paid request must reuse its tokenization"
-        else:
-            assert dispatched[0]["tokenized"] > before_answer
+        assert case.answer.prepared.prepaid_selection is selected
+        assert dispatched[0]["tokenized"] == before_answer, "exact paid request must reuse its tokenization"
+        if not recovery:
+            assert case.answer.prepared.fallback_reason != "optional_recovery_pruned"
         assert answer in result[-1].content
         assert budget.text_used["tokenized"] <= budget.limits.tokenized_codepoints == 1_000_000
         assert budget.pairs_used["final"] == (45 if cheap else 25)

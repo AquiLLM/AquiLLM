@@ -1,37 +1,16 @@
 """Single-use native graph work; recovery remains outside this owner."""
 
 from copy import deepcopy
-from dataclasses import asdict, dataclass, fields
-from typing import Literal
+from dataclasses import asdict, fields
 
 from apps.documents.services.chunk_search_rank_policy import controls
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.documents.services.source_deadline import _DEADLINE
 from lib.retrieval.operation import _OPERATION, capture_operation_bound
+from .graph_child_deadline import (
+    _ClosedGraphAttemptResult, _ClosedGraphLimited, completion_after_deadline,
+)
 from .graph_failure_observations_v2 import failure_diagnostics
-
-
-@dataclass(frozen=True)
-class _ClosedGraphAttemptResult:
-    kind: Literal["success", "failure", "invalid"]
-    pool: tuple | None
-    diagnostics: dict
-    admit_deferred: bool = False
-
-
-class _ClosedGraphLimited(TimeoutError):
-    """Only a known graph limit and detached, validated observations escape."""
-
-    def __init__(self, reason, *, coverage=None, invocation=None):
-        if type(reason) is not str or reason not in {"deadline", "frontier_budget"}:
-            raise ValueError("unsupported closed graph limit")
-        super().__init__(reason)
-        self.reason = reason
-        self.observations = (
-            {}
-            if coverage is None and invocation is None
-            else _graph_observations(coverage, invocation)
-        )
 
 
 def _graph_observations(coverage, invocation):
@@ -189,7 +168,8 @@ class _ClosedGraphAttempt:
 
     def _run(self, reserve_ms, *, native_closure):
         owner, stage, graph = self._owner, self._stage, self._graph
-        deadline = None
+        deadline, child_bound, owned_deadline = None, None, None
+        child_exited = False
         try:
             bound = capture_operation_bound(stage.budget)
             timeout = self._settings.graph_overall_timeout_ms
@@ -235,9 +215,18 @@ class _ClosedGraphAttempt:
 
             stage.failure_phase = "preparation"
             def phase_check():
+                nonlocal owned_deadline
+                expected = self._parent_deadline if child_bound is None or child_exited else child_bound
+                if _DEADLINE.get() is not expected or _OPERATION.get() is not self._operation:
+                    raise SourceScopeUnavailable("graph_original_scope_unavailable")
                 if clock() >= deadline:
-                    raise _ClosedGraphLimited("deadline")
+                    if _DEADLINE.get() is not expected or _OPERATION.get() is not self._operation:
+                        raise SourceScopeUnavailable("graph_original_scope_unavailable")
+                    owned_deadline = _ClosedGraphLimited("deadline")
+                    raise owned_deadline
                 self._check()
+                if _DEADLINE.get() is not expected or _OPERATION.get() is not self._operation:
+                    raise SourceScopeUnavailable("graph_original_scope_unavailable")
 
             parent = self._parent_deadline
             preparation_clock = parent[1] if parent is not None else clock
@@ -249,6 +238,7 @@ class _ClosedGraphAttempt:
                 with owner.source_preparation_scope(
                     preparation_deadline, preparation_clock, stage.budget
                 ):
+                    child_bound = _DEADLINE.get()
                     phase_check()
                     with owner.bounded_source_database(
                         stage.runtime, stage.scope.using
@@ -270,6 +260,7 @@ class _ClosedGraphAttempt:
                         stage.failure_phase = "database_cleanup"
                     phase_check()  # Classify DB cleanup expiry before child scope exit.
                     stage.failure_phase = "preparation_cleanup"
+                child_exited = True
                 # Preparation and DB cleanup precede publication under the same lock.
                 phase_check()
                 stage.failure_phase = "publication"
@@ -295,6 +286,11 @@ class _ClosedGraphAttempt:
                 None,
                 observations,
                 admit_deferred=admit_deferred,
+                baseline_completion=completion_after_deadline(
+                    exc, bound=child_bound, operation=self._operation,
+                    parent_deadline=self._parent_deadline, admission=self._admission,
+                    owned_deadline=owned_deadline,
+                ) if native_closure else None,
             )
         finally:
             stage.withdraw()

@@ -9,7 +9,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from hashlib import sha256
 
-from apps.documents.services.native_search_schedule import scoped_baseline_recovery_enabled
+from apps.documents.services.native_search_schedule import acquisition_schedule, scoped_baseline_recovery_enabled
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.documents.services.source_loading import current_source_runtime
 from lib.llm.turn_context import current_turn
@@ -39,6 +39,7 @@ class _Occurrence:
     rows: tuple
     sources: tuple
     ordinary: tuple
+    preparation: tuple | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,7 @@ class _Origins:
     representation: object = None
     dense: object = None
     occurrences: list = field(default_factory=list)
+    abandoned: bool = False
 
     def check(self):
         # TurnBudget.can_publish delegates to recursive Operation.active.
@@ -70,7 +72,7 @@ class _Origins:
         """Identity-only fence after every callback-capable clock sample."""
         runtime, turn = self.runtime, current_turn()
         frozen = getattr(runtime, "_frozen_retrieval_scope", None)
-        if (current_source_runtime() is not runtime or runtime.budget is not self.budget
+        if (self.abandoned or current_source_runtime() is not runtime or runtime.budget is not self.budget
                 or runtime.authorization is not self.authorization or turn is not self.turn
                 or (turn is not None and turn.budget is not self.budget)
                 or self.budget.stop_reason is not None
@@ -85,6 +87,7 @@ class _Action:
     operation: object
     check_operation: object
     native: list = field(default_factory=list)
+    preparation: list = field(default_factory=list)
     accepted: bool = False
 
 
@@ -126,14 +129,27 @@ def _check_action(action):
         raise SourceScopeUnavailable("recovery_action_unavailable")
 
 
+@contextmanager
+def origin_lock(runtime):
+    """Caller ownership cannot wait for a native worker's source lock."""
+    lock = runtime.lock
+    if not lock.acquire(blocking=False):
+        raise SourceScopeUnavailable("recovery_original_scope_unavailable")
+    try:
+        yield
+    finally:
+        lock.release()
+
+
 def start_recovery_origins(question, budget, initial_results=(), evidence_views=None):
     runtime = current_source_runtime()
-    if runtime is None or not scoped_baseline_recovery_enabled():
+    if runtime is None or not (scoped_baseline_recovery_enabled() or acquisition_schedule() == "native_closure"):
         return None
-    with runtime.lock:
+    with origin_lock(runtime):
         prior = getattr(runtime, "_recovery_origins", None)
         runtime._recovery_origins = None
-        if prior is not None:
+        runtime._external_preparation_origins = None
+        if prior is not None and not (type(prior) is _Origins and prior.abandoned and not prior.occurrences):
             return None
         record = _Origins(runtime, budget, runtime.authorization, current_turn(),
                           sha256(question.encode()).hexdigest())
@@ -168,6 +184,10 @@ def recovery_action(origins):
 
 def record_native_recovery(captured, rows, ordinary_ids):
     """Pending only: a native result may finish after its caller is cancelled."""
+    _record_native(captured, rows, ordinary_ids)
+
+
+def _record_native(captured, rows, initial_ids, *, preparation=False):
     action = _ACTION.get()
     if action is None:
         return
@@ -181,7 +201,8 @@ def record_native_recovery(captured, rows, ordinary_ids):
 
     values = tuple((row.pk, str(row.doc_id), row.chunk_number, fingerprint_source(row.content))
                    for row in rows)
-    action.native.append((values, tuple(value for value in values if value[0] in ordinary_ids)))
+    pending = action.preparation if preparation else action.native
+    pending.append((values, tuple(value for value in values if value[0] in initial_ids)))
 
 
 def accept_recovery_action(action, result, sources):
@@ -204,11 +225,9 @@ def _accept_occurrence(origins, result, sources, native, action=None):
     if (len({item[0] for item in identities}) != len(identities)
             or {_verified_row_coordinates(row)[:3] for row in rows} != {v[:3] for v in identities}):
         raise SourceScopeUnavailable("recovery_result_changed")
-    ordinary = identities
-    if native:
-        if len(native) != 1 or native[0][0] != identities:
-            raise SourceScopeUnavailable("recovery_result_changed")
-        ordinary = native[0][1]
+    from .rag_preparation_order import pending_initial
+    ordinary = pending_initial(native, identities) if native else identities
+    preparation = pending_initial(action.preparation, identities) if action is not None else None
     runtime = origins.runtime
     with runtime.lock:
         origins.check()
@@ -222,7 +241,7 @@ def _accept_occurrence(origins, result, sources, native, action=None):
             for name, value in (("frozen", frozen), ("representation", frozen.representation), ("dense", frozen.dense)):
                 object.__setattr__(origins, name, value)
         if not any(old.result is result for old in origins.occurrences):
-            origins.occurrences.append(_Occurrence(result, rows, sources, ordinary))
+            origins.occurrences.append(_Occurrence(result, rows, sources, ordinary, preparation))
 
 
 @dataclass(frozen=True, slots=True)
@@ -247,33 +266,10 @@ def take_recovery_order(pool, question, authorization):
         runtime._recovery_origins = None
         if not scoped_baseline_recovery_enabled() or type(origins) is not _Origins:
             return None
-        origins.check()
-        if (authorization is not origins.authorization
-                or origins.query != sha256(question.encode()).hexdigest()):
-            raise SourceScopeUnavailable("recovery_original_scope_unavailable")
-        sources, scores, first = {}, {}, {}
-        for occurrence in origins.occurrences:
-            if _payload_rows(occurrence.result) != occurrence.rows:
-                raise SourceScopeUnavailable("recovery_result_changed")
-            for source in occurrence.sources:
-                identity = _identity(source)
-                if source.chunk_id in sources and sources[source.chunk_id] != identity:
-                    raise SourceScopeUnavailable("recovery_source_changed")
-                sources[source.chunk_id] = identity
-            for rank, identity in enumerate(occurrence.ordinary, 1):
-                pk = identity[0]
-                first.setdefault(pk, len(first))
-                scores[pk] = scores.get(pk, 0) + 1 / (60 + rank)
-        ids = tuple(row.get("chunk_id", row.get("i")) for row in pool.rows)
-        for row in pool.rows:
-            pk = row.get("chunk_id", row.get("i"))
-            if pk not in sources or not any(row == original for occurrence in origins.occurrences
-                                            for original in occurrence.rows):
-                raise SourceScopeUnavailable("recovery_result_changed")
-        optional = tuple(pk for pk in ids if pk not in scores)
-        if not optional or not scores:
+        from .rag_preparation_order import accepted_sources, ordinary_votes
+        ids, sources = accepted_sources(origins, pool, question, authorization)
+        ordinary, optional, scores = ordinary_votes(origins, ids, pool)
+        if not optional or not ordinary:
             return None
-        ordinary = tuple(pk for pk in sorted(scores, key=lambda pk: (-scores[pk], first[pk])) if pk in ids)
-        citations = {row.get("chunk_id", row.get("i")): row.get("citation", row.get("ref")) for row in pool.rows}
         return RecoveryOrder(origins, ordinary, optional, tuple(sources[pk] for pk in ids),
-                             tuple((citations[pk], scores[pk]) for pk in ordinary))
+                             scores)

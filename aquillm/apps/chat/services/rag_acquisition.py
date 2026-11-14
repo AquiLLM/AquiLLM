@@ -53,7 +53,11 @@ async def acquire_evidence(
         accept_recovery_action, recovery_action, start_recovery_origins,
     )
 
-    recovery_origins = start_recovery_origins(question, budget, initial_results, evidence_views)
+    from .rag_external_preparation import resume_external_preparation
+
+    recovery_origins = resume_external_preparation(question, budget, initial_results, evidence_views) if initial_acquired else None
+    if recovery_origins is None:
+        recovery_origins = start_recovery_origins(question, budget, initial_results, evidence_views)
 
     def source_ids(current_results):
         return tuple(dict.fromkeys(s.identity for s in evidence_views(current_results)))

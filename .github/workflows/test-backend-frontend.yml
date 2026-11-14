@@ -595,6 +595,7 @@ jobs:
           tests/test_replay_retrieval.py
           tests/test_replay_target_preflight.py
           tests/test_native_closure_replay.py
+          tests/test_native_replay_schedule_versions.py
           tests/test_replay_timeout_controls.py
           tests/test_ci_graph_selection.py
           --ds=aquillm.settings_projection_test -q --tb=short --durations=20

@@ -12,6 +12,7 @@ from lib.llm.evidence_guard import ContextLimited
 from lib.retrieval.operation import _OPERATION
 
 from .rag_retrieval import FusedRetrievalPool
+from .rag_preparation_order import PreparationOrder
 from .rag_recovery_origins import capture_operation_check
 from .rag_recovery_request import UnsupportedRecoveryRequest
 from .rag_selection_policy import normalize_relevance_scores
@@ -21,7 +22,7 @@ from .rag_source_hydration import revalidate_source_candidates
 
 def prepare_recovery_selection(order, *, prepare, pool, primary_query, authorization,
         deadline, allow_new_scores, scorer, chunk_loader, clock, turn_budget,
-        source_mode, token_ceiling, source_windows, answer_preflight=None):
+        source_mode, token_ceiling, source_windows, answer_preflight=None, allow_deferred=True):
     """Two existing pointwise preparations share one final lease and scorer cache.
 
     The second tier is optional as a batch. Partial or unprepared optional rows
@@ -33,9 +34,16 @@ def prepare_recovery_selection(order, *, prepare, pool, primary_query, authoriza
     operation_identity()
     pairs_before = turn_budget.pairs_used["final"]
     capability = (scorer.provider, scorer.pair_counter, scorer.scorer_fingerprint,
-                  scorer.scoring_kind, scorer.budget, scorer.rerank_state)
+                  scorer.scoring_kind, scorer.budget, scorer.rerank_state) if allow_deferred else None
     by_id = {row.get("chunk_id", row.get("i")): row for row in pool.rows}
     identities = {identity[0]: identity for identity in order.identities}
+    neutral = type(order) is PreparationOrder
+    ordinary_ids = order.initial_ids if neutral else order.ordinary_ids
+    optional_ids = order.deferred_ids if neutral else order.optional_ids
+    ordinary_scores = order.fallback_scores if neutral else order.ordinary_scores
+    limited_reason = "preparation_deferred" if neutral else "optional_recovery_pruned"
+    full_ranks = {pk: rank for rank, pk in enumerate(by_id, 1)}
+    fallback_ranks = {pk: rank for rank, pk in enumerate(order.fallback_ids if neutral else ordinary_ids, 1)}
 
     def run(ids, until, scores):
         return prepare(
@@ -64,37 +72,43 @@ def prepare_recovery_selection(order, *, prepare, pool, primary_query, authoriza
             if remaining <= 0:
                 raise SourcePreparationLimited("source preparation deadline")
         with turn_budget._lock:
-            scoring_live = not capability[-1]._failed
+            scoring_live = capability is None or not capability[-1]._failed
         now = clock()
         order.origins.check_owner()
-        current = (scorer.provider, scorer.pair_counter, scorer.scorer_fingerprint,
-                   scorer.scoring_kind, scorer.budget, scorer.rerank_state)
-        if (any(current[i] is not capability[i] for i in (0,1,4,5))
-                or current[2:4] != capability[2:4]):
-            raise SourceScopeUnavailable("recovery_scoring_capability_changed")
+        if capability is not None:
+            current = (scorer.provider, scorer.pair_counter, scorer.scorer_fingerprint,
+                       scorer.scoring_kind, scorer.budget, scorer.rerank_state)
+            if (any(current[i] is not capability[i] for i in (0,1,4,5))
+                    or current[2:4] != capability[2:4]):
+                raise SourceScopeUnavailable("recovery_scoring_capability_changed")
         operation_identity()
         if _DEADLINE.get() is not parent_scope:
             raise SourceScopeUnavailable("recovery_original_scope_unavailable")
         if now >= deadline:
             raise SourcePreparationLimited("final source preparation deadline")
-        if not scoring_live or capability[-1]._failed:
+        if not scoring_live or (capability is not None and capability[-1]._failed):
             raise SourcePreparationLimited("source scorer unavailable")
 
     def omitted(ids, reason):
+        if neutral:
+            reason = "preparation_" + reason.removeprefix("optional_")
         return tuple(OmittedRecoverySource(*identities[pk], reason) for pk in ids)
 
     order.check()
     operation_check()
     if _DEADLINE.get() is not parent_scope:
         raise SourceScopeUnavailable("recovery_original_scope_unavailable")
-    ordinary = run(order.ordinary_ids, deadline, order.ordinary_scores)
-    if ordinary.score_status != "model":
+    ordinary = run(ordinary_ids, deadline, ordinary_scores)
+    if neutral:
+        ordinary = replace(ordinary, candidates=tuple(replace(candidate, fused_rank=fallback_ranks[candidate.chunk_id])
+                           for candidate in ordinary.candidates))
+    if ordinary.score_status != "model" and not neutral:
         return replace(ordinary, acquired_count=len(pool.rows),
-                       omitted_optional=omitted(order.optional_ids, "ordinary_incomplete"))
+                       omitted_optional=omitted(optional_ids, "ordinary_incomplete"))
     parent()
-    baseline = replace(ordinary, score_status="partial_model_ranked",
-        fallback_reason="optional_recovery_pruned", acquired_count=len(pool.rows),
-        omitted_optional=omitted(order.optional_ids, "answer_preflight_unavailable"))
+    baseline = replace(ordinary, score_status="partial_model_ranked" if ordinary.score_status == "model" else ordinary.score_status,
+        fallback_reason=limited_reason, acquired_count=len(pool.rows),
+        omitted_optional=omitted(optional_ids, "answer_preflight_unavailable"))
     if answer_preflight is None:
         return baseline
     try:
@@ -103,6 +117,8 @@ def prepare_recovery_selection(order, *, prepare, pool, primary_query, authoriza
         parent()
         return baseline
     parent()
+    if not allow_deferred or ordinary.score_status != "model":
+        return replace(baseline, omitted_optional=omitted(optional_ids, "scorer_ineligible"))
     optional = None
     reason = "optional_time_reserve"
     child_deadline = deadline - NATIVE_CLOSURE_RESERVE_MS / 1000
@@ -112,7 +128,7 @@ def prepare_recovery_selection(order, *, prepare, pool, primary_query, authoriza
     if optional_time:
         try:
             with source_preparation_scope(child_deadline, clock, turn_budget):
-                optional = run(order.optional_ids, child_deadline, pool.fused_scores)
+                optional = run(optional_ids, child_deadline, pool.fused_scores)
         except ContextLimited as exc:
             if type(exc) is not ContextLimited or str(exc) != "request_tokenization_limit":
                 raise
@@ -141,12 +157,13 @@ def prepare_recovery_selection(order, *, prepare, pool, primary_query, authoriza
     kept = {candidate.chunk_id for candidate in candidates}
     if any(candidate.chunk_id not in kept for candidate in baseline.prepaid_selection.candidates):
         raise SourceScopeUnavailable("recovery_source_changed")
-    omissions = omitted((pk for pk in order.optional_ids if pk not in kept), reason)
+    omissions = omitted((pk for pk in optional_ids if pk not in kept), reason)
     relevance = normalize_relevance_scores(tuple(candidate.raw_score for candidate in candidates))
     # Failed expansion has no vote in ordinary fallback or constant-score ties.
     # A scored combined pool retains its existing mixed-pool tie-break ranks.
-    optional_retained = any(pk in kept for pk in order.optional_ids)
-    ranks = {pk: rank for rank, pk in enumerate(by_id if optional_retained else order.ordinary_ids, 1)}
+    optional_retained = any(pk in kept for pk in optional_ids)
+    scoped_retained = any(pk in kept for pk in order.scoped_only_ids) if neutral else optional_retained
+    ranks = full_ranks if scoped_retained else fallback_ranks
     candidates = tuple(replace(candidate, relevance=value, fused_rank=ranks[candidate.chunk_id])
                        for candidate, value in zip(candidates, relevance))
     status = "partial_model_ranked" if omissions else "model"
@@ -154,7 +171,7 @@ def prepare_recovery_selection(order, *, prepare, pool, primary_query, authoriza
         ordinary.reused_pairs + (optional.reused_pairs if optional else 0),
         turn_budget.pairs_used["final"] - pairs_before,
         max(0, (clock() - start) * 1000),
-        "optional_recovery_pruned" if omissions else None,
+        limited_reason if omissions else None,
         acquired_count=len(pool.rows), omitted_optional=omissions)
     if optional_retained:
         try:
@@ -173,10 +190,10 @@ def prepare_recovery_selection(order, *, prepare, pool, primary_query, authoriza
             candidates=tuple(candidate for candidate in ordinary.candidates if candidate.chunk_id in kept),
             new_pairs=turn_budget.pairs_used["final"] - pairs_before,
             scoring_duration_ms=max(0, (clock() - start) * 1000),
-            omitted_optional=omitted(order.optional_ids, reason))
+            omitted_optional=omitted(optional_ids, reason))
     parent()
-    publish("selection_optional_recovery", {
-        "acquired_count": len(pool.rows), "ordinary_count": len(order.ordinary_ids),
+    publish("selection_native_preparation" if neutral else "selection_optional_recovery", {
+        "acquired_count": len(pool.rows), "ordinary_count": len(ordinary_ids),
         "retained_count": len(result.candidates), "scored_count": len(result.candidates),
         "omitted_count": len(result.omitted_optional), "status": result.score_status,
     })

@@ -141,6 +141,10 @@ async def preservation_turn(consumer, *, max_func_calls):
             budget.remaining_ms() / 1000,
         )
         authorized = isinstance(runtime, SourceRuntime) and runtime.authorization is not None
+        if authorized:
+            from .rag_external_preparation import native_tool_preparation
+
+            turn.retrieval_preparation = lambda message: native_tool_preparation(consumer, message)
         with (
             source_runtime_scope(runtime) if authorized else nullcontext(),
             bind_turn(turn),

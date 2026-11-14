@@ -18,14 +18,15 @@ def test_expired_graph_uses_one_fresh_closure_and_no_acquisition_inference(
     with native_case(monkeypatch, graph_on=graph_on) as case:
         before = case.source.budget.pairs_used.copy()
         result = run_current_or_native(case)
-        assert result.final_rows[2]
-        assert len(case.full_checks) == 2
-        assert case.fetched == []
+        assert len(result.final_rows[2]) == 45
+        assert len(case.full_checks) == (4 if graph_on else 2)  # Read fence + finalizer.
+        assert set(case.fetched) == {r.pk for r in result.final_rows[2]} - {
+            r.pk for r in case.snapshot.baseline_candidates}
         assert case.inference == []
         assert case.source.budget.pairs_used == before
         assert result.ranking.rerank_status == "unavailable"
         assert result.score_set is None or result.score_set.scores == ()
-        assert len(owner_queries(case)) == 2
+        assert len(owner_queries(case)) == (4 if graph_on else 2)
 
 
 def test_failed_graph_never_enters_acquisition_adapter(monkeypatch):
@@ -35,23 +36,27 @@ def test_failed_graph_never_enters_acquisition_adapter(monkeypatch):
 
 
 @pytest.mark.parametrize("expired", [False, True])
-def test_failure_hands_off_whole_initial_pool_without_top_up(
+def test_failure_retains_initial_pool_and_only_deadline_completes(
     monkeypatch, expired
 ):
     with native_case(monkeypatch, expired=expired) as case:
         baseline = case.snapshot.baseline_candidates
+        initial = {row.pk for row in baseline}
         before = case.source.budget.text_used.copy()
         result = run_current_or_native(case)
-        assert case.source.budget.sources_used == 25
-        assert case.source.budget.text_used == before and case.fetched == []
-        # A failed graph retains every already hydrated baseline candidate for
-        # final relevance scoring, without spending the reserved body capacity.
-        assert tuple(result.final_rows[2]) == baseline
-        assert result.ranking.combined_candidates == tuple(result.final_rows[2])
-        assert result.hybrid_pool == tuple(result.final_rows[2])
-        assert result.preclosure_pool_count == 25
+        rows = tuple(result.final_rows[2])
+        assert case.source.budget.sources_used == len(rows) == (45 if expired else 25)
+        assert tuple(row for row in rows if row.pk in initial) == baseline
+        assert set(case.fetched) == {row.pk for row in rows} - initial
+        assert (case.source.budget.text_used["materialized"] > before["materialized"]) is expired
+        if not expired:
+            assert case.source.budget.text_used == before
+        assert result.ranking.combined_candidates == result.hybrid_pool == rows
+        assert result.preclosure_pool_count == len(rows)
         assert result.materialized_union_status == "unavailable"
-        assert result.graph_diagnostics["source_admission"]["fallback_top_up_skipped"]
+        admission = result.graph_diagnostics["source_admission"]
+        assert admission["fallback_top_up_skipped"] is not expired
+        assert admission["fallback_top_up_count"] == (20 if expired else 0)
         assert not case.events and result.score_set is None
 
 
@@ -177,7 +182,7 @@ def test_fresh_requested_check_is_not_duplicated_after_graph(monkeypatch, graph_
         assert checks == ([False, False] if graph_on else [True])
 
 
-@pytest.mark.parametrize("elapsed,want", [(6.0, 2750), (9.0, 0)])
+@pytest.mark.parametrize("elapsed,want", [(6.0, 250), (9.0, 0)])
 def test_clock_translation_keeps_original_tail_and_never_tops_up(
     monkeypatch, elapsed, want
 ):
@@ -197,6 +202,7 @@ def test_clock_translation_keeps_original_tail_and_never_tops_up(
         assert result.final_rows[2] and case.operation.deadline == deadline == 1010
         assert case.source.budget.sources_used == 25 and case.fetched == []
         if want:
+            # Four seconds remain; ordinary completion + closure reserve 3.75s.
             assert len(seen) == 1 and want - 2 <= seen[0] <= want
         else:
             assert seen == [] and case.driver.calls == []
@@ -210,9 +216,14 @@ def test_rrf_keeps_exact_captured_order_without_manufactured_scores(
         # Existing fusion specifies order, never an early semantic cutoff.
         expected = tuple(c.chunk_id for c in case.scope.fusion_v2.candidates)
         result = run_current_or_native(case)
-        assert tuple(row.pk for row in result.final_rows[2]) == expected
+        actual = tuple(row.pk for row in result.final_rows[2])
+        assert tuple(pk for pk in actual if pk in expected) == expected
+        assert actual == tuple(c.chunk_id for c in case.scope.fusion_v2.candidates)
+        assert len(actual) == case.source.budget.sources_used == 45
+        assert len(case.fetched) == (20 if graph_on else 0)
         assert result.ranking.score_set is None and result.score_set is None
-        assert case.source.budget.pairs_used["acquisition"] == 0
+        assert case.source.budget.pairs_used == {"acquisition": 0, "final": 0}
+        assert not case.inference
 
 
 def test_final_window_scoring_still_admits_under_same_reserved_budget(monkeypatch):

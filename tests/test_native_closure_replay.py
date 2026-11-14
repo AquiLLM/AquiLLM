@@ -299,9 +299,9 @@ def test_effective_config_reports_requested_schedule_version_and_reserve(monkeyp
 
     for mode, enabled, version, reserve, recovery_ms in (
         ("scored", "1", None, None, None),
-        ("native_closure", None, "native-closure-v2", 1250, 0),
-        ("native_closure", "false", "native-closure-v2", 1250, 0),
-        ("native_closure", "1", "native-closure-v3", 1250, 2500),
+        ("native_closure", None, "native-closure-v4", 1250, 0),
+        ("native_closure", "false", "native-closure-v4", 1250, 0),
+        ("native_closure", "1", "native-closure-v5", 1250, 2500),
     ):
         monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", mode)
         if enabled is None:

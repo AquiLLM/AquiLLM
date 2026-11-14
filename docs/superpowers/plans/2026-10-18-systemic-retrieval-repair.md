@@ -23,7 +23,52 @@
 - Root alone runs SSH, shared database tests, model calls and GPU experiments; serialize these resources.
 - Keep the serving development stack unchanged while isolated candidate verification is incomplete.
 
-## Current closure work: November 12
+## Current closure work: November 14
+
+The retained-source same-owner rehearsal is now complete in isolated scratch:
+the real PDF, dependent figures and permissions survived the native transition,
+an injected activation failure rolled back, and a fresh generation restored the
+original canonical representation. Historical citation checks and current
+permission checks passed. Dense and graph dispatch remained held, so this is
+source/history verification, not readiness or answer-quality acceptance. The
+[retained-source result](https://github.com/AquiLLM/AquiLLM-internal/blob/c0c71f8ec894eba66216dc57b85eba655f47b521/research/architectural-ablations-2026-11-05/results-nov12-retained-real-third.md)
+preserves the failed attempts and scope limitations.
+
+A subsequent read-only metadata capture covered all 31 owners of the source
+collection (30 PDFs and one raw-text owner), with matching before/after records.
+It confirmed the deployed legacy extraction identity and captured the ontology,
+resolver policies and configured embedding signature. It does not attest live
+embedding responses or complete graph readiness. The
+[metadata result](https://github.com/AquiLLM/AquiLLM-internal/blob/89c958acb7a1b9bf0ed1aedb14acce03f065cb00/research/architectural-ablations-2026-11-05/results-nov14-graph-support-third.md)
+is recorded separately from quality measurements.
+
+Native retrieval now completes ordinary candidates after an owned graph-child
+deadline within the original source, time and work limits. Exact accepted
+initial evidence and its authorized answer request are prepared before added
+passages can exhaust shared work. Affordable, more relevant additions can still
+win; abandoned scoped votes cannot influence an ordinary fallback. Both direct
+acquisition and model-initiated initial tools use the accepted-action lifecycle.
+Busy ownership checks and cancellation cleanup do not wait on a native worker's
+runtime lock. Main-model synthesis and fresh publication checks remain intact.
+
+Final local verification passed 147 combined preparation, request, normal-tool,
+ranking and cancellation checks, plus 22 graph-deadline/source-capacity checks.
+Earlier compatibility batches passed 53 focused and 59 closure/race checks; the
+replay version fix passed 81 checks. Import, file-size, logging and whitespace
+gates pass. Independent aggregate review found no material introduced blocker.
+Failed tests and corrected fixture/setup attempts remain recorded separately.
+These are implementation checks with controlled inference, not live retrieval
+quality or deployment acceptance. The separately registered treatment comparison,
+current-head CI and serving rollout remain pending.
+
+- [x] Verify retained-source same-owner history, permissions and rollback in scratch.
+- [x] Capture the complete source-collection metadata needed for background checks.
+- [x] Fix and locally verify ordinary-completion answer preparation without increasing limits.
+- [ ] Verify new dense/document-graph readiness and old-generation invalidation.
+- [ ] Run the separately registered old/new retrieval comparison and review answers.
+- [ ] Complete independent quality acceptance, CI and development rollout.
+
+### Earlier closure evidence
 
 The [retained-PDF controls](https://github.com/AquiLLM/AquiLLM-internal/blob/a624d55262783d165c7248f8b673297eeb1f0d9c/research/architectural-ablations-2026-11-05/results-nov12-legacy-parity.md)
 now distinguish the current PDF model method from the actual historical upload
@@ -68,7 +113,7 @@ unchanged. These checks do not measure retrieval or answer-quality gains.
 - [x] Implement and review current PDF adoption and its SQL/history guards.
 - [x] Verify bounded POSIX source/worker behavior and ordinary ingestion compatibility.
 - [x] Verify synthetic same-owner citation transition and compensating rollback.
-- [ ] Rehearse one retained-source owner with its exact dependent figure/permission scope.
+- [x] Rehearse one retained-source owner with its exact dependent figure/permission scope.
 - [ ] Verify source fidelity and new dense/graph readiness before opening retrieval.
 - [ ] Evaluate preparation changes with separately registered controls, then complete rollout.
 

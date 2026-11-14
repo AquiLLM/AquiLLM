@@ -25,6 +25,7 @@ _FALLBACK_REASONS = frozenset(
         "deadline",
         "incomplete_scores",
         "optional_recovery_pruned",
+        "preparation_deferred",
     }
 )
 _PROFILE_VERSIONS = frozenset({"adaptive-evidence-v1-minmax-1e-9"})

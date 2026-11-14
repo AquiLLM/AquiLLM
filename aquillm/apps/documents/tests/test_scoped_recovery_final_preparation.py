@@ -105,7 +105,7 @@ def test_optional_scoped_recovery_preserves_ordinary_final_preparation(
             assert any(len(row.content) >= 5000 for row in rows) is not cheap
             assert closure.graph_diagnostics["source_admission"]["fallback_top_up_count"] == 20
         else:
-            assert len(rows) == 25
+            assert len(rows) == 45  # Default-off completion adds ordinary evidence.
         assert case.operation.deadline == old_deadline and case.operation.active()
         winner = next((row for row in rows if row.pk not in ordinary
                        and row.content not in ordinary_text), None) if cheap else None

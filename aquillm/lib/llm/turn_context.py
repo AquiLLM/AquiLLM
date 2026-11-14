@@ -21,6 +21,7 @@ class TurnContext:
     worker_cleanup: object = None
     answer_publication: AnswerPublicationContextV1 | None = None
     initial_source_limit: int | None = None
+    retrieval_preparation: object = None
 
 
 def current_turn():
@@ -123,10 +124,17 @@ async def call_tool_async(llm, message):
             if state and is_retrieval_tool(message.tool_call_name)
             else nullcontext()
         ):
-            return await asyncio.wait_for(
-                asyncio.to_thread(llm.call_tool, message),
-                timeout,
-            )
+            with (state.retrieval_preparation(message)
+                  if state and state.retrieval_preparation and is_retrieval_tool(message.tool_call_name)
+                  else nullcontext(None)) as accept:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(llm.call_tool, message),
+                    timeout,
+                )
+                if accept is not None:
+                    check_turn_active()
+                    accept(result)
+                return result
     except asyncio.CancelledError:
         if state:
             state.budget.close("cancelled")
