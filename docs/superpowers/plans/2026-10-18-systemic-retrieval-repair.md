@@ -25,6 +25,65 @@
 
 ## Current closure work: November 14
 
+Work is paused at the user's request after completing the current diagnostics.
+Continue on `codex/graph-development-repair` and draft PR #247. The latest tested
+product/test head is `703310bf0e015860e11e3ee3207374dbe0d5beb9`; its backend,
+frontend, isolated-projection, hygiene and title CI passed. Development head
+`2439ca866fa353fc51e9b43b8e8ecf9bc78e1702` is already an ancestor. This checkpoint
+changes documentation only; no merge or serving deployment occurred.
+
+The registered eight-run Q4/Q7 ABBA comparison is complete. All four Q4 answers
+still missed the mapped catalog comparison; all four Q7 answers retained the
+correct core value, with the optional discrepancy omitted. None of the runs
+accepted the new native preparation path, so they do not demonstrate a quality
+gain from that fix. Graph candidates were produced but none reached final
+selection; this was not a graph-on/off comparison. The
+[comparison record](https://github.com/AquiLLM/AquiLLM-internal/blob/0e8fc3034e73d97da6a46cdc68d5a2ca9a32a34d/research/architectural-ablations-2026-11-05/results-nov14-baseline-abba.md)
+preserves all eight outcomes and the attribution limits.
+
+Follow-up Q4 diagnostics locate a concrete acquisition gap. The SQL audit
+reproduced native global top-17 dense results and found the four mapped witness
+chunks outside those global prefixes. A separately registered native check then
+returned all four through ordinary channels scoped to already discovered
+documents. It used three parents selected from recorded dense-branch order and
+the same two query variants. All six metadata captures completed in 13.269
+seconds of measured work, using 159,034 of 250,000 materialized codepoints under
+the original 30-second ledger; outer transport took 31.906 seconds. Source and
+owner observations were unchanged. Both fresh query vectors matched the SQL
+audit; original ABBA vector equality was not observed.
+The [native reachability result and independent review](https://github.com/AquiLLM/AquiLLM-internal/blob/a9555e18e7dc104711f262cc8e0d72f72c3d6974/research/architectural-ablations-2026-11-05/results-nov14-q4-native-reachability.md)
+preserve the exact protocol, receipts, all six cells and their limits.
+
+This proves document-scoped metadata reachability. It does not prove final
+evidence admission, reranking, answer correctness or a graph-caused improvement.
+No production parent-routing policy was added. The next retrieval step is a
+general bounded follow-up design that preserves useful global evidence, followed
+by source hydration, selection and main-model answer checks with unrelated
+counterexamples and held-out evaluation. Neither a benchmark-specific parent
+list nor a larger global candidate cap is an accepted solution.
+
+The separate native PDF dense/document-graph rehearsal remains incomplete.
+Its third attempt passed scratch-schema and authenticated model-endpoint
+preflight, then failed in source startup. Subsequent diagnosis identified a
+replayed configuration profile and a private observer restriction blocking the
+HTTP client's read-only library discovery. The source-profile correction and
+second metadata observer are prepared and independently reviewed; 11 focused
+local controls pass and all 42 input hashes match. Actual Linux startup and
+storage-route admission for that second observer have not run. All disposable
+resources from completed attempts were removed. The frozen study stores remain
+available; their existing schema migration must not be reapplied.
+The [prepared source-route repair](https://github.com/AquiLLM/AquiLLM-internal/blob/a9555e18e7dc104711f262cc8e0d72f72c3d6974/research/architectural-ablations-2026-11-05/nov14-source-route-local-discovery-fix.md)
+records the failed first attempt and the unexecuted second protocol separately.
+
+Resume with the registered second metadata-only source-route check, review its
+actual outcome and cleanup, and only then prepare the next native PDF component
+attempt. Full collection readiness, independent quality acceptance, human review
+and development rollout remain open. Private receipts, failed attempts, exact
+resume commands and reviews are retained in AquiLLM-internal's
+[architectural ablation record](https://github.com/AquiLLM/AquiLLM-internal/tree/main/research/architectural-ablations-2026-11-05).
+
+### Implementation and earlier verification
+
 The retained-source same-owner rehearsal is now complete in isolated scratch:
 the real PDF, dependent figures and permissions survived the native transition,
 an injected activation failure rolled back, and a fresh generation restored the
@@ -58,15 +117,18 @@ replay version fix passed 81 checks. Import, file-size, logging and whitespace
 gates pass. Independent aggregate review found no material introduced blocker.
 Failed tests and corrected fixture/setup attempts remain recorded separately.
 These are implementation checks with controlled inference, not live retrieval
-quality or deployment acceptance. The separately registered treatment comparison,
-current-head CI and serving rollout remain pending.
+quality or deployment acceptance. The subsequent registered treatment comparison
+and CI outcomes are recorded above; serving rollout remains pending.
 
 - [x] Verify retained-source same-owner history, permissions and rollback in scratch.
 - [x] Capture the complete source-collection metadata needed for background checks.
 - [x] Fix and locally verify ordinary-completion answer preparation without increasing limits.
 - [ ] Verify new dense/document-graph readiness and old-generation invalidation.
-- [ ] Run the separately registered old/new retrieval comparison and review answers.
-- [ ] Complete independent quality acceptance, CI and development rollout.
+- [x] Run the separately registered old/new retrieval comparison and review answers.
+- [x] Complete CI on the tested product/test head.
+- [x] Distinguish global cutoff from native document-scoped metadata reachability.
+- [ ] Validate a general scoped follow-up policy through final evidence and answers.
+- [ ] Complete independent quality acceptance, human review and development rollout.
 
 ### Earlier closure evidence
 
