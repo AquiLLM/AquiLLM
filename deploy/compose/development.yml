@@ -11,6 +11,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      - KG_GRAPH_REMEDIATION_MODE=${KG_GRAPH_REMEDIATION_MODE:-legacy}
       - APP_EMBED_FALLBACK_POLICY=local-only
       - RAG_DIRECT_ENABLED=${RAG_DIRECT_ENABLED:-1}
       - C_FORCE_ROOT=1
@@ -113,6 +114,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      - KG_GRAPH_REMEDIATION_MODE=${KG_GRAPH_REMEDIATION_MODE:-legacy}
       - APP_EMBED_FALLBACK_POLICY=local-only
       - C_FORCE_ROOT=1
       - RUN_CELERY_IN_WEB=0
@@ -172,6 +174,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       APP_EMBED_FALLBACK_POLICY: local-only
       POSTGRES_HOST: db
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
@@ -260,6 +263,7 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       APP_EMBED_FALLBACK_POLICY: local-only
       SECRET_KEY: schema-worker-only
       DJANGO_DEBUG: "0"
@@ -387,6 +391,7 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment: &kg-projection-env
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       APP_EMBED_FALLBACK_POLICY: local-only
       SECRET_KEY: ${SECRET_KEY:-}
       GOOGLE_OAUTH2_CLIENT_ID:

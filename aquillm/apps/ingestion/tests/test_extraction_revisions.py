@@ -123,11 +123,12 @@ def test_generic_text_projection_is_explicitly_partial_without_invented_structur
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize('format', ['docx', 'xlsx'])
+@pytest.mark.parametrize('format', ['docx', 'xlsx', 'pdf'])
 def test_parser_policy_v2_preserves_frozen_v1_identity_and_replays_both(artifact_storage, format):
     import io
     from aquillm.ingestion.parsers import extract_text_payloads
     from apps.ingestion.models import ExtractionRevision
+    from apps.ingestion.services.output_payloads import output_key
     from apps.ingestion.services.source_artifacts import bind_payload_source
     stream = io.BytesIO()
     if format == 'docx':
@@ -138,7 +139,7 @@ def test_parser_policy_v2_preserves_frozen_v1_identity_and_replays_both(artifact
         _wrap_docx_control(doc.add_paragraph('ControlledRevenue 93017')._p)
         doc.add_paragraph('After')
         doc.save(stream)
-    else:
+    elif format == 'xlsx':
         from openpyxl import Workbook
         from openpyxl.chart import BarChart, Reference
         book = Workbook()
@@ -150,18 +151,32 @@ def test_parser_policy_v2_preserves_frozen_v1_identity_and_replays_both(artifact
         book.active.add_chart(chart, 'D1')
         book.save(stream)
         book.close()
+    else:
+        import fitz
+        with fitz.open() as doc:
+            doc.new_page().insert_text((30, 30), 'photometric\nphoto-\nmetric')
+            stream.write(doc.tobytes())
     service, _ = modules()
     payload = extract_text_payloads('policy.' + format, stream.getvalue())[0]
     current = payload.extraction
     assert current.parser_key == f'native-{format}-ordered-v2'
     # These capture the original v1 behavior for the exact same source bytes:
-    # body controls were omitted, and a cell-only chart extraction was complete.
+    # body controls were omitted, chart extraction was complete, and PDF text
+    # retained line-break hyphenation.
     if format == 'docx':
         legacy = replace(current, parser_key='native-docx-ordered-v1', canonical_text='Before\nAfter',
                          elements=(current.elements[0], replace(current.elements[-1], element_key='element-2', start=7, end=12)))
-    else:
+    elif format == 'xlsx':
         legacy = replace(current, parser_key='native-xlsx-ordered-v1', quality='complete', issue_codes=())
+    else:
+        raw = 'photometric\nphoto-\nmetric'
+        assert current.canonical_text == 'photometric\nphotometric'
+        assert len(current.elements) == 1 and current.elements[0].end == len(current.canonical_text)
+        legacy = replace(current, parser_key='native-pdf-ordered-v1', canonical_text=raw,
+                         elements=(replace(current.elements[0], end=len(raw)),))
     occurrence = bind_payload_source(payload, using='default')
+    assert output_key(1, occurrence.occurrence_key, legacy.parser_key, 'text', 'body') != output_key(
+        1, occurrence.occurrence_key, current.parser_key, 'text', 'body')
     old_id = service.persist_extraction_revision(occurrence, legacy, using='default')
     new_id = service.bind_payload_extraction(payload, using='default')
     assert new_id != old_id

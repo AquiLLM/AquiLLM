@@ -14,7 +14,28 @@
 
 **Execution update:** The follow-up user request authorizes implementation and a review PR. Apply the [execution decisions](../../runbooks/rag-remediation-execution-decisions.md), which settle preflight contract gaps; task completion still requires recorded evidence.
 
-## Execution status — 2026-10-15
+## Current status — 2026-11-05 UTC
+
+Use the [systemic repair closure checklist](2026-10-18-systemic-retrieval-repair.md#current-closure-work-november-5)
+and [PR247](https://github.com/AquiLLM/AquiLLM/pull/247) for current execution.
+The October 15 status below is historical: graph retrieval now executes on
+development, while the latest candidate is verified in an isolated container.
+The original 21 feature implementations still do not close all 25 tasks.
+
+| Remaining gate | Concrete next evidence |
+| --- | --- |
+| Source/index migration (F01/F02, I5/I6) | Verify retained inputs and exact dense receipts; run candidate writers; review structural fidelity and historical-citation rollback before replacing legacy generations. |
+| Contextual graph identity (F05, G1/G6) | Independently evaluate contextual identity before background rebuild. Existing v2 retrieval still consumes legacy identity graphs. |
+| Evidence selection and answers (F06/F10, A2/A3/R5) | Measure generic selection behavior with exact treatment bindings; obtain current-answer support labels. Exposed study regressions cannot substitute for independent holdouts. |
+| Graph failure diagnosis (F13/F14) | Preserve bounded phase/reason diagnostics for actual failures; later successful calls do not explain the historical intermittent failure. |
+| Quality and release (F19, P2/P3) | Complete independent quality/identity and operational cohorts, human review, and final cutover/rollback evidence. Optional treatments remain disabled without their activation evidence. |
+
+Current fixes retain local vLLM model-written answers, existing authorization
+and source budgets. The comparison-specific experiment was removed after
+broader counterexamples; no production question IDs, expected study answers or
+forced graph-result quotas are part of its replacement.
+
+## Historical execution status — 2026-10-15
 
 The original program contains **21 feature tasks and four coordination/acceptance tasks**. All 21 feature tasks have mapped implementation and independent source-review evidence in the [release manifest](../../audits/rag-remediation-implementation/release-manifest.json). That candidate is an ancestor of current development and was integrated through [PR244](https://github.com/AquiLLM/AquiLLM/pull/244). This establishes implementation coverage; it does not close every task's live data, quality or activation requirements.
 

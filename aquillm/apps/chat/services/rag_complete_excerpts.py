@@ -3,7 +3,7 @@
 import re
 
 _BOUNDARY = re.compile(r"(?<=[.!?])\s+|\n[ \t]*\n")
-_UNSAFE = re.compile(r"[<>\[\]`]|!\(|[\x00-\x08\x0b-\x1f]")
+_UNSAFE = re.compile(r"[\x00-\x08\x0b-\x1f]")
 
 
 def partition_complete_source(text, *, slots, codepoints):

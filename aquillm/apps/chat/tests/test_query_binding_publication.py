@@ -154,24 +154,58 @@ async def test_optional_transport_failure_keeps_current_original_partial_evidenc
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("source", [False, True])
-async def test_original_three_second_optional_timeout_preserves_current_partial_evidence(
+async def test_configured_optional_timeout_preserves_current_partial_evidence(
     query_corpus, score_transport, monkeypatch, source,
 ):
     import asyncio
+    from contextvars import copy_context
+
     from apps.chat.services import rag_preservation_turn
+    from apps.chat.services.rag_action_tools import admit_tool_action
+    from lib.retrieval.operation import capture_operation_bound
+
     controls(monkeypatch, "vocabulary", source)
     original, cancelled = rag_preservation_turn.execute_action, []
+    real_acquire = rag_preservation_turn.acquire_evidence
+    contexts, operations, late = [], [], []
+
     async def execute(consumer, action, **kwargs):
         if action.query == QUESTION:
-            return await original(consumer, action, **kwargs)
+            result = await original(consumer, action, **kwargs)
+            # Three seconds is an admission floor, not an action deadline.
+            # Narrow only the follow-up; retain the real initial search.
+            monkeypatch.setenv("TOOL_CALL_TIMEOUT_SECONDS", "0.05")
+            return result
+        assert admit_tool_action(action.kind, action.query)
+        operation = capture_operation_bound(current_turn().budget)
+        assert operation is not None and 0 < operation.remaining_ms() <= 50
+        contexts.append(copy_context())
+        operations.append(operation)
         try:
-            await asyncio.sleep(3.1)
-            raise AssertionError("original three-second action timeout did not cancel")
+            await asyncio.Event().wait()
         except asyncio.CancelledError:
             cancelled.append(True)
             raise
+
+    async def acquire(*args, **kwargs):
+        acquired = await real_acquire(*args, **kwargs)
+        budget = kwargs["budget"]
+        assert acquired.stop_reason == "acquisition_timeout"
+        assert [attempt.outcome for attempt in acquired.attempts] == [
+            "completed",
+            "timeout",
+        ]
+        assert len(contexts) == len(operations) == 1 and budget.actions_used == 2
+        # Reject a late worker publication while the turn is still open.
+        assert budget.can_publish() and not operations[0].live
+        assert contexts[0].run(budget.publish, lambda: late.append(True)) is False
+        assert not late
+        return acquired
+
     monkeypatch.setattr(rag_preservation_turn, "execute_action", execute)
+    monkeypatch.setattr(rag_preservation_turn, "acquire_evidence", acquire)
     provider = QueryProvider(REWRITE)
     result = await run(query_corpus, provider, new_consumer(query_corpus))
     assert cancelled == [True] and len(provider.answers) == 1
-    assert result.answer._validated_answer.outcome == "partial" and result.stored != LIMITED_ANSWER
+    assert result.answer._validated_answer.outcome == "partial"
+    assert result.stored != LIMITED_ANSWER

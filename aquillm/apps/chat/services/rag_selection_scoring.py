@@ -55,7 +55,7 @@ def prepare_selection_candidates(
     turn_budget=None,
     source_mode=False,
     token_ceiling=3500,
-    source_windows=None,
+    source_windows=None, recovery_preflight=None,
 ) -> PreparedSelection:
     """Never widen pool membership or mix model and rank-derived scales."""
     if len(pool.rows) > 45:
@@ -64,6 +64,15 @@ def prepare_selection_candidates(
         deadline = min(
             deadline, clock() + turn_budget.scoring_remaining_ms("final") / 1000
         )
+    if source_mode:
+        from .rag_preparation_dispatch import prepare_ordered_selection
+        ordered = prepare_ordered_selection(prepare_selection_candidates, pool=pool,
+            primary_query=primary_query, authorization=authorization, deadline=deadline,
+            allow_new_scores=allow_new_scores, scorer=scorer, chunk_loader=chunk_loader,
+            clock=clock, turn_budget=turn_budget, source_mode=source_mode,
+            token_ceiling=token_ceiling, source_windows=source_windows, recovery_preflight=recovery_preflight)
+        if ordered is not None:
+            return ordered
 
     def hydrate():
         if source_mode:

@@ -20,6 +20,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       RAG_DIRECT_ENABLED: ${RAG_DIRECT_ENABLED:-1}
       PORT: ${PORT:-8080}
       POSTGRES_HOST: db
@@ -100,6 +101,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       POSTGRES_HOST: db
       STORAGE_HOST: storage:9000
       DJANGO_DEBUG: ${DJANGO_DEBUG:-1}
@@ -153,6 +155,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       POSTGRES_HOST: db
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
       KG_BUILD_ENABLED: ${KG_BUILD_ENABLED:-0}
@@ -234,6 +237,7 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       SECRET_KEY: schema-worker-only
       DJANGO_DEBUG: "0"
       GOOGLE_OAUTH2_CLIENT_ID: disabled
@@ -366,6 +370,7 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       SECRET_KEY: ${SECRET_KEY:-}
       GOOGLE_OAUTH2_CLIENT_ID:
       GOOGLE_OAUTH2_CLIENT_SECRET:

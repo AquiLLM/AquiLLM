@@ -49,7 +49,7 @@ async def test_model_proposal_uses_original_ledger_and_explicit_provider_bounds(
     async def get_message(**kwargs):
         assert budget.planner_calls == 1
         sent.append(kwargs)
-        return SimpleNamespace(text='{"rewrite":"Explain A_12?"}')
+        return SimpleNamespace(text='{"rewrite":"Explain A_12?"}', stop_reason="stop")
 
     llm = SimpleNamespace(base_args={"model": "synthetic"}, get_message=get_message)
     rows = await prepare_in_original_scope("What is A_12?", llm=llm, runtime=runtime)
@@ -57,7 +57,7 @@ async def test_model_proposal_uses_original_ledger_and_explicit_provider_bounds(
     assert len(rows) == (2 if exhausted == "none" else 1)
     assert len(sent) == (1 if exhausted == "none" else 0)
     if sent:
-        assert sent[0]["max_tokens"] == 512
+        assert sent[0]["max_tokens"] == budget.limits.planner_output_tokens
         assert sent[0]["model"] == "synthetic"
     assert budget.planner_calls == (2 if exhausted == "planner" else 0 if exhausted == "actions" else 1)
     assert await prepare_in_original_scope("What is A_12?", llm=llm, runtime=runtime) == rows
@@ -74,7 +74,7 @@ async def test_rejected_and_unavailable_model_outputs_preserve_original(monkeypa
     for runtime, output in zip(admitted_query_runtimes, ('{"rewrite":"Models used X in 2024"}', 'not json')):
 
         async def get_message(**_kwargs):
-            return SimpleNamespace(text=output)
+            return SimpleNamespace(text=output, stop_reason="stop")
 
         rows = await prepare_in_original_scope("Models did NOT use X in 2024",
             llm=SimpleNamespace(base_args={}, get_message=get_message), runtime=runtime)

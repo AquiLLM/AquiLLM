@@ -6,7 +6,8 @@ import unicodedata
 
 from apps.collections.services.vocabulary_contracts import digest, normalized
 
-POLICY = "faithful-query-proposals-v2"
+# V3 binds the bounded generation contract; deterministic filters are unchanged.
+POLICY = "faithful-query-proposals-v3"
 _NEGATION = re.compile(r"\b(?:not|no|never|without|exclude[sd]?|except|neither|nor)\b|\b\w+n['’]t\b", re.I)
 _PROTECTED = re.compile(
     r"\"[^\"]*\"|'[^']*'|“[^”]*”|‘[^’]*’|\b[\w.+/-]*\d[\w.+/-]*\b|\b\w+[_/-]\w+\b|\b[A-Z]{2,}\b|\b[A-Z]\b|(?:\d+(?:\.\d+)?)\s*(?:km|cm|mm|kg|mg|ms|Hz|MHz|GHz|m|s|g|K|°C|%)\b|\b(?:first|second|third|fourth|fifth|last|former|latter)\b",

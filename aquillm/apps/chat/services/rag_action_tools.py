@@ -111,11 +111,13 @@ def source_views(results):
     runtime = current_source_runtime()
     if runtime is None:
         return ()
-    records = {
-        r["chunk_id"]: r
-        for result in results
-        for r in result.get("_source_provenance", ())
-    }
+    records, source_order = {}, {}
+    for result in results:
+        for record in result.get("_source_provenance", ()):
+            records[record["chunk_id"]] = record
+            source_order.setdefault(
+                (record["chunk_id"], record["source_fingerprint"]), len(source_order)
+            )
     sources = {}
     with runtime.lock:
         for row in runtime.cache.values():
@@ -126,4 +128,11 @@ def source_views(results):
                     row.pk, str(row.doc_id), row.chunk_number, revision, row.content
                 )
                 sources[source.identity] = source
-    return tuple(sources.values())
+    return tuple(
+        sorted(
+            sources.values(),
+            key=lambda source: source_order[
+                (source.chunk_id, source.source_fingerprint)
+            ],
+        )
+    )

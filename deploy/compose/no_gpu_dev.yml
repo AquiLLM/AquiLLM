@@ -69,6 +69,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       <<: *common-env
       KG_QUERY_EXTRACTOR_URL: http://knowledge-graph-query-extractor:8000
       KG_QUERY_EXTRACTOR_BEARER_TOKEN: ${KG_QUERY_EXTRACTOR_BEARER_TOKEN:-}
@@ -114,6 +115,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       <<: *common-env
       KG_MEMGRAPH_URI:
       KG_MEMGRAPH_DATABASE:
@@ -147,6 +149,7 @@ services:
     env_file:
       - ../../.env
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       <<: *common-env
       DJANGO_DEBUG: ${DJANGO_DEBUG:-0}
       KG_BUILD_ENABLED: ${KG_BUILD_ENABLED:-0}
@@ -193,6 +196,7 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       SECRET_KEY: schema-worker-only
       DJANGO_DEBUG: "0"
       GOOGLE_OAUTH2_CLIENT_ID: disabled
@@ -319,6 +323,7 @@ services:
     profiles: [knowledge-graph]
     restart: unless-stopped
     environment:
+      KG_GRAPH_REMEDIATION_MODE: ${KG_GRAPH_REMEDIATION_MODE:-legacy}
       SECRET_KEY: ${SECRET_KEY:-}
       GOOGLE_OAUTH2_CLIENT_ID:
       GOOGLE_OAUTH2_CLIENT_SECRET:

@@ -4,15 +4,22 @@ from types import SimpleNamespace
 
 import pytest
 from channels.db import database_sync_to_async
-from django.db import connections
 from django.contrib.auth import get_user_model
+from django.db import connections
 
 from apps.chat.services.rag_answer_publication import bind_legacy_answer_packet
 from apps.chat.services.rag_evidence import build_evidence_packet
 from apps.chat.services.rag_synthesis import synthesize_from_evidence
 from apps.chat.services.rag_turn import preservation_turn
 from apps.documents.services.source_loading import source_query_rows
-from aquillm.models import Collection, CollectionPermission, RawTextDocument, TextChunk
+from aquillm.message_adapters import save_conversation_to_db
+from aquillm.models import (
+    Collection,
+    CollectionPermission,
+    RawTextDocument,
+    TextChunk,
+    WSConversation,
+)
 from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.providers import visibility
 from lib.llm.turn_context import current_turn
@@ -35,7 +42,8 @@ class Model:
 
 
 @pytest.fixture
-def selected():
+def selected(request):
+    source = getattr(request, "param", SOURCE)
     user = get_user_model().objects.create_user(username="support-synthesis")
     collection = Collection.objects.create(name="Synthetic")
     CollectionPermission.objects.create(
@@ -43,14 +51,14 @@ def selected():
     )
     doc = RawTextDocument.objects.create(
         title="Synthetic source",
-        full_text=SOURCE,
+        full_text=source,
         collection=collection,
         ingested_by=user,
     )
     chunk = TextChunk.objects.create(
-        content=SOURCE,
+        content=source,
         start_position=0,
-        end_position=len(SOURCE),
+        end_position=len(source),
         chunk_number=0,
         doc_id=doc.id,
     )
@@ -60,7 +68,7 @@ def selected():
         "chunk_id": chunk.pk,
         "chunk": 0,
         "citation": citation,
-        "text": SOURCE,
+        "text": source,
     }
     return SimpleNamespace(
         consumer=SimpleNamespace(
@@ -71,7 +79,9 @@ def selected():
     )
 
 
-async def synthesize(model, selected, *, bound=True, empty=False, image=False):
+async def synthesize(
+    model, selected, *, bound=True, empty=False, image=False, persist=False
+):
     row = dict(selected.row)
     if image:
         row["image_url"] = "/aquillm/document_image/unbound-image/"
@@ -113,9 +123,9 @@ async def synthesize(model, selected, *, bound=True, empty=False, image=False):
                     TextChunk.objects.filter(pk=selected.row["chunk_id"]),
                     runtime=runtime, require_existing=True,
                 )
-                assert len(rows) == 1 and rows[0].content == SOURCE
+                assert len(rows) == 1 and rows[0].content == selected.row["text"]
                 assert runtime._frozen_retrieval_scope is scope
-                assert runtime.budget.text_used["materialized"] >= len(SOURCE)
+                assert runtime.budget.text_used["materialized"] >= len(selected.row["text"])
 
             await database_sync_to_async(acquire)()
             await bind_legacy_answer_packet(selected.consumer, packet)
@@ -126,6 +136,17 @@ async def synthesize(model, selected, *, bound=True, empty=False, image=False):
             await state.answer_publication.verify(
                 answer, content=result[-1].content, sink="persist"
             )
+            if persist:
+
+                def save_answer():
+                    db = WSConversation.objects.create(owner=selected.consumer.user)
+                    save_conversation_to_db(result, db)
+                    return db.db_messages.get(
+                        message_uuid=result[-1].message_uuid
+                    ).content
+
+                saved = await database_sync_to_async(save_answer)()
+                assert saved == result[-1].content
             assert runtime._frozen_retrieval_scope is scope
     finally:
         await database_sync_to_async(connections.close_all)()
@@ -134,13 +155,18 @@ async def synthesize(model, selected, *, bound=True, empty=False, image=False):
     return result, events
 
 
-async def test_usable_but_unvalidated_answer_becomes_exact_uncertain_excerpt(selected):
-    model = Model(f"Calibration divides by flat fields {selected.citation}.")
-    result, _ = await synthesize(model, selected)
+async def test_cited_model_paraphrase_reaches_stream_and_database_in_one_call(selected):
+    # The provider supplies the wording; citation validity does not promote its
+    # semantic support state or replace the answer with a deterministic excerpt.
+    draft = (
+        "The calibration method removes signatures using flat fields and dark "
+        f"frames {selected.citation}."
+    )
+    model = Model(draft)
+    result, events = await synthesize(model, selected, persist=True)
     assert model.complete_calls == 1
-    assert "uncertain" in result[-1].content
-    assert f"> {SOURCE} {selected.citation}" in result[-1].content
-    assert "divides by" not in result[-1].content
+    assert result[-1].content == draft
+    assert events[0]["content"] == draft
     assert result[-1]._validated_answer.outcome == "partial"
 
 
@@ -166,20 +192,27 @@ async def test_no_results_returns_scoped_notice_without_llm(selected):
     assert "does not establish" in result[-1].content
 
 
-async def test_figure_request_cannot_create_unvalidated_figure_claim(selected):
-    result, _ = await synthesize(
-        Model(f"The figure proves calibration {selected.citation}."), selected
-    )
-    assert "proves calibration" not in result[-1].content
+@pytest.mark.parametrize(
+    "draft",
+    [
+        "Calibration removes signatures.",
+        "Calibration removes signatures [doc:foreign chunk:9].",
+    ],
+)
+async def test_missing_or_invalid_citations_use_complete_source_fallback(selected, draft):
+    model = Model(draft)
+    result, _ = await synthesize(model, selected)
+    assert model.complete_calls == 1
     assert f"> {SOURCE} {selected.citation}" in result[-1].content
+    assert "doc:foreign" not in result[-1].content
+    assert result[-1]._validated_answer.outcome == "partial"
 
 
 async def test_no_figure_appended_when_not_requested(selected):
-    result, _ = await synthesize(
-        Model(f"Calibration uses flat fields {selected.citation}."), selected
-    )
+    draft = f"Calibration uses flat fields {selected.citation}."
+    result, _ = await synthesize(Model(draft), selected)
     assert "![" not in result[-1].content
-    assert f"> {SOURCE} {selected.citation}" in result[-1].content
+    assert result[-1].content == draft
 
 
 async def test_model_selected_image_without_immutable_authority_is_limited(selected):

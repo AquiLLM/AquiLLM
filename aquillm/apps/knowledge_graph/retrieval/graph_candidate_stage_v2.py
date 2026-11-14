@@ -38,6 +38,7 @@ class _GraphSourceStage:
         self.final_keys = frozenset()
         self._active = True
         self._seed_validation = None
+        self.failure_phase = "preparation"
 
     def seed_validation(self, snapshot, check, *, runtime=None, selected=None):
         from .closed_graph_seed_validation import _ClosedSeedValidation

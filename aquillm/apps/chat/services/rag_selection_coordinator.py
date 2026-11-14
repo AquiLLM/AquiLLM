@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any
 
@@ -91,6 +91,9 @@ def selection_metric_fields(config, turn: SelectionTurn | None, packet) -> dict:
     base = {"selection_mode": config.mode, "selection_config_error": config.error}
     if turn is None:
         return base
+    if turn.prepared.acquired_count is not None:
+        base.update(acquired_count=turn.prepared.acquired_count,
+                    omitted_optional_count=len(turn.prepared.omitted_optional))
     proposed = turn.selection.candidates
     return base | {
         "selector_ms": turn.selection_duration_ms,
@@ -124,6 +127,7 @@ async def coordinate_selection(
     revalidate_fn,
     request_conversation=None,
     llm_if=None,
+    recovery_request=None,
 ):
     """Run opt-in selection on DB workers; shadow never changes served evidence."""
     try:
@@ -135,6 +139,8 @@ async def coordinate_selection(
             if ceiling <= 0:
                 raise SourcePreparationLimited("no evidence context capacity")
             kwargs = {"token_ceiling": ceiling}
+        if recovery_request is not None:
+            kwargs["recovery_request"] = recovery_request
         prepare_async = database_sync_to_async(prepare_fn, thread_sensitive=False)
         turn = await prepare_async(
             consumer, pool, query, question, config, top_k, **kwargs
@@ -172,6 +178,7 @@ def prepare_selection_turn(
     *,
     turn_budget=None,
     token_ceiling=None,
+    recovery_request=None,
 ) -> SelectionTurn:
     """Resolve current scope, score once, and select on a DB-capable worker."""
     preservation = rag_preservation_config()
@@ -192,6 +199,37 @@ def prepare_selection_turn(
         )
     if authorization is None:
         raise ValueError("retrieval authorization unavailable")
+    profile = choose_selection_profile(question)
+    limits = SelectionLimits(top_k, resolve_document_cap(
+        mode=preservation.document_capacity_mode, legacy_cap=max_snippets_per_doc(),
+        explicit_hard_cap=preservation.document_hard_cap, final_passage_limit=top_k),
+        token_ceiling if token_ceiling is not None else evidence_token_budget())
+    from .rag_selection_hints import POLICY, consume_selection_hints
+
+    durations = []
+
+    def select(prepared, *, ordinary=False):
+        support = () if ordinary else consume_selection_hints(runtime, prepared, pool, primary_query)
+        selected_profile, options = profile, {}
+        if support and config.mode == "adaptive":
+            options["support_hints"] = support
+            selected_profile = replace(profile, version=profile.version + "+" + POLICY)
+        started = monotonic()
+        result = select_evidence(prepared.candidates, profile=selected_profile, limits=limits,
+            score_status=prepared.score_status, mode="legacy" if config.mode == "legacy" else "adaptive", **options)
+        durations.append(max(0, (monotonic() - started) * 1000))
+        return result
+
+    preflight = None
+    if recovery_request is not None:
+        from .rag_recovery_request import RecoveryRequest
+        if type(recovery_request) is not RecoveryRequest or recovery_request.question != primary_query:
+            raise ValueError("recovery request changed")
+        recovery_request.check()
+
+        def preflight(prepared, *, pin):
+            return recovery_request.pay(select(prepared, ordinary=pin), authorization, pin=pin)
+
     started = monotonic()
     scoring_ms = config.score_timeout_ms
     if turn_budget is not None:
@@ -207,30 +245,16 @@ def prepare_selection_turn(
         token_ceiling=token_ceiling
         if token_ceiling is not None
         else evidence_token_budget(),
+        **({"recovery_preflight": preflight} if preflight is not None else {}),
     )
-    profile = choose_selection_profile(question)
-    select_started = monotonic()
-    selection = select_evidence(
-        prepared.candidates,
-        profile=profile,
-        limits=SelectionLimits(
-            top_k,
-            resolve_document_cap(
-                mode=preservation.document_capacity_mode,
-                legacy_cap=max_snippets_per_doc(),
-                explicit_hard_cap=preservation.document_hard_cap,
-                final_passage_limit=top_k,
-            ),
-            token_ceiling if token_ceiling is not None else evidence_token_budget(),
-        ),
-        score_status=prepared.score_status,
-        mode="legacy" if config.mode == "legacy" else "adaptive",
-    )
+    selection = prepared.prepaid_selection or select(prepared)
+    if any(not any(candidate is row for row in prepared.candidates) for candidate in selection.candidates):
+        raise ValueError("prepaid selection changed")
     return SelectionTurn(
         selection,
         authorization,
         prepared,
-        max(0.0, (monotonic() - select_started) * 1000.0),
+        sum(durations),
         len(prepared.candidates),
     )
 

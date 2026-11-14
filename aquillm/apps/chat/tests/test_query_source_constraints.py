@@ -79,7 +79,7 @@ async def test_prepared_named_source_constraints_reach_actual_acquisition(
 
     async def get_message(**kwargs):
         assert current_source_runtime().budget.planner_calls == 1
-        return SimpleNamespace(text=json.dumps({"rewrite": rewrite}))
+        return SimpleNamespace(text=json.dumps({"rewrite": rewrite}), stop_reason="stop")
 
     async def complete(request, *_args, **_kw):
         return request + [AssistantMessage(content="Red Giants are synthetic stars " + citation,
@@ -159,7 +159,7 @@ async def test_explicit_longer_title_does_not_borrow_partial_historical_identity
         return {"result": []}
 
     async def get_message(**kwargs):
-        return SimpleNamespace(text=json.dumps({"rewrite": rewrite}))
+        return SimpleNamespace(text=json.dumps({"rewrite": rewrite}), stop_reason="stop")
 
     monkeypatch.setattr(rag_pipeline, "_run_vector_search", search)
     consumer = SimpleNamespace(user=actor, col_ref=CollectionsRef([collection.pk]), convo=convo)

@@ -6,6 +6,7 @@ resolved occurrence to its own output/document and enforce that document's scope
 
 from __future__ import annotations
 
+# The transient-source verifier consumes these existing module attributes.
 import io
 import zipfile
 from dataclasses import asdict
@@ -78,7 +79,12 @@ def _put_if_absent(ref: SourceArtifactRefV1, data: bytes) -> None:
     )
 
 
-def _verify_blob(ref: SourceArtifactRefV1) -> None:
+def _verify_blob(ref: SourceArtifactRefV1, *, deadline: float | None = None) -> None:
+    if deadline is not None:
+        from .source_storage import verify_artifact
+
+        verify_artifact(default_storage, ref, deadline=deadline)
+        return
     digest = sha256()
     size = 0
     try:
@@ -110,45 +116,9 @@ def _registered_artifact(ref: SourceArtifactRefV1, *, using: str) -> SourceArtif
 def _verify_archive_member(
     container: SourceArtifact, child: SourceArtifact, step: ArchiveMemberStepV1
 ) -> None:
-    """Attest each registered child's exact ordinal/name/bytes in its container."""
-    container_ref = SourceArtifactRefV1(
-        container.sha256,
-        container.size_bytes,
-        container.immutable_storage_key,
-        None,
-        None,
-    )
-    _verify_blob(container_ref)
-    try:
-        with default_storage.open(container.immutable_storage_key, "rb") as file_obj:
-            with zipfile.ZipFile(file_obj) as archive:
-                entries = archive.infolist()
-                if step.archive_ordinal >= len(entries):
-                    raise SourceArtifactIntegrityError("source_archive_ordinal_missing")
-                entry = entries[step.archive_ordinal]
-                entry_name = canonical_archive_entry_name(
-                    entry.orig_filename, entry.filename, is_directory=entry.is_dir()
-                )
-                if (
-                    entry.is_dir()
-                    or entry_name != step.member_path
-                    or entry.file_size != child.size_bytes
-                ):
-                    raise SourceArtifactIntegrityError("source_archive_member_mismatch")
-                digest = sha256()
-                size = 0
-                with archive.open(entry) as member:
-                    while chunk := member.read(65536):
-                        size += len(chunk)
-                        if size > child.size_bytes:
-                            raise SourceArtifactIntegrityError(
-                                "source_archive_bytes_mismatch"
-                            )
-                        digest.update(chunk)
-                if size != child.size_bytes or digest.hexdigest() != child.sha256:
-                    raise SourceArtifactIntegrityError("source_archive_bytes_mismatch")
-    except (SourceContractError, zipfile.BadZipFile, RuntimeError, EOFError) as exc:
-        raise SourceArtifactIntegrityError("source_archive_integrity_failed") from exc
+    from .source_artifact_archive import verify_archive_member
+
+    verify_archive_member(container, child, step, storage=default_storage, verify_blob=_verify_blob)
 
 
 def persist_artifact(
@@ -157,12 +127,18 @@ def persist_artifact(
     member_path: str | None,
     container_sha256: str | None,
     using: str,
+    deadline: float | None = None,
 ) -> SourceArtifactRefV1:
     ref = source_artifact_ref(
         data, member_path=member_path, container_sha256=container_sha256
     )
-    _put_if_absent(ref, data)
-    _verify_blob(ref)
+    if deadline is None:
+        _put_if_absent(ref, data)
+    else:
+        from .source_storage import put_artifact_if_absent
+
+        put_artifact_if_absent(default_storage, ref, data, deadline=deadline)
+    _verify_blob(ref, deadline=deadline)
     # A crash here can leave an unreferenced verified blob; never the reverse.
     row, _ = SourceArtifact.objects.using(using).get_or_create(
         sha256=ref.sha256,
@@ -173,6 +149,10 @@ def persist_artifact(
     )
     if row.size_bytes != ref.size_bytes or row.immutable_storage_key != ref.storage_key:
         raise SourceArtifactIntegrityError("source_artifact_registration_mismatch")
+    if deadline is not None:
+        from .source_storage import check_deadline
+
+        check_deadline(deadline)
     return ref
 
 
@@ -183,7 +163,14 @@ def persist_occurrence(
     content_type: str,
     archive_lineage: tuple[ArchiveMemberStepV1, ...],
     using: str,
+    deadline: float | None = None,
 ) -> SourceArtifactOccurrenceRefV1:
+    if deadline is not None:
+        from .source_storage import check_deadline
+
+        check_deadline(deadline)
+        if archive_lineage or artifact.member_path is not None or artifact.container_sha256 is not None:
+            raise UnsupportedArtifactStorage("Bounded current capture does not support archive lineage.")
     try:
         key = occurrence_key(
             artifact,
@@ -194,7 +181,7 @@ def persist_occurrence(
     except SourceContractError as exc:
         raise SourceArtifactIntegrityError("source_occurrence_invalid") from exc
     row = _registered_artifact(artifact, using=using)
-    _verify_blob(artifact)
+    _verify_blob(artifact, deadline=deadline)
     ancestors = {
         ancestor.sha256: ancestor
         for ancestor in SourceArtifact.objects.using(using).filter(
@@ -227,6 +214,8 @@ def persist_occurrence(
     )
     if any(getattr(occurrence, field) != value for field, value in fields.items()):
         raise SourceArtifactIntegrityError("source_occurrence_registration_mismatch")
+    if deadline is not None:
+        check_deadline(deadline)
     return SourceArtifactOccurrenceRefV1(occurrence.pk, key, artifact, archive_lineage)
 
 

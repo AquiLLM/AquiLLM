@@ -259,7 +259,7 @@ def _pdf(builder, data):
 def extract_structure(filename: str, data: bytes, *, artifact) -> ExtractionV1:
     validate_artifact_ref(artifact, data=data)
     extension = PurePath(filename).suffix.lower()
-    policy_version = 2 if extension in ('.docx', '.xlsx') else 1
+    policy_version = 2 if extension in ('.docx', '.xlsx', '.pdf') else 1
     parser_key = f'native-{extension.lstrip(".")}-ordered-v{policy_version}'
     if extension not in NATIVE_FORMATS:
         return ExtractionV1(parser_key, artifact, '', (), 'unsupported', ('source_format_unsupported',))

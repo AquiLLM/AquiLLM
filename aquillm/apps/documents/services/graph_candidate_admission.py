@@ -118,11 +118,12 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 charged = charged_sources(budget)
                 active = sum(bool(channels[name]) for name in CHANNELS)
                 baseline_allowance, graph_ceiling = allocation(
-                    max(0, budget.limits.unique_sources - len(charged)), cap, active
+                    budget.remaining_source_capacity(), cap, active
                 )
                 ids = {name: tuple(r.pk for r in refs) for name, refs in channels.items()}
                 all_refs = {r.pk: r for refs in channels.values() for r in refs}
-                reused = tuple(pk for pk in fair_prefix(ids, 45) if all_refs[pk].identity in charged)
+                reused = fair_prefix({name: tuple(pk for pk in lane if all_refs[pk].identity in charged)
+                                      for name, lane in ids.items()}, 45)
                 novel = {name: tuple(pk for pk in lane if all_refs[pk].identity not in charged)
                          for name, lane in ids.items()}
                 protected = ()

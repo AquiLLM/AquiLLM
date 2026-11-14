@@ -87,6 +87,28 @@ jobs:
       - name: Django system check
         working-directory: aquillm
         run: python manage.py check
+
+      - name: PDF extraction identity and embedding recovery
+        run: >-
+          python -m pytest
+          aquillm/lib/parsers/tests/test_pdf_text_cleaning.py
+          aquillm/lib/parsers/tests/test_structural_extraction.py
+          aquillm/apps/ingestion/tests/test_extraction_revisions.py
+          aquillm/apps/documents/tests/test_embedding_generation_recovery.py
+          --ds=aquillm.settings_projection_test -q --tb=short
+      - name: Current PDF provenance and bounded capture
+        run: >-
+          python -m pytest
+          aquillm/lib/parsers/tests/test_pdf_current_validation.py
+          aquillm/apps/ingestion/tests/test_current_adoption_contract.py
+          aquillm/apps/ingestion/tests/test_current_adoption_history.py
+          aquillm/apps/ingestion/tests/test_current_adoption_migration.py
+          aquillm/apps/ingestion/tests/test_bounded_source_storage.py
+          aquillm/apps/ingestion/tests/test_bounded_source_storage_local.py
+          aquillm/apps/ingestion/tests/test_current_pdf_adoption_service.py
+          aquillm/apps/ingestion/tests/test_current_pdf_adoption_admission.py
+          aquillm/apps/documents/tests/test_current_adoption_transition.py
+          --ds=aquillm.settings_projection_test -q --tb=short
       - name: Architecture + import-boundary tests
         run: >-
           python -m pytest
@@ -573,6 +595,7 @@ jobs:
           tests/test_replay_retrieval.py
           tests/test_replay_target_preflight.py
           tests/test_native_closure_replay.py
+          tests/test_native_replay_schedule_versions.py
           tests/test_replay_timeout_controls.py
           tests/test_ci_graph_selection.py
           --ds=aquillm.settings_projection_test -q --tb=short --durations=20

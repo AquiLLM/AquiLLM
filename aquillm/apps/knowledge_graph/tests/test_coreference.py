@@ -1866,12 +1866,9 @@ def test_task7_artifact_identity_uses_the_shared_concrete_resolver_version():
         _artifact_identity_values,
         document_artifact_identity_values,
     )
+    from lib.knowledge_graph.config import load_extraction_settings
 
-    extraction_settings = SimpleNamespace(
-        provider="gliner2_local",
-        model_id="fastino/gliner2-base-v1",
-        model_revision="a" * 40,
-    )
+    extraction_settings = load_extraction_settings({})
 
     identity = _artifact_identity_values(
         DOCUMENT_ID,

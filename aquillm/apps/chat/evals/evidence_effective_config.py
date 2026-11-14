@@ -52,6 +52,7 @@ def additional_controls():
 
     from apps.chat.consumers import chat, chat_receive, utils
     from apps.chat.services import rag_config
+    from apps.chat.services.rag_selection_hints import POLICY, support_hints_enabled
     from apps.chat.services.retrieval_query_runtime import configured_proposal_controls
     from apps.documents.services import chunk_rerank_config as rerank
     from apps.documents.services import rag_cache
@@ -88,6 +89,7 @@ def additional_controls():
     )
     return {
         "graph_policy": graph_effective_controls(),
+        "selection_support_hints": {"enabled": support_hints_enabled(), "policy": POLICY},
         "query_proposals": configured_proposal_controls(),
         "completion": completion_policy_snapshot(
             output_tokens=rag_config.synthesis_max_tokens()

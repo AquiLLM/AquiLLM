@@ -45,6 +45,13 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
 
     supports_request_observability = True
 
+    @property
+    def supports_json_schema(self):
+        # The deployed vLLM supports schema decoding. Unknown compatible
+        # endpoints retain prompt-only planning rather than assuming support.
+        base_url = str(getattr(self.client, "base_url", "") or "").lower()
+        return "vllm" in base_url or ":8000" in base_url
+
     @override
     def __init__(self, openai_client, model: str):
         self.client = openai_client

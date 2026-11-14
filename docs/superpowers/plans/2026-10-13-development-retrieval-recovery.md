@@ -387,3 +387,63 @@ Source: [audit of PR246 at afe1ba95](https://github.com/AquiLLM/AquiLLM/pull/246
 - [ ] Update PR246 with audit disposition and measured results, merge the reviewed source to development, pull over SSH on254, and deploy matching readers/gateway before explicitly enabling packed background writes. Retain a matched packed-compatible rollback pair and verify live health/chat.
 
 Audit dispositions that do not require a speculative rewrite: the native ready-generation witness already checks every typed generation field and identity (covered by the real native guard tests); acquisition schedule values are already validated and repeated reads detect drift; the one-slot metadata overlap has a serial fallback and is not evidence of a correctness defect; no import cycle was reproduced. Exact physical-count tests enforce operational budgets and remain where they express that contract. A larger held-out benchmark, domain ontology/identity changes, different PPR weighting and alternative storage architectures remain research proposals, not proven fixes or claims of this recovery. The10 known questions plus Q431 are a regression study, not a held-out quality benchmark. A zero-graph final answer is valid when baseline evidence is better. Mixed finite-window protocol versions fail before a physical query; deployment uses matched peers instead of an automatic retry after an uncertain request.
+
+### Task36: repair iterative acquisition and evidence-grounded answer delivery
+
+The October 18 deployed 40-cell study exposed zero follow-up searches in all 20
+iteration-enabled cells, and useful retrieved facts lost during publication.
+This follow-up uses the existing branch on development42c80935 after PR246.
+It continues [internal #4](https://github.com/AquiLLM/AquiLLM-internal/issues/4)
+and [audit #6](https://github.com/AquiLLM/AquiLLM-internal/issues/6).
+
+- [x] Reproduce truncated/invalid planner output. Supply a compact action schema
+  with current authorized coordinates, disable planner thinking, allow 1024 output
+  tokens and a bounded 5-second planning call, and retain explicit failure reasons.
+- [x] Reserve one third of the initial novel-source allowance for follow-up work.
+  Preserve the same cumulative source, action, text, scoring and wall-time ledger.
+  Nested operations cannot widen source limits; native admission retains its
+  original identity and authorization checks. Follow-ups remain sequential.
+- [x] Restore the user-approved research-assistant flow: the main model synthesizes
+  an answer from delivered evidence with local citations, preserved experimental
+  conditions and scoped gaps. Unknown semantic support remains unknown; valid
+  citations and publication receipts do not establish entailment.
+- [x] Preserve ordinary scientific brackets, inequalities and full source
+  conditions in literal excerpt fallback. Keep media/current-source authority,
+  reject unsafe presentation, and verify an already-issued answer receipt without
+  finalizing the same response twice.
+- [x] Reproduce real-provider failed citation repair bypassing that fallback.
+  Route citation-only failures through bound finalization, suppress a sources-only
+  substitute, and keep unbound/authority/unsafe-media failures limited.
+- [x] Repair citation-presence parsing for author-year abbreviations, wrapped
+  list paragraphs and release identifiers. Independently review controls against
+  borrowing citations from sibling lists or subsequent quantitative sentences.
+- [x] Verify the real-answer presentation regression: an inline source citation
+  followed by a colon must not be mistaken for a Markdown reference definition.
+  Exact authorized citation-led paragraphs and lists also remain prose; actual
+  reference definitions, unknown labels and unsafe media remain rejected.
+- [ ] Finish integration regression tests and current-head CI on the final source.
+- [ ] Complete 20 candidate ASGI turns on the same real collection: graph on with
+  iteration off/on for each known question. Inspect actual saved answers and
+  cited passages, record failures, and compare with the earlier deployed answers.
+  This is a diagnostic comparison, not held-out accuracy or a graph-benefit claim.
+- [ ] Publish the reviewed PR and aggregate tracking update. Deploy only a
+  source-verified revision through development with recorded rollback and live
+  verification; candidate experiments alone do not establish deployment.
+
+Preliminary probes demonstrate completed follow-up searches on Q3/Q4, but neither
+question's mapped reference passages were reached. Supported contextual facts do
+not answer the missing magnitude-formula or spectroscopic-survey comparison.
+These retrieval-quality gaps remain open independently of the publication fixes.
+Q5's current passage reports 0.016 under 25% image masking, versus 0.012 for BCNN,
+and 0.026 without image masking; the historical 0.017 reference must not override
+the actual source. Final answer review must assess qualifications as well as
+numeric presence. No model-only support flag or successful test activates a
+calibrated semantic-support policy.
+
+Evidence-first acceptance requires checking the assertion against the cited
+passage, not just finding the expected number or a valid citation token. The
+candidate review records unsupported method attribution on Q3 and causal-object
+drift in Q7 explanations as faithfulness failures, even when the answer is saved
+and its citations pass. Missing experimental conditions are recorded separately
+from contradictions. These observations remain in the comparison; do not tune
+away or omit failed trials, or present mechanical publication as semantic proof.

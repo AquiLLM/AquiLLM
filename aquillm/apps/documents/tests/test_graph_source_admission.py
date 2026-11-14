@@ -61,7 +61,7 @@ def test_pressure_rows_never_requests_embeddings(monkeypatch):
         assert attempts == []
 
 
-def capture(active, *, native=True):
+def capture(active, *, native=True, authorization=None):
     from lib.embeddings.document_contracts import digest
 
     f, _, _, scope, snapshot, dependencies, _, _ = active
@@ -71,7 +71,7 @@ def capture(active, *, native=True):
         TextChunk, "Atlas", 20, snapshot.documents,
         query_embedding=None, graph_config=get_graph_expansion_config(),
         app_config_getter=lambda _: SimpleNamespace(vector_top_k=45, trigram_top_k=45),
-        authorization_context=f.authorization,
+        authorization_context=f.authorization if authorization is None else authorization,
         **({"_graph_dependencies": dependencies} if native and
            "_graph_dependencies" in signature(collect_hybrid_candidate_snapshot).parameters else {}),
     )
