@@ -23,9 +23,70 @@
 - Root alone runs SSH, shared database tests, model calls and GPU experiments; serialize these resources.
 - Keep the serving development stack unchanged while isolated candidate verification is incomplete.
 
-## Current closure work: November 14
+## November 17 retrieval and graph verification
 
-Work is paused at the user's request after completing the current diagnostics.
+On the isolated development study stack, the native hybrid search ranked passages
+across three previously discovered documents together. The original Q4 query
+returned all four mapped passages within the usual per-channel cutoff of 17.
+The recorded follow-up returned three. The global search returned zero for each
+query. The narrower search also displaced 36 and 32 global candidates,
+respectively. Both fresh query vectors matched the earlier rank audit. The test
+ended at candidate metadata and performed zero graph traversals. The
+[paired candidate results](https://github.com/AquiLLM/AquiLLM-internal/blob/1c32accd37907bf5d06a8ad114cc016015d7a521/research/architectural-ablations-2026-11-05/results-nov17-pooled-retrieval.md)
+include the gained and displaced sets.
+
+The fixed follow-up then ran through ordinary passage loading, final scoring and
+local vLLM answer generation. On the earlier product revision, three target
+passages reached candidate metadata in the narrowed follow-up, one reached the
+reranker, and none reached the answer model. The global follow-up retrieved
+none. Both answers missed the three registered comparison requirements.
+[Full-turn evidence and answer review](https://github.com/AquiLLM/AquiLLM-internal/blob/07b518f9961d41812e37c9f190ef558d53072dbf/research/architectural-ablations-2026-11-05/results-nov17-historical-followup.md)
+
+On the current PR's product revision, both follow-up graph searches reached
+their readiness deadline. The global and three-document controls admitted
+three new sources apiece and lacked enough time for deferred ordinary reads.
+Assigning all 15 remaining novel-source slots to the ordinary lanes let the
+scoped follow-up deliver and score both release lists. They ranked 26th and
+27th of 43 by raw relevance, and neither made the ten passages sent to the
+model. All three existing selector profiles missed them in a frozen-pool replay.
+The global follow-up still missed both lists. Keep the existing allocation
+until a treatment improves grounded answers and passes unrelated controls.
+[Current product controls](https://github.com/AquiLLM/AquiLLM-internal/blob/9b1043bea70fd5b5ac2a256c970d4c9418f5390b/research/architectural-ablations-2026-11-05/results-nov17-current-followup.md)
+and [allocation ablation](https://github.com/AquiLLM/AquiLLM-internal/blob/ac31708394e18f079b34b084763d40b484a6880b/research/architectural-ablations-2026-11-05/results-nov17-source-allocation.md)
+preserve the answer reviews. The [selector replay](https://github.com/AquiLLM/AquiLLM-internal/blob/972729beca1dff0531a4388d056562d03d123867/research/architectural-ablations-2026-11-05/results-nov17-selector-profiles.md)
+also checked both Q7 control turns. A separate [cross-encoder replay](https://github.com/AquiLLM/AquiLLM-internal/blob/e888233c727ea40a9f862c6efd06ece3cdcbd5ac/research/architectural-ablations-2026-11-05/nov17-context-score-assessment.md)
+completed all 210 pairs. Short neighboring text moved the PDR3 list from rank
+27 to 29, kept the Q5 reference at rank two and moved Q8 from two to four.
+Keep the existing scoring input.
+
+A separate local vLLM replay tested whether the planner could choose a useful
+group of documents on its own. After correcting an unsupported schema keyword
+and retaining application-side validation, all 36 calls produced valid plans.
+The planner chose a group in five of the 16 opportunities. Only one choice
+selected the complete useful group. In both repeats of a question requiring a
+third source, it narrowed the search to documents that excluded that source.
+The candidate failed the registered repeatability and control-preservation
+criteria. Keep the current planner actions. [Scope and query review by case](https://github.com/AquiLLM/AquiLLM-internal/blob/e924d9c4fc136c09f4e7d61011b94b2f4d1bfee7/research/architectural-ablations-2026-11-05/results-nov17-planner-choice.md)
+
+The separate native PDF and background graph rehearsal passed source startup.
+Its historical authorization check failed because the disposable runtime used a
+different Django signing profile. A read-only test reproduced both authorization
+digests for the same permissions and restored the original profile. A complete
+native run still requires an authorized copy of the retained PDF and its
+matching rows in the isolated worker. [Source-side reproduction](https://github.com/AquiLLM/AquiLLM-internal/blob/1c32accd37907bf5d06a8ad114cc016015d7a521/research/architectural-ablations-2026-11-05/nov17-source-auth-correspondence-second.transport.json)
+
+For fresh indexing, use the repository CPU-introduction PDF, a disposable
+PostgreSQL database and a real Celery consumer with an isolated in-memory
+broker. Verify the parent PDF by identity from upload through the stored
+vectors and document graph. The parser can produce several figure documents
+and a partial-quality text result from the same upload. The [parent-specific
+indexing protocol](https://github.com/AquiLLM/AquiLLM-internal/blob/dde985f9ff33ea7ce047854a2e0402122396e12a/research/architectural-ablations-2026-11-05/protocol-nov17-fresh-cpu-pdf-third.md)
+and the [study record](https://github.com/AquiLLM/AquiLLM-internal/tree/main/research/architectural-ablations-2026-11-05)
+track that test independently of legacy citation migration.
+
+## November 14 checkpoint
+
+The November 14 pause followed completion of the diagnostics below.
 Continue on `codex/graph-development-repair` and draft PR #247. The latest tested
 product/test head is `703310bf0e015860e11e3ee3207374dbe0d5beb9`; its backend,
 frontend, isolated-projection, hygiene and title CI passed. Development head
@@ -75,7 +136,7 @@ available; their existing schema migration must not be reapplied.
 The [prepared source-route repair](https://github.com/AquiLLM/AquiLLM-internal/blob/a9555e18e7dc104711f262cc8e0d72f72c3d6974/research/architectural-ablations-2026-11-05/nov14-source-route-local-discovery-fix.md)
 records the failed first attempt and the unexecuted second protocol separately.
 
-Resume with the registered second metadata-only source-route check, review its
+The planned next step on November 14 was to run the second source-route check, review its
 actual outcome and cleanup, and only then prepare the next native PDF component
 attempt. Full collection readiness, independent quality acceptance, human review
 and development rollout remain open. Private receipts, failed attempts, exact
