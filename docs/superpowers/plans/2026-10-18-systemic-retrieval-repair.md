@@ -59,6 +59,17 @@ completed all 210 pairs. Short neighboring text moved the PDR3 list from rank
 27 to 29, kept the Q5 reference at rank two and moved Q8 from two to four.
 Keep the existing scoring input.
 
+A paired local reranker experiment added a generic instruction to find evidence
+for any one part of the question. It scored 278 pairs across Q4, Q5, Q7 and
+Q8. The two Q4 release lists moved from ranks 26 and 27 to ranks 18 and 28.
+Neither entered the final selection. Q7 retained both reference spans, and
+the Q5 and Q8 reference passages stayed in their respective top tens. The
+instruction added 1,350 scored input tokens and missed its registered goal.
+Keep the existing scoring query. The next distinct test is whether a pair
+of passages covers a comparison across conditions, including a previously
+unseen comparison with a necessary third source.
+[Four-question ablation and passage changes](https://github.com/AquiLLM/AquiLLM-internal/blob/001b5d7c6b27bb711425f4bb0bef1c21e351d6e9/research/architectural-ablations-2026-11-05/results-nov17-component-fact-score.md)
+
 A separate local vLLM replay tested whether the planner could choose a useful
 group of documents on its own. After correcting an unsupported schema keyword
 and retaining application-side validation, all 36 calls produced valid plans.
@@ -75,14 +86,23 @@ digests for the same permissions and restored the original profile. A complete
 native run still requires an authorized copy of the retained PDF and its
 matching rows in the isolated worker. [Source-side reproduction](https://github.com/AquiLLM/AquiLLM-internal/blob/1c32accd37907bf5d06a8ad114cc016015d7a521/research/architectural-ablations-2026-11-05/nov17-source-auth-correspondence-second.transport.json)
 
-For fresh indexing, use the repository CPU-introduction PDF, a disposable
-PostgreSQL database and a real Celery consumer with an isolated in-memory
-broker. Verify the parent PDF by identity from upload through the stored
-vectors and document graph. The parser can produce several figure documents
-and a partial-quality text result from the same upload. The [parent-specific
-indexing protocol](https://github.com/AquiLLM/AquiLLM-internal/blob/dde985f9ff33ea7ce047854a2e0402122396e12a/research/architectural-ablations-2026-11-05/protocol-nov17-fresh-cpu-pdf-third.md)
-and the [study record](https://github.com/AquiLLM/AquiLLM-internal/tree/main/research/architectural-ablations-2026-11-05)
-track that test independently of legacy citation migration.
+A fresh repository PDF passed the normal background indexing path on 254 in
+a disposable database. The Celery consumer used an isolated in-memory broker.
+The parent document graph became active 67 seconds after upload submission and
+all 19 chunk vectors were ready by 101 seconds. Local GLiNER2 produced 150
+entity mentions and one relation mention. The first instrumented run traced
+24 blocked socket attempts to optional Qwen figure OCR. Selecting local OCR in
+the scratch worker removed those attempts. Its image lacked the Tesseract
+executable, so this run verifies embedded-text indexing and figure records.
+[Fresh PDF results and scope](https://github.com/AquiLLM/AquiLLM-internal/blob/55cee39a9c760f8db82b513b1b368f589cd2f851/research/architectural-ablations-2026-11-05/results-nov17-fresh-pdf.md)
+
+The background extraction launcher now considers cgroup CPU quotas as well as
+affinity. Under a two-CPU quota on a host with affinity 20, the ordinary
+launcher changed from two workers with eight math threads each to one worker
+with one thread. Its unrestricted configuration stayed at two workers with
+eight threads each. All 87 focused worker and Compose tests passed. The fresh
+PDF used an explicitly configured solo worker, so its timing is independent.
+[Before and after under three CPU limits](https://github.com/AquiLLM/AquiLLM-internal/blob/1552e81bb1ea3877b24ce629c930110e11c6278f/research/architectural-ablations-2026-11-05/nov17-graph-worker-cpu-quota-final.results.json)
 
 ## November 14 checkpoint
 
