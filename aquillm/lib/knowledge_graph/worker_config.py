@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from os import environ as process_environ
 
+from .cgroup_cpu import apply_cgroup_cpu_limits
 from .config_defaults import (
     _EXTRACTION_QUEUE,
     DEFAULT_EXTRACTION_CPU_UTILIZATION_PERCENT,
@@ -19,6 +20,7 @@ from .config_defaults import (
 
 _CpuCountGetter = Callable[[], int]
 _ProcessExecutor = Callable[[str, tuple[str, ...], dict[str, str]], object]
+
 
 @dataclass(frozen=True, slots=True)
 class ExtractionWorkerCpuLayout:
@@ -156,17 +158,17 @@ def build_extraction_worker_launch(
 
 
 def detect_available_cpu_count() -> int:
-    """Return the process affinity width, falling back to the host CPU count."""
+    """Return CPUs available to this worker under affinity and Linux CFS quotas."""
 
     affinity_getter = getattr(os, "sched_getaffinity", None)
+    affinity_count = 0
     if callable(affinity_getter):
         try:
             affinity_count = len(affinity_getter(0))
         except OSError:
-            affinity_count = 0
-        if affinity_count > 0:
-            return affinity_count
-    return max(1, os.cpu_count() or 1)
+            pass
+    cpu_count = affinity_count or max(1, os.cpu_count() or 1)
+    return apply_cgroup_cpu_limits(cpu_count)
 
 
 def run_extraction_worker(
