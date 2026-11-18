@@ -166,7 +166,7 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=No
         )
     )
     current = {item[0]: tuple(item[1:]) for item in metadata}
-    from .chunk_search_scope import current_lexical_ids
+    from .graph_admission_adapter import current_lexical_ids
 
     lexical_ids = current_lexical_ids(scope)
     result = []
@@ -202,7 +202,7 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=No
 
 
 def _retain_dense(rows, scope, final_keys, valid_fts, *, dense_only=False):
-    from .chunk_search_scope import current_lexical_ids
+    from .graph_admission_adapter import current_lexical_ids
 
     lexical_ids = current_lexical_ids(scope)
     return tuple(

@@ -97,7 +97,7 @@ def _finish_search_rows(
             if any(rank.channel.startswith("graph_") for rank in row.channel_ranks)
         )
 
-    from .chunk_search_scope import current_lexical_ids
+    from .graph_admission_adapter import current_lexical_ids
 
     lexical_ids = current_lexical_ids(scope) if scope else set()
 

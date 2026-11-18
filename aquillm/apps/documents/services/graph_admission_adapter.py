@@ -4,6 +4,23 @@ from .graph_source_admission import NativeSourceAdmission
 from .representation_contracts import SourceScopeUnavailable
 
 
+def current_lexical_ids(scope):
+    plan = getattr(scope, "named_item_admission", None)
+    if plan is None:
+        return scope.lexical_ids
+    from .chunk_search_scope import current_scope
+
+    original = current_scope()
+    if (type(plan) is not NativeSourceAdmission or plan.scope is not original
+            or original is None or scope.authorization is not original.authorization
+            or scope.runtime is not original.runtime or scope.representation is not original.representation
+            or scope.requested_document_ids != original.requested_document_ids
+            or scope.query_digest != original.query_digest
+            or (original.named_item_admission is not None and original.named_item_admission is not plan)):
+        raise SourceScopeUnavailable("named_item_scope_unavailable")
+    return scope.lexical_ids.union(plan.channel_ids.get("named_items", ()))
+
+
 def captured_admission(snapshot, scope, *, query=None):
     plan = getattr(snapshot, "source_admission", None)
     if plan is not None:

@@ -63,23 +63,6 @@ def resolve_query_space(using):
     return space
 
 
-def current_lexical_ids(scope):
-    plan = getattr(scope, "named_item_admission", None)
-    if plan is None:
-        return scope.lexical_ids
-    from .graph_source_admission import NativeSourceAdmission
-
-    original = current_scope()
-    if (type(plan) is not NativeSourceAdmission or plan.scope is not original
-            or original is None or scope.authorization is not original.authorization
-            or scope.runtime is not original.runtime or scope.representation is not original.representation
-            or scope.requested_document_ids != original.requested_document_ids
-            or scope.query_digest != original.query_digest
-            or (original.named_item_admission is not None and original.named_item_admission is not plan)):
-        raise SourceScopeUnavailable("named_item_scope_unavailable")
-    return scope.lexical_ids.union(plan.channel_ids.get("named_items", ()))
-
-
 @dataclass
 class FrozenRetrievalScope:
     representation: object
@@ -311,7 +294,6 @@ def bind_search_scope(scope, query, *, graph_enabled):
     scope.query_digest = digest({"version": "unprepared-query-v1", "query": query})
     scope.graph_enabled = graph_enabled
     return _SCOPE.set(scope)
-
 
 def reset_search_scope(token):
     if token is not None:

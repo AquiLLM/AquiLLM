@@ -13,6 +13,7 @@ from aquillm.settings_env import (
     env_int,
     env_kg_float,
     env_kg_int,
+    lexical_ranking_settings,
 )
 from lib.knowledge_graph.config import (
     INVALID_EXTRACTION_QUEUE,
@@ -34,11 +35,7 @@ RAG_RERANK_RESULT_TTL_SECONDS = env_int("RAG_RERANK_RESULT_TTL_SECONDS", 45)
 RAG_RERANK_CAPABILITY_TTL_SECONDS = env_int("RAG_RERANK_CAPABILITY_TTL_SECONDS", 900)
 
 # Optional lexical retrieval/ranking; protected-exact use is gated by RRF.
-RAG_FULL_TEXT_ENABLED = env_bool("RAG_FULL_TEXT_ENABLED", False)
-RAG_NAMED_ITEM_RETRIEVAL_ENABLED = env_bool("RAG_NAMED_ITEM_RETRIEVAL_ENABLED", False)
-RAG_NAMED_ITEM_INDEX_ENABLED = env_bool("RAG_NAMED_ITEM_INDEX_ENABLED", False)
-RAG_RRF_ENABLED = env_bool("RAG_RRF_ENABLED", False)
-RAG_PROTECTED_EXACT_ENABLED = env_bool("RAG_PROTECTED_EXACT_ENABLED", False)
+globals().update(lexical_ranking_settings())
 
 # Hybrid search candidate fan-out (chunk_search); min limits are floors, 0 = unset
 RAG_CANDIDATE_MULTIPLIER = env_float("RAG_CANDIDATE_MULTIPLIER", 3.0)

@@ -7,29 +7,21 @@ from math import log1p, sqrt
 from uuid import UUID
 
 from django.conf import settings
-from django.db import connections
-from django.db.models import F, JSONField
-from django.db.models.functions import Cast, Length, MD5
+from django.db.models import JSONField
+from django.db.models.functions import Cast
 
-from .named_item_projection import (
-    MAX_CANONICAL,
-    MAX_MEMBERS,
-    MAX_PAYLOAD,
-    MIN_OVERLAP,
-    label_terms,
-    owner_binding,
-)
-from .representation_contracts import RepresentationSnapshotV1, SourceScopeUnavailable
-from .representation_store import (
-    SourceSHA256,
-    _active_chunk_predicates,
-    validate_representation_snapshot,
+from .named_item_projection import MIN_OVERLAP, label_terms
+from .named_item_reads import (
+    PDF_MODEL,
+    authorized_selections,
+    ready_owner,
+    current_revisions,
+    validate_sources,
 )
 
 MAX_OWNERS = 4
 MAX_PER_OWNER = 3
 MAX_CANDIDATES = MAX_OWNERS * MAX_PER_OWNER
-PDF_MODEL = "apps_documents.pdfdocument"
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,110 +41,6 @@ class NamedItemCandidate:
     covered_start: int
     covered_end: int
     binding: str
-
-
-def _authorized_selections(scope, owner_ids):
-    from .chunk_search_scope import FrozenRetrievalScope, current_scope
-    from .graph_source_runtime import graph_source_runtime
-    from .hybrid_graph_authorization import is_exact_authorization_context
-
-    if (
-        type(scope) is not FrozenRetrievalScope
-        or scope is not current_scope()
-        or scope.runtime is None
-        or scope.runtime is not graph_source_runtime()
-        or not is_exact_authorization_context(scope.authorization)
-        or scope.runtime.authorization is not scope.authorization
-        or scope.using != scope.authorization.database_alias
-        or not set(owner_ids) <= scope.requested_document_ids
-    ):
-        raise SourceScopeUnavailable("named_item_scope_unavailable")
-    selected = {
-        s.document.id: s
-        for s in scope.representation.selections
-        if s.document.id in owner_ids
-    }
-    if len(selected) != len(owner_ids):
-        raise SourceScopeUnavailable("named_item_scope_unavailable")
-    return selected
-
-
-def _validate_sources(scope, selected):
-    """Reauthorize the original selection and check only the requested owners' source bytes."""
-    from .chunk_search_scope import validate_requested_authorization
-
-    if not scope.runtime.budget.can_publish():
-        raise SourceScopeUnavailable("named_item_scope_unavailable")
-    if scope.proposal_binding is not None:
-        from apps.chat.services.retrieval_query_runtime import (
-            validate_bound_before_current_scope,
-        )
-
-        validate_bound_before_current_scope(scope.proposal_binding, scope)
-    validate_requested_authorization(scope.runtime, scope.authorization, ())
-    validate_representation_snapshot(
-        RepresentationSnapshotV1(tuple(selected.values())), using=scope.using
-    )
-    if not scope.runtime.budget.can_publish():
-        raise SourceScopeUnavailable("named_item_scope_unavailable")
-
-
-def _legacy_membership(rows):
-    """A single bounded digest of ordered integers. No body or body hash is read."""
-    columns = rows.order_by("pk").values_list(
-        "pk", "chunk_number", "start_position", "end_position"
-    )[: MAX_MEMBERS + 1]
-    sql, params = columns.query.get_compiler(using=rows.db).as_sql()
-    with connections[rows.db].cursor() as cursor:
-        cursor.execute(
-            "SELECT encode(sha256(convert_to(string_agg(concat_ws(':', id, n, lo, hi), ',' ORDER BY id),"
-            " 'UTF8')), 'hex') FROM (" + sql + ") AS members(id,n,lo,hi)",
-            params,
-        )
-        return cursor.fetchone()[0]
-
-
-def _ready_owner(scope, selected):
-    from apps.documents.models import PDFNamedItemIndex, TextChunk
-
-    if selected.document.model_label != PDF_MODEL:
-        return None
-    header = (
-        PDFNamedItemIndex.objects.using(scope.using)
-        .filter(
-            document_id=selected.document.pkid,
-            generation_id=selected.generation_key,
-        )
-        .annotate(size=Length("payload"), payload_sha=SourceSHA256(F("payload")))
-        .filter(size__lte=MAX_PAYLOAD)
-    )
-    # Header strings and the optional legacy scalar have fixed maximum lengths.
-    if not scope.runtime.budget.reserve_text(256, kind="materialized"):
-        return None
-    value = header.values_list(
-        "binding", "member_digest", "payload_sha", "size"
-    ).first()
-    if value is None:
-        return None
-    binding, member_sha, payload_sha, size = value
-    if owner_binding(selected, member_sha, payload_sha) != binding:
-        return None
-    rows = _active_chunk_predicates(
-        TextChunk.objects.using(scope.using).filter(
-            doc_id=selected.document.id, modality=TextChunk.Modality.TEXT
-        ),
-        snapshot=RepresentationSnapshotV1((selected,)),
-    )
-    if selected.generation_key is None and _legacy_membership(rows) != member_sha:
-        return None
-    return (
-        header.filter(
-            binding=binding, member_digest=member_sha, payload_sha=payload_sha
-        ),
-        rows,
-        size,
-        binding,
-    )
 
 
 def _choices(data, members, query_terms, limit):
@@ -189,37 +77,8 @@ def _choices(data, members, query_terms, limit):
     return best
 
 
-def _revisions(rows, ids):
-    # Body hashes are computed only for the at most three shortlisted chunks.
-    data = (
-        rows.filter(pk__in=ids)
-        .annotate(
-            body_sha=SourceSHA256(F("content")),
-            native_md5=MD5("content"),
-            body_size=Length("content"),
-        )
-        .filter(
-            body_size__lte=MAX_CANONICAL,
-            body_size=F("end_position") - F("start_position"),
-        )
-        .values_list(
-            "pk",
-            "chunk_number",
-            "start_position",
-            "end_position",
-            "body_sha",
-            "native_md5",
-            "body_size",
-        )
-    )
-    return {
-        pk: (number, start, end, sha, md5, size)
-        for pk, number, start, end, sha, md5, size in data
-    }
-
-
 def _nominate(scope, selected, terms, per_owner):
-    ready = _ready_owner(scope, selected)
+    ready = ready_owner(scope, selected)
     if ready is None:
         return ()
     header, rows, size, binding = ready
@@ -237,7 +96,7 @@ def _nominate(scope, selected, terms, per_owner):
         96 * len(best), kind="materialized"
     ):
         return ()
-    revisions = _revisions(rows, best)
+    revisions = current_revisions(rows, best)
     candidates = []
     for pk, (item, low, high) in best.items():
         current = revisions.get(pk)
@@ -287,7 +146,7 @@ def lookup_named_item_candidates(scope, owner_ids, question, *, per_owner=3, lim
         or len(question) > 2048
     ):
         return ()
-    selected = _authorized_selections(scope, owner_ids)
+    selected = authorized_selections(scope, owner_ids)
     pdfs = {
         owner: selected[owner]
         for owner in owner_ids
@@ -297,11 +156,11 @@ def lookup_named_item_candidates(scope, owner_ids, question, *, per_owner=3, lim
     if not pdfs or not terms or not limit:
         return ()
     with scope.database():
-        _validate_sources(scope, pdfs)
+        validate_sources(scope, pdfs)
         groups = [
             _nominate(scope, pdf, terms, min(per_owner, limit)) for pdf in pdfs.values()
         ]
-        _validate_sources(scope, pdfs)
+        validate_sources(scope, pdfs)
     return tuple(
         group[n] for n in range(per_owner) for group in groups if n < len(group)
     )[:limit]
@@ -322,9 +181,9 @@ def validate_named_item_candidates(scope, candidates):
         candidates
     ):
         return False
-    selections = _authorized_selections(scope, owners)
+    selections = authorized_selections(scope, owners)
     with scope.database():
-        _validate_sources(scope, selections)
+        validate_sources(scope, selections)
         for owner in owners:
             group = [n for n in candidates if n.document_id == owner]
             selected = selections[owner]
@@ -332,7 +191,7 @@ def validate_named_item_candidates(scope, candidates):
                 n.generation_id != selected.generation_key for n in group
             ):
                 return False
-            ready = _ready_owner(scope, selected)
+            ready = ready_owner(scope, selected)
             if ready is None or not scope.runtime.budget.reserve_text(
                 96 * len(group), kind="materialized"
             ):
@@ -370,7 +229,7 @@ def validate_named_item_candidates(scope, candidates):
                 )
             if not check.exists():
                 return False
-            current = _revisions(rows, [n.chunk_id for n in group])
+            current = current_revisions(rows, [n.chunk_id for n in group])
             if any(
                 current.get(n.chunk_id)
                 != (
@@ -384,5 +243,5 @@ def validate_named_item_candidates(scope, candidates):
                 for n in group
             ):
                 return False
-        _validate_sources(scope, selections)
+        validate_sources(scope, selections)
     return True
