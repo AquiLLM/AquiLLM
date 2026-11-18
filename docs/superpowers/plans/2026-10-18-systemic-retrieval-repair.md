@@ -23,6 +23,26 @@
 - Root alone runs SSH, shared database tests, model calls and GPU experiments; serialize these resources.
 - Keep the serving development stack unchanged while isolated candidate verification is incomplete.
 
+## November 18 PDF sections and evidence selection
+
+New native PDF extractions can retain an author's bookmark as a heading when
+the complete local outline resolves to unique lines in canonical page order.
+The versioned parser preserves canonical text and offsets. The chunker can
+include the heading in embedding input and omit it when necessary to fit the
+source passage. Ambiguous or absent outlines use the existing parser version.
+Existing indexed documents require separate validation before reindexing.
+
+On the isolated development corpus, 23 of 30 PDFs had bookmarks. Neither Q4
+release paper did. Of 115 distinct passages in the four frozen question pools,
+two could be bound to a whole bookmarked section in the existing index.
+A paired reranker replay moved the Q5 reference from second to first. The Q7
+packet retained both exact references. A separate study used headings printed
+on the page to annotate both Q4 reference spans. Their ranks stayed at 26 and
+27 out of 43, outside the ten passages selected. These runs measured retrieval
+and evidence selection. They did not regenerate answers or test generalization.
+The [paired results and experimental controls](https://github.com/AquiLLM/AquiLLM-internal/blob/d4e3cba38a54f6eda2becf13e0029c37e67cfab5/research/architectural-ablations-2026-11-05/results-nov18-source-bound-section-scoring.md)
+record treatment exposure, rank changes and displaced evidence.
+
 ## November 17 retrieval and graph verification
 
 On the isolated development study stack, the native hybrid search ranked passages
