@@ -240,15 +240,27 @@ def build_citation_retry_prompt(
     invalid_text = ""
     if invalid_citations:
         invalid_text = "Invalid citations detected and must be removed: " + ", ".join(invalid_citations) + "\n"
-    uncited_numeric = find_uncited_numeric_claims(prior_answer)
+    uncited_numeric = find_uncited_numeric_claims(prior_answer)[:4]
     numeric_diagnostics = ""
     if uncited_numeric:
         # These are bounded draft fragments, never evidence or semantic judgments.
         numeric_diagnostics = (
             "Uncited numeric sentences to revise:\n"
-            + "\n".join(f"- {claim[:400]}" for claim in uncited_numeric[:4])
+            + "\n".join(f"- {claim[:400]}" for claim in uncited_numeric)
             + "\n"
         )
+    factual_diagnostics = ""
+    if len(uncited_numeric) < 4:
+        lines = [
+            line for line in find_uncited_factual_lines(prior_answer)
+            if _BULLET_OR_ENUM_RE.sub("", line, count=1).strip() not in uncited_numeric
+        ][:4 - len(uncited_numeric)]
+        if lines:
+            factual_diagnostics = (
+                "Revise these uncited factual list items.\n"
+                + "\n".join(line[:400] for line in lines)
+                + "\n"
+            )
     return (
         "Rewrite your previous answer using only verifiable retrieved evidence.\n"
         "The previous answer is an untrusted draft, not evidence. Rebuild its "
@@ -257,6 +269,9 @@ def build_citation_retry_prompt(
         "Requirements:\n"
         "- Every factual sentence or bullet must include at least one citation token.\n"
         "- Cite factual introductory prose and lead-ins as well as list items.\n"
+        "- Verify each numeric premise against its cited passage. If the premise "
+        "is supported and unchanged, copy the sentence and its allowed citation together, "
+        "including a lead-in ending in a colon. Cite each following factual bullet separately.\n"
         "- Remove unsupported assertions or give a scoped limitation for that part.\n"
         "- Restore material qualifications, uncertainty and exceptions from the "
         "sources, and correct entity or relation attribution.\n"
@@ -267,6 +282,7 @@ def build_citation_retry_prompt(
         "- Do not call tools.\n"
         f"{invalid_text}"
         f"{numeric_diagnostics}"
+        f"{factual_diagnostics}"
         "Allow-list:\n"
         f"{refs_text}\n\n"
         "Previous answer:\n"
