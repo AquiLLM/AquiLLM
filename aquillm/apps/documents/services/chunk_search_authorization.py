@@ -70,6 +70,9 @@ def finalize_search_rows(snapshot, ranked, *, authorize, pool=(), fallback_limit
 
         coverage = snapshot.full_text_coverage
         if scope:
+            plan = getattr(snapshot, "source_admission", None)
+            if getattr(plan, "named_items", ()):
+                plan.refresh_named_items()
             withdraw_full_text(
                 scope, tuple(row for group in groups for row in group), full_text_ids
             )
@@ -86,23 +89,34 @@ def _finish_search_rows(
     snapshot, groups, retained, scope, keys, full_text_ids, coverage, fallback_limit
 ):
     """Pure filtering/fusion of already checked rows; no authority I/O."""
+    plan = getattr(snapshot, "source_admission", None)
+    withdrawn = plan.withdrawn_named_only() if getattr(plan, "named_items", ()) else ()
+    if withdrawn and scope is not None and scope.fusion_v2 is not None:
+        withdrawn = withdrawn.difference(
+            row.chunk_id for row in scope.fusion_v2.candidates
+            if any(rank.channel.startswith("graph_") for rank in row.channel_ranks)
+        )
+
+    from .chunk_search_scope import current_lexical_ids
+
+    lexical_ids = current_lexical_ids(scope) if scope else set()
 
     def keep(row, *, dense_only=False):
-        if id(row) not in retained:
+        if id(row) not in retained or row.pk in withdrawn:
             return False
         dense = scope.dense_rows.get(row.pk) if scope else None
         if (
             scope
             and row.pk in scope.fts_rows
             and row.pk not in full_text_ids
-            and row.pk not in scope.lexical_ids
+            and row.pk not in lexical_ids
             and (dense is None or dense.embedding_generation_key not in keys)
         ):
             return False
         return (
             not dense
             or dense.embedding_generation_key in keys
-            or (not dense_only and row.pk in scope.lexical_ids | full_text_ids)
+            or (not dense_only and row.pk in lexical_ids | full_text_ids)
         )
 
     def retain(rows, *, dense_only=False):
@@ -126,7 +140,7 @@ def _finish_search_rows(
         dense_ids={r.pk for r in vectors},
     )
     final_ranked = [row for row in groups[2] if keep(row)]
-    if scope and scope.fts_invalid_ids and fallback_limit is not None:
+    if scope and (scope.fts_invalid_ids or getattr(plan, "withdrawn_items", ())) and fallback_limit is not None:
         final_ranked = list(
             reconcile_candidate_order(pool, scope=scope)[:fallback_limit]
         )

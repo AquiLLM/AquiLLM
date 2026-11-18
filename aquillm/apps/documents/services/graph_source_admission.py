@@ -26,6 +26,28 @@ class NativeSourceAdmission:
     initial_ids: tuple
     graph_start: frozenset = field(repr=False)
     counts: dict = field(default_factory=dict, repr=False, compare=False)
+    named_items: tuple = field(default=(), repr=False)
+    withdrawn_items: set = field(default_factory=set, repr=False, compare=False)
+
+    def refresh_named_items(self):
+        """Withdraw stale votes per owner while keeping other admitted evidence."""
+        if not self.named_items:
+            return
+        from .named_item_lookup import validate_named_item_candidates
+
+        owners = {}
+        for item in self.named_items:
+            if item.chunk_id not in self.withdrawn_items:
+                owners.setdefault(item.document_id, []).append(item)
+        for items in owners.values():
+            if not validate_named_item_candidates(self.scope, tuple(items)):
+                self.withdrawn_items.update(item.chunk_id for item in items)
+
+    def withdrawn_named_only(self):
+        if not self.withdrawn_items:
+            return frozenset()
+        ordinary = {ref.pk for channel, refs in self.channels if channel != "named_items" for ref in refs}
+        return self.withdrawn_items.difference(ordinary)
 
     def check(self):
         from apps.documents.models import TextChunk
@@ -65,7 +87,8 @@ class NativeSourceAdmission:
 
     @property
     def channel_ids(self):
-        return {name: tuple(r.pk for r in refs) for name, refs in self.channels}
+        return {name: tuple(r.pk for r in refs if name != "named_items" or r.pk not in self.withdrawn_items)
+                for name, refs in self.channels}
 
     def populate(self, rows, staged):
         from .chunk_search_scoped_rows import fingerprint
@@ -130,8 +153,8 @@ class NativeSourceAdmission:
     @property
     def baseline_order(self):
         lanes = self.channel_ids
-        return tuple(dict.fromkeys(pk for name in ("dense", "trigram", "exact", "full_text")
-                                   for pk in lanes[name]))
+        return tuple(dict.fromkeys(pk for name in ("dense", "trigram", "exact", "full_text", "named_items")
+                                   for pk in lanes.get(name, ())))
 
     def graph_read(self, query, reader):
         from .graph_admission_read import read_owned_refs
@@ -159,7 +182,10 @@ class NativeSourceAdmission:
     def order(self, rows, *, scope=None, **kwargs):
         by_id = {row.pk: row for row in rows}
         ordered = tuple(by_id[pk] for pk in self.baseline_order if pk in by_id)
-        ordered += tuple(row for row in rows if row.pk not in self.references)
+        graph = {pk for name, ranks in (kwargs.get("preserved_ranks") or {}).items()
+                 if name.startswith("graph_") for pk, _ in ranks}
+        remaining_graph = graph & self.withdrawn_named_only()
+        ordered += tuple(row for row in rows if row.pk not in self.references or row.pk in remaining_graph)
         return ordered_candidates(
             ordered, self.channel_ids, query=self.query,
             exact_rows=tuple(by_id[pk] for pk in self.channel_ids["exact"] if pk in by_id),

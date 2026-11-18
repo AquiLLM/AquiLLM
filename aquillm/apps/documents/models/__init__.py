@@ -24,6 +24,7 @@ from .embedding_index import EmbeddingSpace, DocumentEmbeddingState, EmbeddingGe
 from .representation import (
     DocumentRepresentationState, DocumentRepresentationGeneration, LegacyDocumentSourceSnapshot,
 )
+from .named_items import PDFNamedItemIndex
 
 
 def document_modality(doc) -> str:
@@ -82,6 +83,7 @@ __all__ = [
     'DocumentRepresentationState',
     'DocumentRepresentationGeneration',
     'LegacyDocumentSourceSnapshot',
+    'PDFNamedItemIndex',
     # Constants
     'IMAGE_UPLOAD_EXTENSIONS',
     'MEDIA_UPLOAD_EXTENSIONS',

@@ -10,6 +10,24 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-18-systemic-retrieval-repair-design.md`
 
+## November 18 experiment on printed lists
+
+The draft branch can index explicitly labeled items in a PDF when its source representation
+activates. The index stores source and chunk coordinates. A search can use those coordinates
+to admit evidence from up to four documents identified by the native graph-enabled search.
+The ordinary evidence and graph branches share their existing source budget.
+
+Both switches default to off. To test on an isolated database, apply the documents migration
+and enable `RAG_NAMED_ITEM_INDEX_ENABLED` on the background worker. For existing PDFs run
+`python manage.py backfill_pdf_named_items --batch-size 25 --after-pk 0` with the same setting.
+Use the returned `after_pk` to continue each batch until the cursor stops advancing. Enable
+both `RAG_NAMED_ITEM_INDEX_ENABLED` and `RAG_NAMED_ITEM_RETRIEVAL_ENABLED` on the isolated
+search process. The supported admission path is the native graph-enabled V2 collector.
+
+The local-model panel selector and synthesis comparisons are research experiments. Their
+results and deployment decision are tracked in the [retrieval issue](https://github.com/AquiLLM/AquiLLM-internal/issues/4)
+and the [adversarial audit](https://github.com/AquiLLM/AquiLLM-internal/issues/6).
+
 ## Global Constraints
 
 - Work in `codex/graph-development-repair`; do not create another branch.

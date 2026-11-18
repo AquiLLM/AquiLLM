@@ -27,6 +27,12 @@ def _read_stage(plan, ids, stage, *, baseline=(), order=False):
 
     plan.check()
     stage.check()
+    if plan.named_items:
+        plan.refresh_named_items()
+        stage.staged.named_item_admission = plan
+        withdrawn = plan.withdrawn_named_only()
+        ids = tuple(pk for pk in ids if pk not in withdrawn)
+        baseline = tuple(row for row in baseline if row.pk not in withdrawn)
     refs = plan.references
     loaded = stage.read_captured(tuple(refs[pk] for pk in ids)) if ids else ()
     plan.populate(loaded, stage.staged)
