@@ -242,24 +242,30 @@ def _pptx(builder, data):
 
 def _pdf(builder, data):
     from pypdf import PdfReader
+
+    from .pdf_outline import outline_heading_slices, split_pdf_page
     reader = PdfReader(io.BytesIO(data))
     # pypdf can emit NUL; the canonical contract rejects it, as PDFDocument drops it.
     pages = [expand_ligatures((page.extract_text() or '').replace('\0', '')) for page in reader.pages]
     vocabulary = word_vocabulary(*pages)
+    pages = [clean_pdf_text(text, vocabulary) for text in pages]
+    headings = outline_heading_slices(reader, pages)
     for number, text in enumerate(pages, 1):
-        text = clean_pdf_text(text, vocabulary)
         if text:
             builder.add(text, page=number)
+            if headings:
+                split_pdf_page(builder, headings[number - 1])
         else:
             key = f'element-{len(builder.elements) + 1}'
             builder.elements.append(SourceElementV1(key, 'separator', builder.offset, builder.offset, number, None, None, None))
     builder.issue('layout_unavailable')
+    return headings is not None
 
 
 def extract_structure(filename: str, data: bytes, *, artifact) -> ExtractionV1:
     validate_artifact_ref(artifact, data=data)
     extension = PurePath(filename).suffix.lower()
-    policy_version = 2 if extension in ('.docx', '.xlsx') else 1
+    policy_version = 2 if extension in ('.docx', '.xlsx', '.pdf') else 1
     parser_key = f'native-{extension.lstrip(".")}-ordered-v{policy_version}'
     if extension not in NATIVE_FORMATS:
         return ExtractionV1(parser_key, artifact, '', (), 'unsupported', ('source_format_unsupported',))
@@ -271,8 +277,11 @@ def extract_structure(filename: str, data: bytes, *, artifact) -> ExtractionV1:
             text = data.decode('utf-8-sig')
             if text:
                 builder.add(text)
+        elif extension == '.pdf':
+            if _pdf(builder, data):
+                parser_key = 'native-pdf-ordered-v3'
         else:
-            {'.docx': _docx, '.xlsx': _xlsx, '.xls': _xls, '.ods': _ods, '.pptx': _pptx, '.pdf': _pdf}[extension](builder, data)
+            {'.docx': _docx, '.xlsx': _xlsx, '.xls': _xls, '.ods': _ods, '.pptx': _pptx}[extension](builder, data)
         return builder.finish(parser_key, artifact)
     except ImportError:
         return ExtractionV1(parser_key, artifact, '', (), 'unsupported', ('local_parser_unavailable',))

@@ -95,7 +95,13 @@ async def finish_preservation(
     proposal_anchors = anchors
     if proposal_anchors is None and query_proposals_enabled():
         proposal_anchors = resolve_source_anchors(question, convo)
-    proposals = await prepare_query_proposals(question, llm=llm, runtime=runtime, anchors=proposal_anchors)
+    proposals = await prepare_query_proposals(
+        question,
+        llm=llm,
+        runtime=runtime,
+        anchors=proposal_anchors,
+        initial_acquired=initial_acquired,
+    )
     acquired = await acquire_evidence(
         question,
         budget=budget,
@@ -126,22 +132,39 @@ async def finish_preservation(
         prepare_source_tool_handoff,
     )
 
-    _, packet, raw = await bounded_retrieval(
-        prepare_source_tool_handoff(
-            consumer,
-            llm,
-            convo,
-            acquired.results,
-            question=question,
-            top_k=direct_rag_top_k(),
-            prepare_fn=prepare_fn or prepare_selection_turn,
-            revalidate_fn=revalidate_fn or revalidate_selection_turn,
-        ),
-        budget,
+    from .rag_selection_hints import (
+        bind_selection_hints, clear_selection_hints, support_hints_enabled,
     )
-    assessment = recheck_support(acquired.assessment, packet.source_evidence)
-    packet.coverage_assessment = assessment
-    packet.auxiliary_handoff = auxiliary_handoff
+    from .rag_recovery_request import (
+        decorate_preservation_packet, preservation_conversation, recovery_request,
+    )
+    from .rag_config import synthesis_max_tokens
+
+    answer_request = recovery_request(convo, question, llm, max_tokens=synthesis_max_tokens(),
+        stage="direct_synthesis", assessment=acquired.assessment, stop_reason=acquired.stop_reason,
+        notice=notice, auxiliary=auxiliary_handoff, initial_acquired=initial_acquired)
+
+    hints = bind_selection_hints(runtime, question, acquired.assessment,
+        source_views(acquired.results) if support_hints_enabled() else ())
+    try:
+        _, packet, raw = await bounded_retrieval(
+            prepare_source_tool_handoff(
+                consumer,
+                llm,
+                convo,
+                acquired.results,
+                question=question,
+                top_k=direct_rag_top_k(),
+                prepare_fn=prepare_fn or prepare_selection_turn,
+                revalidate_fn=revalidate_fn or revalidate_selection_turn,
+                **({"recovery_request": answer_request} if answer_request is not None else {}),
+            ),
+            budget,
+        )
+    finally:
+        clear_selection_hints(runtime, hints)
+    decorate_preservation_packet(packet, assessment=acquired.assessment,
+        stop_reason=acquired.stop_reason, notice=notice, auxiliary=auxiliary_handoff)
     from apps.documents.services.representation_requested_selection import (
         requested_selection, requested_selection_unchanged,
     )
@@ -150,28 +173,10 @@ async def finish_preservation(
         runtime, consumer, selected_collections
     )
     selected = perf_counter()
-    if (
-        notice
-        or assessment.unresolved_aspects
-        or acquired.stop_reason
-        in {"partial_unknown", "completion_reserve", "action_limit", "no_progress"}
-    ):
-        packet.retrieval_status = "partial" if packet.chunks else "context_limited"
-        packet.diagnostic_message = (
-            str(notice)
-            if notice
-            else (
-                "Coverage is partial or unassessed. Answer supported "
-                "portions at the requested depth and state any missing "
-                "requested aspects; missing evidence is not proof of "
-                "absence."
-            )
-        )
-    working = (
-        convo
-        if initial_acquired and convo.messages and convo[-1].role == "tool"
-        else _append_retrieval_messages(convo, question, raw, direct_rag_top_k())
-    )
+    working = (answer_request.conversation_for(raw, direct_rag_top_k()) if answer_request is not None else
+        preservation_conversation(convo, question, raw, direct_rag_top_k(), initial_acquired=initial_acquired))
+    if answer_request is not None:
+        answer_request.check()
     with (
         observability_scope(new_correlation_id(), "direct_synthesis"),
         suppress_evidence_handoff(),

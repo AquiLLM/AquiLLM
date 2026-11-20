@@ -152,6 +152,7 @@ def collect_hybrid_candidate_snapshot(
             bodies={},
             dense_rows={},
             lexical_ids=set(),
+            named_item_admission=None,
             fts_rows={},
             fts_invalid_ids=set(),
             fusion_v2=None,

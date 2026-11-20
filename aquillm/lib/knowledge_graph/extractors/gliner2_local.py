@@ -12,6 +12,10 @@ from threading import RLock
 from typing import Any
 
 from ..config import ExtractionSettings
+from ..extraction_identity import (
+    GLINER2_VERSION,
+    effective_inference_options,
+)
 from ..type_names import TypeNameValidationError, validate_type_name
 from ..types import (
     EntityCandidate,
@@ -28,8 +32,6 @@ from .gliner2_endpoints import (
     _valid_confidence,
     _valid_span,
 )
-
-GLINER2_VERSION = "1.3.2"
 
 _ModelKey = tuple[str, str, str, str, bool]
 _MODEL_CACHE: dict[_ModelKey, Any] = {}
@@ -48,6 +50,18 @@ def _validate_ontology_type_names(ontology: OntologyDefinition) -> None:
             validate_type_name(name, "ontology relation type name")
     except TypeNameValidationError as exc:
         raise ExtractionBackendError(str(exc)) from exc
+
+
+def _schema_definitions(definitions: Mapping[str, object]) -> dict[str, str]:
+    descriptions = {}
+    for name, definition in definitions.items():
+        description = _definition_value(definition, "description")
+        descriptions[name] = (
+            description
+            if isinstance(description, str) and description.strip()
+            else name
+        )
+    return descriptions
 
 
 def _model_key(settings: ExtractionSettings) -> _ModelKey:
@@ -450,40 +464,13 @@ class GLiNER2LocalBackend:
 
         _validate_ontology_type_names(ontology)
         model = _load_model(self._settings)
-        entity_definitions = {
-            name: (
-                description
-                if isinstance(
-                    description := _definition_value(definition, "description"),
-                    str,
-                )
-                and description.strip()
-                else name
-            )
-            for name, definition in ontology.entity_types.items()
-        }
-        inference_options = {
-            "batch_size": self._settings.batch_size,
-            "format_results": False,
-            "include_confidence": True,
-            "include_spans": True,
-        }
+        inference_options = effective_inference_options(self._settings)
         try:
-            schema = model.create_schema().entities(entity_definitions)
+            schema = model.create_schema().entities(
+                _schema_definitions(ontology.entity_types)
+            )
             if include_relations:
-                relation_definitions = {
-                    name: (
-                        description
-                        if isinstance(
-                            description := _definition_value(definition, "description"),
-                            str,
-                        )
-                        and description.strip()
-                        else name
-                    )
-                    for name, definition in ontology.relations.items()
-                }
-                schema = schema.relations(relation_definitions)
+                schema.relations(_schema_definitions(ontology.relations))
             raw_results = model.batch_extract(list(texts), schema, **inference_options)
         except Exception as exc:
             raise ExtractionBackendError("GLiNER2 inference failed") from exc

@@ -60,7 +60,7 @@ async def test_targeted_action_keeps_stricter_tool_timeout_and_fences_late_resul
         try:
             done, _ = await asyncio.wait({task}, timeout=0.3)
             assert task in done, "refinement exceeded the stricter tool timeout"
-            assert task.result().stop_reason == "partial_unknown"
+            assert task.result().stop_reason == "acquisition_timeout"
         finally:
             released.set()
             await task

@@ -21,7 +21,7 @@ async def normal_source_handoff(consumer, llm, convo, max_tokens, stream_func):
     if current.tool_name not in RETRIEVAL_TOOLS:
         return None
     runtime = current_source_runtime()
-    raw = dict(current.result_dict or {})
+    raw = current.result_dict if current.tool_name in {"vector_search", "search_single_document"} else dict(current.result_dict or {})
     auxiliary_handoff = None
     if current.tool_name in {"whole_document", "more_context"}:
         from apps.chat.services.tool_wiring.source_tool_revalidation import (

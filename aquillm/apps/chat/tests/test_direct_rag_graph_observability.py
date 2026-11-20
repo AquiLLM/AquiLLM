@@ -6,7 +6,7 @@ from json import dumps
 from types import SimpleNamespace
 import pytest
 from .persisted_direct_test_support import close_direct_worker as close_direct_worker
-from .direct_rag_test_support import _synthesize, _admit_query, _retrieval, _assert_default_excerpt
+from .direct_rag_test_support import _synthesize, _admit_query, _retrieval, _assert_generated_answer
 
 pytestmark = pytest.mark.usefixtures("close_direct_worker")
 from unittest.mock import AsyncMock
@@ -40,7 +40,7 @@ async def test_graph_overlay_failure_keeps_direct_rag_on_vector_evidence(monkeyp
     )
 
     assert outcome == "handled"
-    _assert_default_excerpt(consumer, draft="Vector evidence remains usable")
+    _assert_generated_answer(consumer, draft="Vector evidence remains usable [doc:doc-a chunk:1].")
 
 
 async def test_direct_rag_logs_safe_graph_contribution(monkeypatch):

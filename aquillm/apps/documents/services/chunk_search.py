@@ -386,9 +386,8 @@ def text_chunk_search(
                 graph_config is not None and graph_preflight_status is None
             ),
             acquisition_schedule_requested=requested_schedule,
-            acquisition_schedule_observed=(
-                native.acquisition_schedule if native else "scored"
-            ),
+            acquisition_schedule_observed=native.acquisition_schedule if native else "scored",
+            acquisition_schedule_version=native.schedule_version if native else None,
             acquisition_initial_ineligibility_reason=(
                 "native_ineligible"
                 if requested_schedule == "native_closure" and native is None else None

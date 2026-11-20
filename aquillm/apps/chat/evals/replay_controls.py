@@ -29,18 +29,20 @@ MODE_DEFAULTS = {key: values[0] for key, values in MODE_CHOICES.items()}
 def effective_schedule_config():
     from apps.documents.services.native_search_schedule import (
         NATIVE_CLOSURE_RESERVE_MS,
-        NATIVE_CLOSURE_SCHEDULE_VERSION,
+        SCOPED_BASELINE_RESERVE_MS,
         acquisition_schedule,
+        native_closure_version,
+        scoped_baseline_recovery_enabled,
     )
 
     schedule = acquisition_schedule()
     native = schedule == "native_closure"
+    recovery = native and scoped_baseline_recovery_enabled()
     return {
         "acquisition_schedule": schedule,
-        "acquisition_schedule_version": (
-            NATIVE_CLOSURE_SCHEDULE_VERSION if native else None
-        ),
+        "acquisition_schedule_version": native_closure_version(recovery) if native else None,
         "native_closure_reserve_ms": NATIVE_CLOSURE_RESERVE_MS if native else None,
+        "scoped_baseline_recovery_reserve_ms": (SCOPED_BASELINE_RESERVE_MS if recovery else 0) if native else None,
     }
 
 

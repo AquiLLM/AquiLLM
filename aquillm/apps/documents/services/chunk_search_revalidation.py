@@ -67,9 +67,13 @@ def ranking_status(reranked, score_set):
 def final_fusion(scope, snapshot, pool, *, full_text_ids, dense_ids):
     if scope is None:
         return snapshot.fusion_v2
+    channels = {"full_text": full_text_ids, "dense": dense_ids}
+    plan = getattr(snapshot, "source_admission", None)
+    if getattr(plan, "named_items", ()):
+        channels["named_items"] = set(plan.channel_ids["named_items"])
     scope.fusion_v2 = restrict_fusion(
         scope.fusion_v2,
         allowed={row.pk for row in pool},
-        channel_ids={"full_text": full_text_ids, "dense": dense_ids},
+        channel_ids=channels,
     )
     return scope.fusion_v2

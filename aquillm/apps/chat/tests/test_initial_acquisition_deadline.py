@@ -68,7 +68,7 @@ async def test_initial_search_uses_remaining_allowance_without_spending_reserves
     assert budget.remaining_ms() == remaining
     assert budget.limits.retrieval_ms == 15000
     if not succeeds:
-        assert result.stop_reason == "partial_unknown"
+        assert result.stop_reason == "acquisition_timeout"
     # An ended operation must never publish a late worker result, even though
     # the original turn remains open for scoring and completion.
     for context in contexts:
@@ -76,9 +76,17 @@ async def test_initial_search_uses_remaining_allowance_without_spending_reserves
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("initial_duration, actions", [(4, 2), (7, 1)])
-async def test_prepared_original_gets_mandatory_time_but_added_query_keeps_cap(
-    monkeypatch, clock, initial_duration, actions,
+@pytest.mark.parametrize(
+    "initial_duration, followup_duration, actions, completed, reason, remaining",
+    [
+        (4, 4, 2, 2, "initial", 5000),
+        (4, 6, 2, 1, "acquisition_timeout", 4000),
+        (7, 4, 1, 1, "initial", 6000),
+    ],
+)
+async def test_prepared_query_uses_remaining_time_and_preserves_completion_reserve(
+    monkeypatch, clock, initial_duration, followup_duration, actions, completed,
+    reason, remaining,
 ):
     from apps.chat.services import retrieval_query_runtime as query_runtime
 
@@ -97,12 +105,13 @@ async def test_prepared_original_gets_mandatory_time_but_added_query_keeps_cap(
         assert bound.runtime is runtime
 
     monkeypatch.setattr(query_runtime, "_database_call", database_validation)
-    seen = []
+    seen, contexts = [], []
 
     async def execute(action):
         seen.append(action.query)
+        contexts.append(copy_context())
         assert budget.reserve_action(action.signature)
-        await elapse(initial_duration if len(seen) == 1 else 4)
+        await elapse(initial_duration if len(seen) == 1 else followup_duration)
         return {"result": [action.query]}
 
     with source_runtime_scope(runtime), bind_turn(TurnContext(budget)):
@@ -111,7 +120,9 @@ async def test_prepared_original_gets_mandatory_time_but_added_query_keeps_cap(
             evidence_views=lambda _: (), query_proposals=rows,
         )
     assert seen == [row.text for row in rows[:actions]]
-    assert result.results == ({"result": [rows[0].text]},)
-    assert result.stop_reason == ("partial_unknown" if actions == 2 else "initial")
+    assert result.results == tuple({"result": [row.text]} for row in rows[:completed])
+    assert result.stop_reason == reason
     assert budget.actions_used == actions
-    assert budget.remaining_ms() == 6000
+    assert budget.remaining_ms() == remaining
+    for context in contexts:
+        assert context.run(budget.publish, lambda: None) is False

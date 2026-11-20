@@ -72,6 +72,7 @@ def enter_search(model_cls, documents, authorization, query, graph_enabled):
             bodies={},
             dense_rows={},
             lexical_ids=set(),
+            named_item_admission=None,
             fts_rows={},
             fts_invalid_ids=set(),
             fusion_v2=None,

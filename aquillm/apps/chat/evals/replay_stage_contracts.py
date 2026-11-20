@@ -11,6 +11,9 @@ def schedule_fields(stage):
         for key, allowed in (
             ("acquisition_schedule_requested", ("scored", "native_closure")),
             ("acquisition_schedule_observed", ("scored", "native_closure")),
+            ("acquisition_schedule_version", (
+                "native-closure-v2", "native-closure-v3", "native-closure-v4", "native-closure-v5",
+            )),
             ("acquisition_initial_ineligibility_reason", ("native_ineligible",)),
             ("acquisition_score_status", ("not_requested", "complete", "unavailable")),
         )

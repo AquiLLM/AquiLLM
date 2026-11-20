@@ -2,6 +2,7 @@
 
 import hashlib
 from typing import get_args
+from lib.graph_failure_observation import safe_graph_failure
 
 from .replay_stage_contracts import (
     materialized_pool,
@@ -152,6 +153,7 @@ def summarize(events, packet, targets):
                 "graph": {
                     "reasons": _safe_graph_reasons(graph.get("reasons")),
                     "failure_reason": failure_reason,
+                    "failure": safe_graph_failure(graph.get("failure")),
                     "ready": graph.get("ready"),
                     "status": graph.get("status"),
                     "branch_statuses": graph.get("branch_statuses"),

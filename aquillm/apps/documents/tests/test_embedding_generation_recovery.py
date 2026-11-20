@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from django.db import transaction
 from django.utils import timezone
 
 from apps.documents.models.embedding_index import EmbeddingGeneration
@@ -78,6 +79,7 @@ def slow_batches(monkeypatch, seconds):
         now[0] += seconds
         return results
     monkeypatch.setattr(task, "embed_document_batch", embed)
+    return now
 
 
 def test_progress_near_deadline_hands_off_without_spending_a_delivery(dense_source, monkeypatch):
@@ -89,6 +91,33 @@ def test_progress_near_deadline_hands_off_without_spending_a_delivery(dense_sour
     row = EmbeddingGeneration.objects.get(pk=key)
     assert (row.state, row.failure_kind, row.deliveries) == ("building", "", 0)
     assert row.embeddings.count() == row.expected_count
+    assert task.build_embedding_generation.run(str(key)) == "activated"
+    assert_dense_ready(key, dense_source)
+
+
+def test_expiry_at_handoff_commit_leaves_continuation_to_recovery(dense_source, monkeypatch):
+    key = schedule(dense_source)
+    now = slow_batches(monkeypatch, 110)
+
+    def handoff(lease, *, using):
+        assert store.handoff_embedding_delivery(lease, using=using)
+
+        def expire():
+            now[0] += 15  # Commit completed after the 120-second delivery deadline.
+
+        transaction.on_commit(expire, using=using)
+        return True
+
+    monkeypatch.setattr(task, "handoff_embedding_delivery", handoff)
+    with patch.object(task.build_embedding_generation, "delay") as queue:
+        with pytest.raises(TimeoutError, match="embedding_deadline"):
+            task.build_embedding_generation.run(str(key))
+        queue.assert_not_called()
+    row = EmbeddingGeneration.objects.get(pk=key)
+    assert (row.state, row.failure_kind, row.deliveries) == ("building", "", 0)
+    assert row.embeddings.count() == row.expected_count > 0
+    lapse(key)
+    assert recover() == [str(key)]
     assert task.build_embedding_generation.run(str(key)) == "activated"
     assert_dense_ready(key, dense_source)
 

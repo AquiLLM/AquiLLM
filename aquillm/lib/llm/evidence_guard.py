@@ -82,13 +82,8 @@ def contains_selected_evidence(value):
     )
 
 
-def estimate_request_tokens(payload, *, turn_budget=None):
-    """Estimate the whole shaped payload, including schema and image overhead.
-
-    Images have a conservative 4096-token allowance per part. Unknown tokenizer
-    counts remain approximate; a server overflow stops rather than trimming.
-    """
-
+def _encoded_estimate_input(payload):
+    """The complete estimator input, including schema and image overhead."""
     def normalized(value):
         if isinstance(value, dict):
             image = (
@@ -109,7 +104,43 @@ def estimate_request_tokens(payload, *, turn_budget=None):
             return [normalized(v) for v in value]
         return value
 
-    encoded = json.dumps(normalized(_plain(payload)), ensure_ascii=False, default=str)
+    return json.dumps(normalized(_plain(payload)), ensure_ascii=False, default=str)
+
+
+def _estimate_policy():
+    from lib.llm.utils import evidence_tokens
+
+    return estimate_text_tokens, evidence_tokens._ENCODING
+
+
+def prepay_request_tokens(payload, *, turn_budget, pin=False):
+    """Pay actual tokenization once; retain ordinary and one combined request."""
+    from lib.llm.utils.paid_request_estimates import prepay_estimate
+
+    try:
+        return prepay_estimate(_encoded_estimate_input(payload), ledger=turn_budget,
+            pin=pin, policy=_estimate_policy(), policy_now=_estimate_policy,
+            tokenize=estimate_text_tokens)
+    except ValueError as exc:
+        context_limited(str(exc))
+
+
+def estimate_request_tokens(payload, *, turn_budget=None):
+    """Estimate the whole shaped request, reusing only previously paid work.
+
+    Images retain the existing conservative 4096-token allowance per part.
+    Token counts are approximate; a server overflow stops rather than trimming.
+    """
+    encoded = _encoded_estimate_input(payload)
+    if turn_budget is not None:
+        from lib.llm.utils.paid_request_estimates import lookup_paid_estimate
+
+        try:
+            paid = lookup_paid_estimate(turn_budget, encoded, _estimate_policy(), _estimate_policy)
+        except ValueError as exc:
+            context_limited(str(exc))
+        if paid is not None:
+            return paid
     if turn_budget is not None:
         if (
             not turn_budget.reserve_text(len(encoded), kind="tokenized")

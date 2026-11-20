@@ -245,9 +245,10 @@ def test_original_context_invalidity_outranks_valid_limit_observations(
                 closure_reserve_ms=1250
             )
             assert outcome.kind == "invalid" and outcome.pool is None and calls == []
-            assert outcome.diagnostics == {
+            assert {key: value for key, value in outcome.diagnostics.items() if key != "graph_failure"} == {
                 "graph_status": "error",
                 "graph_candidate_count": 0,
             }
+            assert outcome.diagnostics["graph_failure"]["owner_valid"] is False
         finally:
             _DEADLINE.reset(token)

@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-from unittest.mock import AsyncMock
-
-from apps.chat.refs import CollectionsRef
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import UserMessage
 
@@ -76,14 +72,9 @@ def _retrieval(consumer, query, payload):
     return consumer.case.rows(payload)
 
 
-def _assert_default_excerpt(consumer, *, draft):
+def _assert_generated_answer(consumer, *, draft):
     message = consumer.convo[-1]
-    citation = consumer.case.text("[doc:doc-a chunk:1]")
-    assert message.content == (
-        "Support for an answer is uncertain in the selected evidence. "
-        "These are attributed excerpts, not a conclusion about the question:\n\n"
-        f"> Calibration uses flat fields and dark frames. {citation}"
-    )
-    assert draft not in message.content
+    # Valid cited model wording survives without promoting semantic support.
+    assert message.content == consumer.case.text(draft)
     assert message._validated_answer.outcome == "partial"
     assert len(consumer.test_synthesis_calls) == 1

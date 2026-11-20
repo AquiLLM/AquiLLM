@@ -7,17 +7,24 @@ import pytest
 from asgiref.sync import async_to_sync
 from django.contrib.auth.models import User
 
-from apps.chat.services.rag_answer_publication import _freeze_legacy_packet, bind_packet_publication
+from apps.chat.services.rag_answer_publication import (
+    _freeze_legacy_packet,
+    bind_packet_publication,
+)
 from apps.chat.services.rag_evidence import build_evidence_packet
 from apps.chat.services.rag_publication_images import capture_publication_images
 from apps.collections.models import CollectionPermission
 from apps.documents.models import DocumentFigure, RawTextDocument, TextChunk
-from apps.documents.services.representation_activation import build_document_representation
+from apps.documents.services.representation_activation import (
+    build_document_representation,
+)
 from apps.documents.services.representation_caption import caption_chunker_key
-from apps.documents.services.representation_media_acquisition import chunk_media_url, initialize_media_runtime
+from apps.documents.services.representation_media_acquisition import (
+    chunk_media_url,
+    initialize_media_runtime,
+)
 from apps.documents.tests.representation_support import reference
 from aquillm.task_ingest_uploaded import run_ingest_uploaded_file
-from lib.llm.tests.publication_fixture_support import UNCERTAINTY
 from lib.llm.turn_context import TurnContext, bind_turn
 from lib.retrieval.synthesis_budget import seal_synthesis
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
@@ -73,19 +80,6 @@ def citation(source):
 def image_url(source):
     doc, chunk = source
     return f"/aquillm/document_image/{doc.id}/?chunk_id={chunk.pk}"
-
-
-def attributed(sources):
-    # Literal fixture layout: retain caption spacing and both numeric/terminal references.
-    quotes = []
-    for doc, chunk in sources:
-        token = citation((doc, chunk))
-        if isinstance(doc, DocumentFigure):
-            figure, caption = chunk.content.split(". ", 1)
-            quotes.append(f"> {figure}. {token} {caption} {token}")
-        else:
-            quotes.append(f"> {chunk.content} {token}")
-    return UNCERTAINTY + "\n\n" + "\n\n".join(quotes)
 
 
 @contextmanager

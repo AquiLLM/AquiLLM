@@ -5,6 +5,7 @@ from dataclasses import replace
 import pytest
 
 from apps.documents.models import TextChunk
+from apps.documents.services.graph_source_admission_policy import charged_sources
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.documents.services.source_loading import SourcePreparationLimited
 
@@ -22,6 +23,8 @@ def test_changed_body_is_withdrawn_from_every_completed_payload(
 
     with native_case(monkeypatch) as case:
         row = case.snapshot.baseline_candidates[position]
+        initial = {r.pk: r.content for r in case.snapshot.baseline_candidates if r.pk != row.pk}
+        before = charged_sources(case.source.budget)
         original = closure._finalize_closed_ranking
 
         def final(*args, **kwargs):
@@ -42,7 +45,12 @@ def test_changed_body_is_withdrawn_from_every_completed_payload(
             result.snapshot.baseline_candidates,
         )
         assert all(row.pk not in {r.pk for r in group} for group in groups)
-        assert len(result.final_rows[2]) == 24 and result.score_set is None
+        returned = {r.pk: r.content for r in result.final_rows[2]}
+        assert initial.items() <= returned.items() and len(returned) == 44
+        assert len(set(returned) - set(initial)) == len(case.fetched) == 20
+        assert before <= charged_sources(case.source.budget)
+        assert case.source.budget.sources_used == 45 and result.score_set is None
+        assert not case.inference and case.source.budget.pairs_used == {"acquisition": 0, "final": 0}
 
 
 @pytest.mark.parametrize("mutation", ["permission", "source", "operation"])

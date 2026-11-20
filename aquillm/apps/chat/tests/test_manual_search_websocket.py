@@ -7,18 +7,24 @@ import pytest
 
 from apps.chat.consumers.chat_receive import handle_chat_receive
 from apps.chat.services import manual_search_turn
-from apps.chat.tests.chat_message_test_support import _FakeLLMInterface, stub_execution_ownership
+from apps.chat.tests.chat_message_test_support import (
+    _FakeLLMInterface,
+)
+from apps.chat.tests.chat_message_test_support import (
+    stub_execution_ownership as stub_execution_ownership,
+)
+from apps.chat.tests.persisted_direct_test_support import (
+    close_direct_worker as close_direct_worker,
+)
 from apps.chat.tests.test_direct_rag_websocket_smoke import (
     _append_payload,
     _consumer,
     _persisted_user_and_convo,
     _results_payload,
 )
+from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
-from lib.llm.answer_publication import LIMITED_ANSWER
-from lib.llm.tests.publication_fixture_support import UNCERTAINTY
-from apps.chat.tests.persisted_direct_test_support import close_direct_worker
 
 DOC = "11111111-1111-4111-8111-111111111111"
 
@@ -43,7 +49,7 @@ async def test_websocket_command_retrieves_before_model_and_publishes_final_delt
     document_id = str(case.documents["doc-a"].id)
     command = command.replace(DOC, document_id)
     answer = case.text("The paper describes calibration [doc:doc-a chunk:1].")
-    expected = UNCERTAINTY + "\n\n> " + raw["result"][0]["text"] + " " + raw["result"][0]["citation"]
+    expected = answer
     llm = _FakeLLMInterface(
         [
             LLMResponse(

@@ -3,9 +3,10 @@
 from apps.chat.services import rag_pipeline
 from apps.chat.services.rag_pipeline import run_direct_rag_turn
 from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
+from apps.chat.tests.persisted_direct_test_support import (
+    close_direct_worker as close_direct_worker,
+)
 from lib.llm.types.response import LLMResponse
-from apps.chat.tests.persisted_direct_test_support import close_direct_worker
-from lib.llm.tests.publication_fixture_support import UNCERTAINTY
 
 from .direct_rag_test_support import _consumer, _results_payload, _user_convo
 
@@ -57,6 +58,6 @@ async def test_end_to_end_real_synthesis_single_llm_call(monkeypatch, close_dire
     assert order[0] == "retrieval"
     assert order.count("get_message") == 1
     assert "thinking_budget" not in llm_if.calls[0]
-    expected = UNCERTAINTY + "\n\n> " + raw["result"][0]["text"] + " " + raw["result"][0]["citation"]
-    assert consumer.convo[-1].content == expected
+    # The main model's cited synthesis survives without semantic promotion.
+    assert consumer.convo[-1].content == answer
     assert consumer.convo[-1]._validated_answer.outcome == "partial"

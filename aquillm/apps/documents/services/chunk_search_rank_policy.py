@@ -11,12 +11,15 @@ from .lexical_projection import POLICY
 
 def controls():
     rrf = getattr(settings, "RAG_RRF_ENABLED", False) is True
-    return {
+    result = {
         "full_text": getattr(settings, "RAG_FULL_TEXT_ENABLED", False) is True,
         "rrf": rrf,
         "protected_exact": rrf
         and getattr(settings, "RAG_PROTECTED_EXACT_ENABLED", False) is True,
     }
+    if getattr(settings, "RAG_NAMED_ITEM_RETRIEVAL_ENABLED", False) is True:
+        result["named_items"] = True
+    return result
 
 
 def ranking_policy(scope):

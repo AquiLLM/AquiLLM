@@ -23,6 +23,9 @@ from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
     [
         "Why do the photometric filter and redshift both use z?",
         "Can you figure out why this happens?",
+        "Compare deposits in both reports. How many accounts opened, how many closed, "
+        "and what periods do those two figures cover?",
+        "Compare the sales figures from both reports.",
         "Show me the reasoning behind this result.",
         "Explain how GraphRAG retrieves documents.",
         "Explain the graph algorithm in the paper.",
@@ -42,6 +45,8 @@ def test_text_questions_do_not_enable_visual_retrieval(question):
     [
         "Show me Figure 2 with a caption.",
         "What does Figure 2 show?",
+        "Compare the two figures and explain how many points appear in each plot.",
+        "How many data points are shown in those two figures?",
         "Display the calibration plot from the paper.",
         "Can you display it in chat?",
         "What does the redshift distribution look like?",

@@ -76,7 +76,7 @@ def test_malformed_or_unrelated_errors_never_become_proven_limits(
             closure_reserve_ms=1250
         )
         assert outcome.kind == "failure" and outcome.pool is None and calls == []
-        assert outcome.diagnostics == {
+        assert {key: value for key, value in outcome.diagnostics.items() if key != "graph_failure"} == {
             "graph_status": "error",
             "graph_candidate_count": 0,
         }
@@ -114,7 +114,7 @@ def test_private_exception_forgery_remains_generic(monkeypatch, forgery):
             closure_reserve_ms=1250
         )
         assert outcome.kind == "failure" and outcome.pool is None and calls == []
-        assert outcome.diagnostics == {
+        assert {key: value for key, value in outcome.diagnostics.items() if key != "graph_failure"} == {
             "graph_status": "error",
             "graph_candidate_count": 0,
         }
@@ -133,9 +133,14 @@ def test_private_limit_constructor_rejects_unrecognized_reason(reason):
 def test_failed_observation_snapshot_copies_scalars_and_retains_over_cap_charges(
     monkeypatch,
 ):
+    from apps.documents.services.source_deadline import _DEADLINE
     from apps.knowledge_graph.retrieval.closed_graph_attempt_v2 import (
         _ClosedGraphLimited,
     )
+    from apps.knowledge_graph.retrieval.graph_failure_observations_v2 import (
+        limit_observations,
+    )
+    from lib.retrieval.operation import _OPERATION
 
     with graph_frame(monkeypatch) as active:
         seen = returned_envelope(monkeypatch, empty=True, reasons=("deadline",))
@@ -145,6 +150,7 @@ def test_failed_observation_snapshot_copies_scalars_and_retains_over_cap_charges
         assert outcome.diagnostics["graph_failure_reason"] == "deadline"
         envelope = seen[0]
         object.__setattr__(envelope.frontier_budget, "bytes_used", 1_048_577)
+        bound, operation = _DEADLINE.get(), _OPERATION.get()
         error = _ClosedGraphLimited(
             "deadline",
             coverage=envelope.handoff.coverage,
@@ -158,7 +164,7 @@ def test_failed_observation_snapshot_copies_scalars_and_retains_over_cap_charges
 
         def scalar_snapshot(value):
             if type(value) is dict:
-                return all(
+                return not {"bound", "operation"}.intersection(value) and all(
                     type(k) is str and scalar_snapshot(v) for k, v in value.items()
                 )
             if type(value) in (list, tuple):
@@ -166,7 +172,21 @@ def test_failed_observation_snapshot_copies_scalars_and_retains_over_cap_charges
             return value is None or type(value) in (str, int, bool)
 
         assert scalar_snapshot(error.observations)
-        assert set(vars(error)) == {"reason", "observations"}
+        assert set(vars(error)) == {"reason", "observations", "bound", "operation"}
+        assert error.bound is bound
+        assert error.operation is operation
+        sanitized = limit_observations(error)
+        assert set(sanitized) == {
+            "graph_coverage_v2",
+            "frontier_budget",
+            "frontier_invocations",
+            "graph_failure_reason",
+        }
+        assert sanitized["graph_failure_reason"] == "deadline"
+        assert sanitized["frontier_budget"]["bytes_used"] == 1_048_577
+        assert sanitized["graph_coverage_v2"]["reasons"] == ("deadline",)
+        assert scalar_snapshot(sanitized)
+        assert scalar_snapshot(outcome.diagnostics)
 
 
 @pytest.mark.parametrize(
@@ -214,7 +234,7 @@ def test_allowed_snapshot_keys_cannot_carry_unvalidated_values(monkeypatch, muta
             closure_reserve_ms=1250
         )
         assert outcome.kind == "failure" and outcome.pool is None
-        assert outcome.diagnostics == {
+        assert {key: value for key, value in outcome.diagnostics.items() if key != "graph_failure"} == {
             "graph_status": "error",
             "graph_candidate_count": 0,
         }

@@ -61,7 +61,7 @@ def test_pressure_rows_never_requests_embeddings(monkeypatch):
         assert attempts == []
 
 
-def capture(active, *, native=True):
+def capture(active, *, native=True, authorization=None):
     from lib.embeddings.document_contracts import digest
 
     f, _, _, scope, snapshot, dependencies, _, _ = active
@@ -71,7 +71,7 @@ def capture(active, *, native=True):
         TextChunk, "Atlas", 20, snapshot.documents,
         query_embedding=None, graph_config=get_graph_expansion_config(),
         app_config_getter=lambda _: SimpleNamespace(vector_top_k=45, trigram_top_k=45),
-        authorization_context=f.authorization,
+        authorization_context=f.authorization if authorization is None else authorization,
         **({"_graph_dependencies": dependencies} if native and
            "_graph_dependencies" in signature(collect_hybrid_candidate_snapshot).parameters else {}),
     )
@@ -94,6 +94,37 @@ def test_real_45_source_pressure_admits_novel_graph_without_raising_cap(monkeypa
         assert diagnostics["source_admission"]["policy"] == "native-v2-channel-admission-v1"
 
 
+def test_named_item_lookup_precedes_hydration_and_shares_the_native_ledger(monkeypatch):
+    from hashlib import md5
+    from django.conf import settings
+    from apps.documents.services import named_item_lookup
+
+    monkeypatch.setattr(settings, "RAG_NAMED_ITEM_RETRIEVAL_ENABLED", True)
+    with graph_frame(monkeypatch, prepare_sources=pressure_rows, dataset=True) as active:
+        f, _, source, scope, _, dependencies, _, _ = active
+        row = TextChunk.objects.filter(doc_id=f.chunks["A"].doc_id).order_by("-chunk_number").first()
+        nominee = SimpleNamespace(chunk_id=row.pk, document_id=row.doc_id, chunk_number=row.chunk_number,
+            generation_id=row.representation_generation, body_length=len(row.content),
+            body_md5=md5(row.content.encode(), usedforsecurity=False).hexdigest())
+
+        def lookup(current_scope, owner_ids, question):
+            assert source.budget.sources_used == 0
+            assert current_scope is scope and row.doc_id in owner_ids and question == "Atlas"
+            return (nominee,)
+
+        monkeypatch.setattr(named_item_lookup, "lookup_named_item_candidates", lookup)
+        monkeypatch.setattr(named_item_lookup, "validate_named_item_candidates",
+                            lambda current, candidates: current is scope and candidates == (nominee,))
+        snapshot = capture(active)
+        assert snapshot.source_admission.channel_ids["named_items"] == (row.pk,)
+        assert row.pk in snapshot.source_admission.initial_ids
+        assert row.pk in {r.pk for r in snapshot.baseline_candidates}
+        assert source.budget.sources_used == 25
+        rows, _ = hybrid_graph_candidate_pool_v2(snapshot, "Atlas", f.authorization, dependencies)
+        assert row.pk in {r.pk for r in rows}
+        assert source.budget.sources_used <= 45
+
+
 def test_graph_off_collector_keeps_existing_full_body_prefix(monkeypatch):
     with graph_frame(monkeypatch, prepare_sources=pressure_rows, dataset=True) as active:
         snapshot = capture(active, native=False)
@@ -101,6 +132,37 @@ def test_graph_off_collector_keeps_existing_full_body_prefix(monkeypatch):
         assert len(snapshot.baseline_candidates) == 45
         assert source.budget.sources_used == 45
         assert getattr(snapshot, "source_admission", None) is None
+
+
+def test_withdrawn_item_votes_refill_fallback_and_preserve_an_independent_graph_vote():
+    from apps.documents.services.candidate_rank_fusion import fuse_ranked_channels_v2
+    from apps.documents.services.chunk_search_authorization import _finish_search_rows
+    from apps.documents.services.chunk_search_candidates import HybridCandidateSnapshot
+
+    stale, graph, ordinary = (SimpleNamespace(pk=i) for i in (1, 2, 3))
+    rows = (stale, graph, ordinary)
+    fusion = fuse_ranked_channels_v2(
+        {"dense": ((1, 1),), "named_items": ((1, 1), (2, 2)),
+         "graph_v2": ((2, 1),), "trigram": ((3, 1),)},
+        limit=3, scope_key="a" * 64,
+    )
+    plan = SimpleNamespace(named_items=(1, 2), withdrawn_items={1, 2},
+                           withdrawn_named_only=lambda: {2}, channel_ids={"named_items": ()})
+    snapshot = HybridCandidateSnapshot(
+        documents=(), vector_results=(stale,), trigram_results=(ordinary,), exact_results=(),
+        vector_chunk_ids=(1,), trigram_chunk_ids=(3,), exact_chunk_ids=(),
+        baseline_candidates=rows, graph_seeds=(), exact_terms=(), vector_error=None,
+        vector_ms=0, trigram_ms=0, exact_ms=0, pre_dedupe_count=3, graph_seed_error=False,
+        fusion_v2=fusion, source_admission=plan,
+    )
+    scope = SimpleNamespace(dense_rows={1: SimpleNamespace(embedding_generation_key="old")},
+                            lexical_ids={3}, fts_rows={}, fts_invalid_ids=set(), fusion_v2=fusion)
+    result, (_, _, ranked) = _finish_search_rows(snapshot,
+        ((stale,), (ordinary,), (stale, graph), (), (), rows), {id(r) for r in rows},
+        scope, set(), set(), None, 2)
+    assert {row.pk for row in ranked} == {2, 3}
+    assert {row.chunk_id for row in result.fusion_v2.candidates} == {2, 3}
+    assert all(rank.channel != "named_items" for c in result.fusion_v2.candidates for rank in c.channel_ranks)
 
 
 @pytest.mark.parametrize("kind", ["wrapped", "legacy", "graph_off"])

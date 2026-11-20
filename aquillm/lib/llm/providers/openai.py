@@ -45,6 +45,17 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
 
     supports_request_observability = True
 
+    @property
+    def _uses_vllm(self):
+        base_url = str(getattr(self.client, "base_url", "") or "").lower()
+        return "vllm" in base_url or ":8000" in base_url
+
+    @property
+    def supports_json_schema(self):
+        # The deployed vLLM supports schema decoding. Unknown compatible
+        # endpoints retain prompt-only planning rather than assuming support.
+        return self._uses_vllm
+
     @override
     def __init__(self, openai_client, model: str):
         self.client = openai_client
@@ -55,6 +66,9 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
         synthesis_phase = kwargs.pop("_synthesis_phase", "initial")
         kwargs.pop("messages_pydantic", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
+        if synthesis_phase == "citation_repair" and self._uses_vllm:
+            # Hidden reasoning can consume the entire bounded repair completion.
+            thinking_budget = 0
         correlation_id = safe_correlation_id(
             kwargs.pop("_observability_correlation_id", None)
             or current_correlation_id()

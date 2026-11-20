@@ -86,9 +86,9 @@ async def test_suffix_after_1600_survives_scoring_seal_sdk_and_persisted_sink(
     assert result["delivered"][0]["text"].encode() == text.encode()
     assert result["delivered"][0]["fingerprint"] == sha256(text.encode()).hexdigest()
     assert publication_matches(result), result
-    assert result["persisted_answer"] == result["final_stream"]
+    assert result["persisted_answer"] == result["final_stream"] == answer
     assert citation in result["persisted_answer"]
-    assert MARKER in result["persisted_answer"], result["persisted_answer"]
+    assert MARKER in result["persisted_answer"].replace(" " + citation, "")
     assert not unattributed and result["dispatch_accounting_complete"]
     assert result["actions"] == 1
     assert sum(result["pairs"].values()) == len(calls) == 2

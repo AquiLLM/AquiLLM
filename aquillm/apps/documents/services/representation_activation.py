@@ -205,6 +205,8 @@ def activate_representation(lease, *, expected_active_key, using, legacy_success
                 state.active_generation, state.legacy_closed = generation, True
                 state.save(using=using, update_fields=["active_generation", "legacy_closed", "updated_at"])
                 selected = freeze_active_representations((reference(current),), using=using).selections[0]
+                from .named_item_projection import publish_named_items
+                publish_named_items(current, selected, using=using)
                 finish_document_representation_transition(transition, target=selected, using=using)
                 if publication is not None:
                     publication.delete(using=using)

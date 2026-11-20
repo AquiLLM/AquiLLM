@@ -785,10 +785,11 @@ def test_effective_report_records_explicit_acquisition_schedule(monkeypatch):
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
     monkeypatch.setenv("RAG_ACQUISITION_SCHEDULE", "native_closure")
+    monkeypatch.setenv("RAG_SCOPED_BASELINE_RECOVERY_ENABLED", "1")
     report = cli.effective_config(
         SimpleNamespace(RAG_CACHE_ENABLED=False),
         SimpleNamespace(vector_top_k=15, trigram_top_k=15),
     )
     assert report["acquisition_schedule"] == "native_closure"
-    assert report["acquisition_schedule_version"] == "native-closure-v2"
+    assert report["acquisition_schedule_version"] == "native-closure-v5"
     assert report["native_closure_reserve_ms"] == 1250

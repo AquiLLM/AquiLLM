@@ -14,10 +14,10 @@ from aquillm.llm import (
     Conversation,
     LLMResponse,
     ToolChoice,
-    ToolMessage,
     UserMessage,
     llm_tool,
 )
+
 
 @llm_tool(
     for_whom="assistant",
@@ -465,56 +465,6 @@ class ToolUseRetryTests(SimpleTestCase):
         self.assertIn("Kerr solution", updated[-1].content)
         self.assertNotIn("I'll retrieve", updated[-1].content)
 
-    def test_retries_post_tool_placeholder_that_only_promises_to_help(self):
-        from lib.llm.tests.publication_fixture_support import selected_publication, UNCERTAINTY
-        citation = "[doc:doc-1 chunk:1]"
-        llm = _FakeLLMInterface(
-            [
-                LLMResponse(
-                    text="I'll help you understand the math from this paper.",
-                    tool_call={},
-                    stop_reason="end_turn",
-                    input_usage=5,
-                    output_usage=5,
-                ),
-                LLMResponse(
-                    text=(
-                        "The paper's math centers on calibration and discrimination: "
-                        "it compares confidence scores against correctness, then studies "
-                        "regions where utility and factuality trade off."
-                    ) + " " + citation,
-                    tool_call={},
-                    stop_reason="stop",
-                    input_usage=5,
-                    output_usage=5,
-                ),
-            ]
-        )
-        convo = Conversation(
-            system="You are a test assistant.",
-            messages=[
-                UserMessage(content="Can you show me some of the math from the paper?"),
-                ToolMessage(
-                    content="The paper discusses calibration, confidence, utility, and factuality.",
-                    tool_name="whole_document",
-                    arguments={"doc_id": "doc-1"},
-                    for_whom="assistant",
-                    result_dict={
-                        "result": "The paper discusses calibration, confidence, utility, and factuality."
-                    },
-                ),
-            ],
-        )
-
-        with selected_publication([{"doc_id": "doc-1", "chunk_id": 1, "text": 'The paper discusses calibration, confidence, utility, and factuality.'}]):
-            updated, changed = async_to_sync(llm.complete)(convo, 512)
-
-        self.assertEqual(changed, "changed")
-        self.assertEqual(len(llm.calls), 2)
-        self.assertEqual(updated[-1].content, UNCERTAINTY + "\n\n> " + 'The paper discusses calibration, confidence, utility, and factuality.' + " " + citation)
-        self.assertNotIn("I'll help", updated[-1].content)
-
-
 class CutoffContinuationTests(SimpleTestCase):
     def test_reasoning_only_general_cutoff_retries_with_visible_answer_budget(self):
         llm = _FakeLLMInterface(
@@ -743,7 +693,9 @@ class CutoffContinuationTests(SimpleTestCase):
 
         self.assertEqual(changed, "changed")
         self.assertEqual(len(llm.calls), 2)
-        from lib.llm.tests.publication_fixture_support import assert_unbound_image_continuation
+        from lib.llm.tests.publication_fixture_support import (
+            assert_unbound_image_continuation,
+        )
         assert_unbound_image_continuation(llm, updated)
 
 

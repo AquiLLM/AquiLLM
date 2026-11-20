@@ -1,5 +1,20 @@
 """Validation of immutable pilot limits; no runtime budget state."""
 
+PILOT_MAX = {
+    "actions": 3,
+    "unique_sources": 45,
+    "materialized_codepoints": 250_000,
+    "tokenized_codepoints": 1_000_000,
+    "acquisition_pairs": 90,
+    "final_pairs": 45,
+    "in_flight_pairs": 6,
+    "planner_calls": 2,
+    "planner_call_ms": 5_000,
+    "planner_output_tokens": 1024,
+    "retrieval_ms": 30_000,
+    "final_scoring_ms": 3_000,
+}
+
 
 def validate_limits(self, pilot_max) -> None:
     for name in self.__dataclass_fields__:

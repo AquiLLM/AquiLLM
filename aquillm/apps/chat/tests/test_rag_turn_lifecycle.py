@@ -88,7 +88,8 @@ async def test_outer_scope_creates_distinct_turns_and_closes(monkeypatch):
     )
 
     monkeypatch.setattr(
-        rag_turn, "rag_preservation_config", lambda: SimpleNamespace(active=True)
+        rag_turn, "rag_preservation_config",
+        lambda: SimpleNamespace(active=True, iterative_retrieval_enabled=False)
     )
     monkeypatch.setattr(
         rag_turn, "create_runtime", lambda consumer, budget: SourceRuntime(budget, None)

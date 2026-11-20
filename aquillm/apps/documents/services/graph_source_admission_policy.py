@@ -40,6 +40,12 @@ def fair_prefix(channels, limit, *, protected=()):
     return tuple(selected)
 
 
+def item_admission_prefix(ordinary, nominees, *, allowance, active_channels):
+    """Share the existing baseline allowance and keep the initial ordinary lane heads."""
+    heads = ordinary[:min(allowance, active_channels)]
+    return tuple(dict.fromkeys((*heads, *nominees, *ordinary)))[:allowance]
+
+
 def charged_sources(budget):
     """Read the same atomic ledger; never reserve, refund, or replace identities."""
     from lib.retrieval.turn_budget import TurnBudget
