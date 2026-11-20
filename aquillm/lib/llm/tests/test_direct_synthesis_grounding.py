@@ -19,6 +19,27 @@ from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
 
 
+@pytest.mark.asyncio
+async def test_initial_and_retried_comparison_use_exact_entries_and_identifying_source(
+    monkeypatch,
+):
+    monkeypatch.setenv("LLM_POST_TOOL_SYNTHESIS_RETRIES", "1")
+    convo = _conversation()
+    convo[0].content = "Which instruments changed between the two monitoring plans?"
+    model = _ModelBoundary(empty_attempts=1)
+    with synthetic_publication(packet=_selected_packet(convo)):
+        await complete_conversation_turn(model, convo, 1024)
+
+    assert len(model.requests) == 2
+    for request in model.requests:
+        grounding = request["system"]
+        assert "complete entries on both sides" in grounding
+        assert "count a version replacement once" in grounding
+        assert "cite both inventories at the comparison" in grounding
+        assert "cite the chunk containing the entry" in grounding
+        assert "cite the identifying passage" in grounding
+
+
 @pytest.mark.parametrize("stage", ["direct_synthesis", "post_tool_synthesis", None])
 async def test_document_initial_and_all_empty_retries_preserve_grounding(
     monkeypatch,
