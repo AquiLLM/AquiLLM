@@ -858,7 +858,7 @@ async def complete_conversation_turn(
     citation_repair_failed = False
     incomplete_repair = False
     if enforce_citations and (not response_tool_call):
-        from .rag_citation_evidence import exact_draft_claims, misplaced_identifiers
+        from .rag_citation_evidence import misplaced_identifiers
 
         bound_sources = getattr(getattr(publication, "policy", None), "sources", ())
         misplaced = misplaced_identifiers(response_text, bound_sources)
@@ -869,90 +869,24 @@ async def complete_conversation_turn(
             require_cited_numeric_claims=require_cited_numeric_claims,
         )
         if (not citations_valid or misplaced) and (not is_streaming_turn):
-            invalid = citations.find_invalid_citations(
-                response_text, citation_allowlist
-            )
-            prior_for_retry = response_text
-            if len(prior_for_retry) > citation_retry_prior_max_chars:
-                prior_for_retry = (
-                    prior_for_retry[:citation_retry_prior_max_chars].rstrip()
-                    + "\n[Truncated for citation retry.]"
-                )
-            retry_prompt = citations.build_citation_retry_prompt(
-                prior_answer=prior_for_retry,
-                allowed_citations=citation_allowlist,
-                invalid_citations=invalid,
-            )
-            if misplaced:
-                retry_prompt += (
-                    "\n\nThese identifiers appear in other selected passages "
-                    "and are missing from the passages cited at "
-                    "the claim. Check these passages for the full assertion and "
-                    "qualifications. A matching name alone does not establish "
-                    "a relation between documents. Cite passages that establish "
-                    "the assertion or remove the unsupported detail.\n"
-                    + "\n".join(f"{identifier}: {' '.join(refs)}"
-                                for identifier, refs in misplaced.items())
-                )
-            if require_cited_numeric_claims:
-                retry_prompt += (
-                    "\n\nNumeric factual sentences need citations at the claim. "
-                    "For a computed comparison, cite every source supplying "
-                    "an input "
-                    "at that comparison; a trailing Sources list is not sufficient."
-                )
-            retry_messages = message_dicts + [
-                {"role": "assistant", "content": response_text},
-                {"role": "user", "content": retry_prompt},
-            ]
-            retry_pydantic_messages = messages_for_bot + [
-                AssistantMessage(content=response_text, stop_reason="stop"),
-                UserMessage(content=retry_prompt),
-            ]
-            retry_args = llm.base_args | {
-                "_synthesis_phase": "citation_repair",
-                "system": request_system_prompt,
-                "messages": retry_messages,
-                "messages_pydantic": retry_pydantic_messages,
-                "max_tokens": _resolve_post_tool_max_tokens(
-                    conversation,
-                    default_cap=post_tool_max_tokens,
+            from .rag_citation_repair import retry_citation_draft
+
+            repair = await retry_citation_draft(
+                llm, response_text, citation_allowlist, bound_sources, misplaced,
+                prior_max_chars=citation_retry_prior_max_chars,
+                system_prompt=request_system_prompt,
+                messages=message_dicts,
+                pydantic_messages=messages_for_bot,
+                max_tokens=_resolve_post_tool_max_tokens(
+                    conversation, default_cap=post_tool_max_tokens,
                     global_max=_post_tool_global_max(max_tokens),
                 ),
-                "stream_callback": provider_stream_func,
-                "stream_message_uuid": stream_message_uuid,
-            }
-            try:
-                retry_response = await llm.get_message(**retry_args)
-            except Exception:
-                retry_response = None
-            if retry_response and (not retry_response.tool_call):
-                revised = visibility.sanitize_completed_response(
-                    retry_response.text or "", retry_response
-                )
-                revised_misplaced = misplaced_identifiers(revised, bound_sources)
-                cutoff = retry_response.stop_reason.strip().lower() in {
-                    "length", "max_tokens"
-                }
-                valid_repair = (
-                    not cutoff and revised and not revised_misplaced
-                    and citations.response_has_required_citations(
-                        revised, citation_allowlist,
-                        require_cited_numeric_claims=require_cited_numeric_claims,
-                    )
-                )
-                # If both candidates fail, give publication the one with more
-                # independently recoverable complete statements. It still
-                # validates presentation and reauthorizes the final text.
-                if valid_repair or (
-                    len(exact_draft_claims(revised, bound_sources))
-                    > len(exact_draft_claims(response_text, bound_sources))
-                ):
-                    response = retry_response
-                    response_text = revised
-                    response_tool_call = {}
-                    misplaced = revised_misplaced
-                    incomplete_repair = cutoff
+                stream_callback=provider_stream_func,
+                stream_message_uuid=stream_message_uuid,
+            )
+            if repair is not None:
+                response, response_text, misplaced, incomplete_repair = repair
+                response_tool_call = {}
         citation_repair_failed = incomplete_repair or bool(misplaced) or (
             not citations.response_has_required_citations(
                 response_text, citation_allowlist,

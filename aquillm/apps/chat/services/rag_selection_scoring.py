@@ -41,17 +41,6 @@ from apps.documents.services.source_deadline import (
 )
 
 
-def _source_start(item):
-    # Read only already hydrated coordinates. Accessing a deferred model field
-    # here would open a new database read during final preparation.
-    fields = vars(item.chunk)
-    start, end = fields.get("start_position"), fields.get("end_position")
-    if type(start) is int and start >= 0 and type(end) is int:
-        if end - start == len(item.prepared_evidence.source.text):
-            return start
-    return None
-
-
 @bound_source_finalization
 def prepare_selection_candidates(
     *,
@@ -265,7 +254,10 @@ def prepare_selection_candidates(
         row.get("chunk_id", row.get("i")): rank
         for rank, row in enumerate(pool.rows, start=1)
     }
-    from apps.chat.services.rag_source_hydration import source_candidate_cost
+    from apps.chat.services.rag_source_hydration import (
+        source_candidate_cost,
+        source_start,
+    )
 
     candidates = tuple(
         SelectionCandidate(
@@ -286,7 +278,7 @@ def prepare_selection_candidates(
             used_scorer.scoring_kind
             if item.chunk.pk in published_scores else "rank_only",
             "uncalibrated" if item.chunk.pk in published_scores else "unavailable",
-            _source_start(item) if source_mode else None,
+            source_start(item) if source_mode else None,
         )
         for item, value in zip(retained, relevance)
     )

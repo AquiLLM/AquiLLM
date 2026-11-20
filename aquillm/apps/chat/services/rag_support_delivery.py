@@ -236,3 +236,26 @@ def render_supported_answer(packet, *, preferred_citations=()):
     return header + "\n\n" + "\n\n".join(
         points
     ), "answer" if support.state == "complete" else "partial"
+
+
+def recover_draft_answer(packet, draft, policy):
+    """Preserve complete claims or render authorized excerpts of the cited sources."""
+    from lib.llm.answer_publication import validate_final_answer
+    from lib.llm.providers.rag_citation_evidence import (
+        draft_excerpt_order,
+        exact_draft_claims,
+    )
+
+    from .rag_model_answer import prepare_model_answer
+
+    exact = "\n\n".join(exact_draft_claims(draft, policy.sources))
+    if exact:
+        try:
+            exact = prepare_model_answer(packet, exact)
+        except ValueError:
+            exact = ""
+        if exact and validate_final_answer(exact, policy).valid:
+            return exact, "partial"
+    return render_supported_answer(
+        packet, preferred_citations=draft_excerpt_order(draft, policy.sources)
+    )

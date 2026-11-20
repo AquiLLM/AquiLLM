@@ -92,6 +92,11 @@ def _assert_grounded_request(request):
         "unassessed",
         "every supporting paper",
         "computed comparison",
+        "complete entries on both sides",
+        "count a version replacement once",
+        "cite both inventories at the comparison",
+        "cite the chunk containing the entry",
+        "cite the identifying passage",
         "Preserve disagreements",
         "do not establish causation",
     ):

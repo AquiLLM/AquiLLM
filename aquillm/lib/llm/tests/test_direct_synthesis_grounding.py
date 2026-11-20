@@ -32,12 +32,7 @@ async def test_initial_and_retried_comparison_use_exact_entries_and_identifying_
 
     assert len(model.requests) == 2
     for request in model.requests:
-        grounding = request["system"]
-        assert "complete entries on both sides" in grounding
-        assert "count a version replacement once" in grounding
-        assert "cite both inventories at the comparison" in grounding
-        assert "cite the chunk containing the entry" in grounding
-        assert "cite the identifying passage" in grounding
+        _assert_grounded_request(request)
 
 
 @pytest.mark.parametrize("stage", ["direct_synthesis", "post_tool_synthesis", None])
