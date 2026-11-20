@@ -34,6 +34,14 @@ _ACTION = re.compile(
     re.I,
 )
 _TARGET_RE = re.compile(rf"\b{_TARGET}\b", re.I)
+_QUANTITY = re.compile(
+    r"\b(?:how many|how much|counts?|totals?|amounts?|percentages?)\b", re.I
+)
+_FIGURES_AS_QUANTITIES = re.compile(
+    r"\b(?:these|those|both)\s+(?:(?:two|three|\d+)\s+)?figures"
+    r"(?=\s+(?:cover|describe|represent|measure|refer to|correspond to|mean)\b)",
+    re.I,
+)
 _FOLLOWUP = re.compile(
     rf"\b(?:show|display|render)\s+(?:me\s+)?(?:it|them|that|those)\b|"
     rf"\b(?:that|those|previous|earlier|same)\s+{_TARGET}\b",
@@ -53,11 +61,14 @@ def requests_visuals(text: str) -> bool:
         return False
     # These uses name reasoning/technical concepts, not document illustrations.
     text = re.sub(
-        r"\bfigure\s+out\b|\bgraphs?\s+(?:rag|algorithms?|theory|databases?)\b",
+        r"\bfigure\s+out\b|\bgraphs?\s+(?:rag|algorithms?|theory|databases?)\b|"
+        r"\b(?:sales|revenue|attendance|enrollment|population|significant)\s+figures\b",
         "",
         text,
         flags=re.I,
     )
+    if _QUANTITY.search(text):
+        text = _FIGURES_AS_QUANTITIES.sub("", text)
     return bool(
         (_TARGET_RE.search(text) and _ACTION.search(text))
         or re.search(r"\b(?:figure|fig\.?|plot|diagram|chart)\s+\d+\b", text, re.I)
