@@ -214,6 +214,8 @@ def prepare_selection_turn(
         if support and config.mode == "adaptive":
             options["support_hints"] = support
             selected_profile = replace(profile, version=profile.version + "+" + POLICY)
+        if source_mode and config.mode == "adaptive":
+            options["question"] = question
         started = monotonic()
         result = select_evidence(prepared.candidates, profile=selected_profile, limits=limits,
             score_status=prepared.score_status, mode="legacy" if config.mode == "legacy" else "adaptive", **options)

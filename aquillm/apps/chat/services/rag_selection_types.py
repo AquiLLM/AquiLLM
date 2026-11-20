@@ -24,6 +24,7 @@ class SelectionCandidate:
     scorer_fingerprint: str | None = None
     scoring_kind: str = "rank_only"
     score_interpretation: str = "unavailable"
+    source_start: int | None = None
 
 
 @dataclass(frozen=True)

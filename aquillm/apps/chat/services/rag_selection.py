@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterable
+from dataclasses import replace
 
 from apps.chat.services.rag_selection_similarity import (
     prepare_snippet,
@@ -122,6 +123,7 @@ def select_evidence(
     score_status: str,
     mode: str = "adaptive",
     support_hints: tuple = (),
+    question: str = "",
 ) -> EvidenceSelection:
     """Choose feasible passages by score and marginal textual novelty.
 
@@ -219,6 +221,22 @@ def select_evidence(
                     features[_identity(best)],
                     same_document=candidate.doc_id == best.doc_id,
                 ),
+            )
+
+    if mode == "adaptive" and question:
+        from .rag_comparison_selection import comparison_packet
+
+        packet = comparison_packet(
+            question, tuple(by_identity.values()), selected, limits
+        )
+        if packet:
+            selected = packet
+            estimated_tokens = sum(candidate_token_cost(c) for c in selected)
+            document_counts = Counter(c.doc_id for c in selected)
+            selected_ids = {_identity(c) for c in selected}
+            remaining = [c for key, c in by_identity.items() if key not in selected_ids]
+            profile = replace(
+                profile, version=profile.version + "+paired-printed-sections-v1"
             )
 
     from .rag_selection_observation import observe_exclusions

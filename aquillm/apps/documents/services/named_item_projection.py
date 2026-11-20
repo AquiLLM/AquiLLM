@@ -37,24 +37,8 @@ def label_terms(text):
     )
 
 
-def build_items(text, members):
-    """Return complete owner metadata, [] for no items, or None for ineligible input."""
-    if len(text) > MAX_CANONICAL or len(members) > MAX_MEMBERS or not members:
-        return None
-    verified = 0
-    covered_end = 0
-    for _, _, start, end, fingerprint in sorted(members, key=lambda row: row[2]):
-        verified += end - start
-        if (
-            not 0 <= start < end <= len(text)
-            or verified > 2 * MAX_CANONICAL
-            or text[covered_end:start].strip()
-            or digest(text[start:end]) != fingerprint
-        ):
-            return None
-        covered_end = max(covered_end, end)
-    if text[covered_end:].strip():
-        return None
+def printed_items(text):
+    """Return literal named ranges and whether a printed boundary closed each one."""
     # A bound on work applies to unmatched list markers as well as emitted items.
     markers = list(islice(MARKER.finditer(text), MAX_ITEMS * 4 + 1))
     if len(markers) > MAX_ITEMS * 4:
@@ -85,6 +69,36 @@ def build_items(text, members):
         stop = BOUNDARY.search(text, label_end + 1, end)
         if stop:
             end = stop.start()
+        closed = stop is not None or (
+            i + 1 < len(markers) and end == markers[i + 1].start()
+        )
+        items.append((start, label_end, end, terms, closed))
+    return items
+
+
+def build_items(text, members):
+    """Return complete owner metadata, [] for no items, or None for ineligible input."""
+    if len(text) > MAX_CANONICAL or len(members) > MAX_MEMBERS or not members:
+        return None
+    verified = 0
+    covered_end = 0
+    for _, _, start, end, fingerprint in sorted(members, key=lambda row: row[2]):
+        verified += end - start
+        if (
+            not 0 <= start < end <= len(text)
+            or verified > 2 * MAX_CANONICAL
+            or text[covered_end:start].strip()
+            or digest(text[start:end]) != fingerprint
+        ):
+            return None
+        covered_end = max(covered_end, end)
+    if text[covered_end:].strip():
+        return None
+    ranges = printed_items(text)
+    if ranges is None:
+        return None
+    items = []
+    for start, label_end, end, terms, _ in ranges:
         refs = [
             pk
             for pk, _, a, b, _ in members
@@ -96,7 +110,7 @@ def build_items(text, members):
                     start=start,
                     label_end=label_end,
                     end=end,
-                    label_sha256=digest(label),
+                    label_sha256=digest(text[start:label_end]),
                     terms=terms,
                     refs=refs,
                 )
