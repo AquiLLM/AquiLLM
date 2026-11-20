@@ -147,7 +147,7 @@ def _attributed_span(text, citation):
     return rendered
 
 
-def _render_unknown_excerpts(packet, support):
+def _render_unknown_excerpts(packet, support, preferred_citations=()):
     """Admit each entire source atomically under source and rendered limits."""
     from .rag_complete_excerpts import partition_complete_source
 
@@ -157,7 +157,15 @@ def _render_unknown_excerpts(packet, support):
     )
     points = []
     remaining_slots, remaining_codepoints = 5, 6000
-    for row in packet.chunks:
+    rows = packet.chunks
+    if preferred_citations:
+        priority = {ref: i for i, ref in enumerate(preferred_citations)}
+        focused = [row for row in rows if _chunk_citation_from_row(row) in priority]
+        if focused:
+            rows = sorted(
+                focused, key=lambda row: priority[_chunk_citation_from_row(row)]
+            )
+    for row in rows:
         citation = _chunk_citation_from_row(row)
         if citation not in packet.citation_tokens:
             continue
@@ -186,7 +194,7 @@ def _render_unknown_excerpts(packet, support):
     ), "answer" if support.state == "complete" else "partial"
 
 
-def render_supported_answer(packet):
+def render_supported_answer(packet, *, preferred_citations=()):
     """Return final text/outcome, independent of unsupported provider assertions."""
     support = refresh_answer_support(packet)
     if support.state == "insufficient":
@@ -216,7 +224,7 @@ def render_supported_answer(packet):
                 + "."
             )
     else:
-        return _render_unknown_excerpts(packet, support)
+        return _render_unknown_excerpts(packet, support, preferred_citations)
     points = []
     for text, citation in excerpts:
         if _safe_excerpt(text):

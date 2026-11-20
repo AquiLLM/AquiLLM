@@ -856,14 +856,19 @@ async def complete_conversation_turn(
                 response_text, retrieval_notice
             )
     citation_repair_failed = False
+    incomplete_repair = False
     if enforce_citations and (not response_tool_call):
+        from .rag_citation_evidence import exact_draft_claims, misplaced_identifiers
+
+        bound_sources = getattr(getattr(publication, "policy", None), "sources", ())
+        misplaced = misplaced_identifiers(response_text, bound_sources)
         is_streaming_turn = callable(provider_stream_func)
         require_cited_numeric_claims = True
         citations_valid = citations.response_has_required_citations(
             response_text, citation_allowlist,
             require_cited_numeric_claims=require_cited_numeric_claims,
         )
-        if (not citations_valid) and (not is_streaming_turn):
+        if (not citations_valid or misplaced) and (not is_streaming_turn):
             invalid = citations.find_invalid_citations(
                 response_text, citation_allowlist
             )
@@ -878,6 +883,17 @@ async def complete_conversation_turn(
                 allowed_citations=citation_allowlist,
                 invalid_citations=invalid,
             )
+            if misplaced:
+                retry_prompt += (
+                    "\n\nThese identifiers appear in other selected passages "
+                    "and are missing from the passages cited at "
+                    "the claim. Check these passages for the full assertion and "
+                    "qualifications. A matching name alone does not establish "
+                    "a relation between documents. Cite passages that establish "
+                    "the assertion or remove the unsupported detail.\n"
+                    + "\n".join(f"{identifier}: {' '.join(refs)}"
+                                for identifier, refs in misplaced.items())
+                )
             if require_cited_numeric_claims:
                 retry_prompt += (
                     "\n\nNumeric factual sentences need citations at the claim. "
@@ -911,12 +927,37 @@ async def complete_conversation_turn(
             except Exception:
                 retry_response = None
             if retry_response and (not retry_response.tool_call):
-                response = retry_response
-                response_text = (retry_response.text or "").strip()
-                response_tool_call = {}
-        citation_repair_failed = not citations.response_has_required_citations(
-            response_text, citation_allowlist,
-            require_cited_numeric_claims=require_cited_numeric_claims,
+                revised = visibility.sanitize_completed_response(
+                    retry_response.text or "", retry_response
+                )
+                revised_misplaced = misplaced_identifiers(revised, bound_sources)
+                cutoff = retry_response.stop_reason.strip().lower() in {
+                    "length", "max_tokens"
+                }
+                valid_repair = (
+                    not cutoff and revised and not revised_misplaced
+                    and citations.response_has_required_citations(
+                        revised, citation_allowlist,
+                        require_cited_numeric_claims=require_cited_numeric_claims,
+                    )
+                )
+                # If both candidates fail, give publication the one with more
+                # independently recoverable complete statements. It still
+                # validates presentation and reauthorizes the final text.
+                if valid_repair or (
+                    len(exact_draft_claims(revised, bound_sources))
+                    > len(exact_draft_claims(response_text, bound_sources))
+                ):
+                    response = retry_response
+                    response_text = revised
+                    response_tool_call = {}
+                    misplaced = revised_misplaced
+                    incomplete_repair = cutoff
+        citation_repair_failed = incomplete_repair or bool(misplaced) or (
+            not citations.response_has_required_citations(
+                response_text, citation_allowlist,
+                require_cited_numeric_claims=require_cited_numeric_claims,
+            )
         )
         # Bound publication owns authorized fallback; keep failed drafts intact.
         if citation_repair_failed and publication is None:
@@ -976,9 +1017,11 @@ async def complete_conversation_turn(
             new_msg.content = LIMITED_ANSWER
             new_msg._rag_answer = True
         else:
-            bind_answer(
-                new_msg, await publication.finalize(new_msg.content), publication
-            )
+            # Keep the entire cut-off draft for presentation checks. Only its
+            # independently recoverable complete units can reach the final text.
+            options = {"incomplete_draft": True} if incomplete_repair else {}
+            answer = await publication.finalize(new_msg.content, **options)
+            bind_answer(new_msg, answer, publication)
     if (
         defer_stream_until_final
         and callable(stream_func)

@@ -13,6 +13,11 @@ from lib.llm.answer_publication import (
     validate_final_answer,
 )
 from lib.llm.execution_context import _EXECUTION
+from lib.llm.providers.rag_citation_evidence import (
+    bind_citation_sources,
+    draft_excerpt_order,
+    exact_draft_claims,
+)
 from lib.llm.providers.visibility import sanitize_assistant_text
 from lib.llm.turn_context import current_turn
 
@@ -95,6 +100,7 @@ class RagAnswerPublication:
             True,
             _evidence_digest(packet),
             _scope_digest(packet),
+            bind_citation_sources(packet.chunks, set(packet.citation_tokens)),
         )
         self._receipts = {}
         self._closed = False
@@ -183,7 +189,7 @@ class RagAnswerPublication:
         if allowed is not True:
             raise AnswerPublicationRejected("authority_unavailable")
 
-    async def finalize(self, text, *, limited_reason=None):
+    async def finalize(self, text, *, limited_reason=None, incomplete_draft=False):
         self._active()
         text = sanitize_assistant_text(text, allow_short_final=True)
         limited = limited_reason is not None or text == LIMITED_ANSWER
@@ -205,6 +211,7 @@ class RagAnswerPublication:
                     render_supported_answer,
                 )
 
+                draft = text
                 try:
                     text = prepare_model_answer(self.packet, text)
                 except ValueError as exc:
@@ -218,12 +225,26 @@ class RagAnswerPublication:
                     support = refresh_answer_support(self.packet)
                     if support.state == "insufficient":
                         limited = True
-                    elif validate_final_answer(text, self.policy).valid:
+                    elif not incomplete_draft and validate_final_answer(
+                        text, self.policy
+                    ).valid:
                         # The receipt proves authorized, bound publication,
                         # not independent validation of the model's claims.
                         outcome = "partial"
                     else:
-                        text, outcome = render_supported_answer(self.packet)
+                        exact = "\n\n".join(exact_draft_claims(draft, self.policy.sources))
+                        if exact:
+                            try:
+                                exact = prepare_model_answer(self.packet, exact)
+                            except ValueError:
+                                exact = ""
+                        if exact and validate_final_answer(exact, self.policy).valid:
+                            text, outcome = exact, "partial"
+                        else:
+                            focused = draft_excerpt_order(draft, self.policy.sources)
+                            text, outcome = render_supported_answer(
+                                self.packet, preferred_citations=focused
+                            )
                 limited = (
                     limited or outcome == "limited"
                     or not validate_final_answer(text, self.policy).valid
