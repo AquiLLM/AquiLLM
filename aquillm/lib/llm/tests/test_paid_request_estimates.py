@@ -257,3 +257,22 @@ def test_synthesis_cannot_publish_a_new_estimate_that_expired_during_tokenizatio
     with pytest.raises((ValueError, guard.ContextLimited), match="synthesis allowance"):
         guard.estimate_request_tokens(PAYLOAD, turn_budget=active)
     assert owner.text_used["tokenized"] == len(guard._encoded_estimate_input(PAYLOAD))
+
+
+def test_synthesis_keeps_pinned_request_and_pays_again_when_tokenizer_policy_changes(monkeypatch):
+    owner = budget()
+    ordinary = prepay(PAYLOAD, owner, pin=True)
+    active = lease(owner)
+    first, second = {"request": "one"}, {"request": "two"}
+    guard.estimate_request_tokens(first, turn_budget=active)
+    guard.estimate_request_tokens(second, turn_budget=active)
+    paid = owner.text_used["tokenized"]
+    assert guard.estimate_request_tokens(PAYLOAD, turn_budget=active) == ordinary
+    guard.estimate_request_tokens(second, turn_budget=active)
+    assert owner.text_used["tokenized"] == paid
+    guard.estimate_request_tokens(first, turn_budget=active)
+    amount = len(guard._encoded_estimate_input(first))
+    assert owner.text_used["tokenized"] == paid + amount
+    monkeypatch.setattr(guard, "estimate_text_tokens", lambda text: len(text))
+    assert guard.estimate_request_tokens(first, turn_budget=active) == amount
+    assert owner.text_used["tokenized"] == paid + 2 * amount
