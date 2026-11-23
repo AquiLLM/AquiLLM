@@ -218,3 +218,42 @@ def test_clock_callback_cancellation_is_rechecked_before_paid_hit(synthesis):
     armed[0] = True
     with pytest.raises((guard.ContextLimited, asyncio.CancelledError)):
         guard.estimate_request_tokens(PAYLOAD, turn_budget=active)
+
+
+def test_synthesis_request_builder_and_final_validation_pay_once_for_each_exact_input(monkeypatch):
+    # The repair changes a message without changing the encoded input length.
+    initial = {**PAYLOAD, "instruction": "Answer."}
+    repair = {**PAYLOAD, "instruction": "Repair."}
+    encoded = [guard._encoded_estimate_input(p) for p in (initial, repair)]
+    assert encoded[0] != encoded[1] and len(encoded[0]) == len(encoded[1])
+    owner = budget(tokenized_codepoints=sum(map(len, encoded)))
+    active = lease(owner)
+    protection = guard.EvidenceProtection(active.payload, 10000, 10, 0, synthesis_lease=active)
+    calls = []
+
+    def count(text):
+        calls.append(text)
+        return len(text)
+
+    monkeypatch.setattr(guard, "estimate_text_tokens", count)
+    with guard.protect_evidence(protection):
+        for payload in (initial, repair):
+            guard.validate_request(payload, output_reserve=10)
+            guard.validate_request(dict(payload), output_reserve=10)
+    assert calls == encoded
+    assert owner.text_used["tokenized"] == owner.limits.tokenized_codepoints
+
+
+def test_synthesis_cannot_publish_a_new_estimate_that_expired_during_tokenization(monkeypatch):
+    now = [0.0]
+    owner = budget(clock=lambda: now[0])
+    active = lease(owner)
+
+    def count(text):
+        now[0] = active.deadline
+        return len(text)
+
+    monkeypatch.setattr(guard, "estimate_text_tokens", count)
+    with pytest.raises((ValueError, guard.ContextLimited), match="synthesis allowance"):
+        guard.estimate_request_tokens(PAYLOAD, turn_budget=active)
+    assert owner.text_used["tokenized"] == len(guard._encoded_estimate_input(PAYLOAD))

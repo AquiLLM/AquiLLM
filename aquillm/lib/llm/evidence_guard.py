@@ -6,6 +6,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 
 from lib.llm.utils.evidence_tokens import estimate_text_tokens
+from lib.retrieval.synthesis_budget import SynthesisLease
 
 
 class ContextLimited(ValueError):
@@ -131,6 +132,9 @@ def estimate_request_tokens(payload, *, turn_budget=None):
     Images retain the existing conservative 4096-token allowance per part.
     Token counts are approximate; a server overflow stops rather than trimming.
     """
+    if type(turn_budget) is SynthesisLease:
+        # Both request construction and final transport validation count this input.
+        return prepay_request_tokens(payload, turn_budget=turn_budget)
     encoded = _encoded_estimate_input(payload)
     if turn_budget is not None:
         from lib.llm.utils.paid_request_estimates import lookup_paid_estimate

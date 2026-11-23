@@ -71,14 +71,18 @@ def lookup_paid_estimate(ledger, encoded, policy, policy_now):
 
 
 def prepay_estimate(encoded, *, ledger, pin, policy, policy_now, tokenize):
-    if type(ledger) is not TurnBudget or type(pin) is not bool:
-        raise TypeError("paid request estimates require the original turn budget")
-    with ledger._lock:
-        cache = getattr(ledger, "_paid_request_estimates", None)
+    if type(pin) is not bool or (type(ledger) is not TurnBudget
+            and (type(ledger) is not SynthesisLease or pin)):
+        raise TypeError("paid estimates require the original budget or its unpinned synthesis lease")
+    owner = _owner(ledger)
+    if owner is None:
+        raise ValueError("synthesis allowance exhausted")
+    with owner._lock:
+        cache = getattr(owner, "_paid_request_estimates", None)
         if cache is None:
-            cache = _PaidEstimates(ledger, ledger._lock)
-            ledger._paid_request_estimates = cache
-        if type(cache) is not _PaidEstimates or cache.owner is not ledger:
+            cache = _PaidEstimates(owner, owner._lock)
+            owner._paid_request_estimates = cache
+        if type(cache) is not _PaidEstimates or cache.owner is not owner:
             raise ValueError("request_estimate_owner_changed")
         _check(cache, ledger)
         if not _same_policy(policy, policy_now()):
@@ -94,8 +98,8 @@ def prepay_estimate(encoded, *, ledger, pin, policy, policy_now, tokenize):
             _check(cache, ledger)
             if not _same_policy(policy, policy_now()):
                 raise ValueError("request_estimate_policy_changed")
-            entry = _Estimate(encoded, policy, tokens, ledger._text["tokenized"])
-        elif ledger._text["tokenized"] < entry.charged_total:
+            entry = _Estimate(encoded, policy, tokens, owner._text["tokenized"])
+        elif owner._text["tokenized"] < entry.charged_total:
             raise ValueError("request_tokenization_limit")
         if pin:
             object.__setattr__(cache, "ordinary", entry)
