@@ -185,6 +185,13 @@ def prepare_source_windows(
             check_preparation_open()
             if len(windows) >= 135:
                 return finish("partial", "window_limit")
+            # A short remainder often fits as a whole. Verify the exact pair
+            # once before searching its prefixes. The previous window bounds
+            # this probe even when the source has a very long tail.
+            if windows and len(source.text) - start <= len(windows[-1].text):
+                if counted(source.text[start:]) <= pair_limit:
+                    add(start, len(source.text))
+                    break
             low, high = start, len(source.text)
             while low < high:
                 mid = (low + high + 1) // 2
