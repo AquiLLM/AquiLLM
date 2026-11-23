@@ -179,3 +179,14 @@ async def test_actual_turn_preserves_reference_or_fresh_local_grammar(
     assert ("title or citation" in consumer.convo[-1].content) is clarify
     assert llm.calls == []
     assert convo.model_dump() == original
+
+
+@pytest.mark.parametrize("suffix, historical", [
+    ("in APA style", False),
+    ("by title", False),
+    ("from your previous answer", True),
+])
+def test_citation_format_qualifier_preserves_fresh_or_historical_sources(suffix, historical):
+    question = f"Search selected documents for kiln firing temperatures; cite both sources {suffix}."
+    anchors = resolve_source_anchors(question, Conversation(system="sys", messages=[]))
+    assert bool(anchors.unresolved_references) is historical

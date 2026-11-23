@@ -19,7 +19,10 @@ _SEARCH = re.compile(r"\b(?:search|find|retrieve)\s+(?:[\w-]+\s+){2,}[\w-]+", re
 _QUESTION = re.compile(
     r"(?:^|[.!?;\n])\s*(?:what|how|why|where|when|which)\s+[^?;\n]{3,}\?", re.I,
 )
-_CITED_SOURCE_NOUN = re.compile(r"\s+(sources|papers|reports|documents)\s*(?=[.!?;]|$)", re.I)
+_CITED_SOURCE_NOUN = re.compile(
+    r"\s+(sources|papers|reports|documents)(?:\s+(?:by\s+title|in\s+[\w-]+\s+(?:style|format)))?"
+    r"\s*(?=[.!?;]|$)", re.I,
+)
 _ELLIPTICAL_QUESTION = re.compile(
     r"(?:^|[.!?;\n])\s*(?:what|how|why|where|when|which)\s+"
     r"(?:(?:else|next|now|so|again|ones?)\b|"
