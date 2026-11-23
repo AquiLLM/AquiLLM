@@ -219,7 +219,9 @@ class _ClosedGraphAttempt:
                 expected = self._parent_deadline if child_bound is None or child_exited else child_bound
                 if _DEADLINE.get() is not expected or _OPERATION.get() is not self._operation:
                     raise SourceScopeUnavailable("graph_original_scope_unavailable")
-                if clock() >= deadline:
+                remaining = deadline - clock()
+                # Native source/SQL reads require at least one whole millisecond.
+                if remaining <= 0 or (native_closure and remaining * 1000 < 1):
                     if _DEADLINE.get() is not expected or _OPERATION.get() is not self._operation:
                         raise SourceScopeUnavailable("graph_original_scope_unavailable")
                     owned_deadline = _ClosedGraphLimited("deadline")

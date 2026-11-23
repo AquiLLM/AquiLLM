@@ -212,6 +212,8 @@ def _run_closed_graph(
         codec=graph.codec,
         stage=stage,
     )
+    if native_closure:
+        check()
     if len(rows) != len(envelope.handoff.candidates) or any(
         row.doc_id not in scope.requested_document_ids for row in rows
     ):
@@ -222,7 +224,12 @@ def _run_closed_graph(
         raise ValueError("V2 evidence changed after selection hydration")
     baseline_ids = {row.pk for row in baseline}
     stage.failure_phase = "baseline_top_up"
-    baseline = deferred_baseline(admission, stage, baseline)
+    if native_closure and admission is not None and any(row.pk not in baseline_ids for row in rows):
+        from apps.documents.services.graph_admission_adapter import native_deferred_baseline
+
+        baseline = native_deferred_baseline(admission, stage, baseline, check)
+    else:
+        baseline = deferred_baseline(admission, stage, baseline)
     combined = baseline + tuple(
         row for row in rows if row.pk not in {b.pk for b in baseline}
     )

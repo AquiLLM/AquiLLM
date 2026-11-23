@@ -6,6 +6,7 @@ from django.core.exceptions import ObjectDoesNotExist, ValidationError
 
 from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.documents.services.representation_store import active_chunk_scope, _active_chunk_predicates
+from apps.documents.services.source_deadline import check_source_deadline
 from apps.knowledge_graph.projection.identifiers import (
     OpaqueProjectionKey,
     ProjectionIdentifierDomain,
@@ -64,10 +65,7 @@ def _validate_captured_authorities(*, selected, authorization, settings, codec):
 
 def materialize_graph_candidates_v2(*, selected, refs, authorization):
     from apps.documents.services.graph_source_runtime import graph_source_runtime
-    from apps.documents.services.source_deadline import check_source_deadline
-    from apps.documents.services.source_loading import (
-        bounded_source_database,
-    )
+    from apps.documents.services.source_loading import bounded_source_database
 
     runtime = graph_source_runtime()
     if runtime is None:
@@ -195,7 +193,6 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _sou
     groups = {g.group_checksum: g for g in selected.groups}
     selections = {s.document.id: s for s in selected.representation_snapshot.selections}
     try:
-        # Verify every reference against the captured envelope before source I/O.
         for ref in refs:
             group = groups.get(ref.authority_group_checksum)
             if (
@@ -213,8 +210,7 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _sou
             def load_chunk_objects(
                 self, *, chunk_predicates, authorized_document_ids, database_alias
             ):
-                # The private-map contract supplies exact (pk, UUID, number)
-                # tuples; post-read _chunk_objects still checks each full tuple.
+                # _chunk_objects verifies each exact (pk, UUID, number) after this read.
                 document_ids = frozenset(row[1] for row in chunk_predicates)
                 query = (
                     _active_chunk_predicates
@@ -246,6 +242,8 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _sou
             if not group_refs:
                 continue
             for ref in group_refs:
+                if _source_stage is not None:
+                    check_source_deadline()
                 owner = group.scope.projection_for_generation(ref.graph_generation_key)
                 if (
                     not ProjectionChunkReference.objects.using(
@@ -275,6 +273,8 @@ def _materialize_rows(*, selected, refs, authorization, codec, body_reader, _sou
                 reader = _provenance._phase_provenance_reader(
                     (owner, row.candidate_object) for row, _, owner in validated)
             for row, ref, owner in validated:
+                if _source_stage is not None:
+                    check_source_deadline()
                 chunk = row.candidate_object
                 provenance = reader(
                     authority=owner, chunk=chunk, codec=codec,

@@ -41,8 +41,53 @@ def deferred_baseline(plan, stage, baseline):
     if plan is None:
         return baseline
     added = plan.top_up(stage.read, stage.staged)
+    return _merge_baseline(plan, baseline, added)
+
+
+def _merge_baseline(plan, baseline, added):
     by_id = {row.pk: row for row in (*baseline, *added)}
     return tuple(by_id[pk] for pk in plan.baseline_order if pk in by_id)
+
+
+def native_deferred_baseline(plan, stage, baseline, check):
+    """Let a deferred baseline read expire before the graph's mandatory final fences."""
+    from django.db import OperationalError
+
+    from .graph_admission_read import read_owned_refs
+    from .native_search_schedule import NATIVE_CLOSURE_RESERVE_MS
+    from .source_deadline import _DEADLINE, source_preparation_scope
+    from .source_loading import SourcePreparationLimited, bounded_source_database
+
+    deadline, clock, budget = _DEADLINE.get()
+    cutoff = deadline - NATIVE_CLOSURE_RESERVE_MS / 1000
+    added = ()
+    if (cutoff - clock()) * 1000 >= 1:
+        try:
+            with stage.buffered_reads(), source_preparation_scope(cutoff, clock, budget):
+                ids = plan.top_up_ids()
+                if ids:
+                    refs = plan.references
+                    with bounded_source_database(stage.runtime, stage.scope.using):
+                        added = read_owned_refs(plan, tuple(refs[pk] for pk in ids), stage.read)
+        except (SourcePreparationLimited, OperationalError) as exc:
+            # A real owner failure or an unrelated SQL error must still fail closed.
+            check()
+            if (cutoff - clock()) * 1000 >= 1:
+                raise
+            if isinstance(exc, OperationalError):
+                cause = exc.__cause__
+                code = getattr(cause, "sqlstate", None) or getattr(cause, "pgcode", None)
+                message = getattr(getattr(cause, "diag", None), "message_primary", None)
+                if code != "57014" or message != "canceling statement due to statement timeout":
+                    raise
+            elif exc.args not in (("source preparation deadline",), ("source deadline",)):
+                raise
+            added = ()
+    check()
+    if added:
+        plan.populate(added, stage.staged)
+    plan.counts["baseline_top_up"] = len(added)
+    return _merge_baseline(plan, baseline, added)
 
 
 def order_graph_pool(snapshot, rows, *, scope, query, **kwargs):

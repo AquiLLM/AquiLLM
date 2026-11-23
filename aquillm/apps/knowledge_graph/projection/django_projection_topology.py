@@ -174,6 +174,7 @@ def _load_entity_mention_rows(
     chunks: Mapping[int, tuple[UUID, int]],
     batch_size: int,
     document_filtered: bool = False,
+    chunk_filtered: bool = False,
 ) -> tuple[dict, ...]:
     fields = (
         "collection_entity_id",
@@ -211,13 +212,21 @@ def _load_entity_mention_rows(
         # types/nullability and kg_mention_confidence_range enforce the scalar
         # checks in expand_entity_mentions even for rows outside these documents.
         overflow = query.order_by()[MAX_DETAIL_ROWS : MAX_DETAIL_ROWS + 1]
-        # Filter documents, not representative chunks: observations may identify
-        # another chunk of the same document that is the only requested chunk.
         query = query.annotate(_raw_family_overflow=Exists(overflow)).filter(
             manifest_input__document_id__in={
                 document for document, _ in chunks.values()
             }
         )
+        if chunk_filtered and 0 < len(chunks) <= 45 and connections[using].features.supports_json_field_contains:
+            # Bind representative and observation tests to the same validated mention join.
+            query = query.alias(
+                _representative=F("document_entity__mention_links__mention__chunk_id"),
+                _metadata=F("document_entity__mention_links__mention__metadata"),
+            )
+            pertinent = Q(_representative__in=tuple(chunks))
+            for pk in chunks:
+                pertinent |= Q(_metadata__contains={"observations": [{"chunk_id": pk}]})
+            query = query.filter(pertinent)
         read_fields = (*fields, "_raw_family_overflow")
     raw = _bounded(
         query,
