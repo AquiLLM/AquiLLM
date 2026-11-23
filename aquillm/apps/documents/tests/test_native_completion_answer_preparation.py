@@ -12,21 +12,21 @@ from apps.documents.tests import test_scoped_recovery_final_preparation as flow
 pytestmark = pytest.mark.django_db(transaction=True)
 
 
-@pytest.mark.parametrize("cheap,changed_request", [(False, False), (True, False), (False, True)],
-                         ids=["long-additions", "cheap-addition-wins", "changed-request"])
+@pytest.mark.parametrize("cheap,request_change", [
+    (False, None), (True, None), (False, "small"), (True, "small"), (True, "over-budget"),
+], ids=["long-additions", "cheap-addition-wins", "changed-request", "payable-change", "unpayable-change"])
 def test_ordinary_completion_prepays_exact_answer_before_deferred_work(
-        monkeypatch, cheap, changed_request):
+        monkeypatch, cheap, request_change):
     from apps.chat.services import rag_recovery_origins
     from apps.chat.services.rag_synthesis import synthesize_from_evidence
     from apps.documents.services.chunk_rerank_window_adapter import WindowSelectionScorer
     from lib.llm import evidence_guard
     from lib.llm.providers import openai_request
     from lib.llm.turn_context import TurnContext, bind_turn
-    from lib.llm.utils import paid_request_estimates
 
     monkeypatch.setattr(rag_recovery_origins, "record_native_recovery",
                         lambda *a, **kw: pytest.fail("ordinary additions acquired scoped origins"))
-    validations, dispatched, completed, providers, lookups = [], [], [], [], []
+    validations, dispatched, completed, providers = [], [], [], []
     validate = evidence_guard.validate_request
     initialize = WindowSelectionScorer.__init__
 
@@ -74,14 +74,6 @@ def test_ordinary_completion_prepays_exact_answer_before_deferred_work(
 
         monkeypatch.setattr(openai_request, "validate_request", observed("prepare_request"))
         monkeypatch.setattr(evidence_guard, "validate_request", observed("provider_dispatch"))
-        lookup = paid_request_estimates.lookup_paid_estimate
-
-        def observed_lookup(*args):
-            value = lookup(*args)
-            lookups.append(value)
-            return value
-
-        monkeypatch.setattr(paid_request_estimates, "lookup_paid_estimate", observed_lookup)
 
         async def create(**kwargs):
             assert evidence_guard.contains_selected_evidence(kwargs["messages"])
@@ -95,21 +87,31 @@ def test_ordinary_completion_prepays_exact_answer_before_deferred_work(
 
         llm, conversation = case.answer.llm, case.answer.conversation
         llm.client.chat.completions.create = create  # Only external inference is replaced.
-        if changed_request:
+        if request_change:
             conversation.system += " This changes the exact paid request."
+        if request_change == "over-budget":
+            conversation.system += "x" * (budget.limits.tokenized_codepoints - before_answer + 1)
         turn = TurnContext(budget)
         turn._media_source_runtime = case.source
         with bind_turn(turn):
             result = async_to_sync(synthesize_from_evidence)(llm, conversation, packet, max_tokens=512)
-        if changed_request:
-            assert lookups and all(value is None for value in lookups)
+        if request_change:
+            if cheap:
+                assert bool(dispatched) == (request_change == "small")
             if dispatched:
-                assert dispatched[0] > before_answer and answer in result[-1].content
-                assert any(after > before for _, before, after, _, _ in validations)
+                built, sent = validations
+                needed = built[4]
+                paid = before_answer + needed
+                assert built == ("prepare_request", before_answer, paid, None, needed)
+                assert sent == ("provider_dispatch", paid, paid, None, needed)
+                assert dispatched == [paid] and answer in result[-1].content
             else:
-                _, before, _, reason, needed = validations[-1]
-                assert reason == "request_tokenization_limit"
-                assert needed > budget.limits.tokenized_codepoints - before
+                denied, = validations
+                needed = denied[4]
+                assert denied == (
+                    "prepare_request", before_answer, before_answer, "request_tokenization_limit", needed,
+                )
+                assert needed > budget.limits.tokenized_codepoints - before_answer
         else:
             assert dispatched == [before_answer]
             assert [item[0] for item in validations] == ["prepare_request", "provider_dispatch"]
