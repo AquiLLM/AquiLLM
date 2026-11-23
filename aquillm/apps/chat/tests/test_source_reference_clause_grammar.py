@@ -72,6 +72,36 @@ def test_citation_output_directive_does_not_bind_an_antecedent(question, unresol
     assert bool(anchors.unresolved_references) is unresolved
 
 
+@pytest.mark.parametrize("noun", ["papers", "reports", "documents", "sources"])
+def test_terminal_citation_instruction_preserves_standalone_retrieval_with_or_without_history(noun):
+    question = f"The kiln survey reused a public archive. Which archive did the survey consult? Cite both {noun}."
+    for history in (Conversation(system="sys", messages=[]), _history()):
+        anchors = resolve_source_anchors(question, history)
+        assert not anchors.document_ids and not anchors.source_constraints and not anchors.unresolved_references
+
+
+@pytest.mark.parametrize("question", [
+    "Cite both papers.",
+    "How did they compare? Cite both reports.",
+    "What else? Cite both documents.",
+    "Which one held more? Cite both documents.",
+    "What else did they measure? Cite both sources.",
+    "What were the results? Cite both papers.",
+    "How many were there? Cite both reports.",
+    "Thanks. What were the results? Cite both documents.",
+    "Which glaze resisted heat? Cite both papers from your previous answer.",
+    'The inscription reads "Which kiln was used?" Cite both papers.',
+])
+def test_citation_request_does_not_erase_a_reference_to_previous_evidence(question):
+    assert resolve_source_anchors(question, Conversation(system="sys", messages=[])).unresolved_references == ("both",)
+
+
+def test_earlier_explicit_pair_and_its_ambiguous_citation_remain_historical():
+    question = "Compare both papers. Which held more heat? Cite both papers."
+    anchors = resolve_source_anchors(question, Conversation(system="sys", messages=[]))
+    assert anchors.unresolved_references == ("both", "both")
+
+
 @pytest.mark.parametrize("question", [
     "Explain what each paper is about? What overlaps between them?",
     "Summarize each document. What differs between them?",
@@ -106,6 +136,7 @@ def test_local_quantifier_never_suppresses_independent_definite_references(quest
     ("Compare that paper with the second one.", True),
     ("Explain what each paper says. Compare that paper with the second one.", True),
     ("Search selected documents for controlled and field trial results; cite both sources.", False),
+    ("The kiln survey reused a public archive. Which archive supplied its catalog? Cite both papers.", False),
     ("Cite both sources.", True),
     ("Compare both sources and cite both sources.", True),
     ("What is the Lumen unit's dry-mode capacity? What is its humid-mode capacity?", False),

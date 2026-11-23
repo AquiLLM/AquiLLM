@@ -19,7 +19,18 @@ _SEARCH = re.compile(r"\b(?:search|find|retrieve)\s+(?:[\w-]+\s+){2,}[\w-]+", re
 _QUESTION = re.compile(
     r"(?:^|[.!?;\n])\s*(?:what|how|why|where|when|which)\s+[^?;\n]{3,}\?", re.I,
 )
+_CITED_SOURCE_NOUN = re.compile(r"\s+(sources|papers|reports|documents)\s*(?=[.!?;]|$)", re.I)
+_ELLIPTICAL_QUESTION = re.compile(
+    r"(?:^|[.!?;\n])\s*(?:what|how|why|where|when|which)\s+"
+    r"(?:(?:else|next|now|so|again|ones?)\b|"
+    r"(?:" + _AUXILIARY + r")\s+(?:they|it|these|those|both|either|each)\b)"
+    r"[^?;\n]*\?\s*$", re.I,
+)
 _WORD = r"[^\W\d_][\w-]*"
+_TOPIC_STATEMENT = re.compile(
+    r"(?:^|[.!?;\n])\s*(?:the|an?)\s+" + _WORD + r"(?:\s+" + _WORD
+    + r"){2,}[^.!?;\n]*\.\s*$", re.I,
+)
 _PROCESS_NOUN_LIMIT = 6
 _LOCAL_WINDOW = 512
 _SOURCE_WORD = re.compile(r"\b(?:papers?|reports?|documents?|sources?)\b", re.I)
@@ -185,7 +196,8 @@ def local_reference_spans(question, references):
                     local.append((start, end))
         elif kind == "plural" and cue == "both":
             cite = re.search(r"\bcite\s+$", question[:start], re.I)
-            if cite and re.match(r"\s+sources\b", question[end:], re.I):
+            noun = _CITED_SOURCE_NOUN.match(question, end)
+            if cite and noun:
                 preceding = question[:cite.start()]
                 # An output directive cannot supply its own missing antecedent.
                 unquoted = list(preceding)
@@ -194,7 +206,14 @@ def local_reference_spans(question, references):
                         stop = min(right, len(unquoted))
                         unquoted[left:stop] = " " * (stop - left)
                 preceding = "".join(unquoted)
-                if _SEARCH.search(preceding) or _QUESTION.search(preceding):
+                question_clause = _QUESTION.search(preceding)
+                # Specific paper/report/document directives need their own local
+                # topic. A bare 'What were the results?' can refer to prior work.
+                local_question = question_clause and (
+                    noun[1].casefold() == "sources" or _TOPIC_STATEMENT.search(
+                        preceding[:question_clause.start() + 1]))
+                if ((_SEARCH.search(preceding) or local_question)
+                        and not _ELLIPTICAL_QUESTION.search(preceding)):
                     local.append((start, end))
     return frozenset(local)
 
