@@ -61,6 +61,7 @@ def lexical_ranking_settings():
     names = (
         "RAG_FULL_TEXT_ENABLED",
         "RAG_NAMED_ITEM_RETRIEVAL_ENABLED",
+        "RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED",
         "RAG_NAMED_ITEM_INDEX_ENABLED",
         "RAG_RRF_ENABLED",
         "RAG_PROTECTED_EXACT_ENABLED",

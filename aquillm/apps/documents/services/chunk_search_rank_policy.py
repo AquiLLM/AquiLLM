@@ -19,6 +19,8 @@ def controls():
     }
     if getattr(settings, "RAG_NAMED_ITEM_RETRIEVAL_ENABLED", False) is True:
         result["named_items"] = True
+    if getattr(settings, "RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED", False) is True:
+        result["parent_abstracts"] = True
     return result
 
 

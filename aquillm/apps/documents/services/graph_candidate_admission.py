@@ -42,17 +42,25 @@ def _query_bindings(scope, query):
     return frozenset(bindings)
 
 
-def _named_item_refs(scope, query, baseline_order, all_refs):
+def _named_item_refs(scope, query, baseline_order, all_refs, *, named=True, dense_parents=()):
     from .named_item_lookup import lookup_named_item_candidates
+    from .named_item_reads import PDF_MODEL
 
-    owners = tuple(dict.fromkeys(all_refs[pk].doc_id for pk in baseline_order))[:4]
-    nominees = lookup_named_item_candidates(scope, owners, query)
+    owners = tuple(dict.fromkeys(all_refs[pk].doc_id for pk in baseline_order))[:4] if named else ()
+    abstract_owners = ()
+    if dense_parents:
+        pdfs = {s.document.id for s in scope.representation.selections if s.document.model_label == PDF_MODEL}
+        abstract_owners = tuple(dict.fromkeys(ref.doc_id for ref in dense_parents if ref.doc_id in pdfs))[:2]
+    if abstract_owners:
+        nominees = lookup_named_item_candidates(scope, owners, query, abstract_owners=abstract_owners)
+    else:
+        nominees = lookup_named_item_candidates(scope, owners, query)
     refs = tuple(
         SourceRankRef(n.chunk_id, n.document_id, n.chunk_number,
                       n.generation_id, n.body_md5, n.body_length)
         for n in nominees
     )
-    if len(refs) > 12 or any(ref.doc_id not in owners for ref in refs):
+    if len(refs) > 12 or any(ref.doc_id not in (*owners, *abstract_owners) for ref in refs):
         raise SourceScopeUnavailable("invalid_named_item_candidates")
     for ref in refs:
         existing = all_refs.get(ref.pk)
@@ -155,8 +163,13 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                                       ("dense", "trigram", "exact", "full_text") for r in channels[name]))
                 ordinary = fair_prefix(novel, baseline_allowance, protected=protected)
                 nominees = ()
-                if dict(ranking).get("named_items") and baseline_order and baseline_allowance > active:
-                    nominees, item_refs = _named_item_refs(scope, query, baseline_order, all_refs)
+                rank_options = dict(ranking)
+                named = rank_options.get("named_items", False)
+                dense_parents = channels["dense"] if rank_options.get("parent_abstracts") else ()
+                if (named or dense_parents) and baseline_order and baseline_allowance > active:
+                    nominees, item_refs = _named_item_refs(
+                        scope, query, baseline_order, all_refs, named=named, dense_parents=dense_parents
+                    )
                     if item_refs:
                         channels["named_items"] = item_refs
                         reused += tuple(ref.pk for ref in item_refs if ref.identity in charged)

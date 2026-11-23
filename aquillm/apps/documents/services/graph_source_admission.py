@@ -38,7 +38,7 @@ class NativeSourceAdmission:
         owners = {}
         for item in self.named_items:
             if item.chunk_id not in self.withdrawn_items:
-                owners.setdefault(item.document_id, []).append(item)
+                owners.setdefault((item.document_id, getattr(item, "kind", "named")), []).append(item)
         for items in owners.values():
             if not validate_named_item_candidates(self.scope, tuple(items)):
                 self.withdrawn_items.update(item.chunk_id for item in items)

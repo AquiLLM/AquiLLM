@@ -120,7 +120,27 @@ def build_items(text, members):
     return items
 
 
-def index_payload(entries, members):
+def _abstract_item(canonical, members):
+    """Bind an early, separately printed heading to one existing source chunk."""
+    heading = re.search(r"(?im)^[ \t]*abstract[ \t]*\r?$", canonical)
+    if heading is None or heading.start() > len(canonical) // 3:
+        return None
+    start, label_end = heading.span()
+    end = min(len(canonical), label_end + 2000)
+    # An overlapping chunk can end just after the heading. Prefer the one
+    # that carries the most abstract text, while retaining the literal heading.
+    choices = [
+        (min(end, hi) - label_end, pk)
+        for pk, _, lo, hi, _ in members
+        if lo <= start and min(end, hi) - label_end >= MIN_OVERLAP
+    ]
+    if not choices or not canonical[label_end:end].strip():
+        return None
+    coverage, pk = min(choices, key=lambda candidate: (-candidate[0], candidate[1]))
+    return dict(start=start, label_end=label_end, end=label_end + coverage, refs=[pk])
+
+
+def index_payload(entries, members, *, canonical=None):
     """Build this PDF's literal inverted index once, inside publication."""
     postings = {}
     items = []
@@ -131,13 +151,15 @@ def index_payload(entries, members):
         item = {key: value for key, value in entry.items() if key != "terms"}
         items.append({**item, "term_count": len(terms)})
     referenced = {pk for item in items for pk in item["refs"]}
-    return encode(
-        {
-            "items": items,
-            "postings": postings,
-            "members": [row for row in members if row[0] in referenced],
-        }
-    )
+    data = dict(items=items, postings=postings, members=[r for r in members if r[0] in referenced])
+    abstract = _abstract_item(canonical, members) if canonical is not None else None
+    if abstract is not None:
+        new_refs = referenced.union(abstract["refs"])
+        expanded = encode(dict(data, version=2, abstract=abstract,
+                               members=[r for r in members if r[0] in new_refs]))
+        if len(expanded) <= MAX_PAYLOAD:
+            return expanded
+    return encode(data)
 
 
 def owner_binding(selected, member_digest, payload_sha256):
@@ -210,7 +232,7 @@ def publish_named_items(document, selected, *, using):
         entries = build_items(canonical, members)
     index = PDFNamedItemIndex.objects.using(using)
     if entries is not None:
-        payload = index_payload(entries, members)
+        payload = index_payload(entries, members, canonical=canonical)
     if entries is None or len(payload) > MAX_PAYLOAD:
         index.filter(document_id=document.pk).delete()
         return False

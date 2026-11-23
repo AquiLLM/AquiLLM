@@ -24,6 +24,14 @@ Use the returned `after_pk` to continue each batch until the cursor stops advanc
 both `RAG_NAMED_ITEM_INDEX_ENABLED` and `RAG_NAMED_ITEM_RETRIEVAL_ENABLED` on the isolated
 search process. The supported admission path is the native graph-enabled V2 collector.
 
+For parent-paper abstracts, enable `RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED` on that search
+process with `RAG_NAMED_ITEM_INDEX_ENABLED`. Matching named sections have their own search
+switch. Re-run the same backfill from cursor zero after upgrading so existing PDFs with a
+printed Abstract heading gain a passage reference. Earlier index rows still supply their
+named sections. Up to two distinct PDF owners from the vector results can nominate
+abstract passages within the same source allowance. The final scorer evaluates their
+relevance alongside the other candidates.
+
 The local-model panel selector and synthesis comparisons are research experiments. Their
 results and deployment decision are tracked in the [retrieval issue](https://github.com/AquiLLM/AquiLLM-internal/issues/4)
 and the [adversarial audit](https://github.com/AquiLLM/AquiLLM-internal/issues/6).

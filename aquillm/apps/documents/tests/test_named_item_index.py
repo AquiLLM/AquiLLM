@@ -29,27 +29,26 @@ pytestmark = pytest.mark.django_db(transaction=True)
 
 
 @pytest.fixture
-def pdf(settings):
+def pdf(settings, request):
     settings.RAG_NAMED_ITEM_INDEX_ENABLED = True
     settings.DOCUMENT_EMBEDDING_SPACE_KEY = None
+    parts = getattr(request, "param", "Intro.\n• Moss traits: " + "green 🌿 " * 20)
+    if isinstance(parts, str):
+        parts = (parts,)
     doc = PDFDocument(
         title="Field guide",
-        full_text="Intro.\n• Moss traits: " + "green 🌿 " * 20,
+        full_text="".join(parts),
         collection=Collection.objects.create(name="Fieldwork"),
         ingested_by=User.objects.create(username="field-researcher"),
     )
     doc.save(dont_rechunk=True)
-    TextChunk.objects.bulk_create(
-        [
-            TextChunk(
-                doc_id=doc.id,
-                content=doc.full_text,
-                start_position=0,
-                end_position=len(doc.full_text),
-                chunk_number=0,
-            )
-        ]
-    )
+    rows = []
+    offset = 0
+    for number, part in enumerate(parts):
+        rows.append(TextChunk(doc_id=doc.id, content=part, start_position=offset,
+                              end_position=offset + len(part), chunk_number=number))
+        offset += len(part)
+    TextChunk.objects.bulk_create(rows)
     return doc
 
 
@@ -172,3 +171,90 @@ def test_background_activation_builds_index_for_real_pdf_extraction(upload, sett
             TextChunk.objects.get(pk=hit.chunk_id).representation_generation_id
             == projection.generation_id
         )
+
+
+@pytest.mark.parametrize("pdf", ["Abstract\n" + "Soil samples increased in depth. " * 12],
+                         indirect=True, ids=["explicit-heading"])
+def test_abstract_uses_only_the_requested_parent_and_withdraws_stale_support(pdf, settings):
+    settings.RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED = True
+    assert backfill()["ready"] == 1
+    with existing_query((pdf, reference(pdf))) as (_, scope, _):
+        def ask(owners):
+            return lookup_named_item_candidates(scope, (), "Copper yield", abstract_owners=owners)
+
+        assert not lookup_named_item_candidates(scope, (pdf.id,), "Copper yield")
+        (hit,) = ask((pdf.id,))
+        assert hit.kind == "abstract" and hit.document_id == pdf.id
+        assert validate_named_item_candidates(scope, (hit,))
+        with pytest.raises(SourceScopeUnavailable):
+            ask((uuid4(),))
+        assert not validate_named_item_candidates(scope, (replace(hit, kind="named"),))
+        TextChunk.objects.filter(pk=hit.chunk_id).update(content=pdf.full_text.swapcase())
+        assert not ask((pdf.id,)) and not validate_named_item_candidates(scope, (hit,))
+
+
+def test_legacy_index_keeps_list_votes_without_an_abstract_until_backfill(pdf, settings):
+    from apps.documents.services.named_item_projection import digest, encode, owner_binding
+
+    settings.RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED = True
+    assert backfill()["ready"] == 1
+    with existing_query((pdf, reference(pdf))) as (_, scope, _):
+        selected, = scope.representation.selections
+        header = PDFNamedItemIndex.objects.get()
+        data = json.loads(header.payload)
+        data.pop("version", None)
+        data.pop("abstract", None)
+        old = encode(data)
+        PDFNamedItemIndex.objects.update(payload=old, binding=owner_binding(selected, header.member_digest, digest(old)))
+        (vote,) = lookup_named_item_candidates(scope, (pdf.id,), "moss", abstract_owners=(pdf.id,))
+        assert vote.kind == "named" and validate_named_item_candidates(scope, (vote,))
+
+
+@pytest.mark.parametrize(
+    "pdf", [("Abstract\n" + "A crop experiment compared two treatments. " * 6 + "\n\n",
+             "• Moss traits: " + "Moisture was retained in leaf surfaces. " * 5)],
+    indirect=True, ids=["separate-abstract-and-list"],
+)
+def test_literal_item_retains_priority_when_both_routes_match_the_same_parent(pdf, settings):
+    settings.RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED = True
+    assert backfill()["ready"] == 1
+    with existing_query((pdf, reference(pdf))) as (_, scope, _):
+        def query(limit):
+            return lookup_named_item_candidates(scope, (pdf.id,), "Which moss traits?",
+                                                abstract_owners=(pdf.id,), limit=limit)
+        named, overview = query(2)
+        assert (named.kind, named.chunk_number, overview.kind, overview.chunk_number) == ("named", 1, "abstract", 0)
+        assert query(1) == (named,) and validate_named_item_candidates(scope, (named, overview))
+        settings.RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED = False
+        assert query(2) == (named,) and not validate_named_item_candidates(scope, (overview,))
+        settings.RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED = True
+        chunk = TextChunk.objects.get(pk=overview.chunk_id)
+        TextChunk.objects.filter(pk=chunk.pk).update(content=chunk.content.swapcase())
+        assert query(2) == (named,) and validate_named_item_candidates(scope, (named,))
+
+
+@pytest.mark.parametrize(
+    "pdf", [("Abstract\n" + "Crystal growth was measured. " * 8 + "\n\n",
+             "• Crystal facets: " + "planes and angles " * 15)],
+    indirect=True, ids=["one-funded-revision"],
+)
+def test_a_funded_named_witness_survives_when_the_optional_abstract_cannot_be_funded(pdf, settings):
+    settings.RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED = True
+    assert backfill()["ready"] == 1
+    header = PDFNamedItemIndex.objects.get()
+    with existing_query((pdf, reference(pdf))) as (runtime, scope, _):
+        budget = runtime.budget
+        free = budget.limits.materialized_codepoints - budget.text_used["materialized"]
+        assert budget.reserve_text(free - 256 - len(header.payload) - 96, kind="materialized")
+        hits = lookup_named_item_candidates(scope, (pdf.id,), "crystal facets", abstract_owners=(pdf.id,))
+        assert [(hit.kind, hit.chunk_number) for hit in hits] == [("named", 1)]
+
+
+def test_abstract_only_lookup_skips_legacy_postings_without_charging_the_payload(pdf, settings):
+    settings.RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED = True
+    assert backfill()["ready"] == 1
+    with existing_query((pdf, reference(pdf))) as (runtime, scope, _):
+        budget = runtime.budget
+        before = budget.text_used["materialized"]
+        assert lookup_named_item_candidates(scope, (), "crystal", abstract_owners=(pdf.id,)) == ()
+        assert budget.text_used["materialized"] - before <= 256

@@ -57,3 +57,46 @@ def test_offline_postings_link_all_literal_labels_to_bound_members():
     assert index["postings"] == {"moss": [0, 1], "traits": [0], "height": [1]}
     assert index["members"] == [list(row)]
     assert [i["term_count"] for i in index["items"]] == [2, 2]
+
+
+def test_explicit_abstract_chooses_the_member_covering_most_of_its_text():
+    import json
+    from apps.documents.services.named_item_projection import index_payload
+
+    prefix = "A. Author, Institute.\n" * 20
+    body = "Soil properties respond to irrigation. " * 28
+    canonical = prefix + "  aBsTrAcT  \r\n" + body + "\n\n1 Introduction\n" + "Science. " * 230
+    start = canonical.index("  aBsTrAcT")
+    rows = [
+        member(1, canonical, 0, start + 190),
+        member(2, canonical, start - 40, start + 870),
+        member(3, canonical, start + 850, len(canonical)),
+    ]
+    projected = json.loads(index_payload(build_items(canonical, rows), rows, canonical=canonical))
+    abstract = projected["abstract"]
+    assert projected["version"] == 2 and abstract["refs"] == [2]
+    assert canonical[abstract["start"]:abstract["label_end"]].strip().lower() == "abstract"
+    assert projected["postings"] == {} and projected["items"] == []
+    assert projected["members"] == [list(rows[1])]
+
+
+def test_abstract_index_ignores_unmarked_prose_and_late_headings():
+    import json
+    from apps.documents.services.named_item_projection import index_payload
+
+    for text in ("Our abstract summarizes soil.\n" * 26, "Background. " * 50 + "\nAbstract\n" + "B" * 150):
+        rows = [member(1, text, 0, len(text))]
+        projected = json.loads(index_payload(build_items(text, rows), rows, canonical=text))
+        assert not projected.get("abstract") and projected["members"] == []
+
+
+def test_abstract_metadata_never_overflows_a_previously_eligible_list_index(monkeypatch):
+    from apps.documents.services import named_item_projection as projection
+
+    text = "Abstract\n" + "Microscopy resolved the structure. " * 7 + "\n\n• Crystal facets: " + "x" * 150
+    rows = [member(1, text, 0, len(text))]
+    items = build_items(text, rows)
+    old = projection.index_payload(items, rows)
+    assert len(projection.index_payload(items, rows, canonical=text)) > len(old)
+    monkeypatch.setattr(projection, "MAX_PAYLOAD", len(old))
+    assert projection.index_payload(items, rows, canonical=text) == old
