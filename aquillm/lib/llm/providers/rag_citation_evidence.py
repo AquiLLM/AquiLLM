@@ -14,12 +14,18 @@ _NAME_VERSION = re.compile(
     r"\b([A-Z][A-Za-z0-9-]{1,31})\s+"
     r"([A-Z]{1,6}\d+[a-zA-Z0-9]*|[vV]?\d+(?:\.\d+){1,3})\b"
 )
+# Some publications hyphenate an acronym and its named release. Match only the
+# complete two-part identifier; punctuation inside a longer code is significant.
+_HYPHENATED_RELEASE = re.compile(
+    r"(?<![\w.\-‐‑])([A-Z]{2,16})[\-‐‑]([A-Z]{1,6}\d+[A-Za-z0-9]*)(?![\w\-‐‑]|\.\w)"
+)
 _QUOTED = re.compile(r"""["'“‘`]([^"'“”‘’`\n]{1,64})["'”’`]""")
 
 
 def _identifiers(text, *, source=False):
     # Case and punctuation matter. Plain quantities, units, and arithmetic
     # results need not appear literally in a source describing the inputs.
+    text = _HYPHENATED_RELEASE.sub(r"\1 \2", text)
     quoted = set(_QUOTED.findall(text)) if not source else set()
     words = {
         word

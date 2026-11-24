@@ -532,18 +532,14 @@ async def complete_conversation_turn(
     stream_message_uuid = str(uuid.uuid4())
     observability_correlation_id = current_correlation_id() or new_correlation_id()
     sdk_args = {
-        **(
-            llm.base_args
-            | tools
-            | {
-                "system": request_system_prompt,
-                "messages": message_dicts,
-                "messages_pydantic": messages_for_bot,
-                "max_tokens": request_max_tokens,
-                "stream_callback": provider_stream_func,
-                "stream_message_uuid": stream_message_uuid,
-            }
-        )
+        **llm.base_args,
+        **tools,
+        "system": request_system_prompt,
+        "messages": message_dicts,
+        "messages_pydantic": messages_for_bot,
+        "max_tokens": request_max_tokens,
+        "stream_callback": provider_stream_func,
+        "stream_message_uuid": stream_message_uuid,
     }
     supports_request_observability = bool(
         getattr(llm, "supports_request_observability", False)
@@ -554,7 +550,11 @@ async def complete_conversation_turn(
     if isinstance(last_message, UserMessage) and last_message.tools:
         sdk_args["thinking_budget"] = 0
 
-    response = await llm.get_message(**sdk_args)
+    if enforce_citations and is_post_tool_result_turn and conversation._comparison_plan is not None:
+        from .rag_comparison_dispatch import write_comparison
+        response = await write_comparison(llm, sdk_args, conversation._comparison_plan, publication)
+    else:
+        response = await llm.get_message(**sdk_args)
     is_required_tool_cutoff = (
         isinstance(last_message, UserMessage)
         and bool(last_message.tools)

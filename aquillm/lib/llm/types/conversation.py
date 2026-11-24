@@ -1,8 +1,13 @@
 """Conversation type for managing LLM message sequences."""
-from pydantic import BaseModel
+from typing import TYPE_CHECKING
+
+from pydantic import BaseModel, PrivateAttr
 
 from .messages import LLM_Message, UserMessage, AssistantMessage, ToolMessage
 from .tools import LLMTool, ToolChoice
+
+if TYPE_CHECKING:
+    from ..providers.rag_comparison_writer import ComparisonAnswerPlan
 
 
 class Conversation(BaseModel):
@@ -15,6 +20,7 @@ class Conversation(BaseModel):
     """
     system: str
     messages: list[LLM_Message] = []
+    _comparison_plan: "ComparisonAnswerPlan | None" = PrivateAttr(default=None)
 
     def __len__(self):
         return len(self.messages)

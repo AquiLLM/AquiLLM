@@ -64,7 +64,7 @@ def initial_request_policy(conversation, max_tokens, *, stage, post_tool_cap):
     return requested, choice, stage
 
 
-def protected_post_tool_inputs(conversation, max_tokens, *, stage):
+def protected_post_tool_inputs(conversation, max_tokens, *, stage, supports_json_schema=False):
     """Exact eligible initial text request; other paths conservatively abstain."""
     from lib.llm.turn_context import is_retrieval_tool
     from .complete_turn_sources import _collect_source_refs_from_tool_message
@@ -77,10 +77,16 @@ def protected_post_tool_inputs(conversation, max_tokens, *, stage):
     refs = _collect_source_refs_from_tool_message(last)
     if not is_retrieval_tool(last.tool_name) and not refs:
         return None
-    system, _, _, _ = completion_prompt_inputs(
+    system, _, _, enforce = completion_prompt_inputs(
         conversation, rag_answer=True, post_tool=True, source_refs=refs)
     maximum, _, _ = initial_request_policy(conversation, max_tokens,
         stage=stage, post_tool_cap=turn_token_limits()[0])
     messages = [message.render(include={"role", "content"}) for message in conversation
                 if not (isinstance(message, ToolMessage) and message.for_whom == "user")]
-    return {"system_text": system, "message_list": messages, "max_tokens": maximum}
+    options = {}
+    if supports_json_schema and enforce and conversation._comparison_plan:
+        from .rag_comparison_dispatch import structured_request
+
+        messages.append({"role": "user", "content": conversation._comparison_plan.brief})
+        options = structured_request(conversation._comparison_plan)
+    return {"system_text": system, "message_list": messages, "max_tokens": maximum, **options}

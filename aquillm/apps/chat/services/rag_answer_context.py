@@ -185,6 +185,14 @@ class RagAnswerPublication:
         if allowed is not True:
             raise AnswerPublicationRejected("authority_unavailable")
 
+    def accepts_comparison_text(self, text):
+        from .rag_model_answer import prepare_model_answer
+
+        try:
+            return prepare_model_answer(self.packet, text) == text and validate_final_answer(text, self.policy).valid
+        except ValueError:
+            return False
+
     async def finalize(self, text, *, limited_reason=None, incomplete_draft=False):
         self._active()
         text = sanitize_assistant_text(text, allow_short_final=True)

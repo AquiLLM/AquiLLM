@@ -119,7 +119,12 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
             request_args["stream"] = True
             request_args.setdefault("stream_options", {"include_usage": True})
         timeout_retries_used = 0
+        client = self.client
         max_total_retries = max_overflow_retries + max_timeout_retries
+        if synthesis_phase in {"comparison_clarification", "comparison_paired_support"}:
+            # The SDK can resend a failed request inside a single adapter dispatch.
+            client = client.with_options(max_retries=0)
+            max_total_retries = 0
         for attempt in range(max_total_retries + 1):
             from lib.llm.evidence_guard import validate_request
             from lib.llm.synthesis_dispatch import dispatch
@@ -129,7 +134,7 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
             try:
                 if stream_enabled:
                     stream = await dispatch(
-                        lambda: self.client.chat.completions.create(
+                        lambda: client.chat.completions.create(
                             timeout=request_timeout_s, **request_args
                         ),
                         output_reserve=request_args["max_tokens"],
@@ -155,7 +160,7 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
                     )
                 else:
                     response = await dispatch(
-                        lambda: self.client.chat.completions.create(
+                        lambda: client.chat.completions.create(
                             timeout=request_timeout_s, **request_args
                         ),
                         output_reserve=request_args["max_tokens"],

@@ -105,7 +105,8 @@ class RecoveryRequest:
         refresh_answer_support(packet)
         working = self.conversation_for(selected_tool_result(packet), self.top_k)
         _, request = prepare_evidence_handoff(working, packet)
-        inputs = protected_post_tool_inputs(request, self.max_tokens, stage=self.stage)
+        inputs = protected_post_tool_inputs(request, self.max_tokens, stage=self.stage,
+                                           supports_json_schema=self.llm.supports_json_schema)
         arguments = protected_text_request_arguments(self.llm, **inputs) if inputs is not None else None
         if arguments is None:
             raise UnsupportedRecoveryRequest("unsupported_recovery_request")
