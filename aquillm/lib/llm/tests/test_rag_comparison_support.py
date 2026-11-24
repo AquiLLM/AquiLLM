@@ -139,3 +139,26 @@ def test_descriptive_passive_relation_and_original_schema_still_apply():
     for role in ("invented", "designation"):
         assert prepare_paired_claims(raw(claim("The later inventory added West survey plates.", ["AB", "C"],
                                                relation=role)), PLAN, POLICY) is None
+
+
+@pytest.mark.parametrize("statement", [
+    "West survey plates were removed.",
+    "The West survey plates were added.",
+])
+def test_bare_affirmative_change_cannot_reclassify_a_proven_shared_member(statement):
+    obj, needs = prepare_paired_claims(raw(claim(statement, ["AB"], relation="qualification")), PLAN, POLICY)
+    assert not needs
+    assert decode(json.dumps({"claims": obj["claims"]}), PLAN, POLICY) is None
+
+
+@pytest.mark.parametrize("statement", [
+    "Upper bay maps were added.",
+    "West survey plates were not removed.",
+    "West survey plates were removed during calibration.",
+    "West survey plates from another set were removed.",
+    "The West survey plates and a different item were removed.",
+])
+def test_bare_shared_member_check_preserves_distinct_or_context_qualified_statements(statement):
+    obj, needs = prepare_paired_claims(raw(claim(statement, ["B"], relation="qualification")), PLAN, POLICY)
+    assert not needs and obj["claims"][0]["relation"] == "qualification"
+    assert decode(json.dumps({"claims": obj["claims"]}), PLAN, POLICY) is not None

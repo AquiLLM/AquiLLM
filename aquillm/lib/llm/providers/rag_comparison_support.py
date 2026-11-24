@@ -77,7 +77,7 @@ def _explicit_report(claim, quote, texts):
             and any(_whole_clause(quote, text) for text in texts))
 
 
-def _asserted_change(statement, texts):
+def _asserted_change(statement, texts, shared_names=()):
     """Recognize a direct inventory predicate only for a member named in the selected evidence."""
     text = statement.strip().rstrip(".!?")
     if _UNCERTAIN.search(text):
@@ -88,9 +88,16 @@ def _asserted_change(statement, texts):
         member = re.split(r",|\s+(?:and|with)\s+", objects, maxsplit=1, flags=re.I)[0]
     else:
         passive = _PASSIVE_MEMBERSHIP.match(text)
-        if not passive or not _MEMBERSHIP_TARGET.match(text, passive.end()):
+        if not passive:
             return None
         member, verb = passive.groups()
+        if not _MEMBERSHIP_TARGET.match(text, passive.end()):
+            # A bare change is unambiguous only when the entire subject names a proven shared entry.
+            if passive.end() == len(text) and verb.casefold() in ("added", "removed"):
+                subject = " ".join(member.casefold().split())
+                if any(subject in (name.casefold(), "the " + name.casefold()) for name in shared_names):
+                    return verb.casefold()
+            return None
     relation = next((kind for kind, verbs in _CHANGE.items() if verbs.fullmatch(verb)), None)
     if relation is None:
         return None
@@ -127,7 +134,7 @@ def prepare_paired_claims(raw: str, plan: ComparisonAnswerPlan, policy: FinalCit
             return None
         if relation not in _CHANGE and relation not in ("other", "qualification", "designation"):
             return None
-        inferred = _asserted_change(statement, texts.values())
+        inferred = _asserted_change(statement, texts.values(), plan.shared_names)
         if relation == "designation" and inferred in ("added", "removed"):
             return None
         if inferred and relation != "designation":
