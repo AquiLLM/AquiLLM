@@ -8,48 +8,18 @@ evidence can still be used for answer synthesis.
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable
-from dataclasses import dataclass
 from threading import RLock
 from time import monotonic
 
 from .budget_observation import observed_budget
 from .evidence import SourceIdentity
 from .turn_limits import PILOT_MAX as _PILOT_MAX
+from .turn_limits import TurnLimits
 
 # Actual transports share this weighted, non-waiting admission across all turns.
 # Fleet capacity is worker process count times six until service admission exists.
 _PROCESS_PAIR_LOCK = RLock()
 _PROCESS_PAIRS = 0
-
-@dataclass(frozen=True, slots=True)
-class TurnLimits:
-    actions: int = 3
-    unique_sources: int = 45
-    materialized_codepoints: int = 250_000
-    tokenized_codepoints: int = 1_000_000
-    acquisition_pairs: int = 90
-    final_pairs: int = 45
-    in_flight_pairs: int = 6
-    planner_calls: int = 2
-    planner_call_ms: int = 5_000
-    planner_output_tokens: int = 1024
-    retrieval_ms: int = 15_000
-    final_scoring_ms: int = 3_000
-
-    def __post_init__(self) -> None:
-        from .turn_limits import validate_limits
-
-        validate_limits(self, _PILOT_MAX)
-
-    def clamped_to(self, parent: TurnLimits) -> TurnLimits:
-        """A nested caller can narrow, never enlarge, a parent allowance."""
-        return TurnLimits(
-            **{
-                name: min(getattr(self, name), getattr(parent, name))
-                for name in self.__dataclass_fields__
-            }
-        )
-
 
 @observed_budget
 class TurnBudget:

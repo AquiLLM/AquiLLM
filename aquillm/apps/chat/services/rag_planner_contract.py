@@ -163,3 +163,42 @@ def planner_contract(views, allowed_documents, *, evidence_leads=False):
         "type": "json_schema",
         "json_schema": {"name": "retrieval_plan", "strict": True, "schema": schema},
     }
+
+
+def validate_action(action, unresolved, views, allowed_documents):
+    if (
+        not isinstance(action.query, str)
+        or (action.document_id is not None and not isinstance(action.document_id, str))
+        or (action.chunk_id is not None and type(action.chunk_id) is not int)
+    ):
+        raise ValueError("invalid acquisition coordinates")
+    if action.kind not in {"vector", "document", "adjacent"}:
+        raise ValueError("invalid acquisition kind")
+    if not action.aspect or action.aspect not in unresolved:
+        raise ValueError("action does not address an unresolved aspect")
+    if action.kind in {"vector", "document"} and (
+        not action.query.strip() or len(action.query) > 2000
+    ):
+        raise ValueError("invalid acquisition query")
+    if action.kind == "vector" and (
+        action.document_id is not None or action.chunk_id is not None
+    ):
+        raise ValueError("vector action cannot specify source coordinates")
+    if action.kind != "vector" and action.document_id not in allowed_documents:
+        raise ValueError("action outside selected scope")
+    if action.kind != "vector" and not any(
+        source.document_id == action.document_id for source in views
+    ):
+        raise ValueError("unknown document source")
+    if action.kind == "adjacent" and (
+        action.query
+        or not any(
+            source.chunk_id == action.chunk_id
+            and source.document_id == action.document_id
+            for source in views
+        )
+    ):
+        raise ValueError("unknown adjacent source")
+    if action.kind == "document" and action.chunk_id is not None:
+        raise ValueError("document action cannot specify a chunk")
+    return action

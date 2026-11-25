@@ -20,6 +20,7 @@ from apps.chat.services.rag_context_budget import (
     synthesis_evidence_budget,
 )
 from apps.chat.services.rag_evidence import build_selected_evidence_packet
+from apps.chat.services.rag_metrics import selection_metric_fields as selection_metric_fields
 from apps.chat.services.rag_query import _is_retry
 from apps.chat.services.rag_retrieval import (
     FusedRetrievalPool,
@@ -84,35 +85,6 @@ def selected_tool_result(packet) -> dict:
     if not packet.chunks:
         result["retrieval_message"] = packet.diagnostic_message
     return result
-
-
-def selection_metric_fields(config, turn: SelectionTurn | None, packet) -> dict:
-    """Closed aggregate values only; no passages, identities, or score arrays."""
-    base = {"selection_mode": config.mode, "selection_config_error": config.error}
-    if turn is None:
-        return base
-    if turn.prepared.acquired_count is not None:
-        base.update(acquired_count=turn.prepared.acquired_count,
-                    omitted_optional_count=len(turn.prepared.omitted_optional))
-    proposed = turn.selection.candidates
-    return base | {
-        "selector_ms": turn.selection_duration_ms,
-        "final_scoring_ms": turn.prepared.scoring_duration_ms,
-        "candidate_count": turn.candidate_count,
-        "selected_doc_count": len(
-            {row.get("doc_id", row.get("d")) for row in packet.chunks}
-        ),
-        "estimated_tokens": packet.total_tokens,
-        "reused_pairs": turn.prepared.reused_pairs,
-        "new_pairs": turn.prepared.new_pairs,
-        "profile_version": turn.selection.profile.version,
-        "fixed_fallback_reason": turn.prepared.fallback_reason,
-        "proposed_selected_count": len(proposed),
-        "proposed_selected_doc_count": len({item.doc_id for item in proposed}),
-        "proposed_estimated_tokens": turn.selection.estimated_tokens,
-        "proposed_profile_name": turn.selection.profile.name,
-        "proposed_score_status": turn.selection.score_status,
-    }
 
 
 async def coordinate_selection(
