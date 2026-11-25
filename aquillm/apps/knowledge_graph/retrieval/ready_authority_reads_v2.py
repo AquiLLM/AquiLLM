@@ -35,6 +35,13 @@ def capture_authority_check():
         try:
             check_source_deadline()
         except SourcePreparationLimited as error:
+            from .graph_child_deadline import _ReadyAuthorityDeadline
+
+            expired = bound is not None and (bound[0] - bound[1]()) * 1000 < 1
+            live = operation is not None and operation.active()
+            identity()  # Clock callbacks cannot hide a changed child or ancestor.
+            if expired and live:
+                raise _ReadyAuthorityDeadline(bound, operation) from error
             raise TimeoutError("graph authority deadline") from error
         if operation is not None and not operation.active():
             raise TimeoutError("graph authority original operation expired")

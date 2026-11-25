@@ -200,12 +200,13 @@ class AcquisitionBoundTests(unittest.IsolatedAsyncioTestCase):
             captured.append(operation._OPERATION.get())
             return sentinel
         stubs = {
-            "lib.llm.turn_context": SimpleNamespace(tool_timeout=lambda **kwargs: 10.0),
-            "apps.documents.services.source_loading": SimpleNamespace(current_source_runtime=lambda: None),
             "apps.chat.services.retrieval_query_runtime": SimpleNamespace(
                 run_optional_proposal=None, action_observation=lambda *args: {"signature": "q"}),
         }
-        with patch.dict(sys.modules, stubs):
+        # Keep real context accessors for lazily imported origin tracking; a
+        # partial module stub can both break imports and retain fake bindings.
+        with patch.dict(sys.modules, stubs), \
+                patch("lib.llm.turn_context.tool_timeout", return_value=10.0):
             result = await acquire_evidence("q", budget=budget, llm=None,
                 execute=execute, evidence_views=lambda rows: ())
         self.assertEqual(result.results, (sentinel,))
@@ -223,12 +224,11 @@ class AcquisitionBoundTests(unittest.IsolatedAsyncioTestCase):
             entered.set()
             await asyncio.Future()
         stubs = {
-            "lib.llm.turn_context": SimpleNamespace(tool_timeout=lambda **kwargs: 10.0),
-            "apps.documents.services.source_loading": SimpleNamespace(current_source_runtime=lambda: None),
             "apps.chat.services.retrieval_query_runtime": SimpleNamespace(
                 run_optional_proposal=None, action_observation=lambda *args: {"signature": "q"}),
         }
-        with patch.dict(sys.modules, stubs):
+        with patch.dict(sys.modules, stubs), \
+                patch("lib.llm.turn_context.tool_timeout", return_value=10.0):
             task = asyncio.create_task(acquire_evidence("q", budget=budget, llm=None,
                 execute=execute, evidence_views=lambda rows: ()))
             await asyncio.wait_for(entered.wait(), 1)

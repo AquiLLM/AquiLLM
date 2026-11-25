@@ -94,6 +94,16 @@ def hydrate_source_rows(
     return tuple(hydrated)
 
 
+def source_start(item):
+    """Return a verified start offset without fetching deferred chunk fields."""
+    fields = vars(item.chunk)
+    start, end = fields.get("start_position"), fields.get("end_position")
+    if type(start) is int and start >= 0 and type(end) is int:
+        if end - start == len(item.prepared_evidence.source.text):
+            return start
+    return None
+
+
 def source_candidate_cost(item, turn_budget=None):
     # Count exact rendered text, row/citation metadata and any figure together.
     return estimate_request_tokens(dict(item.row), turn_budget=turn_budget)

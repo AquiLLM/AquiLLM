@@ -240,13 +240,14 @@ def configure(monkeypatch, settings):
         monkeypatch.setenv(name, value)
 
 
-def fake_answer(monkeypatch, binding):
+def fake_answer(monkeypatch, binding, *, statements=(MARKER,)):
+    """Explicit model synthesis; source transport remains independently checked."""
     from apps.chat.consumers.chat import ChatConsumer
     from lib.llm.providers.openai import OpenAIInterface
 
     calls = []
     citation = f"[doc:{binding['document_id']} chunk:{binding['chunk_id']}]"
-    answer = f"{MARKER[:-1]} {citation}."
+    answer = "\n\n".join(f"{s.removesuffix('.')} {citation}." for s in statements)
 
     async def create(**kwargs):
         calls.append(kwargs)

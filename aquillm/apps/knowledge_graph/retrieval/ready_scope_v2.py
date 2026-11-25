@@ -213,6 +213,14 @@ def requested_authorities_v2(authorities, representation_snapshot, requested):
     )
 
 
+def distinct_representation_pair(captured, artifact_snapshot):
+    """Coalesce exact immutable values only; this carries no freshness proof."""
+    if (type(captured) is type(artifact_snapshot) is RepresentationSnapshotV1
+            and captured == artifact_snapshot):
+        return (captured,)
+    return captured, artifact_snapshot
+
+
 def assemble_group_v2(*, authorities, authorization, codec, representation_snapshot):
     """Encode a subset directly; never manufacture a narrowed authorization."""
     authorities = tuple(sorted(authorities, key=lambda a: a.collection_id))

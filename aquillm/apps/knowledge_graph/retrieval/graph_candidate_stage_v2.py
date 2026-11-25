@@ -1,6 +1,7 @@
 """Unpublished eager source state owned only by the native graph operation."""
 
 from collections import ChainMap
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import replace
 
@@ -38,6 +39,7 @@ class _GraphSourceStage:
         self.final_keys = frozenset()
         self._active = True
         self._seed_validation = None
+        self.failure_phase = "preparation"
 
     def seed_validation(self, snapshot, check, *, runtime=None, selected=None):
         from .closed_graph_seed_validation import _ClosedSeedValidation
@@ -68,6 +70,19 @@ class _GraphSourceStage:
 
     def read(self, query):
         return self._read(query)
+
+    @contextmanager
+    def buffered_reads(self):
+        """Keep optional eager reads local until their database and deadline scopes exit."""
+        original = self.cache
+        buffer = original.new_child()
+        self.cache = buffer
+        try:
+            yield
+        finally:
+            self.cache = original
+        self.check()
+        self.pending.update(buffer.maps[0])
 
     def read_captured(self, refs):
         """Exact private references narrow SQL work, never full authority."""

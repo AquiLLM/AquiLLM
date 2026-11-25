@@ -171,6 +171,12 @@ The active context tracks its issued message UUIDs and write epoch across databa
 
 The corrected DOCX traversal and XLSX unsupported-chart classification use `native-docx-ordered-v2` and `native-xlsx-ordered-v2`. Changed canonical content or quality cannot reuse an older immutable extraction identity. No persisted revision is overwritten.
 
+New native PDF extractions use `native-pdf-ordered-v2` for the policy that cleans
+ligatures, line-break hyphenation and NULs. To replay a stored PDF revision,
+use its recorded canonical text, offsets and manifest. The cleanup initially
+shipped under v1, so the v1 label alone does not distinguish raw and cleaned
+output. Do not relabel existing revisions or reinterpret their offsets.
+
 ### D5 clarification: source and dense revalidation APIs
 
 I4 owns `validate_representation_snapshot(snapshot: RepresentationSnapshotV1, *, using: str) -> RepresentationSnapshotV1`. It returns the same input object after re-reading all concrete owners for each original UUID and matching exact model/PK/UUID/collection/source hash and canonical text digest. Invalid, ambiguous or changed source raises `SourceScopeUnavailable('source_scope_unavailable')`; it never freezes replacement selections.

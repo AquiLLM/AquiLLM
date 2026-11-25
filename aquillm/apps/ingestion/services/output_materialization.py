@@ -57,6 +57,8 @@ def authorized_scope(output, *, using):
 
 
 def build_document(output, *, using):
+    if output.provenance_kind != 'ingestion':
+        raise ValueError('source_scope_unavailable')
     from apps.documents.models import RawTextDocument, PDFDocument, ImageUploadDocument, MediaUploadDocument, DocumentFigure
     from aquillm.task_ingest_helpers import figures_subcollection_name
     payload, item = output.payload, output.item

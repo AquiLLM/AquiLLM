@@ -2,7 +2,10 @@
 
 from dataclasses import dataclass, field
 from hashlib import sha256
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
+
+if TYPE_CHECKING:
+    from .providers.rag_citation_evidence import CitedSource
 
 LIMITED_ANSWER = (
     "I could not produce a reliably cited answer from the selected excerpts. "
@@ -16,6 +19,7 @@ class FinalCitationPolicy:
     require_cited_numeric_claims: bool
     evidence_digest: str
     scope_digest: str
+    sources: tuple["CitedSource", ...] = field(default=(), repr=False)
 
 
 @dataclass(frozen=True)
@@ -40,7 +44,8 @@ class AnswerPublicationRejected(RuntimeError):
 
 class AnswerPublicationContextV1(Protocol):
     async def finalize(
-        self, text: str, *, limited_reason: str | None = None
+        self, text: str, *, limited_reason: str | None = None,
+        incomplete_draft: bool = False,
     ) -> ValidatedAnswer: ...
     async def verify(
         self,
@@ -57,6 +62,7 @@ def content_digest(text):
 
 def validate_final_answer(text: str, policy: FinalCitationPolicy) -> CitationValidation:
     from .providers import rag_citations as citations
+    from .providers.rag_citation_evidence import misplaced_identifiers
 
     reasons = []
     if (
@@ -75,6 +81,8 @@ def validate_final_answer(text: str, policy: FinalCitationPolicy) -> CitationVal
         text
     ):
         reasons.append("uncited_numeric_claim")
+    if misplaced_identifiers(text, policy.sources):
+        reasons.append("misplaced_identifier_citation")
     return CitationValidation(not reasons, tuple(reasons))
 
 

@@ -149,19 +149,43 @@ def test_real_pair_proof_loss_stops_at_first_unknown_count(monkeypatch, loss):
         budget.close("proof_loss_test_finished")
 
 
+def test_fitting_tail_is_counted_once_and_leaves_request_headroom():
+    # Distinct code points keep unrelated prefixes out of the exact-slice memo.
+    text = "".join(chr(0x4E00 + offset) for offset in range(1500))
+    source = SourceEvidence(1, "d", 0, "r", text)
+    budget = TurnBudget(TurnLimits(tokenized_codepoints=16_000))
+    counted = []
+
+    def counter(question, passage):
+        counted.append(passage)
+        return len(question) + len(passage) + 8
+
+    plan = prepare_source_windows("q", source, pair_counter=counter, budget=budget)
+
+    assert plan.preparation_coverage == "complete"
+    assert [(w.start, w.end) for w in plan.windows] == [(0, 1015), (951, 1500)]
+    assert all(len("q") + len(w.text) + 8 <= 1024 for w in plan.windows)
+    assert [p for p in counted if p.startswith(text[951]) and text.endswith(p)] == [text[951:]]
+    assert budget.text_used["tokenized"] == sum(1 + len(p) for p in counted)
+    assert budget.reserve_text(1000, kind="tokenized")
+
+
 def test_lost_counter_discards_unscorable_prior_windows_but_keeps_original_source():
     budget, counts = TurnBudget(TurnLimits()), []
-    item = source()
+    text = "x " * 961 + "tail."
+    item = SourceEvidence(1, "synthetic", 0, "revision", text)
 
     def counter(query, document):
         counts.append(len(document))
-        return len(query) + len(document) + 8 if len(counts) <= 25 else None
+        if document != text and document.endswith("tail."):
+            return None  # Capability lost when sizing the remaining source window.
+        return len(query) + len(document) + 8
 
     try:
         plan = prepare_source_windows("q", item, pair_counter=counter, budget=budget)
-        assert plan.source is item and plan.source.text == "x " * 961
+        assert plan.source is item and plan.source.text == text
         assert plan.preparation_coverage == "unknown"
-        assert len(counts) == 26
+        assert 0 < counts[-1] < len(text)
         assert plan.windows == ()
         assert (
             score_window_plan(plan, scorer=Scorer(), budget=budget).attempted_pairs == 0

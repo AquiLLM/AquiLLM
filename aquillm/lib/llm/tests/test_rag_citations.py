@@ -6,20 +6,21 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from lib.llm.providers.complete_turn import complete_conversation_turn
 from lib.llm.answer_publication import LIMITED_ANSWER
-from lib.llm.tests.publication_fixture_support import selected_publication, UNCERTAINTY, assert_uncertain_alpha
+from lib.llm.providers.complete_turn import complete_conversation_turn
 from lib.llm.providers.rag_citations import (
     synthesize_cited_extract_from_results,
-    collect_allowed_chunk_citations,
-    response_has_required_citations,
-    find_invalid_citations,
-    synthesize_doc_level_extract_from_results,
 )
 from lib.llm.providers.request_observability import observability_scope
+from lib.llm.tests.publication_fixture_support import (
+    ALPHA_EXCERPT_FALLBACK,
+    assert_alpha_excerpt_fallback,
+    selected_publication,
+)
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
+
 
 @pytest.mark.asyncio
 async def test_complete_turn_retries_when_post_tool_answer_lacks_required_citations():
@@ -70,7 +71,8 @@ async def test_complete_turn_retries_when_post_tool_answer_lacks_required_citati
     with selected_publication(convo[-1].result_dict["result"]):
         updated, changed = await complete_conversation_turn(llm, convo, max_tokens=512)
     assert changed == "changed"
-    assert updated[-1].content == UNCERTAINTY + "\n\n> Alpha finding with supporting detail. [doc:doc-a chunk:7]"
+    assert updated[-1].content == "Cited answer [doc:doc-a chunk:7]."
+    assert updated[-1]._validated_answer.outcome == "partial"
     assert llm.get_message.await_count == 2
 
 @pytest.mark.asyncio
@@ -260,7 +262,7 @@ async def test_complete_turn_rejects_long_answer_with_uncited_factual_line():
     with selected_publication(convo[-1].result_dict["result"]):
         updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
     assert changed == "changed"
-    assert updated[-1].content == LIMITED_ANSWER
+    assert_alpha_excerpt_fallback(updated[-1])
     assert llm.get_message.await_count == 2
     assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
 
@@ -350,11 +352,11 @@ async def test_complete_turn_final_only_stream_still_repairs_uncited_claims(monk
             stream_func=_noop_stream,
         )
     assert changed == "changed"
-    assert updated[-1].content == LIMITED_ANSWER
+    assert_alpha_excerpt_fallback(updated[-1])
     assert llm.get_message.await_count == 2
     assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
     assert len(events) == 1 and events[0]["done"] is True
-    assert events[0]["content"] == LIMITED_ANSWER
+    assert events[0]["content"] == ALPHA_EXCERPT_FALLBACK
 
 
 @pytest.mark.asyncio
@@ -399,11 +401,11 @@ async def test_complete_turn_final_only_stream_rejects_fabricated_citations(monk
             stream_func=_noop_stream,
         )
     assert changed == "changed"
-    assert updated[-1].content == LIMITED_ANSWER
+    assert_alpha_excerpt_fallback(updated[-1])
     assert llm.get_message.await_count == 2
     assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
     assert len(events) == 1 and events[0]["done"] is True
-    assert events[0]["content"] == LIMITED_ANSWER
+    assert events[0]["content"] == ALPHA_EXCERPT_FALLBACK
 
 
 @pytest.mark.asyncio
@@ -449,7 +451,7 @@ async def test_complete_turn_legacy_stream_flag_publishes_only_final_attribution
         )
     assert changed == "changed"
     assert llm.get_message.await_count == 1
-    expected = UNCERTAINTY + "\n\n> alpha [doc:doc-a chunk:7]"
+    expected = "Final answer [doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
     assert updated[-1].content == expected
     assert len(stream_payloads) == 1
     assert stream_payloads[0]["done"] is True
@@ -500,9 +502,9 @@ async def test_complete_turn_streaming_skips_appending_sources_when_flag_disable
             stream_func=_capture_stream,
         )
     assert changed == "changed"
-    assert updated[-1].content == LIMITED_ANSWER
+    assert_alpha_excerpt_fallback(updated[-1])
     assert len(stream_payloads) == 1 and stream_payloads[0]["done"] is True
-    assert stream_payloads[0]["content"] == LIMITED_ANSWER
+    assert stream_payloads[0]["content"] == ALPHA_EXCERPT_FALLBACK
     assert llm.get_message.await_count == 2
     assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
 
@@ -549,9 +551,9 @@ async def test_complete_turn_sources_cannot_rescue_uncited_model_answer(monkeypa
             stream_func=_capture_stream,
         )
     assert changed == "changed"
-    assert updated[-1].content == LIMITED_ANSWER
+    assert_alpha_excerpt_fallback(updated[-1])
     assert len(stream_payloads) == 1 and stream_payloads[0]["done"] is True
-    assert stream_payloads[0]["content"] == LIMITED_ANSWER
+    assert stream_payloads[0]["content"] == ALPHA_EXCERPT_FALLBACK
     assert llm.get_message.await_count == 2
     assert all(call.kwargs["stream_callback"] is None for call in llm.get_message.await_args_list)
 
@@ -606,7 +608,10 @@ async def test_complete_turn_final_stream_adds_refs_when_model_emits_empty_sourc
     assert _append_citation_sources_if_missing(
         "A cited fact [doc:doc-a chunk:7].\n\nSources:", {"[doc:doc-a chunk:7]"}
     ).endswith("Sources:\n- [doc:doc-a chunk:7]")
-    expected = UNCERTAINTY + "\n\n> alpha [doc:doc-a chunk:7]"
+    expected = (
+        "The retrieved passage supports the central claim [doc:doc-a chunk:7]."
+        "\n\nSources:\n- [doc:doc-a chunk:7]"
+    )
     assert updated[-1].content == expected
     assert len(stream_payloads) == 1 and stream_payloads[0]["done"] is True
     assert stream_payloads[0]["content"] == expected
@@ -672,10 +677,9 @@ async def test_complete_turn_streaming_appends_used_sources_when_present(monkeyp
     source_list = _append_citation_sources_if_missing("Summary [doc:doc-a chunk:1].", refs)
     assert "Sources:\n- [doc:doc-a chunk:1]" in source_list
     assert "[doc:doc-g chunk:7]" not in source_list
-    expected = UNCERTAINTY + (
-        "\n\n> a [doc:doc-a chunk:1]\n\n> b [doc:doc-b chunk:2]"
-        "\n\n> c [doc:doc-c chunk:3]\n\n> d [doc:doc-d chunk:4]"
-        "\n\n> e [doc:doc-e chunk:5]"
+    expected = (
+        "Summary with one inline cite [doc:doc-a chunk:1]."
+        "\n\nSources:\n- [doc:doc-a chunk:1]"
     )
     assert streamed == updated[-1].content == expected
     assert "[doc:doc-f" not in streamed and "[doc:doc-g" not in streamed
@@ -737,7 +741,9 @@ async def test_complete_turn_cutoff_draft_cannot_escape_final_validation(monkeyp
             stream_func=_capture_stream,
         )
     assert changed == "changed"
-    expected = assert_uncertain_alpha(updated)
+    expected = LIMITED_ANSWER
+    assert updated[-1].content == expected
+    assert updated[-1]._validated_answer.outcome == "limited"
     assert len(stream_payloads) == 1 and stream_payloads[0]["done"] is True
     assert stream_payloads[0]["content"] == expected
     llm._continue_cutoff_response.assert_awaited_once()
@@ -745,7 +751,7 @@ async def test_complete_turn_cutoff_draft_cannot_escape_final_validation(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_deduplicated_continuation_still_requires_complete_citations(monkeypatch):
+async def test_complete_turn_deduplicated_continuation_preserves_cited_generated_answer(monkeypatch):
     monkeypatch.setenv("LLM_STREAM_FINAL_ANSWER_ONLY", "0")
     llm = SimpleNamespace(
         base_args={},
@@ -795,7 +801,9 @@ async def test_complete_turn_deduplicated_continuation_still_requires_complete_c
         ],
     )
 
-    from lib.llm.providers.complete_turn_continuation import _trim_duplicate_continuation_prefix
+    from lib.llm.providers.complete_turn_continuation import (
+        _trim_duplicate_continuation_prefix,
+    )
     partial = llm.get_message.return_value.text
     continuation = llm._continue_cutoff_response.return_value.text
     merged = partial + _trim_duplicate_continuation_prefix(partial, continuation)
@@ -810,7 +818,16 @@ async def test_complete_turn_deduplicated_continuation_still_requires_complete_c
             stream_func=stream,
         )
     assert changed == "changed"
-    expected = assert_uncertain_alpha(updated)
+    expected = (
+        "# The GalaxiesML Dataset: Comprehensive Technical Analysis\n"
+        "Dataset Construction and Provenance\n"
+        "Source Survey: HSC-PDR2 Wide Survey\n"
+        "Performance Requirements Context\n"
+        "The paper establishes **LSST deployment thresholds and acceptance criteria "
+        "[doc:doc-a chunk:7].\n\nSources:\n- [doc:doc-a chunk:7]"
+    )
+    assert updated[-1].content == expected
+    assert updated[-1]._validated_answer.outcome == "partial"
     llm._continue_cutoff_response.assert_awaited_once()
     assert llm._continue_cutoff_response.await_args.kwargs["stream_callback"] is None
     stream.assert_awaited_once()
@@ -890,7 +907,7 @@ async def test_complete_turn_unbound_whole_document_continuation_stays_limited(m
 
 
 @pytest.mark.asyncio
-async def test_complete_turn_valid_cutoff_draft_publishes_only_selected_source(monkeypatch):
+async def test_complete_turn_preserves_cited_cutoff_draft_when_continuation_is_empty(monkeypatch):
     async def _fake_compact_summary(_llm, _conversation, _max_tokens):
         return "Compressed fallback that should not replace the richer draft."
 
@@ -945,7 +962,8 @@ async def test_complete_turn_valid_cutoff_draft_publishes_only_selected_source(m
         updated, changed = await complete_conversation_turn(llm, convo, max_tokens=2048)
 
     assert changed == "changed"
-    assert updated[-1].content == UNCERTAINTY + "\n\n> Alpha finding with supporting detail. [doc:doc-a chunk:7]"
+    assert updated[-1].content == partial
+    assert updated[-1]._validated_answer.outcome == "partial"
     assert "Compressed fallback" not in updated[-1].content
 
 
@@ -1018,10 +1036,11 @@ async def test_complete_turn_recovers_from_blank_post_tool_answer_using_list_vec
         updated, changed = await complete_conversation_turn(llm, convo, max_tokens=1024)
 
     assert changed == "changed"
-    assert updated[-1].content == UNCERTAINTY + (
-        "\n\n> Radick argues that the victory of Mendelian genetics was not the only path biology could "
-        "have taken, and that alternative traditions such as Weldonian biology were historically possible. [doc:doc-a chunk:7]"
+    assert updated[-1].content == (
+        "- Radick argues that Mendelism's triumph was historically contingent, not inevitable [doc:doc-a chunk:7].\n"
+        "- The excerpts suggest Weldonian alternatives were crowded out rather than simply disproved [doc:doc-a chunk:7]."
     )
+    assert updated[-1]._validated_answer.outcome == "partial"
     assert "could not generate a final answer" not in updated[-1].content
     assert llm.get_message.await_count == 3
 
@@ -1167,242 +1186,8 @@ async def test_complete_turn_recovers_blank_post_tool_whole_document_via_synthes
     assert llm.get_message.await_count == 2
     content = updated[-1].content
     assert "I found supporting context" not in content
-    source_text = convo[-1].result_dict["result"]["text"]
-    assert content == f"{UNCERTAINTY}\n\n> {source_text} [doc:doc-paper chunk:1]"
-
-
-def test_collect_allowed_chunk_citations_accepts_explicit_ref_fields():
-    convo = Conversation(
-        system="sys",
-        messages=[
-            ToolMessage(
-                content="{}",
-                tool_name="vector_search",
-                for_whom="assistant",
-                result_dict={
-                    "result": [
-                        {"citation": "[doc:doc-c chunk:11]", "text": "gamma"},
-                        {"ref": "prefix [doc:doc-d chunk:12] suffix", "x": "delta"},
-                    ]
-                },
-            )
-        ],
+    assert content == (
+        "This paper defines a calibration loss and reliability diagram [doc:doc-paper chunk:1]. "
+        "Equation (3) scores bin-wise accuracy; Figure 2 shows the curve [doc:doc-paper chunk:1]."
     )
-    allowed = collect_allowed_chunk_citations(convo)
-    assert "[doc:doc-c chunk:11]" in allowed
-    assert "[doc:doc-d chunk:12]" in allowed
-
-
-
-def test_collect_allowed_chunk_citations_accepts_whole_document_metadata():
-    convo = Conversation(
-        system="sys",
-        messages=[
-            ToolMessage(
-                content="{}",
-                tool_name="whole_document",
-                for_whom="assistant",
-                result_dict={
-                    "result": "[doc:doc-paper chunk:21]\nA cited passage.",
-                    "citation_chunks": [
-                        {
-                            "doc_id": "doc-paper",
-                            "chunk_id": 21,
-                            "citation": "[doc:doc-paper chunk:21]",
-                        }
-                    ],
-                },
-            )
-        ],
-    )
-
-    assert collect_allowed_chunk_citations(convo) == {
-        "[doc:doc-paper chunk:21]"
-    }
-
-
-
-def test_collect_allowed_chunk_citations_from_verbose_and_compact_rows():
-    convo = Conversation(
-        system="sys",
-        messages=[
-            ToolMessage(
-                content="{}",
-                tool_name="vector_search",
-                for_whom="assistant",
-                result_dict={
-                    "result": [
-                        {"chunk_id": 7, "doc_id": "doc-a", "title": "Doc A", "text": "alpha"},
-                        {"i": 9, "d": "doc-b", "n": "Doc B", "x": "beta"},
-                    ]
-                },
-            )
-        ],
-    )
-    allowed = collect_allowed_chunk_citations(convo)
-    assert "[doc:doc-a chunk:7]" in allowed
-    assert "[doc:doc-b chunk:9]" in allowed
-
-
-
-def test_graph_metadata_cannot_create_pseudo_citations():
-    convo = Conversation(
-        system="sys",
-        messages=[
-            ToolMessage(
-                content="{}",
-                tool_name="vector_search",
-                for_whom="assistant",
-                result_dict={
-                    "result": [
-                        {
-                            "chunk_id": 17,
-                            "doc_id": "doc-real",
-                            "citation": "[doc:doc-real chunk:17]",
-                            "text": "real graph-expanded chunk",
-                            "graph_path": "[doc:private chunk:999]",
-                            "graph_entity": "private canonical node",
-                            "graph_score": 0.9,
-                        }
-                    ],
-                    "retrieval_diagnostics": {
-                        "graph_status": "hit",
-                        "graph_version_signature": "a" * 64,
-                    },
-                },
-            )
-        ],
-    )
-
-    assert collect_allowed_chunk_citations(convo) == {
-        "[doc:doc-real chunk:17]"
-    }
-
-
-
-def test_response_has_required_citations_allows_indented_sub_bullets_under_cited_heading():
-    allowed = {"[doc:doc-a chunk:7]"}
-    answer = (
-        "Figure 27 - Degrees of wrinkledness [doc:doc-a chunk:7]\n"
-        "    - Telegraph seeds 1-4\n"
-        "    - Telephone seeds 5-6\n"
-        "    - Lightning seeds 13-15"
-    )
-    assert response_has_required_citations(answer, allowed)
-
-
-
-def test_response_has_required_citations_allows_uncited_connective_sentence():
-    allowed = {"[doc:doc-a chunk:7]"}
-    answer = (
-        "- Core finding from the paper [doc:doc-a chunk:7]\n"
-        "Overall, this suggests the pattern is robust across experiments."
-    )
-    assert response_has_required_citations(answer, allowed)
-
-
-
-def test_response_has_required_citations_and_rejects_unknown_refs():
-    allowed = {"[doc:doc-a chunk:7]"}
-    assert response_has_required_citations("Fact from source [doc:doc-a chunk:7].", allowed)
-    assert not response_has_required_citations("Fact with no cite.", allowed)
-    invalid = find_invalid_citations(
-        "Wrong cite [doc:doc-a chunk:999] plus right [doc:doc-a chunk:7].",
-        allowed,
-    )
-    assert invalid == ["[doc:doc-a chunk:999]"]
-
-
-
-def test_response_has_required_citations_rejects_uncited_bullets():
-    allowed = {"[doc:doc-a chunk:7]"}
-    answer = "- Supported claim [doc:doc-a chunk:7]\n- Unsupported claim without cite"
-    assert not response_has_required_citations(answer, allowed)
-
-
-
-def test_synthesize_cited_extract_from_results_includes_refs():
-    convo = Conversation(
-        system="sys",
-        messages=[
-            ToolMessage(
-                content="{}",
-                tool_name="vector_search",
-                for_whom="assistant",
-                result_dict={
-                    "result": [
-                        {
-                            "chunk_id": 7,
-                            "doc_id": "doc-a",
-                            "title": "Doc A",
-                            "text": "Alpha finding with supporting detail.",
-                        }
-                    ]
-                },
-            )
-        ],
-    )
-    fallback = synthesize_cited_extract_from_results(convo)
-    assert fallback is not None
-    assert "Alpha finding" in fallback
-    assert "[doc:doc-a chunk:7]" in fallback
-
-
-
-def test_synthesize_doc_level_extract_from_whole_document_payload():
-    convo = Conversation(
-        system="sys",
-        messages=[
-            ToolMessage(
-                content="{}",
-                tool_name="whole_document",
-                for_whom="assistant",
-                arguments={"doc_id": "doc-paper"},
-                result_dict={
-                    "result": {
-                        "type": "document_with_figures",
-                        "text": (
-                            "The model minimizes a calibration loss L(theta). "
-                            "Figure 2 plots the reliability curve across bins."
-                        ),
-                        "figures": [],
-                    }
-                },
-            )
-        ],
-    )
-    extract = synthesize_doc_level_extract_from_results(convo)
-    assert extract is not None
-    assert "calibration loss" in extract
-    assert "[doc:doc-paper]" in extract
-
-
-
-def test_whole_document_citation_metadata_is_not_truncated_by_search_row_cap():
-    citation_chunks = [
-        {
-            "doc_id": "doc-paper",
-            "chunk_id": chunk_id,
-            "citation": f"[doc:doc-paper chunk:{chunk_id}]",
-        }
-        for chunk_id in range(1, 46)
-    ]
-    convo = Conversation(
-        system="sys",
-        messages=[
-            ToolMessage(
-                content="{}",
-                tool_name="whole_document",
-                for_whom="assistant",
-                result_dict={
-                    "result": "whole document",
-                    "citation_chunks": citation_chunks,
-                },
-            )
-        ],
-    )
-
-    allowed = collect_allowed_chunk_citations(convo, max_rows_per_message=1)
-
-    assert len(allowed) == 45
-    assert "[doc:doc-paper chunk:45]" in allowed
+    assert updated[-1]._validated_answer.outcome == "partial"

@@ -190,8 +190,14 @@ making operational claims.
 Final-answer callbacks wait for complete-answer classification and validation.
 With `LLM_STREAM_FINAL_ANSWER_ONLY=0`, ordinary answers therefore no longer emit
 incremental final-answer tokens. Tool/progress events retain their own behavior.
-Unvalidated semantic support produces attributed excerpts or a limited answer;
-a high ranking score is not calibrated confidence.
+The main model generates a cited answer from the delivered evidence. Usable text
+survives the final access, evidence, presentation and citation checks. Unknown
+semantic support remains unknown; a publication receipt and high ranking score
+do not establish factual correctness or calibrated confidence. Whole-source
+attributed excerpts are a fallback for unusable or citation-invalid drafts.
+Failed authority checks still produce a limited answer without source content.
+Evaluate generated answer correctness against the study references in addition
+to checking successful publication.
 
 Default retrieval uses the original private authority/budget carrier without
 enabling source/window feature routing. Explicit human `/search` requests may

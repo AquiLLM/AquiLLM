@@ -76,7 +76,12 @@ async def test_actual_acquisition_scores_reused_without_losing_source_conditions
         monkeypatch, score_value=lambda text: 0.95 if MARKER in text else 0.1
     )
     observed = observe_originals(monkeypatch)
-    sdk, _, citation = fake_answer(monkeypatch, binding)
+    statements = (MARKER,)
+    if variant == "table_header":
+        statements = ("Table 1.", "Signed results; concentration unit: ug/L.", MARKER)
+    elif variant == "contradiction":
+        statements = (f"Earlier finding: {MARKER}", CONTRADICTION)
+    sdk, answer, citation = fake_answer(monkeypatch, binding, statements=statements)
     unattributed = []
     with mode_environment("combined"), transport_observation(unattributed):
         result = await run_case(case, manifest, mode="combined", cache_state="cold")
@@ -122,24 +127,19 @@ async def test_actual_acquisition_scores_reused_without_losing_source_conditions
     assert result["delivered"][0]["text"].encode() == source.encode()
     assert result["delivered"][0]["fingerprint"] == scored.source_fingerprint
     assert publication_matches(result), result
-    assert result["persisted_answer"] == result["final_stream"]
-    assert (
-        MARKER in result["persisted_answer"] and citation in result["persisted_answer"]
-    )
-    # Retain every source line; remove only exact injected inline/terminal references.
+    assert result["persisted_answer"] == result["final_stream"] == answer
+    assert citation in result["persisted_answer"]
     assert not find_uncited_numeric_claims(result["persisted_answer"])
-    quoted = " ".join(
-        line.removeprefix("> ").replace(" " + citation, "")
-        for line in result["persisted_answer"].splitlines()
-        if line.startswith("> ")
-    )
-    assert " ".join(quoted.split()) == " ".join(source.split())
+    # The model synthesizes the finding and its conditions; the exact whole
+    # source is checked independently through scoring, sealing and SDK delivery.
+    synthesis = result["persisted_answer"].replace(" " + citation, "")
+    assert MARKER in synthesis
     if variant != "ordinary":
         condition = HEADER if variant == "table_header" else CONTRADICTION
         assert condition in source and any(
             condition in call["text_2"] for call in calls
         )
-        assert condition in lease.payload and condition in " ".join(quoted.split())
+        assert condition in lease.payload and condition in " ".join(synthesis.split())
     assert result["pairs"] == {"acquisition": 3, "final": 0}
     assert result["actions"] == 1 and not unattributed
     assert result["dispatch_accounting_complete"]

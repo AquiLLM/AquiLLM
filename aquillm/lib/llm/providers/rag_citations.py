@@ -30,10 +30,12 @@ from .rag_citation_extracts import (
 from .rag_citation_extracts import (
     synthesize_doc_level_extract_from_results as synthesize_doc_level_extract_from_results,
 )
+from .rag_citation_prompts import build_citation_system_suffix, render_citation_retry_prompt
+from .rag_citation_prose import logical_factual_lines, numeric_claim_sentences
 
 _CITATION_RE = re.compile(r"\[doc:[^\]\s]+\s+chunk:\d+\]")
 _CITATION_LIKE_RE = re.compile(r"\[doc:[^\]\r\n]*(?:\]|(?=[\r\n]|$))")
-_BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*]\s+|\s*\d+\.\s+)")
+_BULLET_OR_ENUM_RE = re.compile(r"^(\s*[-*+]\s+|\s*\d+[.)]\s+)")
 
 
 def citation_enforcement_enabled() -> bool:
@@ -154,7 +156,7 @@ def find_uncited_numeric_claims(answer_text: str | None) -> list[str]:
     for lines in paragraphs:
         # A nonnumeric marker also protects punctuation inside document IDs.
         marked = _CITATION_RE.sub(" \x00", " ".join(lines))
-        sentences = re.split(r"(?<=[.!?])\s+|(?<=[.!?][\"')\u201d\u2019])\s+", marked)
+        sentences = numeric_claim_sentences(marked)
         claims: list[str] = []
         for sentence in sentences:
             # Accept: "Capacity is 18 litres. [doc:a chunk:1]". The citation
@@ -168,7 +170,8 @@ def find_uncited_numeric_claims(answer_text: str | None) -> list[str]:
         uncited.extend(
             claim for claim in claims
             if "\x00" not in claim
-            and re.search(r"\d", claim)
+            # A digit inside an identifier such as PDR3 is not itself a quantity.
+            and re.search(r"\b\d", claim)
             and re.search(r"[A-Za-z]{2,}", claim)
         )
     return uncited
@@ -185,7 +188,7 @@ def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
     uncited: list[str] = []
     in_code_block = False
     inherited_citation: str | None = None
-    for raw_line in answer_text.splitlines():
+    for raw_line in logical_factual_lines(answer_text, _BULLET_OR_ENUM_RE):
         line = raw_line.strip()
         if line.startswith("```"):
             in_code_block = not in_code_block
@@ -214,18 +217,6 @@ def find_uncited_factual_lines(answer_text: str | None) -> list[str]:
     return uncited
 
 
-def build_citation_system_suffix(allowed_citations: set[str], max_refs: int = 24) -> str:
-    """Instruction suffix appended to the system prompt for post-tool synthesis turns."""
-    refs = sorted(allowed_citations)[:max_refs]
-    refs_text = "\n".join(refs)
-    return (
-        "When answering from retrieved documents, every factual claim must cite source chunks "
-        "using tokens exactly like [doc:<doc_id> chunk:<chunk_id>].\n"
-        "Do not invent citations. Use only citations from this allow-list:\n"
-        f"{refs_text}"
-    )
-
-
 def build_citation_retry_prompt(
     *,
     prior_answer: str,
@@ -233,23 +224,17 @@ def build_citation_retry_prompt(
     invalid_citations: list[str] | None = None,
     max_refs: int = 24,
 ) -> str:
-    refs = sorted(allowed_citations)[:max_refs]
-    refs_text = "\n".join(refs)
-    invalid_text = ""
-    if invalid_citations:
-        invalid_text = "Invalid citations detected and must be removed: " + ", ".join(invalid_citations) + "\n"
-    return (
-        "Rewrite your previous answer using only verifiable retrieved evidence.\n"
-        "Requirements:\n"
-        "- Every factual sentence or bullet must include at least one citation token.\n"
-        "- Citation format: [doc:<doc_id> chunk:<chunk_id>]\n"
-        "- Use only citations from the allow-list below.\n"
-        "- Do not call tools.\n"
-        f"{invalid_text}"
-        "Allow-list:\n"
-        f"{refs_text}\n\n"
-        "Previous answer:\n"
-        f"{prior_answer}"
+    uncited_numeric = find_uncited_numeric_claims(prior_answer)[:4]
+    uncited_factual = []
+    if len(uncited_numeric) < 4:
+        uncited_factual = [
+            line for line in find_uncited_factual_lines(prior_answer)
+            if _BULLET_OR_ENUM_RE.sub("", line, count=1).strip() not in uncited_numeric
+        ][:4 - len(uncited_numeric)]
+    return render_citation_retry_prompt(
+        prior_answer=prior_answer, allowed_citations=allowed_citations,
+        invalid_citations=invalid_citations, max_refs=max_refs,
+        uncited_numeric=uncited_numeric, uncited_factual=uncited_factual,
     )
 
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from time import monotonic
 from typing import Any
 
@@ -20,6 +20,7 @@ from apps.chat.services.rag_context_budget import (
     synthesis_evidence_budget,
 )
 from apps.chat.services.rag_evidence import build_selected_evidence_packet
+from apps.chat.services.rag_metrics import selection_metric_fields as selection_metric_fields
 from apps.chat.services.rag_query import _is_retry
 from apps.chat.services.rag_retrieval import (
     FusedRetrievalPool,
@@ -86,32 +87,6 @@ def selected_tool_result(packet) -> dict:
     return result
 
 
-def selection_metric_fields(config, turn: SelectionTurn | None, packet) -> dict:
-    """Closed aggregate values only; no passages, identities, or score arrays."""
-    base = {"selection_mode": config.mode, "selection_config_error": config.error}
-    if turn is None:
-        return base
-    proposed = turn.selection.candidates
-    return base | {
-        "selector_ms": turn.selection_duration_ms,
-        "final_scoring_ms": turn.prepared.scoring_duration_ms,
-        "candidate_count": turn.candidate_count,
-        "selected_doc_count": len(
-            {row.get("doc_id", row.get("d")) for row in packet.chunks}
-        ),
-        "estimated_tokens": packet.total_tokens,
-        "reused_pairs": turn.prepared.reused_pairs,
-        "new_pairs": turn.prepared.new_pairs,
-        "profile_version": turn.selection.profile.version,
-        "fixed_fallback_reason": turn.prepared.fallback_reason,
-        "proposed_selected_count": len(proposed),
-        "proposed_selected_doc_count": len({item.doc_id for item in proposed}),
-        "proposed_estimated_tokens": turn.selection.estimated_tokens,
-        "proposed_profile_name": turn.selection.profile.name,
-        "proposed_score_status": turn.selection.score_status,
-    }
-
-
 async def coordinate_selection(
     consumer,
     search_results,
@@ -124,6 +99,8 @@ async def coordinate_selection(
     revalidate_fn,
     request_conversation=None,
     llm_if=None,
+    recovery_request=None,
+    followup_query="",
 ):
     """Run opt-in selection on DB workers; shadow never changes served evidence."""
     try:
@@ -135,6 +112,10 @@ async def coordinate_selection(
             if ceiling <= 0:
                 raise SourcePreparationLimited("no evidence context capacity")
             kwargs = {"token_ceiling": ceiling}
+        if recovery_request is not None:
+            kwargs["recovery_request"] = recovery_request
+        if followup_query:
+            kwargs["followup_query"] = followup_query
         prepare_async = database_sync_to_async(prepare_fn, thread_sensitive=False)
         turn = await prepare_async(
             consumer, pool, query, question, config, top_k, **kwargs
@@ -162,6 +143,30 @@ async def coordinate_selection(
         return None, None, None
 
 
+def select_prepared_evidence(candidates, *, followup_query="", turn_budget=None, **options):
+    """Freeze any retrieval-only rank signal before invoking the replayable selector."""
+    from .rag_followup_ranking import POLICY, followup_relevance
+    from .rag_planner_leads import EvidenceLead
+    from .rag_selection import support_scores_usable
+
+    hints = options.get("support_hints", ())
+    lead_only = all(type(ref) is EvidenceLead for _, refs in hints for ref in refs)
+    if (options["mode"] == "adaptive" and followup_query and lead_only
+            and support_scores_usable(candidates, options["score_status"])):
+        scores = followup_relevance(candidates, options["question"], followup_query, turn_budget)
+        if scores:
+            ranked = tuple(replace(c, relevance=scores[id(c)]) for c in candidates)
+            if hints:
+                views = {id(original): view for original, view in zip(candidates, ranked)}
+                options["support_hints"] = tuple((views[id(row)], refs) for row, refs in hints)
+            profile = options["profile"]
+            options["profile"] = replace(profile, version=profile.version + "+" + POLICY)
+            result = select_evidence(ranked, **options)
+            originals = {id(view): c for view, c in zip(ranked, candidates)}
+            return replace(result, candidates=tuple(originals[id(c)] for c in result.candidates))
+    return select_evidence(candidates, **options)
+
+
 def prepare_selection_turn(
     consumer: Any,
     pool: FusedRetrievalPool,
@@ -172,6 +177,8 @@ def prepare_selection_turn(
     *,
     turn_budget=None,
     token_ceiling=None,
+    recovery_request=None,
+    followup_query="",
 ) -> SelectionTurn:
     """Resolve current scope, score once, and select on a DB-capable worker."""
     preservation = rag_preservation_config()
@@ -192,6 +199,43 @@ def prepare_selection_turn(
         )
     if authorization is None:
         raise ValueError("retrieval authorization unavailable")
+    profile = choose_selection_profile(question)
+    limits = SelectionLimits(top_k, resolve_document_cap(
+        mode=preservation.document_capacity_mode, legacy_cap=max_snippets_per_doc(),
+        explicit_hard_cap=preservation.document_hard_cap, final_passage_limit=top_k),
+        token_ceiling if token_ceiling is not None else evidence_token_budget())
+    from .rag_planner_leads import LEAD_POLICY, EvidenceLead
+    from .rag_selection_hints import POLICY, consume_selection_hints
+
+    durations = []
+
+    def select(prepared, *, ordinary=False):
+        support = () if ordinary else consume_selection_hints(runtime, prepared, pool, primary_query)
+        selected_profile, options = profile, {}
+        if support and config.mode == "adaptive":
+            options["support_hints"] = support
+            policy = LEAD_POLICY if isinstance(support[0][1][0], EvidenceLead) else POLICY
+            selected_profile = replace(profile, version=profile.version + "+" + policy)
+        if source_mode and config.mode == "adaptive":
+            options["question"] = question
+            if followup_query:
+                options.update(followup_query=followup_query, turn_budget=turn_budget)
+        started = monotonic()
+        result = select_prepared_evidence(prepared.candidates, profile=selected_profile, limits=limits,
+            score_status=prepared.score_status, mode="legacy" if config.mode == "legacy" else "adaptive", **options)
+        durations.append(max(0, (monotonic() - started) * 1000))
+        return result
+
+    preflight = None
+    if recovery_request is not None:
+        from .rag_recovery_request import RecoveryRequest
+        if type(recovery_request) is not RecoveryRequest or recovery_request.question != primary_query:
+            raise ValueError("recovery request changed")
+        recovery_request.check()
+
+        def preflight(prepared, *, pin):
+            return recovery_request.pay(select(prepared, ordinary=pin), authorization, pin=pin)
+
     started = monotonic()
     scoring_ms = config.score_timeout_ms
     if turn_budget is not None:
@@ -207,30 +251,16 @@ def prepare_selection_turn(
         token_ceiling=token_ceiling
         if token_ceiling is not None
         else evidence_token_budget(),
+        **({"recovery_preflight": preflight} if preflight is not None else {}),
     )
-    profile = choose_selection_profile(question)
-    select_started = monotonic()
-    selection = select_evidence(
-        prepared.candidates,
-        profile=profile,
-        limits=SelectionLimits(
-            top_k,
-            resolve_document_cap(
-                mode=preservation.document_capacity_mode,
-                legacy_cap=max_snippets_per_doc(),
-                explicit_hard_cap=preservation.document_hard_cap,
-                final_passage_limit=top_k,
-            ),
-            token_ceiling if token_ceiling is not None else evidence_token_budget(),
-        ),
-        score_status=prepared.score_status,
-        mode="legacy" if config.mode == "legacy" else "adaptive",
-    )
+    selection = prepared.prepaid_selection or select(prepared)
+    if any(not any(candidate is row for row in prepared.candidates) for candidate in selection.candidates):
+        raise ValueError("prepaid selection changed")
     return SelectionTurn(
         selection,
         authorization,
         prepared,
-        max(0.0, (monotonic() - select_started) * 1000.0),
+        sum(durations),
         len(prepared.candidates),
     )
 

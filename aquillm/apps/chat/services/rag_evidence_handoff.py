@@ -134,6 +134,9 @@ def prepare_evidence_handoff(
     from .rag_support_delivery import support_grounding
 
     request.system += support_grounding(packet)
+    from .rag_comparison_synthesis import comparison_plan
+
+    request._comparison_plan = comparison_plan(packet)
     for message in request.messages[:-1]:
         if isinstance(message, ToolMessage):
             message.content = _OMITTED_EVIDENCE

@@ -13,20 +13,21 @@ from apps.chat.services.manual_search_commands import (
 from apps.chat.services.tool_wiring import documents
 from apps.chat.tests.chat_message_test_support import _FakeLLMInterface
 from apps.chat.tests.test_rag_source_document_tools import docs as docs
-from apps.documents.tests.representation_support import upload as upload
-from apps.documents.tests.test_representation_media import figure as figure
-from .manual_routing_support import current_figure as current_figure
-from .manual_routing_support import close_routing_worker as close_routing_worker
-from lib.llm.turn_context import TurnContext, bind_turn
 from apps.documents.services.source_loading import (
     SourceRuntime,
     current_source_runtime,
     source_runtime_scope,
 )
+from apps.documents.tests.representation_support import upload as upload
+from apps.documents.tests.test_representation_media import figure as figure
+from lib.llm.turn_context import TurnContext, bind_turn
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage, UserMessage
 from lib.llm.types.response import LLMResponse
 from lib.retrieval.turn_budget import TurnBudget, TurnLimits
+
+from .manual_routing_support import close_routing_worker as close_routing_worker
+from .manual_routing_support import current_figure as current_figure
 
 DOC = "11111111-1111-4111-8111-111111111111"
 CASES = [
@@ -107,11 +108,8 @@ async def test_legacy_manual_search_admits_only_requested_images(
     assert retrieved.tool_name == tool_name
     assert bool(retrieved.arguments.get("include_images")) is visual
     assert ("image_url" in retrieved.result_dict["result"][0]) is visual
-    assert consumer.convo[-1].content == (
-        "Support for an answer is uncertain in the selected evidence. "
-        "These are attributed excerpts, not a conclusion about the question:\n\n"
-        f"> {chunk.content} [doc:{document_id} chunk:{chunk.pk}]"
-    )
+    assert consumer.convo[-1].content == reply
+    assert consumer.convo[-1]._validated_answer.outcome == "partial"
     assert len(llm.calls) == 1
     assert "![" not in consumer.convo[-1].content
 
@@ -122,7 +120,9 @@ async def test_legacy_manual_search_admits_only_requested_images(
 def test_preserved_manual_search_keeps_scope_and_visual_intent(
     current_figure, monkeypatch, query, visual, inherit, single_document
 ):
-    from apps.documents.services.representation_media_acquisition import initialize_media_runtime
+    from apps.documents.services.representation_media_acquisition import (
+        initialize_media_runtime,
+    )
     user, doc, chunk = current_figure
     monkeypatch.setenv("RAG_EVIDENCE_TEXT_MODE", "source")
     document_id = str(doc.id)

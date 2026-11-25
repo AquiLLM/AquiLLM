@@ -36,6 +36,25 @@ def expected(case, index, chunk):
     }
 
 
+def test_phase_reads_only_metadata_that_can_describe_the_requested_chunk(case, monkeypatch):
+    # The active mention references the second chunk only through an observation.
+    # The other assignment is in the same document but refers only to the first.
+    _set(DocumentEntityMention, case.inactive_assignment.pk, status="active")
+    wanted = case.chunks[1][1]
+    transferred = []
+    bounded = topology._bounded
+
+    def record(*args, **kwargs):
+        rows = tuple(bounded(*args, **kwargs))
+        transferred.extend(row["document_entity__mention_links__mention_id"] for row in rows)
+        return rows
+
+    monkeypatch.setattr(topology, "_bounded", record)
+    phase = _phase_provenance_reader(((case.authority, wanted),))
+    assert read(case, phase, wanted) == expected(case, 1, wanted)
+    assert transferred == [case.mentions[1].pk]
+
+
 def test_each_chunk_keeps_its_fanout_cap_when_union_would_exceed_it(case, monkeypatch):
     # Two raw rows expand to four chunks; each original singleton still has one.
     monkeypatch.setattr(topology, "MAX_DETAIL_ROWS", 2)

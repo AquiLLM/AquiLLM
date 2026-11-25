@@ -129,7 +129,7 @@ def _phase_provenance_reader(pairs):
             raw = topology._load_entity_mention_rows(
                 using=using, artifact_id=authority.artifact_id,
                 entity_ids=_entity_ids(authority, using), chunks=chunks,
-                batch_size=1000, document_filtered=True,
+                batch_size=1000, document_filtered=True, chunk_filtered=True,
             )
             by_document = {}
             for row in raw:

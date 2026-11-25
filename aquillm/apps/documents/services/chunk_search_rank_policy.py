@@ -11,17 +11,22 @@ from .lexical_projection import POLICY
 
 def controls():
     rrf = getattr(settings, "RAG_RRF_ENABLED", False) is True
-    return {
+    result = {
         "full_text": getattr(settings, "RAG_FULL_TEXT_ENABLED", False) is True,
         "rrf": rrf,
         "protected_exact": rrf
         and getattr(settings, "RAG_PROTECTED_EXACT_ENABLED", False) is True,
     }
+    if getattr(settings, "RAG_NAMED_ITEM_RETRIEVAL_ENABLED", False) is True:
+        result["named_items"] = True
+    if getattr(settings, "RAG_PARENT_ABSTRACT_RETRIEVAL_ENABLED", False) is True:
+        result["parent_abstracts"] = True
+    return result
 
 
 def ranking_policy(scope):
     return {
-        "version": "lexical-ranking-v2",
+        "version": "lexical-ranking-v3",
         "controls": controls(),
         "projection": POLICY,
         "fts_bindings": sorted(

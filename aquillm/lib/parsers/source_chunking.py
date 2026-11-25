@@ -68,6 +68,14 @@ def chunk_extraction(extraction, *, chunker_key: str, tokenizer, max_tokens: int
             heading = source[element.start:element.end].rstrip('\n')
         elif heading:
             context += f'heading={heading}\n'
+        # Only the outline-derived PDF prefix is optional. Other formats keep
+        # their established heading/column/formula context contracts.
+        optional_heading = (
+            bool(context) and extraction.parser_key == 'native-pdf-ordered-v3'
+            and not element.cells
+        )
+        if optional_heading and count(context) >= max_tokens:
+            context = ''
         if element.cells:
             columns = ' '.join(f'{cell.column}:{visible("|".join(cell.header_keys))}' for cell in element.cells if cell.header_keys)
             if columns:
@@ -77,32 +85,38 @@ def chunk_extraction(extraction, *, chunker_key: str, tokenizer, max_tokens: int
             if formulas:
                 context += f'formula_context={formulas}\n'
         start = element.start
+        prefix = context
         while start < element.end:
             # Binary probes are only a fast candidate heuristic: BPE token counts
             # are neither additive nor monotone over Unicode slice boundaries.
             # Every accepted candidate uses the actual complete embedding input.
             end = element.end
-            if count(context + source[start:end]) > max_tokens:
+            if count(prefix + source[start:end]) > max_tokens:
                 low, high = start + 1, element.end
                 best = None
                 checked = {element.end}
                 while low <= high:
                     middle = (low + high) // 2
                     checked.add(middle)
-                    if count(context + source[start:middle]) <= max_tokens:
+                    if count(prefix + source[start:middle]) <= max_tokens:
                         best, low = middle, middle + 1
                     else:
                         high = middle - 1
+                if best is None and optional_heading and prefix:
+                    # Keep exhaustive nonmonotone search available for the
+                    # canonical source and retry this offset without the heading.
+                    prefix = ''
+                    continue
                 if best is None:
                     for candidate in range(element.end - 1, start, -1):
-                        if candidate not in checked and fallback_count(context + source[start:candidate]) <= max_tokens:
+                        if candidate not in checked and fallback_count(prefix + source[start:candidate]) <= max_tokens:
                             best = candidate
                             break
                     if best is None:
                         raise SourceContractError('unrepresentable_source_element')
                 end = best
             text = source[start:end]
-            embedding = context + text
+            embedding = prefix + text
             if count(embedding) > max_tokens:
                 raise SourceContractError('unrepresentable_source_element')
             chunks.append(SourceChunkV1(start, end, text, embedding, (element.element_key,), sha256(text.encode('utf-8')).hexdigest(), input_digest(embedding)))
@@ -129,4 +143,5 @@ def chunk_extraction(extraction, *, chunker_key: str, tokenizer, max_tokens: int
             if next_start <= start:
                 raise SourceContractError('unrepresentable_source_element')
             start = next_start
+            prefix = context
     return tuple(chunks)

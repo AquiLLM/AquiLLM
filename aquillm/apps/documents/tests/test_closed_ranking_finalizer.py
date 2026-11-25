@@ -79,6 +79,43 @@ def test_actual_native_final_union_uses_two_fresh_owner_sweeps(
     assert tuple(s.chunk_pk for s in scores.scores) == scores.candidate_order
 
 
+def test_final_chunk_revision_reads_skip_unrelated_owner_hashes(handoff, settings):
+    from apps.documents.services.closed_search_finalizer import _bind_search_authorizer
+
+    case, scope, rows, snapshot, ranking = handoff
+    settings.RAG_FULL_TEXT_ENABLED = False
+    kept = (rows[0],)
+    snapshot = replace(snapshot, trigram_results=kept, baseline_candidates=kept)
+    ranking = replace(ranking, combined_candidates=kept, ranked_results=kept)
+    authorizer = _bind_search_authorizer(
+        chunk_search_authorization.authorized_search_rows, scope.authorization, False
+    )
+    with CaptureQueriesContext(connection) as statements:
+        _, channels, scores = chunk_search_authorization.finalize_ranking(
+            snapshot, ranking, authorize=authorizer, query="query", top_k=2
+        )
+    assert tuple(channels[2]) == kept and scores.candidate_order == (rows[0].pk,)
+    revisions = [q["sql"] for q in statements if "MD5(" in q["sql"]]
+    unrelated = {doc.full_text_hash for doc in case.docs if doc.id != rows[0].doc_id}
+    assert len(revisions) == 2 and unrelated
+    assert all(digest not in sql for sql in revisions for digest in unrelated)
+
+
+def test_revision_lookup_drops_missing_and_crossed_chunk_identities(handoff):
+    from copy import copy
+    from uuid import uuid4
+
+    from apps.documents.services.chunk_search_scoped_rows import validate_rows
+
+    _, scope, rows, _, _ = handoff
+    missing, crossed, foreign = (copy(rows[0]) for _ in range(3))
+    missing.pk = max(row.pk for row in rows) + 1
+    crossed.doc_id = rows[1].doc_id
+    foreign.doc_id = uuid4()
+    candidates = (missing, crossed, foreign, rows[0])
+    assert validate_rows(candidates, scope=scope) == (rows[0],)
+
+
 def test_original_witness_replacement_during_inference_cannot_be_adopted(
     handoff, monkeypatch, settings
 ):

@@ -141,6 +141,12 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=No
         return (), set()
     from .lexical_readiness import _matching_full_text_ids
 
+    # Only these owners can supply a matching row fingerprint. The caller
+    # still revalidates the entire original scope before and after this read.
+    if document_ids is None:
+        document_ids = scope.requested_document_ids.intersection(
+            row.doc_id for row in rows
+        )
     fts_ids = tuple(row.pk for row in rows if row.pk in scope.fts_rows)
     valid_fts = (
         _matching_full_text_ids(scope, _current_row_queryset(
@@ -166,6 +172,9 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=No
         )
     )
     current = {item[0]: tuple(item[1:]) for item in metadata}
+    from .graph_admission_adapter import current_lexical_ids
+
+    lexical_ids = current_lexical_ids(scope)
     result = []
     for row in rows:
         captured = scope.bodies.get(row.pk)
@@ -174,7 +183,7 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=No
         if (
             row.pk in scope.fts_rows
             and row.pk not in valid_fts
-            and row.pk not in scope.lexical_ids
+            and row.pk not in lexical_ids
             and dense is None
         ):
             continue
@@ -186,7 +195,7 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=No
             continue
         if (
             dense
-            and (dense_only or row.pk not in scope.lexical_ids | valid_fts)
+            and (dense_only or row.pk not in lexical_ids | valid_fts)
             and (
                 dense.embedding_generation_key not in valid_dense
                 or actual[2] != dense.source_md5
@@ -199,11 +208,14 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=No
 
 
 def _retain_dense(rows, scope, final_keys, valid_fts, *, dense_only=False):
+    from .graph_admission_adapter import current_lexical_ids
+
+    lexical_ids = current_lexical_ids(scope)
     return tuple(
         row
         for row in rows
         if row.pk not in scope.dense_rows
-        or (not dense_only and row.pk in scope.lexical_ids | valid_fts)
+        or (not dense_only and row.pk in lexical_ids | valid_fts)
         or scope.dense_rows[row.pk].embedding_generation_key in final_keys
     )
 

@@ -16,7 +16,6 @@ direct-RAG guarantees on top:
 
 from __future__ import annotations
 
-import re
 from typing import Any
 
 import structlog
@@ -30,22 +29,18 @@ from apps.chat.services.rag_source_synthesis import (
     finalize_source_support,
     revalidate_source_packet,
 )
+from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from apps.documents.services.source_loading import (
     SourcePreparationLimited,
     current_source_runtime,
 )
-from apps.documents.services.representation_contracts import SourceScopeUnavailable
 from lib.llm.evidence_guard import ContextLimited
 from lib.llm.providers import visibility
-from lib.llm.providers.rag_citations import _chunk_citation_from_row
 from lib.llm.providers.retrieval_status import document_retrieval_notice
 from lib.llm.types.conversation import Conversation
 from lib.llm.types.messages import AssistantMessage, ToolMessage
 
 logger = structlog.stdlib.get_logger(__name__)
-
-_MAX_EXTRACTIVE_POINTS = 5
-
 
 def _last_assistant_tool_result(convo: Conversation) -> ToolMessage | None:
     for msg in reversed(convo.messages):
@@ -65,33 +60,6 @@ def _synthesis_unusable(content: str | None) -> bool:
     if visible == visibility.clean_response_failure_text(after_tool_result=True):
         return True
     return False
-
-
-def _extractive_summary(packet: EvidencePacket) -> str:
-    points: list[str] = []
-    seen: set[tuple[str, str | None]] = set()
-    for chunk in packet.chunks:
-        text = chunk.get("text") or chunk.get("x") or ""
-        boundary = re.search(r"[.!?](?:\s|$)", text)
-        snippet = text[: boundary.start() + 1] if boundary else text[:240]
-        if not snippet:
-            continue
-        citation = _chunk_citation_from_row(chunk)
-        key = (snippet, citation)
-        if key in seen:
-            continue
-        seen.add(key)
-        if not citation:
-            continue
-        points.append(
-            "\n".join(f"> {line} {citation}" for line in snippet.splitlines())
-        )
-        if not packet.source_mode and len(points) >= _MAX_EXTRACTIVE_POINTS:
-            break
-    if not points:
-        return ""
-    header = "Selected excerpts:"
-    return header + "\n" + "\n".join(points)
 
 
 def _no_results_notice(convo: Conversation, packet: EvidencePacket) -> str:
@@ -124,7 +92,12 @@ async def synthesize_from_evidence(
 ) -> Conversation:
     """Produce and publish one exact final answer, including app fallbacks."""
     from apps.chat.services.rag_answer_publication import bind_packet_publication
-    from lib.llm.answer_publication import LIMITED_ANSWER, bind_answer
+    from lib.llm.answer_publication import (
+        LIMITED_ANSWER,
+        AnswerPublicationRejected,
+        bind_answer,
+        verify_message,
+    )
     from lib.llm.providers.final_stream import send_final_answer_stream
     from lib.llm.turn_context import current_turn
 
@@ -137,10 +110,23 @@ async def synthesize_from_evidence(
         if context is None and state is not None:
             context = bind_packet_publication(packet, lease=state.budget._synthesis)
         if context is not None:
-            answer = await context.finalize(
-                last.content, limited_reason="unbound_evidence" if limited else None
-            )
-            bind_answer(last, answer, context)
+            if (
+                last._rag_answer
+                or last._validated_answer is not None
+                or last._answer_publication_context is not None
+                or last.message_uuid in getattr(context, "issued_messages", {})
+            ):
+                # complete_turn can already have issued this exact answer.
+                # Recheck its receipt, never reinterpret trusted fallback HTML
+                # as a fresh model draft or repair a tampered binding.
+                if limited or last._answer_publication_context is not context:
+                    raise AnswerPublicationRejected("unbound_receipt")
+                await verify_message(last, content=last.content, sink="stream")
+            else:
+                answer = await context.finalize(
+                    last.content, limited_reason="unbound_evidence" if limited else None
+                )
+                bind_answer(last, answer, context)
         else:
             last.content = LIMITED_ANSWER
             last._rag_answer = True
@@ -181,8 +167,6 @@ async def synthesize_from_evidence(
     state = current_turn()
     if state is not None and state.answer_publication is not None:
         if state.answer_publication.packet is not packet:
-            from lib.llm.answer_publication import AnswerPublicationRejected
-
             raise AnswerPublicationRejected("evidence_changed")
         state.answer_publication.historical_ids = frozenset(
             m.message_uuid for m in convo.messages
@@ -279,13 +263,19 @@ async def synthesize_from_evidence(
     last = result_convo[-1]
     if not isinstance(last, AssistantMessage) or last.tool_call_id:
         return result_convo
+    if (
+        last._rag_answer
+        or last._validated_answer is not None
+        or last._answer_publication_context is not None
+    ):
+        return await finish(result_convo)
 
     content = last.content or ""
     new_content = content
     if _synthesis_unusable(content):
-        extractive = _extractive_summary(packet)
-        if extractive:
-            new_content = extractive
+        # Finalization checks authority before rendering complete-source
+        # excerpts. Never turn a clipped first sentence into a model answer.
+        new_content = ""
 
     if new_content != content:
         result_convo = _replace_last_content(result_convo, last, new_content)

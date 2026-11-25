@@ -9,9 +9,10 @@ from .chunk_search_graph_seeds import build_graph_seeds
 from .chunk_search_rank_policy import controls
 from .chunk_search_scope import FrozenRetrievalScope, validate_requested_authorization
 from .chunk_search_source_operation import _closed_header, _same_header
-from .graph_candidate_metadata import capture_metadata
+from .graph_candidate_metadata import SourceRankRef, capture_metadata
 from .graph_source_admission import NativeSourceAdmission, dependency_header, native_dependencies
-from .graph_source_admission_policy import CHANNELS, allocation, charged_sources, fair_prefix
+from .graph_source_admission_policy import CHANNELS, allocation, charged_sources, fair_prefix, item_admission_prefix
+from .lexical_candidates import literal_terms
 from .representation_contracts import SourceScopeUnavailable
 
 
@@ -40,6 +41,33 @@ def _query_bindings(scope, query):
         except EmbeddingContractError:
             pass
     return frozenset(bindings)
+
+
+def _named_item_refs(scope, query, baseline_order, all_refs, *, named=True, dense_parents=()):
+    from .named_item_lookup import lookup_named_item_candidates
+    from .named_item_reads import PDF_MODEL
+
+    owners = tuple(dict.fromkeys(all_refs[pk].doc_id for pk in baseline_order))[:4] if named else ()
+    abstract_owners = ()
+    if dense_parents:
+        pdfs = {s.document.id for s in scope.representation.selections if s.document.model_label == PDF_MODEL}
+        abstract_owners = tuple(dict.fromkeys(ref.doc_id for ref in dense_parents if ref.doc_id in pdfs))[:2]
+    if abstract_owners:
+        nominees = lookup_named_item_candidates(scope, owners, query, abstract_owners=abstract_owners)
+    else:
+        nominees = lookup_named_item_candidates(scope, owners, query)
+    refs = tuple(
+        SourceRankRef(n.chunk_id, n.document_id, n.chunk_number,
+                      n.generation_id, n.body_md5, n.body_length)
+        for n in nominees
+    )
+    if len(refs) > 12 or any(ref.doc_id not in (*owners, *abstract_owners) for ref in refs):
+        raise SourceScopeUnavailable("invalid_named_item_candidates")
+    for ref in refs:
+        existing = all_refs.get(ref.pk)
+        if existing is not None and existing.fingerprint != ref.fingerprint:
+            raise SourceScopeUnavailable("source_admission_captured_row_changed")
+    return nominees, refs
 
 
 def try_native_snapshot(model, query, documents, scope, observation, config, limits,
@@ -118,28 +146,48 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 charged = charged_sources(budget)
                 active = sum(bool(channels[name]) for name in CHANNELS)
                 baseline_allowance, graph_ceiling = allocation(
-                    max(0, budget.limits.unique_sources - len(charged)), cap, active
+                    budget.remaining_source_capacity(), cap, active
                 )
                 ids = {name: tuple(r.pk for r in refs) for name, refs in channels.items()}
                 all_refs = {r.pk: r for refs in channels.values() for r in refs}
-                reused = tuple(pk for pk in fair_prefix(ids, 45) if all_refs[pk].identity in charged)
+                reused = fair_prefix({name: tuple(pk for pk in lane if all_refs[pk].identity in charged)
+                                      for name, lane in ids.items()}, 45)
                 novel = {name: tuple(pk for pk in lane if all_refs[pk].identity not in charged)
                          for name, lane in ids.items()}
                 protected = ()
-                if dict(ranking)["protected_exact"] and terms and any(
-                    term.case_sensitive or term.kind == "phrase" for term in terms
+                literal = literal_terms(terms)
+                if dict(ranking)["protected_exact"] and any(
+                    term.case_sensitive or term.kind == "phrase" for term in literal
                 ):
                     protected = tuple(r.pk for r in channels["exact"]
-                                      if r.exact_coverage == len(terms))[:1]
-                selected = set(reused + fair_prefix(novel, baseline_allowance, protected=protected))
+                                      if r.exact_coverage == len(literal))[:1]
                 baseline_order = tuple(dict.fromkeys(r.pk for name in
                                       ("dense", "trigram", "exact", "full_text") for r in channels[name]))
+                ordinary = fair_prefix(novel, baseline_allowance, protected=protected)
+                nominees = ()
+                rank_options = dict(ranking)
+                named = rank_options.get("named_items", False)
+                dense_parents = channels["dense"] if rank_options.get("parent_abstracts") else ()
+                if (named or dense_parents) and baseline_order and baseline_allowance > active:
+                    nominees, item_refs = _named_item_refs(
+                        scope, query, baseline_order, all_refs, named=named, dense_parents=dense_parents
+                    )
+                    if item_refs:
+                        channels["named_items"] = item_refs
+                        reused += tuple(ref.pk for ref in item_refs if ref.identity in charged)
+                        ordinary = item_admission_prefix(ordinary,
+                            tuple(ref.pk for ref in item_refs if ref.identity not in charged),
+                            allowance=baseline_allowance, active_channels=active)
+                        baseline_order = tuple(dict.fromkeys((*baseline_order, *(r.pk for r in item_refs))))
+                selected = set(reused + ordinary)
                 initial_ids = tuple(pk for pk in baseline_order if pk in selected)[:45]
                 check()
             plan = NativeSourceAdmission(
                 scope, header, operation, parent_deadline, dependencies, dependencies_before, settings_before, ranking,
-                tuple((name, channels[name]) for name in CHANNELS), tuple(dense.items()),
+                tuple((name, channels[name]) for name in (*CHANNELS, "named_items") if name in channels),
+                tuple(dense.items()),
                 query, graph_ceiling, initial_ids, frozenset(),
+                named_items=nominees,
             )
             stage.check()
             initial, plan = _read_initial_captured_refs(plan, stage)
@@ -151,9 +199,15 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 check()
                 plan.check()
                 stage.check()
+            if plan.named_items:
+                plan.refresh_named_items()
+                excluded = plan.withdrawn_named_only()
+                initial = tuple(row for row in initial if row.pk not in excluded)
             stage.publish(initial, publish_check)
             plan.check()
             plan = replace(plan, graph_start=charged_sources(budget))
+            if plan.named_items:
+                scope.named_item_admission = plan
             plan.counts["baseline_initial_hydrated"] = len(initial)
             by_id = {r.pk: r for r in initial}
             baseline = initial

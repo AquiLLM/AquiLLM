@@ -45,6 +45,17 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
 
     supports_request_observability = True
 
+    @property
+    def _uses_vllm(self):
+        base_url = str(getattr(self.client, "base_url", "") or "").lower()
+        return "vllm" in base_url or ":8000" in base_url
+
+    @property
+    def supports_json_schema(self):
+        # The deployed vLLM supports schema decoding. Unknown compatible
+        # endpoints retain prompt-only planning rather than assuming support.
+        return self._uses_vllm
+
     @override
     def __init__(self, openai_client, model: str):
         self.client = openai_client
@@ -55,6 +66,9 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
         synthesis_phase = kwargs.pop("_synthesis_phase", "initial")
         kwargs.pop("messages_pydantic", None)
         thinking_budget = kwargs.pop("thinking_budget", None)
+        if synthesis_phase == "citation_repair" and self._uses_vllm:
+            # Hidden reasoning can consume the entire bounded repair completion.
+            thinking_budget = 0
         correlation_id = safe_correlation_id(
             kwargs.pop("_observability_correlation_id", None)
             or current_correlation_id()
@@ -105,7 +119,12 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
             request_args["stream"] = True
             request_args.setdefault("stream_options", {"include_usage": True})
         timeout_retries_used = 0
+        client = self.client
         max_total_retries = max_overflow_retries + max_timeout_retries
+        if synthesis_phase in {"comparison_clarification", "comparison_paired_support"}:
+            # The SDK can resend a failed request inside a single adapter dispatch.
+            client = client.with_options(max_retries=0)
+            max_total_retries = 0
         for attempt in range(max_total_retries + 1):
             from lib.llm.evidence_guard import validate_request
             from lib.llm.synthesis_dispatch import dispatch
@@ -115,7 +134,7 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
             try:
                 if stream_enabled:
                     stream = await dispatch(
-                        lambda: self.client.chat.completions.create(
+                        lambda: client.chat.completions.create(
                             timeout=request_timeout_s, **request_args
                         ),
                         output_reserve=request_args["max_tokens"],
@@ -141,7 +160,7 @@ class OpenAIInterface(OpenAIContextPolicy, LLMInterface):
                     )
                 else:
                     response = await dispatch(
-                        lambda: self.client.chat.completions.create(
+                        lambda: client.chat.completions.create(
                             timeout=request_timeout_s, **request_args
                         ),
                         output_reserve=request_args["max_tokens"],

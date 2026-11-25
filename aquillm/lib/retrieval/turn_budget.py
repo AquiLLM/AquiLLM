@@ -8,63 +8,18 @@ evidence can still be used for answer synthesis.
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable
-from dataclasses import dataclass
 from threading import RLock
 from time import monotonic
 
 from .budget_observation import observed_budget
 from .evidence import SourceIdentity
+from .turn_limits import PILOT_MAX as _PILOT_MAX
+from .turn_limits import TurnLimits
 
 # Actual transports share this weighted, non-waiting admission across all turns.
 # Fleet capacity is worker process count times six until service admission exists.
 _PROCESS_PAIR_LOCK = RLock()
 _PROCESS_PAIRS = 0
-
-_PILOT_MAX = {
-    "actions": 3,
-    "unique_sources": 45,
-    "materialized_codepoints": 250_000,
-    "tokenized_codepoints": 1_000_000,
-    "acquisition_pairs": 90,
-    "final_pairs": 45,
-    "in_flight_pairs": 6,
-    "planner_calls": 2,
-    "planner_call_ms": 2_000,
-    "planner_output_tokens": 512,
-    "retrieval_ms": 30_000,
-    "final_scoring_ms": 3_000,
-}
-
-
-@dataclass(frozen=True, slots=True)
-class TurnLimits:
-    actions: int = 3
-    unique_sources: int = 45
-    materialized_codepoints: int = 250_000
-    tokenized_codepoints: int = 1_000_000
-    acquisition_pairs: int = 90
-    final_pairs: int = 45
-    in_flight_pairs: int = 6
-    planner_calls: int = 2
-    planner_call_ms: int = 2_000
-    planner_output_tokens: int = 512
-    retrieval_ms: int = 15_000
-    final_scoring_ms: int = 3_000
-
-    def __post_init__(self) -> None:
-        from .turn_limits import validate_limits
-
-        validate_limits(self, _PILOT_MAX)
-
-    def clamped_to(self, parent: TurnLimits) -> TurnLimits:
-        """A nested caller can narrow, never enlarge, a parent allowance."""
-        return TurnLimits(
-            **{
-                name: min(getattr(self, name), getattr(parent, name))
-                for name in self.__dataclass_fields__
-            }
-        )
-
 
 @observed_budget
 class TurnBudget:
@@ -81,6 +36,7 @@ class TurnBudget:
         self._sources: set[Hashable] = set()
         self._pairs = {"acquisition": 0, "final": 0}
         self._text = {"materialized": 0, "tokenized": 0}
+        self._lexical_scan_codepoints = 0
         self._inflight = 0
         self._final_deadline: float | None = None
 
@@ -162,10 +118,19 @@ class TurnBudget:
                 return False
             if identity in self._sources:
                 return True
-            if len(self._sources) >= self.limits.unique_sources:
+            if self.remaining_source_capacity() <= 0:
                 return False
             self._sources.add(identity)
             return True
+
+    def remaining_source_capacity(self) -> int:
+        """Novel sources available to this action on the original shared ledger."""
+        from .operation import operation_source_limit
+
+        with self._lock:
+            if not self._open():
+                return 0
+            return max(0, operation_source_limit(self) - len(self._sources))
 
     def reserve_pairs(self, count: int, *, phase: str) -> bool:
         if (
@@ -198,6 +163,21 @@ class TurnBudget:
                 return False
             self._text[kind] += count
             return True
+
+    def reserve_lexical_scan(self, count: int) -> int:
+        """Bound analysis of loaded text while preserving transport credit."""
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise ValueError("invalid lexical scan reservation")
+        with self._lock:
+            total = self._lexical_scan_codepoints + count
+            room = min(
+                self.limits.materialized_codepoints - self._text["materialized"],
+                self.limits.tokenized_codepoints - self._text["tokenized"],
+            )
+            if not self._open() or total > room:
+                return 0
+            self._lexical_scan_codepoints = total
+            return total
 
     def remaining_ms(self) -> int:
         with self._lock:

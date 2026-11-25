@@ -33,6 +33,7 @@ def output_record(output, *, using, user=None, validate_scope=True):
     available = bool(document) if validate_scope else bool(output.document_id)
     record = {
         'output_key': output.output_key, 'status': 'error' if unavailable else output.status,
+        'provenance_kind': output.provenance_kind,
         'error_code': 'source_scope_unavailable' if unavailable else output.error_code or None,
         'issue_codes': payload.get('issue_codes', []), 'index_status': 'unavailable',
         'document_id': str(output.document_id) if available and not unavailable else None,

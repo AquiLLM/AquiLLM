@@ -83,6 +83,7 @@ class FrozenRetrievalScope:
     graph_enabled: bool = False
     vocabulary_digest: str = "vocabulary-disabled-v1"
     proposal_binding: object = None
+    named_item_admission: object | None = field(default=None, repr=False, compare=False)
 
     def database(self):
         return (
@@ -293,7 +294,6 @@ def bind_search_scope(scope, query, *, graph_enabled):
     scope.query_digest = digest({"version": "unprepared-query-v1", "query": query})
     scope.graph_enabled = graph_enabled
     return _SCOPE.set(scope)
-
 
 def reset_search_scope(token):
     if token is not None:

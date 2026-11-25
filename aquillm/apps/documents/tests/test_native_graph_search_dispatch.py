@@ -1,6 +1,7 @@
 """Production dispatch with real metadata capture, native authority and closure."""
 
 from contextlib import contextmanager
+from hashlib import md5
 from types import SimpleNamespace
 
 import pytest
@@ -8,6 +9,7 @@ from django.conf import settings
 
 from apps.documents.models import TextChunk
 from apps.documents.services import chunk_search, native_graph_search_closure
+from apps.documents.services.graph_source_admission_policy import charged_sources
 from apps.documents.tests.test_graph_source_admission import pressure_rows
 from apps.knowledge_graph.tests.test_graph_candidate_operation_work import (
     count_full_authorities,
@@ -95,7 +97,25 @@ def dispatch_case(monkeypatch, *, graph_on=True, fail=False, schedule="native_cl
 def test_actual_dispatch_closes_once_before_stage_without_acquisition_scoring(
     monkeypatch, graph_on, fail
 ):
+    from apps.documents.services import graph_candidate_admission
+
+    monkeypatch.delenv("RAG_SCOPED_BASELINE_RECOVERY_ENABLED", raising=False)
     with dispatch_case(monkeypatch, graph_on=graph_on, fail=fail) as case:
+        captured, metadata = [], []
+        capture = native_graph_search_closure.capture_search
+        collect = graph_candidate_admission.capture_metadata
+
+        def capture_once(*args, **kwargs):
+            result = capture(*args, **kwargs)
+            captured.append(result)
+            return result
+
+        def collect_once(*args, **kwargs):
+            metadata.append(True)
+            return collect(*args, **kwargs)
+
+        monkeypatch.setattr(native_graph_search_closure, "capture_search", capture_once)
+        monkeypatch.setattr(graph_candidate_admission, "capture_metadata", collect_once)
         for name in ("hybrid_graph_candidate_pool", "materialize_and_rerank_candidates",
                      "finalize_ranking"):
             monkeypatch.setattr(chunk_search, name, lambda *a, **k: pytest.fail(
@@ -104,18 +124,30 @@ def test_actual_dispatch_closes_once_before_stage_without_acquisition_scoring(
         result = case.run()
         assert case.inference == []
         assert case.events == ["finalized", "stage"]
+        assert len(captured) == 1 and captured[0] is not None
+        assert len(metadata) == int(graph_on)  # Recovery never reacquires ranks.
+        initial = {row.pk: row.content for row in captured[0].baseline}
+        returned = {row.pk: row.content for row in result[2]}
+        assert len(initial) == (25 if graph_on else 45)
+        assert initial.items() <= returned.items()
         # Native acquisition publishes its bounded, freshly authorized pool;
         # The passage cutoff belongs to final relevance selection.
         assert len(case.finals) == 1
-        # Graph consumes two additional source identities but publishes one
-        # novel passage: 25 initial +18 top-up +1 graph, with all45 charges kept.
-        assert len(result[2]) == (25 if fail else 44 if graph_on else 45)
-        assert case.source.budget.pairs_used["acquisition"] == 0
+        # A successful graph pays two identities and publishes one novel row.
+        # Ready-scope expiry pays no graph bodies and completes all ordinary slots.
+        assert len(result[2]) == (44 if graph_on and not fail else 45)
+        assert case.source.budget.pairs_used == {"acquisition": 0, "final": 0}
         assert case.operation.deadline == 10.0 and case.operation.active()
-        assert case.source.budget.sources_used <= 45
+        charged = charged_sources(case.source.budget)
+        returned_ids = {(row.pk, md5(row.content.encode(), usedforsecurity=False).hexdigest())
+                        for row in result[2]}
+        assert case.source.budget.sources_used == len(charged) == 45
+        assert returned_ids <= charged
+        assert len(charged - returned_ids) == int(graph_on and not fail)
         args, observed = case.stages[0]
         assert observed["acquisition_schedule_requested"] == "native_closure"
         assert observed["acquisition_schedule_observed"] == "native_closure"
+        assert observed["acquisition_schedule_version"] == "native-closure-v4"
         assert observed["acquisition_initial_ineligibility_reason"] is None
         assert observed["acquisition_score_status"] == "not_requested"
         assert observed["materialized_union_status"] == "unavailable"
@@ -136,7 +168,13 @@ def test_actual_dispatch_closes_once_before_stage_without_acquisition_scoring(
             assert not case.graph_events
             if fail:
                 assert args[5]["graph_status"] == "error"
-                assert case.source.budget.sources_used == 25
+                assert args[5]["graph_failure"]["phase"] == "ready_scope"
+                assert args[5]["graph_failure_reason"] == "deadline"
+                admission = args[5]["source_admission"]
+                assert admission["baseline_completion_attempted"]
+                assert not admission["fallback_top_up_skipped"]
+                assert admission["fallback_top_up_count"] == 20
+                assert set(captured[0].scope.bodies) == set(returned)
 
 
 @pytest.mark.parametrize("kind", [

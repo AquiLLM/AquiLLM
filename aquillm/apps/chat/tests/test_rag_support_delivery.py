@@ -1,4 +1,4 @@
-"""Unvalidated support cannot be laundered through valid citations or memory."""
+"""Generated wording and independent support metadata remain separate contracts."""
 
 import pytest
 
@@ -12,9 +12,9 @@ from lib.retrieval.turn_budget import TurnBudget, TurnLimits
 
 
 @pytest.mark.asyncio
-async def test_unknown_replaces_fabricated_answer_with_attributed_exact_excerpt():
+async def test_unknown_keeps_cited_model_wording_without_support_promotion():
     packet = packet_for(
-        "This excerpt describes telescope optics.", "Does this drug improve survival?"
+        "This excerpt describes telescope optics.", "Explain the retrieved topic."
     )
     state = TurnContext(TurnBudget(TurnLimits()))
 
@@ -24,19 +24,18 @@ async def test_unknown_replaces_fabricated_answer_with_attributed_exact_excerpt(
     with bind_turn(state):
         context = RagAnswerPublication(packet=packet, authorize=authorize, turn=state)
         state.answer_publication = context
-        answer = await context.finalize("This drug improves survival [doc:a chunk:1].")
-        assert "This drug improves survival" not in answer.content
-        assert (
-            "> This excerpt describes telescope optics. [doc:a chunk:1]"
-            in answer.content
-        )
-        assert "uncertain" in answer.content.casefold()
+        draft = "The retrieved text concerns telescope optics [doc:a chunk:1]."
+        answer = await context.finalize(draft)
+        assert answer.content == draft
         assert answer.outcome == "partial"
+        assert packet.answer_support.state == "unknown"
+        assert packet.answer_support.assessment_basis == "unvalidated"
+        assert packet.answer_support.calibration_id is None
         await context.verify(answer, content=answer.content, sink="stream")
 
 
 @pytest.mark.asyncio
-async def test_partial_names_missing_aspect_without_absence_claim():
+async def test_partial_keeps_model_conditions_and_unresolved_support_metadata():
     packet = packet_for(question="What is the capacity and what is the voltage?")
     state = TurnContext(TurnBudget(TurnLimits()))
 
@@ -46,14 +45,17 @@ async def test_partial_names_missing_aspect_without_absence_claim():
     with bind_turn(state):
         context = RagAnswerPublication(packet=packet, authorize=authorize, turn=state)
         state.answer_publication = context
-        answer = await context.finalize(
-            "No study exists. Voltage is 12 V [doc:a chunk:1]."
+        draft = (
+            "The reported capacity is 18 litres at 20 C [doc:a chunk:1].\n\n"
+            "The retrieved evidence leaves voltage unresolved."
         )
-        assert "no study exists" not in answer.content.casefold()
-        assert "12 V" not in answer.content
-        assert "voltage" in answer.content
-        assert "18 litres at 20 C" in answer.content
+        answer = await context.finalize(draft)
+        assert answer.content == draft
         assert answer.outcome == "partial"
+        assert packet.answer_support.state == "partial"
+        assert packet.answer_support.supported_aspects == ("capacity",)
+        assert packet.answer_support.unresolved_aspects == ("voltage",)
+        assert not packet.answer_support.exhaustive
 
 
 def test_grounding_gets_bounded_support_without_serializing_private_metadata():
@@ -78,7 +80,7 @@ def test_grounding_gets_bounded_support_without_serializing_private_metadata():
 
 
 @pytest.mark.asyncio
-async def test_complete_field_cannot_publish_other_facts_or_drop_conditions():
+async def test_complete_lookup_does_not_promote_generated_wording_to_semantic_proof():
     packet = packet_for()
     state = TurnContext(TurnBudget(TurnLimits()))
 
@@ -88,19 +90,22 @@ async def test_complete_field_cannot_publish_other_facts_or_drop_conditions():
     with bind_turn(state):
         context = RagAnswerPublication(packet=packet, authorize=authorize, turn=state)
         state.answer_publication = context
-        answer = await context.finalize(
-            "Capacity is 18 litres and voltage is 12 V [doc:a chunk:1]."
-        )
-        assert "12 V" not in answer.content
-        assert "18 litres at 20 C" in answer.content
-        assert answer.outcome == "answer"
+        draft = "At 20 C, the source reports a capacity of 18 litres [doc:a chunk:1]."
+        answer = await context.finalize(draft)
+        assert answer.content == draft
+        assert answer.outcome == "partial"
+        assert packet.answer_support.state == "complete"
+        assert packet.answer_support.assessment_basis == "deterministic"
+        assert packet.answer_support.calibration_id is None
+        assert not packet.answer_support.exhaustive
 
 
 @pytest.mark.asyncio
-async def test_unsafe_or_oversized_excerpt_produces_scoped_server_limit():
+@pytest.mark.parametrize("source", ["x" * 1201, "Unsafe source\x00 text."])
+async def test_unusable_draft_with_unsafe_or_unsplittable_source_is_limited(source):
     from lib.llm.answer_publication import LIMITED_ANSWER
 
-    packet = packet_for("x" * 1201, "Does this drug improve survival?")
+    packet = packet_for(source, "Explain the retrieved topic.")
     state = TurnContext(TurnBudget(TurnLimits()))
 
     async def authorize():
@@ -109,7 +114,7 @@ async def test_unsafe_or_oversized_excerpt_produces_scoped_server_limit():
     with bind_turn(state):
         context = RagAnswerPublication(packet=packet, authorize=authorize, turn=state)
         state.answer_publication = context
-        answer = await context.finalize("This drug improves survival [doc:a chunk:1].")
+        answer = await context.finalize("")
         assert answer.content == LIMITED_ANSWER
         assert answer.outcome == "limited"
 
@@ -154,7 +159,10 @@ def test_unassessed_optional_mode_can_use_independent_exact_lookup():
 
 
 @pytest.mark.asyncio
-async def test_multisentence_excerpts_keep_conditions_and_local_citations():
+@pytest.mark.parametrize(
+    "draft", ["Capacity is 18 litres.", "Capacity is 18 litres [doc:foreign chunk:9]."]
+)
+async def test_invalid_or_missing_citations_fall_back_with_all_source_conditions(draft):
     packet = packet_for(
         "Capacity is 18 litres. This applies only at 20 C.", "Explain the capacity."
     )
@@ -166,9 +174,11 @@ async def test_multisentence_excerpts_keep_conditions_and_local_citations():
     with bind_turn(state):
         context = RagAnswerPublication(packet=packet, authorize=authorize, turn=state)
         state.answer_publication = context
-        answer = await context.finalize("Capacity is 18 litres [doc:a chunk:1].")
+        answer = await context.finalize(draft)
         assert "uncertain" in answer.content
         assert "> Capacity is 18 litres. [doc:a chunk:1]" in answer.content
         assert "This applies only at 20 C. [doc:a chunk:1]" in answer.content
         assert answer.content.count("> ") == 1
+        assert "doc:foreign" not in answer.content
+        assert answer.outcome == "partial"
         await context.verify(answer, content=answer.content, sink="stream")

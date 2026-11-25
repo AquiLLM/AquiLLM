@@ -88,6 +88,9 @@ def _finalize_closed_ranking(snapshot, ranking, *, authorize, query, top_k):
             raise SourceScopeUnavailable("source_scope_unavailable")
 
     def read(staged, original, budget, allowed, cache, initial_keys):
+        plan = getattr(snapshot, "source_admission", None)
+        if getattr(plan, "named_items", ()):
+            plan.refresh_named_items()
         rows = tuple(row for group in groups for row in group)
         rows, _ = row_operations._current_rows(rows, staged, initial_keys)
         return _incoming_search_rows(

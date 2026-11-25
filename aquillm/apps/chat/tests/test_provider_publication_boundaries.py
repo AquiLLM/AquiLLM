@@ -22,6 +22,12 @@ from .test_rag_answer_publication import setup_publication
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
+CAPACITY_EXCERPT_FALLBACK = (
+    "Support for an answer is uncertain in the selected evidence. "
+    "These are attributed excerpts, not a conclusion about the question:"
+    "\n\n> Capacity is 18 litres. [doc:a chunk:1]"
+)
+
 
 def response(text, stop_reason="stop"):
     return LLMResponse(
@@ -136,8 +142,12 @@ def test_bound_malformed_line_reference_never_reaches_sinks(
             Model(), convo, 1024, stream_func=stream
         )
         stored = publish_and_save(result, db, events)
-    assert result[-1].content == stored == LIMITED_ANSWER
-    assert events == [LIMITED_ANSWER, LIMITED_ANSWER]
+    # A citation-only failure can use authorized excerpts; forbidden control
+    # characters still fail the presentation boundary.
+    expected = LIMITED_ANSWER if newline == "\r\n" else CAPACITY_EXCERPT_FALLBACK
+    assert result[-1].content == stored == expected
+    assert events == [expected, expected]
+    assert "doc:missing" not in stored and "Another finding" not in stored
 
 
 @pytest.mark.parametrize("stream_setting", ["0", "1"])
@@ -196,11 +206,17 @@ def test_continuation_uses_original_authority_and_lease(
             )
             stored = publish_and_save(result, db, events)
             expected = LIMITED_ANSWER
+            if change == "violation":
+                expected = CAPACITY_EXCERPT_FALLBACK
+                assert result[-1]._validated_answer.outcome == "partial"
+                assert "999" not in result[-1].content
             if change == "none":
-                expected = result[-1].content
-                assert "uncertain" in expected
-                assert "> Capacity is 18 litres. [doc:a chunk:1]" in expected
-                assert "More evidence" not in expected
+                # Valid assembled provider wording survives publication; its
+                # receipt remains mechanical rather than semantic proof.
+                expected = (
+                    "Capacity is 18 litres [doc:a chunk:1]. More evidence\n"
+                    "is cited [doc:a chunk:1]."
+                )
                 assert result[-1]._validated_answer.outcome == "partial"
             assert result[-1].content == stored == expected
             assert events == [expected, expected]

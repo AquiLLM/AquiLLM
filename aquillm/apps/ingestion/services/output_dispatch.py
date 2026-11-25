@@ -37,7 +37,8 @@ def recover_due_outputs(*, limit: int = 25, using: str = 'default') -> int:
         after = 0
         while scanned < limit:
             if kind == 'outputs':
-                query = IngestionOutput.objects.using(using).filter(status__in=['queued', 'processing'], item__manifest_complete=True)
+                query = IngestionOutput.objects.using(using).filter(status__in=['queued', 'processing'],
+                    item__manifest_complete=True, provenance_kind='ingestion')
             else:
                 query = IngestionBatchItem.objects.using(using).filter(manifest_complete=False, status__in=['queued', 'processing'])
             rows = list(query.filter(pk__gt=after, next_attempt_at__lte=timezone.now()).order_by('pk')[:min(25, limit-scanned)])

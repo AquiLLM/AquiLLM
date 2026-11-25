@@ -6,7 +6,7 @@ from django.utils import timezone
 
 IDENTITY_FIELDS = ('item_id', 'output_key', 'source_occurrence_id',
                    'extraction_revision_id', 'parent_output_id', 'output_kind',
-                   'element_key', 'payload')
+                   'element_key', 'payload', 'provenance_kind', 'provenance_evidence')
 
 
 class OutputQuerySet(models.QuerySet):
@@ -25,6 +25,9 @@ class IngestionOutput(models.Model):
     output_kind = models.CharField(max_length=32)
     element_key = models.CharField(max_length=200)
     payload = models.JSONField(default=dict)
+    provenance_kind = models.CharField(max_length=32, default='ingestion', db_default='ingestion',
+        choices=[('ingestion', 'Ingestion'), ('current_adoption', 'Current source adoption')])
+    provenance_evidence = models.JSONField(default=dict, db_default={})
     status = models.CharField(max_length=20, default='queued')
     generation = models.UUIDField(default=uuid4)
     attempt = models.PositiveIntegerField(default=0)
@@ -44,6 +47,10 @@ class IngestionOutput(models.Model):
         db_table = 'aquillm_ingestionoutput'
         ordering = ['pk']
         constraints = [
+            models.UniqueConstraint(fields=['document_model', 'document_pkid', 'document_id'],
+                condition=models.Q(status='success'), name='ingestion_output_success_owner_unique'),
+            models.CheckConstraint(condition=models.Q(provenance_kind__in=['ingestion', 'current_adoption']),
+                name='ingestion_output_provenance_valid'),
             models.UniqueConstraint(fields=['item', 'output_key'], name='ingestion_output_item_key_unique'),
             models.CheckConstraint(condition=models.Q(status__in=['queued', 'processing', 'success', 'error']), name='ingestion_output_status_valid'),
             models.CheckConstraint(condition=(
@@ -62,4 +69,7 @@ class IngestionOutput(models.Model):
             previous = type(self).objects.using(kwargs.get('using') or self._state.db).get(pk=self.pk)
             if any(getattr(previous, f) != getattr(self, f) for f in IDENTITY_FIELDS):
                 raise ValidationError('Output identity is immutable.')
+        else:
+            from .adoption_evidence import validate_adoption_evidence
+            validate_adoption_evidence(self)
         return super().save(*args, **kwargs)
