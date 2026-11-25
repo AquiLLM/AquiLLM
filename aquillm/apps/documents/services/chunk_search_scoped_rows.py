@@ -141,6 +141,12 @@ def _current_rows(rows, scope, valid_dense, *, dense_only=False, document_ids=No
         return (), set()
     from .lexical_readiness import _matching_full_text_ids
 
+    # Only these owners can supply a matching row fingerprint. The caller
+    # still revalidates the entire original scope before and after this read.
+    if document_ids is None:
+        document_ids = scope.requested_document_ids.intersection(
+            row.doc_id for row in rows
+        )
     fts_ids = tuple(row.pk for row in rows if row.pk in scope.fts_rows)
     valid_fts = (
         _matching_full_text_ids(scope, _current_row_queryset(
