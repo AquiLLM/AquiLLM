@@ -19,6 +19,10 @@ _NAME_VERSION = re.compile(
 _HYPHENATED_RELEASE = re.compile(
     r"(?<![\w.\-‐‑])([A-Z]{2,16})[\-‐‑]([A-Z]{1,6}\d+[A-Za-z0-9]*)(?![\w\-‐‑]|\.\w)"
 )
+_SECTION = re.compile(
+    r"(?:\b(?:section|sec\.)\s+|§\s*)(\d{1,3}(?:\.\d{1,3}){1,5})"
+    r"(?![\w‐‑–—-]|\.\w|\s*\([a-z0-9]+\))", re.IGNORECASE,
+)
 _QUOTED = re.compile(r"""["'“‘`]([^"'“”‘’`\n]{1,64})["'”’`]""")
 
 
@@ -36,7 +40,12 @@ def _identifiers(text, *, source=False):
         and (any(c.isupper() for c in word) or re.match(r"v\d", word))
         and not re.fullmatch(r"\d+(?:\.\d+)?(?:[A-Z]{1,3}|E[+-]?\d+)", word)
     }
+    for match in _SECTION.finditer(text):
+        if not re.search(r"\bcross[\s‐‑–-]+$", text[max(0, match.start()-16):match.start()], re.I):
+            words.add(f"section {match[1]}")
     for match in _NAME_VERSION.finditer(text):
+        if match[1].lower() == "section":
+            continue
         if source or match[1].isupper() or match[0] in quoted:
             words.add(" ".join(match.groups()))
     return frozenset(words)
@@ -138,6 +147,15 @@ def misplaced_identifiers(text, sources):
                         if source.document in docs and identifier in source.identifiers
                     )
                 )
+                if identifier.startswith("section "):
+                    # A section number can be a bare heading or share a label with
+                    # other papers. Only flag a unique, explicit sibling pointer.
+                    label = re.escape(identifier.split()[1])
+                    if (len(docs) != 1 or len(candidates) != 1 or any(
+                        re.search(rf"(?<![\w.]){label}(?!\w|\.\w)", source.text)
+                        for source in cited
+                    )):
+                        continue
                 if not candidates and (
                     other := _unique_named_source(identifier, sources)
                 ):

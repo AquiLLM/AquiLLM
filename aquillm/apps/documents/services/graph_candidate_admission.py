@@ -12,6 +12,7 @@ from .chunk_search_source_operation import _closed_header, _same_header
 from .graph_candidate_metadata import SourceRankRef, capture_metadata
 from .graph_source_admission import NativeSourceAdmission, dependency_header, native_dependencies
 from .graph_source_admission_policy import CHANNELS, allocation, charged_sources, fair_prefix, item_admission_prefix
+from .lexical_candidates import literal_terms
 from .representation_contracts import SourceScopeUnavailable
 
 
@@ -154,11 +155,12 @@ def try_native_snapshot(model, query, documents, scope, observation, config, lim
                 novel = {name: tuple(pk for pk in lane if all_refs[pk].identity not in charged)
                          for name, lane in ids.items()}
                 protected = ()
-                if dict(ranking)["protected_exact"] and terms and any(
-                    term.case_sensitive or term.kind == "phrase" for term in terms
+                literal = literal_terms(terms)
+                if dict(ranking)["protected_exact"] and any(
+                    term.case_sensitive or term.kind == "phrase" for term in literal
                 ):
                     protected = tuple(r.pk for r in channels["exact"]
-                                      if r.exact_coverage == len(terms))[:1]
+                                      if r.exact_coverage == len(literal))[:1]
                 baseline_order = tuple(dict.fromkeys(r.pk for name in
                                       ("dense", "trigram", "exact", "full_text") for r in channels[name]))
                 ordinary = fair_prefix(novel, baseline_allowance, protected=protected)

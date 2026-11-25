@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import replace
 
+from apps.documents.services.lexical_candidates import asks_for_method, extract_exact_terms
 from lib.llm.answer_publication import LIMITED_ANSWER
 from lib.llm.providers.rag_citations import _chunk_citation_from_row
 
@@ -39,6 +40,24 @@ def support_grounding(packet):
         "exhaustive": False,
         "selected_evidence_exhaustive": False,
     }
+    query = packet.query or ""
+    guidance = ""
+    if any(term.kind == "notation" for term in extract_exact_terms(query)):
+        guidance = (
+            "For a comparison of symbol uses, lead with whether the sources use the "
+            "symbol for the same thing or different things. If you infer the distinction "
+            "from the uses, cite the passages for those uses together. Scope any remaining "
+            "uncertainty to the specific definition or naming history the passages omit. "
+        )
+    if asks_for_method(query):
+        guidance += (
+            "Answer the supported parts first. For a requested calculation, distinguish "
+            "the inputs and steps actually described from a reference that only points to "
+            "a method elsewhere. Keep measurement biases attached to the measured quantity. "
+            "Do not transfer a direction of error to a derived quantity unless its "
+            "transformation is established. Omit tangential caveats when they cannot "
+            "help answer the question. "
+        )
     return (
         "\n\nBounded answer_support: "
         + json.dumps(payload, ensure_ascii=True)
@@ -57,7 +76,8 @@ def support_grounding(packet):
         "Do not claim exhaustive coverage or universal absence. If the selected evidence "
         "does not support an answer, give a scoped limitation; quote useful passages "
         "only when they help explain it. "
-        "Profile memory is personalization, not document evidence."
+        + guidance
+        + "Profile memory is personalization, not document evidence."
     )
 
 

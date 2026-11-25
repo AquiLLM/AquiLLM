@@ -26,7 +26,7 @@ def controls():
 
 def ranking_policy(scope):
     return {
-        "version": "lexical-ranking-v2",
+        "version": "lexical-ranking-v3",
         "controls": controls(),
         "projection": POLICY,
         "fts_bindings": sorted(
