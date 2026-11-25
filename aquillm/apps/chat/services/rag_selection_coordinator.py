@@ -128,6 +128,7 @@ async def coordinate_selection(
     request_conversation=None,
     llm_if=None,
     recovery_request=None,
+    followup_query="",
 ):
     """Run opt-in selection on DB workers; shadow never changes served evidence."""
     try:
@@ -141,6 +142,8 @@ async def coordinate_selection(
             kwargs = {"token_ceiling": ceiling}
         if recovery_request is not None:
             kwargs["recovery_request"] = recovery_request
+        if followup_query:
+            kwargs["followup_query"] = followup_query
         prepare_async = database_sync_to_async(prepare_fn, thread_sensitive=False)
         turn = await prepare_async(
             consumer, pool, query, question, config, top_k, **kwargs
@@ -168,6 +171,24 @@ async def coordinate_selection(
         return None, None, None
 
 
+def select_prepared_evidence(candidates, *, followup_query="", turn_budget=None, **options):
+    """Freeze any retrieval-only rank signal before invoking the replayable selector."""
+    from .rag_followup_ranking import POLICY, followup_relevance
+    from .rag_selection import support_scores_usable
+
+    if (options["mode"] == "adaptive" and followup_query and not options.get("support_hints")
+            and support_scores_usable(candidates, options["score_status"])):
+        scores = followup_relevance(candidates, options["question"], followup_query, turn_budget)
+        if scores:
+            ranked = tuple(replace(c, relevance=scores[id(c)]) for c in candidates)
+            profile = options["profile"]
+            options["profile"] = replace(profile, version=profile.version + "+" + POLICY)
+            result = select_evidence(ranked, **options)
+            originals = {id(view): c for view, c in zip(ranked, candidates)}
+            return replace(result, candidates=tuple(originals[id(c)] for c in result.candidates))
+    return select_evidence(candidates, **options)
+
+
 def prepare_selection_turn(
     consumer: Any,
     pool: FusedRetrievalPool,
@@ -179,6 +200,7 @@ def prepare_selection_turn(
     turn_budget=None,
     token_ceiling=None,
     recovery_request=None,
+    followup_query="",
 ) -> SelectionTurn:
     """Resolve current scope, score once, and select on a DB-capable worker."""
     preservation = rag_preservation_config()
@@ -216,8 +238,10 @@ def prepare_selection_turn(
             selected_profile = replace(profile, version=profile.version + "+" + POLICY)
         if source_mode and config.mode == "adaptive":
             options["question"] = question
+            if followup_query:
+                options.update(followup_query=followup_query, turn_budget=turn_budget)
         started = monotonic()
-        result = select_evidence(prepared.candidates, profile=selected_profile, limits=limits,
+        result = select_prepared_evidence(prepared.candidates, profile=selected_profile, limits=limits,
             score_status=prepared.score_status, mode="legacy" if config.mode == "legacy" else "adaptive", **options)
         durations.append(max(0, (monotonic() - started) * 1000))
         return result

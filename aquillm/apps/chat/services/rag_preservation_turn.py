@@ -139,6 +139,7 @@ async def finish_preservation(
         decorate_preservation_packet, preservation_conversation, recovery_request,
     )
     from .rag_config import synthesis_max_tokens
+    from .rag_followup_ranking import completed_followup
 
     answer_request = recovery_request(convo, question, llm, max_tokens=synthesis_max_tokens(),
         stage="direct_synthesis", assessment=acquired.assessment, stop_reason=acquired.stop_reason,
@@ -146,6 +147,7 @@ async def finish_preservation(
 
     hints = bind_selection_hints(runtime, question, acquired.assessment,
         source_views(acquired.results) if support_hints_enabled() else ())
+    followup_query = completed_followup(acquired.attempts, question)
     try:
         _, packet, raw = await bounded_retrieval(
             prepare_source_tool_handoff(
@@ -157,6 +159,7 @@ async def finish_preservation(
                 top_k=direct_rag_top_k(),
                 prepare_fn=prepare_fn or prepare_selection_turn,
                 revalidate_fn=revalidate_fn or revalidate_selection_turn,
+                **({"followup_query": followup_query} if followup_query else {}),
                 **({"recovery_request": answer_request} if answer_request is not None else {}),
             ),
             budget,

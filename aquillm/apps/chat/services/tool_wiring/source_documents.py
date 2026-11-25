@@ -109,6 +109,7 @@ async def prepare_source_tool_handoff(
     prepare_fn=None,
     revalidate_fn=None,
     recovery_request=None,
+    followup_query="",
 ):
     """Same served selection for model tools and direct acquisition.
 
@@ -133,5 +134,6 @@ async def prepare_source_tool_handoff(
         revalidate_fn=revalidate_fn or revalidate_selection_turn,
         request_conversation=conversation,
         llm_if=llm,
+        **({"followup_query": followup_query} if followup_query else {}),
         **({"recovery_request": recovery_request} if recovery_request is not None else {}),
     )

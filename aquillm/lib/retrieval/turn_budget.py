@@ -66,6 +66,7 @@ class TurnBudget:
         self._sources: set[Hashable] = set()
         self._pairs = {"acquisition": 0, "final": 0}
         self._text = {"materialized": 0, "tokenized": 0}
+        self._lexical_scan_codepoints = 0
         self._inflight = 0
         self._final_deadline: float | None = None
 
@@ -192,6 +193,21 @@ class TurnBudget:
                 return False
             self._text[kind] += count
             return True
+
+    def reserve_lexical_scan(self, count: int) -> int:
+        """Bound analysis of loaded text while preserving transport credit."""
+        if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+            raise ValueError("invalid lexical scan reservation")
+        with self._lock:
+            total = self._lexical_scan_codepoints + count
+            room = min(
+                self.limits.materialized_codepoints - self._text["materialized"],
+                self.limits.tokenized_codepoints - self._text["tokenized"],
+            )
+            if not self._open() or total > room:
+                return 0
+            self._lexical_scan_codepoints = total
+            return total
 
     def remaining_ms(self) -> int:
         with self._lock:
