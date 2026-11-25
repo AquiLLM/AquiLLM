@@ -105,6 +105,13 @@ def test_rejects_uncontrolled_media_or_forged_source_presentation(markup):
         prepare(packet(), f"A supported statement [doc:a chunk:1].\n\n{markup}")
 
 
+def test_authorized_citation_can_precede_a_parenthetical_in_research_prose():
+    prose = "The estimate was reported [doc:a chunk:1] (also compared in the appendix)."
+    assert prepare(packet(), prose) == prose
+    with pytest.raises(ValueError, match="invalid_presentation"):
+        prepare(packet(), "The estimate [unrecognized label] (see the appendix).")
+
+
 def test_selected_url_alone_never_grants_media_authority():
     current = packet()
     current.image_urls = ["/aquillm/document_image/a/?chunk_id=1"]

@@ -86,8 +86,16 @@ def prepare_model_answer(packet, text):
     # outside Markdown links; only server citation linkification creates them.
     if _INTERNAL_ROUTE.search(_decoded_url(prose)):
         raise ValueError("invalid_presentation")
-    if re.search(r"\]\s*\(", _LINK.sub("", prose)):
-        raise ValueError("invalid_presentation")
+    residual = _LINK.sub("\x00", prose)
+    for opening in re.finditer(r"\](\s*)\(", residual):
+        # The renderer replaces an exact source citation before parsing Markdown.
+        # A separate parenthetical after that citation is ordinary prose.
+        end = opening.start() + 1
+        if not (
+            re.fullmatch(r"[ \t]+", opening[1])
+            and residual.endswith(tuple(allowed_citations), 0, end)
+        ):
+            raise ValueError("invalid_presentation")
     for link in _LINK.finditer(prose):
         try:
             url = urlsplit(_decoded_url(link[1]))
