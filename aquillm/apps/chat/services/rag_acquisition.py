@@ -4,6 +4,7 @@ import asyncio
 from dataclasses import dataclass, replace
 
 from lib.evidence_observation import active, publish
+from lib.retrieval.evidence import SourceIdentity
 
 from .rag_coverage import (
     AcquisitionAction,
@@ -46,6 +47,7 @@ async def acquire_evidence(
 ):
     results = list(initial_results)
     assessment = CoverageAssessment()
+    retained_leads = ()
     reason = "initial"
     phase = "acquisition"
     attempts, latest_source_ids = [], ()
@@ -224,6 +226,8 @@ async def acquire_evidence(
                 from dataclasses import asdict
 
                 publish("coverage_assessment", asdict(assessment))
+            if assessment.leads:
+                retained_leads = tuple(dict.fromkeys((*assessment.leads, *retained_leads)))[:2]
             action = assessment.next_action
             if action is None:
                 reason = "assessed"
@@ -250,6 +254,11 @@ async def acquire_evidence(
             phase = "acquisition"
             results.append(await run(action))
             after = {s.identity for s in evidence_views(results)}
+            # Only carry pointers to revisions still present after the follow-up.
+            retained_leads = tuple(
+                lead for lead in retained_leads
+                if SourceIdentity(lead.chunk_id, lead.source_fingerprint) in after
+            )
             if not after - before:
                 reason = "no_progress"
                 break
@@ -269,6 +278,8 @@ async def acquire_evidence(
             reason = phase + "_failure"
         # Never log the exception message: provider errors can contain evidence.
         publish("acquisition_failure", {"phase": phase, "reason": reason})
+    if retained_leads != assessment.leads:
+        assessment = replace(assessment, leads=retained_leads)
     return AcquiredEvidence(
         tuple(results), assessment, reason, budget.actions_used, tuple(attempts)
     )

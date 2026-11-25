@@ -1,6 +1,7 @@
 """Regressions for real follow-up capacity on one cumulative retrieval ledger."""
 
 import asyncio
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -128,6 +129,65 @@ async def test_initial_search_leaves_novel_source_slots_for_followup():
     assert result.stop_reason == "duplicate_action"
     assert budget.planner_calls == 2 == budget.limits.planner_calls
     assert budget.sources_used == budget.limits.unique_sources
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second_pass,expected_ids", [
+    ("no_quotes", (1, 2)), ("new_quote", (3, 1)), ("lookup", (1, 2)),
+    ("changed_revision", (1, 2)),
+])
+async def test_later_acquisition_keeps_two_recent_verified_leads(monkeypatch, second_pass, expected_ids):
+    monkeypatch.setenv("RAG_PLANNER_EVIDENCE_LEADS_ENABLED", "1")
+    budget = TurnBudget(TurnLimits(retrieval_ms=30_000))
+    texts = ["The volume is 4 L.", "The mass is 2 kg.", "The pressure is 2 Pa."]
+    if second_pass != "lookup":
+        # The follow-up's whole view fills the planner window. Previous evidence
+        # remains in the acquired pool but its quotations cannot be emitted again.
+        texts[2] = texts[2].ljust(16000)
+    followup_chunk = 1 if second_pass == "changed_revision" else 3
+    sources = tuple(SourceEvidence(i, "doc", i, fingerprint_source(t), t)
+                    for i, t in zip((1, 2, followup_chunk), texts))
+
+    async def execute(action):
+        assert budget.reserve_action(action.signature)
+        return {"sources": sources[:2] if budget.actions_used == 1 else sources[2:]}
+
+    def current_views(results):
+        return tuple({source.chunk_id: source for source in views(results)}.values())
+
+    prompts = []
+
+    async def message(**arguments):
+        visible = json.loads(arguments["messages"][0]["content"])["evidence"]
+        prompts.append(tuple(row["chunk_id"] for row in visible))
+        first = len(prompts) == 1
+        quotes = []
+        if first:
+            quotes = [{"chunk_id": 1, "quote": texts[0]}, {"chunk_id": 2, "quote": texts[1]}]
+        elif second_pass in ("new_quote", "changed_revision"):
+            quotes = [{"chunk_id": followup_chunk, "quote": "The pressure is 2 Pa."}]
+        action = {"kind": "vector", "query": "pressure measurement", "aspect": "pressure"} if first else None
+        return SimpleNamespace(text=json.dumps({
+            "evidence_leads": quotes, "requested_aspects": ["pressure"],
+            "unresolved_aspects": ["pressure"], "next_action": action,
+        }), stop_reason="stop")
+
+    question = ("What is the volume and what is the mass and what is the pressure?"
+                if second_pass == "lookup" else "Which measurements did the study report?")
+    result = await acquire_evidence(
+        question, budget=budget, llm=SimpleNamespace(base_args={}, get_message=message),
+        execute=execute, evidence_views=current_views, iterative=True, allowed_documents={"doc"},
+    )
+    assert prompts == ([(1, 2)] if second_pass == "lookup" else [(1, 2), (followup_chunk,)])
+    assert result.stop_reason == ("adequate_lookup" if second_pass == "lookup" else "assessed")
+    assert tuple(lead.chunk_id for lead in result.assessment.leads) == expected_ids
+    if second_pass == "changed_revision":
+        assert result.assessment.leads[0].source_fingerprint == sources[2].source_fingerprint
+    if second_pass == "lookup":
+        assert result.assessment.certainty == "deterministic"
+        assert tuple(ref.aspect for ref in result.assessment.support) == ("volume", "mass", "pressure")
+    else:
+        assert not result.assessment.support and result.assessment.unresolved_aspects == ("pressure",)
 
 
 @pytest.mark.asyncio

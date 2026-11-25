@@ -135,6 +135,7 @@ async def finish_preservation(
     from .rag_selection_hints import (
         bind_selection_hints, clear_selection_hints, support_hints_enabled,
     )
+    from .rag_planner_leads import evidence_leads_enabled
     from .rag_recovery_request import (
         decorate_preservation_packet, preservation_conversation, recovery_request,
     )
@@ -145,8 +146,9 @@ async def finish_preservation(
         stage="direct_synthesis", assessment=acquired.assessment, stop_reason=acquired.stop_reason,
         notice=notice, auxiliary=auxiliary_handoff, initial_acquired=initial_acquired)
 
+    use_hints = support_hints_enabled() or (acquired.assessment.leads and evidence_leads_enabled())
     hints = bind_selection_hints(runtime, question, acquired.assessment,
-        source_views(acquired.results) if support_hints_enabled() else ())
+        source_views(acquired.results) if use_hints else ())
     followup_query = completed_followup(acquired.attempts, question)
     try:
         _, packet, raw = await bounded_retrieval(

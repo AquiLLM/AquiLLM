@@ -15,6 +15,7 @@ from lib.llm.turn_context import current_turn
 from lib.retrieval.evidence import SourceEvidence
 
 from .rag_coverage import CoverageAssessment, SupportReference
+from .rag_planner_leads import LEAD_POLICY, EvidenceLead, evidence_leads_enabled
 from .rag_selection import support_scores_usable
 
 POLICY = "assessment-support-hints-v1"
@@ -47,7 +48,8 @@ class _Hints:
     representation: object
     dense_manifest: str | None
     ranking_controls: tuple
-    references: tuple[tuple[SupportReference, SourceEvidence], ...]
+    references: tuple[tuple[SupportReference | EvidenceLead, SourceEvidence], ...]
+    lead_policy: bool
 
 
 def _bind_selection_hints(runtime, question, assessment, sources):
@@ -57,20 +59,25 @@ def _bind_selection_hints(runtime, question, assessment, sources):
     with runtime.lock:
         previous = getattr(runtime, "_selection_support_hints", None)
         runtime._selection_support_hints = None
-        if not support_hints_enabled() or previous is not None:
+        if previous is not None or type(assessment) is not CoverageAssessment:
             return None
+        use_leads = bool(assessment.leads) and evidence_leads_enabled()
+        if not use_leads and not support_hints_enabled():
+            return None
+        pointers = assessment.leads if use_leads else assessment.support
         frozen = getattr(runtime, "_frozen_retrieval_scope", None)
         turn = current_turn()
         if (current_source_runtime() is not runtime or not runtime.budget.can_publish()
                 or (turn is not None and turn.budget is not runtime.budget)
-                or frozen is None or type(assessment) is not CoverageAssessment
-                or not 1 <= len(assessment.support) <= 4
+                or frozen is None or not 1 <= len(pointers) <= (2 if use_leads else 4)
                 or not 1 <= len(assessment.requested_aspects) <= 4):
             return None
         views = tuple(sources)
         references = []
-        for ref in assessment.support:
-            if (type(ref) is not SupportReference or ref.aspect not in assessment.requested_aspects
+        for ref in pointers:
+            if type(ref) is not (EvidenceLead if use_leads else SupportReference):
+                return None
+            if ((not use_leads and ref.aspect not in assessment.requested_aspects)
                     or any(type(v) is not int for v in (ref.chunk_id, ref.start, ref.end))):
                 return None
             matching = tuple(source for source in views if type(source) is SourceEvidence
@@ -81,7 +88,7 @@ def _bind_selection_hints(runtime, question, assessment, sources):
             references.append((ref, matching[0]))
         record = _Hints(sha256(question.encode()).hexdigest(), runtime, runtime.budget,
             runtime.authorization, turn, frozen, frozen.representation,
-            getattr(frozen.dense, "manifest_sha256", None), _ranking_controls(), tuple(references))
+            getattr(frozen.dense, "manifest_sha256", None), _ranking_controls(), tuple(references), use_leads)
         runtime._selection_support_hints = record
         return record
 
@@ -90,7 +97,8 @@ def bind_selection_hints(runtime, question, assessment, sources):
     from lib.evidence_observation import publish
 
     record = _bind_selection_hints(runtime, question, assessment, sources)
-    publish("selection_support_hints", {"stage": "bound", "policy": POLICY,
+    policy = LEAD_POLICY if record and record.lead_policy else POLICY
+    publish("selection_support_hints", {"stage": "bound", "policy": policy,
         "references": len(record.references) if record else 0})
     return record
 
@@ -112,7 +120,8 @@ def _consume_selection_hints(runtime, prepared, pool, question):
         record = getattr(runtime, "_selection_support_hints", None)
         runtime._selection_support_hints = None
         frozen = getattr(runtime, "_frozen_retrieval_scope", None)
-        if (not support_hints_enabled() or type(record) is not _Hints
+        if (type(record) is not _Hints
+                or not (evidence_leads_enabled() if record.lead_policy else support_hints_enabled())
                 or current_source_runtime() is not runtime or record.runtime is not runtime
                 or record.budget is not runtime.budget or record.authorization is not runtime.authorization
                 or record.turn is not current_turn() or record.frozen is not frozen
@@ -149,6 +158,7 @@ def consume_selection_hints(runtime, prepared, pool, question):
     from lib.evidence_observation import publish
 
     hints = _consume_selection_hints(runtime, prepared, pool, question)
-    publish("selection_support_hints", {"stage": "accepted", "policy": POLICY,
+    policy = LEAD_POLICY if hints and isinstance(hints[0][1][0], EvidenceLead) else POLICY
+    publish("selection_support_hints", {"stage": "accepted", "policy": policy,
         "references": sum(len(refs) for _, refs in hints), "candidates": len(hints)})
     return hints

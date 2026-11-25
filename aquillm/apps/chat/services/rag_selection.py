@@ -171,6 +171,18 @@ def select_evidence(
     }
     estimated_tokens = 0
     hint_keys = _support_keys(pool, support_hints, score_status, mode)
+    # A search rewrite can change the ordering. A quoted lead may break ties
+    # only within the relevance allowance of the original question as well.
+    from .rag_planner_leads import EvidenceLead
+    from .rag_selection_policy import normalize_relevance_scores
+
+    has_leads = hint_keys and any(
+        isinstance(key, EvidenceLead) for keys in hint_keys.values() for key in keys
+    )
+    pointwise = {}
+    if has_leads:
+        values = normalize_relevance_scores(tuple(c.raw_score for c in pool))
+        pointwise = {id(c): value for c, value in zip(pool, values)}
     represented = set()
 
     while len(selected) < limits.max_passages:
@@ -200,11 +212,19 @@ def select_evidence(
             )
             return (-value, *_tie_break(candidate))
 
+        eligible_hints = hint_keys
+        if pointwise:
+            threshold = max(pointwise[id(c)] for c in feasible) - profile.gap_allowance
+            eligible_hints = {
+                id(c): hint_keys[id(c)] for c in frontier
+                if selected and id(c) in hint_keys and pointwise[id(c)] >= threshold
+            }
+
         best = (
             min(feasible, key=lambda c: legacy_order[_identity(c)])
             if mode == "legacy"
             else min(frontier, key=lambda c: (
-                not bool(hint_keys.get(id(c), frozenset()) - represented), *order(c)
+                not bool(eligible_hints.get(id(c), frozenset()) - represented), *order(c)
             ))
         )
         selected.append(best)

@@ -350,6 +350,13 @@ that the experimental version-comparison policy is ready for general use.
   Conflicting references and secondary conditions must compete without a
   primary-document preference. A pointer is not proof of semantic support.
   `RAG_SELECTION_SUPPORT_HINTS_ENABLED` defaults off pending prospective tests.
+- An independent experiment uses `RAG_PLANNER_EVIDENCE_LEADS_ENABLED=1` with
+  iterative acquisition and adaptive source selection. The planner can quote up to
+  two passages it has already seen. The server locates each quotation in the source
+  revision, rechecks it before selection, and uses it to order candidates close in
+  relevance to the original question. The writer receives the selected source text.
+  Leave the flag unset to reproduce the existing planner. Both configurations use
+  the same acquisition deadline, evidence budget, and publication checks.
 - [x] Preserve bounded failure phase/type/reason through the normal graph
   diagnostic and replay paths; verify observation cannot change recovery or
   authorization decisions. The original intermittent graph failure remains

@@ -174,13 +174,19 @@ async def coordinate_selection(
 def select_prepared_evidence(candidates, *, followup_query="", turn_budget=None, **options):
     """Freeze any retrieval-only rank signal before invoking the replayable selector."""
     from .rag_followup_ranking import POLICY, followup_relevance
+    from .rag_planner_leads import EvidenceLead
     from .rag_selection import support_scores_usable
 
-    if (options["mode"] == "adaptive" and followup_query and not options.get("support_hints")
+    hints = options.get("support_hints", ())
+    lead_only = all(type(ref) is EvidenceLead for _, refs in hints for ref in refs)
+    if (options["mode"] == "adaptive" and followup_query and lead_only
             and support_scores_usable(candidates, options["score_status"])):
         scores = followup_relevance(candidates, options["question"], followup_query, turn_budget)
         if scores:
             ranked = tuple(replace(c, relevance=scores[id(c)]) for c in candidates)
+            if hints:
+                views = {id(original): view for original, view in zip(candidates, ranked)}
+                options["support_hints"] = tuple((views[id(row)], refs) for row, refs in hints)
             profile = options["profile"]
             options["profile"] = replace(profile, version=profile.version + "+" + POLICY)
             result = select_evidence(ranked, **options)
@@ -226,6 +232,7 @@ def prepare_selection_turn(
         mode=preservation.document_capacity_mode, legacy_cap=max_snippets_per_doc(),
         explicit_hard_cap=preservation.document_hard_cap, final_passage_limit=top_k),
         token_ceiling if token_ceiling is not None else evidence_token_budget())
+    from .rag_planner_leads import LEAD_POLICY, EvidenceLead
     from .rag_selection_hints import POLICY, consume_selection_hints
 
     durations = []
@@ -235,7 +242,8 @@ def prepare_selection_turn(
         selected_profile, options = profile, {}
         if support and config.mode == "adaptive":
             options["support_hints"] = support
-            selected_profile = replace(profile, version=profile.version + "+" + POLICY)
+            policy = LEAD_POLICY if isinstance(support[0][1][0], EvidenceLead) else POLICY
+            selected_profile = replace(profile, version=profile.version + "+" + policy)
         if source_mode and config.mode == "adaptive":
             options["question"] = question
             if followup_query:

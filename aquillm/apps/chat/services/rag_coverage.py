@@ -6,7 +6,13 @@ import unicodedata
 from dataclasses import dataclass, replace
 
 from .rag_planner_context import attempt_context, planner_views
-from .rag_planner_contract import PLANNER_SYSTEM, PlannerFailure, planner_contract
+from .rag_planner_contract import (
+    LEAD_PLANNER_SYSTEM,
+    PLANNER_SYSTEM,
+    PlannerFailure,
+    planner_contract,
+)
+from .rag_planner_leads import EvidenceLead, evidence_leads_enabled, resolve_leads
 
 
 def decide_answer_support(question, packet, *, assessment, calibration_id=None):
@@ -54,6 +60,7 @@ class CoverageAssessment:
     unresolved_aspects: tuple[str, ...] = ()
     next_action: AcquisitionAction | None = None
     certainty: str = "unknown"
+    leads: tuple[EvidenceLead, ...] = ()
 
 
 def needs_coverage_assessment(question, evidence_views, anchors):
@@ -188,8 +195,40 @@ def recheck_support(assessment, delivered):
         )
     )
     return replace(
-        assessment, support=kept, unresolved_aspects=missing, next_action=None
+        assessment, support=kept, unresolved_aspects=missing, next_action=None, leads=()
     )
+
+
+def _assess_with_leads(payload, views, allowed_documents, budget):
+    """Validate the search action and the quoted ranking clues independently."""
+    if not isinstance(payload, dict) or set(payload) != {
+        "evidence_leads", "requested_aspects", "unresolved_aspects", "next_action"
+    }:
+        raise ValueError("invalid planner lead response")
+    leads = resolve_leads(payload["evidence_leads"], views, budget)
+    plan = {key: value for key, value in payload.items() if key != "evidence_leads"}
+    requested = _aspects(plan["requested_aspects"])
+    unresolved = _aspects(plan["unresolved_aspects"])
+    if not 1 <= len(requested) <= 4 or len(unresolved) > 4:
+        raise ValueError("invalid planner aspects")
+    if leads:
+        # A planner can give an outstanding detail a more specific name. With
+        # no semantic support claimed, adding it only expands what is unknown.
+        # Keep all named outstanding details inside the four-facet limit, then
+        # carry broader labels where they fit. The original question is intact.
+        plan["requested_aspects"] = list(dict.fromkeys((*unresolved, *requested)))[:4]
+    try:
+        assessment = validate_assessment(plan, views, allowed_documents)
+    except PlannerFailure as exc:
+        if not leads or exc.reason != "invalid_action":
+            raise
+        from lib.evidence_observation import publish
+
+        publish("planner_action_rejected", {"reason": exc.reason})
+        assessment = validate_assessment(
+            dict(plan, next_action=None), views, allowed_documents
+        )
+    return replace(assessment, leads=leads)
 
 
 async def assess_coverage(
@@ -206,7 +245,10 @@ async def assess_coverage(
     """One bounded structured call to the same provider; never writes an answer."""
     evidence_views = tuple(evidence_views)
     views = planner_views(evidence_views, latest_source_ids=latest_source_ids)
-    coordinates, response_format = planner_contract(views, allowed_documents)
+    use_leads = evidence_leads_enabled()
+    coordinates, response_format = planner_contract(
+        views, allowed_documents, evidence_leads=use_leads
+    )
     prompt = json.dumps(
         {
             "question": question,
@@ -242,7 +284,7 @@ async def assess_coverage(
 
     context, margin = provider_context_capacity(llm)
     arguments = llm.base_args | {
-        "system": PLANNER_SYSTEM,
+        "system": LEAD_PLANNER_SYSTEM if use_leads else PLANNER_SYSTEM,
         "messages": [{"role": "user", "content": prompt}],
         "max_tokens": budget.limits.planner_output_tokens,
         "thinking_budget": 0,
@@ -279,6 +321,8 @@ async def assess_coverage(
     except (ValueError, TypeError):
         raise PlannerFailure("invalid_json") from None
     try:
+        if use_leads:
+            return _assess_with_leads(payload, views, allowed_documents, budget)
         return validate_assessment(payload, views, allowed_documents)
     except PlannerFailure:
         raise
